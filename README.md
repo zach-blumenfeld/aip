@@ -1,0 +1,53 @@
+# AIP — Agent Instruction Protocol
+
+>  Codify Skills & Docs for Autonomous Agents — Engineer and govern reliable AI workflows like code.
+
+Your team's skills, prompts, deliberations, and runbooks are the
+documents that drive your AI workflows. Today they live as ad-hoc
+markdown — they drift between revisions, they fail silently when an
+agent reads them, and the corpus can't be queried to see what's
+actually happening. As those workflows become autonomous, that gap
+between "human-readable" and "agent-executable" stops being a quality
+issue and becomes a production-reliability one.
+
+AIP closes the gap. A JSON Schema per document type declares the
+shape; a small toolchain validates, compiles, ingests, and reads
+back. Human prose stays canonical; the agent-readable companion is
+a build artifact. The closest analogy is a compiler — source
+language, target language, type system, multi-target backends,
+preserved source. The case-gating is the same as any compile step:
+**you compile for production; you validate for autonomy.**
+
+AIP positions upstream of agent runtime / execution-graph
+protocols (LangGraph, ADK, AgentOps). It's the protocol for the
+*inputs* that drive agent behavior, not the runtime that executes
+them.
+
+
+
+## Benefits
+
+1. **Reliability for autonomous workflows.** Schema validation catches
+   structural drift at write time. Silent bugs in skills and prompts
+   stop being silent.
+2. **Lower cost per AI interaction.** Compressed structured documents
+   cut token usage 40–60% versus their human-prose sources. Savings
+   compound across every long-running session and every sub-agent
+   fan-out.
+3. **Insights at corpus scale.** Once N documents share a structured
+   shape, cross-doc queries become single-line operations. "Every
+   option rejected for speculative reasons across all our
+   deliberations" — one query, not a doc-trawling expedition.
+4. **Vendor-neutral by design.** Schemas declare data shape only — no
+   database-specific keywords. Per-database connectors let any storage
+   system plug in. No lock-in.
+5. **Continuous improvement.** A schema-validated corpus is
+   high-quality structured training data for fine-tuning agents that
+   mirror your team's reasoning patterns.
+6. **Audit and governance.** Every agent decision lives in a queryable
+   graph with provenance back to its source document. AI-driven
+   workflows become inspectable, not opaque.
+
+---
+
+See [`spec.md`](spec.md) for the technical specification.

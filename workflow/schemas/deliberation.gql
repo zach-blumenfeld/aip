@@ -1,0 +1,153 @@
+// deliberation.gql
+//
+// Forward-looking declaration of the deliberation graph type, written in a
+// GQL-flavored notation that approximates Neo4j's `CREATE GRAPH TYPE`
+// syntax. See https://neo4j.com/docs/cypher-manual/current/schema/graph-types/
+// for the canonical syntax — that feature is not generally available at the
+// time of writing, so this file is documentation-of-intent, not executable.
+//
+// When `CREATE GRAPH TYPE` is GA, this file should become the single
+// declarative source for the deliberation graph type, and
+// `deliberation.cypher` (the constraint-based current-day equivalent) can
+// be deprecated.
+//
+// The 1:1 correspondence with `deliberation.schema.json` is the whole
+// point: the JSON Schema validates what an AI-rewrite looks like as a
+// document; this graph type declares what the same content looks like as
+// nodes and relationships. The `mapper/mapper.py` script bridges the two.
+//
+// =====================================================================
+// CREATE GRAPH TYPE deliberation_graph_type STRICT {
+//
+// === Nodes ===
+//
+//   (:SourceDocument {
+//     path        :: STRING NOT NULL,    // canonical id; relative repo path
+//     sha256      :: STRING,             // content hash for change detection
+//     content     :: STRING,             // full markdown source (lossless fallback)
+//     indexed_at  :: ZONED DATETIME      // when last upserted by mapper
+//   }),
+//
+//   (:AiRewrite {
+//     id            :: STRING NOT NULL,  // canonical id; matches doc.doc
+//     schema        :: STRING NOT NULL,  // 'deliberation' | future schemas
+//     status        :: STRING,           // enum, see deliberation.schema.json
+//     doc           :: STRING NOT NULL,  // doc identifier from YAML
+//     trigger       :: STRING,           // motivating observation
+//     rewrite_path  :: STRING,           // path to the .md file
+//     indexed_at    :: ZONED DATETIME
+//   }),
+//
+//   (:Item {
+//     id      :: STRING NOT NULL,        // <ai_rewrite_id>:item:<key>
+//     key     :: STRING NOT NULL,        // YAML map key (e.g. 'item1')
+//     name    :: STRING NOT NULL,        // kebab-case slug
+//     problem :: STRING                  // problem statement
+//   }),
+//
+//   (:Option {
+//     id              :: STRING NOT NULL, // <item_id>:option:<key>
+//     key             :: STRING NOT NULL, // YAML map key (e.g. '1a', '2e')
+//     name            :: STRING NOT NULL, // kebab-case slug
+//     action          :: STRING,          // what this option does
+//     pros            :: LIST<STRING>,    // string list (always populated)
+//     cons            :: LIST<STRING>,    // string list (top-level keys if structured)
+//     cons_structured :: STRING,          // JSON-encoded full structure if cons is a map
+//     verdict         :: STRING,          // enum: rejected|accepted|tentative|pending
+//     verdict_reason  :: STRING,          // why
+//     code_sketch     :: STRING,
+//     cypher_sketch   :: STRING,
+//     sql_sketch      :: STRING
+//   }),
+//
+//   (:Lean {
+//     id            :: STRING NOT NULL,   // <item_id>:lean
+//     pick          :: STRING NOT NULL,   // raw string; may not parse to a single key
+//     because       :: STRING NOT NULL,
+//     rationale     :: STRING,
+//     synergy_note  :: STRING,
+//     landing       :: STRING             // JSON-encoded list (mixed types)
+//   }),
+//
+//   (:Shape {
+//     id          :: STRING NOT NULL,     // <item_id>:shape:<key>
+//     key         :: STRING NOT NULL,
+//     name        :: STRING NOT NULL,
+//     composition :: STRING NOT NULL,     // e.g. '2c + 2d + 2e'
+//     intent      :: STRING,
+//     scope       :: STRING,
+//     requires    :: LIST<STRING>
+//   }),
+//
+//   (:OpenQuestion {
+//     id          :: STRING NOT NULL,     // <item_id>:openq:<index>
+//     q           :: STRING NOT NULL,
+//     answer      :: STRING,
+//     likely      :: STRING,
+//     belongs_to  :: STRING
+//   }),
+//
+//   (:GlossaryTerm {
+//     id         :: STRING NOT NULL,      // <ai_rewrite_id>:glossary:<term>
+//     term       :: STRING NOT NULL,
+//     definition :: STRING                // JSON-encoded if non-string
+//   }),
+//
+//   (:Interaction {
+//     id        :: STRING NOT NULL,       // <ai_rewrite_id>:interaction
+//     conflict  :: STRING,                // enum: none|minor|blocking
+//     synergy   :: STRING
+//   }),
+//
+//   (:Ordering {
+//     id      :: STRING NOT NULL,         // <ai_rewrite_id>:ordering
+//     payload :: STRING                   // JSON-encoded (loose schema shape)
+//   })
+//
+// === Relationships ===
+//
+//   // Provenance back to the human-readable source
+//   (:AiRewrite)-[:DERIVED_FROM]->(:SourceDocument),
+//
+//   // Cross-doc links (from `refs:` in YAML). The slug is on the edge.
+//   // Target may be an unfilled stub if the referenced doc has not been
+//   // ingested yet — when it is, MERGE upgrades the stub in place.
+//   (:AiRewrite)-[:REFERENCES { slug :: STRING NOT NULL }]->(:SourceDocument),
+//
+//   // Composition of the deliberation
+//   (:AiRewrite)-[:HAS_ITEM]->(:Item),
+//   (:AiRewrite)-[:DEFINES_TERM]->(:GlossaryTerm),
+//   (:AiRewrite)-[:HAS_INTERACTION]->(:Interaction),
+//   (:AiRewrite)-[:HAS_ORDERING]->(:Ordering),
+//
+//   (:Item)-[:HAS_OPTION]->(:Option),
+//   (:Item)-[:HAS_LEAN]->(:Lean),
+//   (:Item)-[:HAS_SHAPE]->(:Shape),
+//   (:Item)-[:HAS_OPEN_QUESTION]->(:OpenQuestion),
+//
+//   // The lean's recommendation; only created when `pick` resolves cleanly
+//   // to a single option key or shape key. Composite picks
+//   // (e.g. 'A (start with), 2e queued') leave the edge unset; the raw
+//   // string remains in Lean.pick.
+//   (:Lean)-[:PICKS]->(:Option),
+//   (:Lean)-[:PICKS]->(:Shape),
+//
+//   // Shape composition; only created when `composition` parses cleanly
+//   // as `<key> + <key> + …` with all keys resolving to known options.
+//   (:Shape)-[:COMPOSES]->(:Option)
+//
+// };
+// =====================================================================
+//
+// Future direction (per ai-rewrite.md):
+//
+//   When other doc-type schemas (spec, release, incident) gain mappers,
+//   add cross-schema relationships here:
+//
+//     (:Spec)-[:DERIVED_FROM_DELIBERATION]->(:AiRewrite),     // when Spec.derived_from is set
+//     (:Release)-[:IMPLEMENTS_SPEC]->(:Spec),                 // when Release.implements is set
+//     (:Incident)-[:REGRESSES_RELEASE]->(:Release)            // when Incident.regresses is set
+//
+//   These are the edges that turn the schema family from a flat
+//   collection of validated docs into a queryable graph of organizational
+//   reasoning.
