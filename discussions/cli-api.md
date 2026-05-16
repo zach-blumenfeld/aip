@@ -1,11 +1,10 @@
 # Discussion: CLI / API surface (v0.1 candidate)
 
 > **Status: deliberation, not spec.** Captures the open design
-> questions around the local-first CLI for compiling, validating,
-> and managing schema-validated documents. Defers all DB-publishing
-> concerns (provenance, idempotency, sharing, versioning,
-> deprecation) to a later discussion. Tool name is `foo` throughout
-> as a placeholder.
+> questions around the AIP skill and its bundled validation scripts.
+> Defers all DB-publishing concerns to a later discussion. Key
+> resolution (2026-05-16): no separate CLI binary — validation lives
+> in `scripts/` inside the `aip` skill, run via `uv run`.
 
 ## What triggered this
 
@@ -18,6 +17,87 @@ I produce one? validate one? find one? throw one away?).
 
 A first-pass CLI sketch landed in the README; pulling it here and
 expanding into the open questions it raised.
+
+## Usage scenarios
+
+These three scenarios define the actual usage surface and drove the
+key design decisions below. They should be consulted whenever a new
+CLI command or skill capability is proposed.
+
+Two roles appear in every scenario:
+- **The agent** — an AI agent (e.g. Claude Code in the terminal)
+- **The user** — the person directing the agent
+
+### Scenario 1 — Create a skill, no schema specified (most common)
+
+The user has a document describing a process, workflow, skill, or
+cheat sheet — or describes what they want in the prompt. They ask the
+agent to create a skill from it.
+
+1. Agent reads the document (or takes the description from context),
+   surfaces any structural gaps or concerns to the user.
+2. Agent prompts the user to pick a schema — **not by exposing JSON
+   Schema internals**, but by offering:
+   - A short list of existing schemas that match the context (drawn
+     from AIP example schemas, user's project schemas, and schemas in
+     the user's installed skills directory)
+   - An offer to draft a schema automatically based on the doc and
+     session context
+   - An option to discuss alternatives
+3. Agent compiles the skill: produces the full SKILL.md folder with
+   frontmatter, compiled body, source preserved in `references/`,
+   metadata in `meta.yml`.
+4. Agent asks whether to **install** the skill (move to
+   `~/.claude/skills/` or `.claude/skills/`) or save it elsewhere
+   for review first.
+
+**Key implication:** The agent owns schema selection and reuse. The
+user is not expected to understand JSON Schema or open schema files.
+The agent's bias is to reuse existing schemas over drafting new ones.
+
+### Scenario 2 — Create a skill with a specified schema
+
+The user provides both a document path and a schema reference (path
+or name).
+
+1. Agent reads and validates the document.
+2. Agent validates the schema is AIP-compliant (`uv run scripts/validate_schema.py`).
+3. Agent checks schema–document fit semantically — flags mismatches
+   (e.g. a historical wiki doc paired with a workflow schema).
+4. Agent compiles the skill.
+5. Agent asks whether to install or save for review.
+
+### Scenario 3 — Author or iterate on a schema (rare, advanced)
+
+The user wants to create or refine a schema. Inputs may include
+reference docs, web sources, examples from the session, or prior
+schemas. This is a conversational process — the agent assists in
+thinking through structure, drafts schema iterations, runs
+`uv run scripts/validate_schema.py` on each draft, and iterates until the user
+is satisfied. There is no fixed command sequence.
+
+### Design implications of these scenarios
+
+These scenarios settle several open questions that had been framed as
+CLI design questions:
+
+- **`compile` and `draft-schema` are not scripts or CLI commands.**
+  They are what the agent *does*, guided by SKILL.md knowledge. The
+  agent writes files using what it knows from the AIP skill — no
+  script invocation needed for compilation.
+- **There is no separate CLI binary.** Validation is
+  `scripts/validate.py` and `scripts/validate_schema.py` in the `aip`
+  skill, run via `uv run`. The same commands work for the agent
+  (inline during the workflow) and for CI (directly, no agent needed).
+- **Schema discovery is a first-class concern.** For Scenario 1 to
+  work, the agent must know what schemas already exist: AIP example
+  schemas (in `references/examples/` of the skill), project-local
+  schemas, and schemas embedded in other installed skills. The
+  convention for discovering these is an open question
+  (see [§Open questions §7](#open-questions)).
+- **"Install" is a directory move.** Moving the compiled skill folder
+  to `~/.claude/skills/` is a directory operation the agent performs
+  directly — no script needed for v0.1.
 
 ## Foundational research (Anthropic Skills spec)
 
@@ -52,7 +132,7 @@ If the agent reads anything other than our compiled artifact, we've
 defeated the value prop — the agent is consuming uncompiled content
 and we've added a build step that produces something nobody loads.
 
-So `foo compile` produces the **whole skill folder**: SKILL.md is
+So `aip compile` produces the **whole skill folder**: SKILL.md is
 the primary output (with structured content + frontmatter that
 Claude Code can read), and the skill folder is the build output
 directory. The original human-prose source becomes another artifact
@@ -69,42 +149,64 @@ read the uncompiled form — defeating the entire compile-step value
 prop. Worth being explicit about: we use Anthropic's framework as
 our delivery mechanism, not as our authoring model.
 
-## The CLI sketch (annotated)
+## Validation surface — v0.1
+
+There is no separate CLI binary. Validation is provided by Python
+scripts bundled inside the `aip` skill's `scripts/` folder, run via
+`uv run` (which handles isolated environments and inline dependencies
+with no install step):
 
 ```bash
-# Author-side (mostly agent-invoked, not CLI-invoked)
-foo compile <source.md> --schema <name|path> --name <skill-name>   # md → skill folder
-foo draft-schema "desc of what you want" --name release            # spec a new schema
-
-# Validation (CLI-invoked, fast feedback)
-foo validate <skill-folder|doc.yml>                                # validates against declared schema
-foo validate-schema release.schema.json                            # validates JSON Schema is well-formed
-
-# DB / publishing (DEFERRED to later discussion)
-foo publish <skill-folder>                                         # → DB
-foo get <skill-name> --out <path>                                  # ← DB
-foo list --schema [name]                                           # inventory
-foo archive|deprecate|rm <skill-name>                              # delete from DB
+# Run by the agent as a final check, or directly in CI / pre-commit
+uv run scripts/validate.py <skill-folder|doc.yml>   # doc against its declared schema
+uv run scripts/validate_schema.py <schema.json>     # schema against AIP conventions
 ```
 
-Annotation per command:
+The Anthropic Skills spec ([agentskills.io/skill-creation/using-scripts](https://agentskills.io/skill-creation/using-scripts))
+explicitly supports this pattern: scripts in `scripts/` are
+referenced by relative path from the skill root, invoked by the
+agent via bash, and their stdout/stderr feed directly into the
+agent's context. For CI without an agent, the same commands run
+directly — same scripts, same `uv run`, no extra installation.
 
-- `compile` and `draft-schema` are *agent-invoked* operations —
-  the running agent is the producer. They're CLI-callable for
-  scripting / pipelines, but the primary path is agent-as-user,
-  not human-typing-shell.
-- `validate` and `validate-schema` are the *human-or-CI-invoked*
-  operations. Run pre-commit, in CI, or interactively to catch
-  drift fast. These are the v0.1 minimum.
-- The `publish/get/list/archive` block is the *DB layer.* All the
-  hard problems live here: provenance, idempotency, sharing,
-  permissions, versioning, deprecation, schema migration. **Out of
-  scope for this discussion.** The CLI design should leave room for
-  these without committing to their shape.
+**Why scripts-in-skill, not a standalone CLI:**
+
+- No install step for users — the skill installs the validation
+  tooling along with the knowledge.
+- The agent can invoke them inline during the conversational workflow
+  (e.g. Scenario 2: validate the user-supplied schema before
+  compiling; Scenario 3: validate each schema draft as it's iterated).
+- CI use is identical: `uv run scripts/validate.py doc.yml` works
+  directly from the skill folder path.
+- A standalone binary would require a separate package, separate
+  versioning, and a separate install step — complexity with no
+  benefit at v0.1 scale.
+
+**What is NOT a script (and why):**
+
+- `compile` — agent behavior guided by SKILL.md knowledge, not a
+  script. The agent writes files; no script is needed.
+- `draft-schema` — conversational agent activity (Scenario 3). The
+  agent iterates and calls `validate_schema.py` on each draft.
+- `install` — directory move the agent performs directly.
+
+**DB publishing (deferred):**
+
+```bash
+# Future — not in this repo at v0.1
+aip publish <skill-folder>             # → DB (aip-neo4j, aip-postgres, …)
+aip get <skill-name> --out <path>      # ← DB
+aip list --schema [name]               # inventory
+aip archive|deprecate|rm <skill-name>  # delete from DB
+```
+
+All hard governance problems (provenance, idempotency, sharing,
+versioning, deprecation, schema migration) live here. Separate
+discussion when ready.
 
 ## Items to deliberate
 
-### Item 1 — What does `foo compile` produce?
+### Item 1 — What does `aip compile` produce?
 
 #### Problem
 
@@ -133,7 +235,7 @@ Question: where exactly does each piece land in the skill folder?
   scripts/                  # ← per Anthropic spec, optional
 ```
 
-`foo compile <source.md> --name my-skill` creates the folder, writes
+`aip compile <source.md> --name my-skill` creates the folder, writes
 SKILL.md, copies the source into `references/`. Re-compiling
 overwrites SKILL.md but preserves the source.
 
@@ -167,7 +269,7 @@ Same as 1a but source lives in `assets/source.md` instead of
 
 ##### Option 1c — SKILL.md only, source discarded
 
-`foo compile` reads source, writes SKILL.md, doesn't preserve the
+`aip compile` reads source, writes SKILL.md, doesn't preserve the
 source. User keeps source elsewhere (in a `drafts/` folder, in
 git, wherever) by their own convention.
 
@@ -181,9 +283,9 @@ git, wherever) by their own convention.
 - Re-compile requires the user to remember where they put the
   source.
 
-##### Option 1d — Source not preserved by `foo`; `foo` records source path
+##### Option 1d — Source not preserved by `aip`; `aip` records source path
 
-Source stays where the user put it; `foo compile` writes the source
+Source stays where the user put it; `aip compile` writes the source
 path into SKILL.md frontmatter (`metadata: { source_path: ... }`)
 or into a sidecar `meta.yml`. No source-copy in the skill folder.
 
@@ -254,7 +356,7 @@ Put everything there.
 
 ##### Option 2b — Separate file in skill folder
 
-`<skill-folder>/meta.yml` (or `.foo.yml` if we want to namespace)
+`<skill-folder>/meta.yml` (or `.aip.yml` if we want to namespace)
 carries all tooling metadata. SKILL.md frontmatter holds only what
 Anthropic spec requires (`name`, `description`) plus optional
 agent-facing extras (`license`, `version`).
@@ -336,7 +438,7 @@ my-deliberation/
 
 **Pros**
 - Uniform output shape across all doc types.
-- Same `foo compile` semantics for everything.
+- Same `aip compile` semantics for everything.
 - Sidecar metadata + source preservation work the same way.
 
 **Cons**
@@ -349,7 +451,7 @@ my-deliberation/
 ##### Option 3b — Folder for skills, single-file for docs
 
 Skills compile to folders (per Anthropic spec). General docs
-compile to a single file with sidecar metadata in `.foo/`:
+compile to a single file with sidecar metadata in `.aip/`:
 
 ```
 ~/.claude/skills/my-skill/
@@ -359,7 +461,7 @@ compile to a single file with sidecar metadata in `.foo/`:
 
 docs/v0_4_0/
   ai-discussion.md      # the compiled doc (YAML head, prose body if useful)
-  .foo/
+  .aip/
     source.md           # original prose
     meta.yml
 ```
@@ -373,12 +475,12 @@ docs/v0_4_0/
 **Cons**
 - Two output patterns to understand and document.
 - Cross-doc consistency is weaker (skill metadata in `meta.yml` at
-  folder root; doc metadata in `.foo/meta.yml` at doc dir).
+  folder root; doc metadata in `.aip/meta.yml` at doc dir).
 
 ##### Option 3c — Schema-driven (the schema itself declares output shape)
 
 Each schema declares its preferred output shape: `output: folder`
-or `output: file`. `foo compile` dispatches based on the schema's
+or `output: file`. `aip compile` dispatches based on the schema's
 declaration.
 
 **Pros**
@@ -398,7 +500,7 @@ declaration.
 Skills need to plug into Anthropic's folder convention because
 that's how Claude Code finds them. Other docs don't have that
 constraint, so the folder pattern adds weight without adding value.
-Single-file with `.foo/` sidecar covers the metadata and source
+Single-file with `.aip/` sidecar covers the metadata and source
 preservation for non-skill docs.
 
 This means we have two output patterns. Document them clearly:
@@ -406,7 +508,7 @@ This means we have two output patterns. Document them clearly:
 | Doc type           | Output shape                                                 |
 |--------------------|--------------------------------------------------------------|
 | Skills             | Folder: `<name>/SKILL.md` + `references/source.md` + `meta.yml` |
-| Everything else    | Single file: `<name>.yml` (or `.md`) + sidecar `.foo/source.md` + `.foo/meta.yml` |
+| Everything else    | Single file: `<name>.yml` (or `.md`) + sidecar `.aip/source.md` + `.aip/meta.yml` |
 
 Option 3c (schema-driven) is the long-term-clean answer if we end
 up wanting more than two output shapes. v0.1 doesn't need that
@@ -426,7 +528,7 @@ constraint.
 
 ##### Option 4a — In place with Claude Code's skills dir
 
-`foo compile <source.md> --schema skill --name my-skill` writes to
+`aip compile <source.md> --schema skill --name my-skill` writes to
 `~/.claude/skills/my-skill/` by default (or `./.claude/skills/`
 with a `--project` flag). For non-skill docs, output goes wherever
 the user puts it (path-agnostic).
@@ -440,12 +542,12 @@ the user puts it (path-agnostic).
 
 **Cons**
 - Two patterns to learn (skill location vs. doc location).
-- `foo compile` for skills WRITES into `~/.claude/skills/` —
+- `aip compile` for skills WRITES into `~/.claude/skills/` —
   that's an opinionated default, even if overridable.
 
-##### Option 4b — Single `foo` root for everything
+##### Option 4b — Single `aip` root for everything
 
-`~/.foo/skills/`, `~/.foo/docs/`, etc. Claude Code doesn't see this
+`~/.aip/skills/`, `~/.aip/docs/`, etc. Claude Code doesn't see this
 directly; we'd need a sync step to mirror skills back into
 `.claude/skills/`.
 
@@ -460,7 +562,7 @@ directly; we'd need a sync step to mirror skills back into
 
 ##### Option 4c — Path-agnostic (no opinion)
 
-`foo compile` requires `--out` for every invocation; no defaults.
+`aip compile` requires `--out` for every invocation; no defaults.
 
 **Pros**
 - Minimum opinion. Maximum flexibility.
@@ -475,25 +577,25 @@ directly; we'd need a sync step to mirror skills back into
 `~/.claude/skills/<name>/` by default; `--project` writes to
 `./.claude/skills/<name>/`; `--out <path>` overrides for
 non-default locations. Other doc types are path-agnostic — the
-user supplies `--out` or `foo` writes to a default within the
+user supplies `--out` or `aip` writes to a default within the
 source's directory.
 
-This makes `foo compile` for skills do the obvious thing: produce
+This makes `aip compile` for skills do the obvious thing: produce
 something Claude Code immediately picks up. The opinion is small
 and Anthropic-aligned; the override is one flag away.
 
 ## Items deferred to their own discussions
 
-- **DB-publishing layer** (`foo publish`, `foo get`, `foo list`,
-  `foo archive` and friends). All the hard governance problems —
+- **DB-publishing layer** (`aip publish`, `aip get`, `aip list`,
+  `aip archive` and friends). All the hard governance problems —
   provenance, idempotency, sharing, permissions, versioning,
   deprecation, schema migration — live there. Separate discussion
   when we're ready.
 - **Connector interface contract** (when we DO get to publishing).
   Already flagged as Open Question §1 in the [main spec](../spec.md).
-- **Tool naming.** `foo` is a placeholder. Defer to its own
-  discussion when extraction is closer; CLI naming has marketing
-  implications and shouldn't be rushed.
+- **Tool naming.** Resolved 2026-05-15: **`aip`** (package and
+  binary). See
+  [identity-and-naming.md](identity-and-naming.md).
 
 ## Open questions
 
@@ -535,59 +637,80 @@ What happens when the source MD changes after compile?
 
 Lean: hash + warn (middle option). Allow hand-edits but track them.
 
-### §3 — Schema auto-discovery in `validate`
+### §3 — Schema auto-discovery in `validate.py`
 
-`foo validate <doc>` — does it auto-discover the schema from the
-doc's `schema:` field, or require `--schema`?
+`uv run scripts/validate.py <doc>` — does it auto-discover the schema
+from the doc's `schema:` field, or require `--schema`?
 
-Lean: auto-discover from `schema:`; `--schema` overrides. Validate
-errors clearly if `schema:` is missing AND `--schema` not provided.
+Lean: auto-discover from `schema:`; `--schema` overrides. Exit with
+a clear error if `schema:` is missing AND `--schema` not provided.
 
 ### §4 — Sidecar dir / file naming
 
-Currently `meta.yml` (skill folder) and `.foo/` (non-skill docs).
-Both will need a tool-namespaced slug once we name the tool. Locks
-once naming is decided.
+Currently `meta.yml` (skill folder) and `.aip/` (non-skill docs).
+CLI tool name is now `aip` — sidecar dir stays `.aip/`. Locked.
 
-### §5 — `foo compile` for skills with existing scripts/
+### §5 — Compiling into an existing skill folder
 
-If a user has `~/.claude/skills/my-skill/` already containing
-`scripts/` (Anthropic-pattern, hand-authored skill), and runs
-`foo compile <source.md> --name my-skill` — do we preserve
-existing `scripts/` content? Refuse? Move to `references/old/`?
+If a skill folder already exists at `~/.claude/skills/my-skill/`
+(e.g. a hand-authored skill with `scripts/`), and the agent compiles
+into it — do we preserve existing `scripts/` content?
 
 Lean: preserve existing subdirs (don't touch them), only manage
 SKILL.md, `references/`, and `meta.yml`.
 
-### §6 — Agent-invoked vs CLI-invoked split
+### §6 — Agent vs script split: resolved
 
-`compile` and `draft-schema` are primarily agent operations. Are
-they CLI commands at all, or only invocable through skills /
-agent capabilities?
+**Resolved 2026-05-16.** There is no separate CLI binary. Compile,
+draft-schema, and install are agent behaviors guided by SKILL.md.
+Validate and validate-schema are Python scripts bundled in `scripts/`,
+invoked via `uv run` by both the agent (inline) and CI (directly).
+See [§Usage scenarios](#usage-scenarios) and
+[§Validation surface — v0.1](#validation-surface--v01).
 
-Lean: both. Primary path is agent-driven, but CLI exposure lets
-you script them.
+### §7 — Schema discovery convention (open)
+
+For Scenario 1 (no schema specified) to work, the agent must know
+what schemas already exist. The AIP skill should expose:
+1. AIP example schemas (bundled in `examples/schemas/` in the `aip`
+   repo and referenced from the skill).
+2. Project-local schemas — the agent scans for `*.schema.json` files
+   in the current project.
+3. Schemas embedded in the user's installed skills — convention for
+   where these live inside a skill folder is not yet defined.
+
+Open questions: Should there be a `schemas/` convention inside skill
+folders? Should `uv run scripts/validate_schema.py` have a `--register` flag to
+add a validated schema to a known list? How does the agent discover
+schemas from other users / teams? This needs its own discussion before
+the AIP skill can be fully specified.
 
 ## Tentative leans summary
 
-| Item                                    | Lean                                                          |
-|-----------------------------------------|---------------------------------------------------------------|
-| 1. What does `foo compile` produce?     | Whole skill folder; SKILL.md primary, source in `references/` |
-| 2. Where does metadata live?            | Hybrid — agent-facing in SKILL.md frontmatter; tooling in `meta.yml` |
-| 3. Skills vs general docs output shape? | Folder for skills, single-file + `.foo/` sidecar for docs     |
-| 4. File system layout vs Claude Code?   | In-place: skills default to `~/.claude/skills/`; `--out` overrides |
+| Item                                        | Lean / Status                                                                           |
+|---------------------------------------------|-----------------------------------------------------------------------------------------|
+| Separate CLI binary?                        | **No** — validation is scripts in `scripts/` of the `aip` skill (resolved 2026-05-16)  |
+| Validation surface                          | `uv run scripts/validate.py` + `uv run scripts/validate_schema.py` (resolved 2026-05-16) |
+| compile / draft-schema as commands?         | **No** — agent behaviors guided by SKILL.md knowledge (resolved 2026-05-16)            |
+| Script language                             | Python with PEP 723 inline deps, run via `uv run` (resolved 2026-05-16)                |
+| 1. What does compilation produce?           | Whole skill folder; SKILL.md primary, source in `references/`                          |
+| 2. Where does metadata live?               | Hybrid — agent-facing in SKILL.md frontmatter; tooling in `meta.yml`                   |
+| 3. Skills vs general docs output shape?     | Folder for skills, single-file + `.aip/` sidecar for docs                              |
+| 4. File system layout vs Claude Code?       | Agent installs directly to `~/.claude/skills/` or `.claude/skills/`                    |
+| 5. Sidecar dir name                         | `.aip/`                                                                                 |
+| 6. Agent vs script split                    | Resolved — see §6                                                                       |
+| 7. Schema discovery convention              | **Open** — see §7                                                                       |
 
-If these all land, the v0.1 CLI shrinks to:
+The v0.1 validation surface is two scripts in `scripts/`:
 
 ```bash
-foo compile <source.md> --schema <name|path> --name <skill-or-doc-name> [--out <path>] [--project]
-foo validate <skill-folder|doc.yml> [--schema <name|path>]
-foo schema validate <schema.json>
+uv run scripts/validate.py <skill-folder|doc.yml> [--schema <name|path>]
+uv run scripts/validate_schema.py <schema.json>
 ```
 
-Three commands. Everything else (publish, get, list, archive,
-draft-schema as a CLI vs as a skill) is either deferred or
-agent-driven.
+Compile, draft-schema, and install are agent behaviors guided by the
+AIP skill — not scripts. Everything else (publish, get, list, archive)
+is deferred to the DB-publishing discussion.
 
 ## Sources
 

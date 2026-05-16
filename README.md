@@ -1,6 +1,6 @@
 # AIP — Agent Instruction Protocol
 
->  Codify Skills & Docs for Autonomous Agents — Engineer and govern reliable AI workflows like code.
+>  Compile Skills for Autonomous Agents to engineer and govern reliable AI workflows like code.
 
 Your team's skills, prompts, deliberations, and runbooks are the
 documents that drive your AI workflows. Today they live as ad-hoc
@@ -29,7 +29,7 @@ them.
 
 1. **Reliability for autonomous workflows.** Schema validation catches
    structural drift at write time. Silent bugs in skills and prompts
-   stop being silent.
+   stop being silent. Evalautions can be associated to specific parts of structured skill and adrferssed in a targeted matter 
 2. **Lower cost per AI interaction.** Compressed structured documents
    cut token usage 40–60% versus their human-prose sources. Savings
    compound across every long-running session and every sub-agent
@@ -47,6 +47,13 @@ them.
 6. **Audit and governance.** Every agent decision lives in a queryable
    graph with provenance back to its source document. AI-driven
    workflows become inspectable, not opaque.
+7. **Zero-friction entry point for skill authoring.** If you've never
+   written a Claude Code skill before, using AIP is how you get your
+   first one. The agent walks you through it conversationally and
+   compiles the output into a correctly-structured skill folder you can
+   inspect and learn from. No prior knowledge of the Skills spec
+   required — the process teaches you the format by producing a working
+   example of it.
 
 ---
 

@@ -1,19 +1,17 @@
 # AIP — Agent Instruction Protocol — spec (draft v0.1)
 
-> **Status: draft.** Captures decisions made through the chat session
-> on 2026-05-15. Several sections are settled; two have real
-> open-question subsections that may get promoted to standalone
-> discussion docs. Pre-extraction — this project lives in the `ki` repo
-> for now and will be lifted into its own repo when the v0.1 spec
-> stabilizes.
+> **Status: draft.** Captures decisions made through 2026-05-15.
+> Several sections are settled; several open-question subsections
+> remain and may be promoted to standalone discussion docs.
 
 > **Protocol name: AIP — Agent Instruction Protocol** (committed per
 > [identity-and-naming.md](discussions/identity-and-naming.md)).
 > Positioned upstream of agent runtime / execution-graph protocols
-> (LangGraph, ADK). Reference compiler tool name: TBD at extraction
-> (Forge / Anvil / Codify / Lattice candidates). The point: a thin
-> format + storage protocol for the documents that drive autonomous
-> agent behavior.
+> (LangGraph, ADK). Reference implementation: the **`aip` skill**
+> (bundled in this repo), which includes validation scripts in
+> `scripts/`. No separate binary installation required. The point: a
+> thin format + storage protocol for the documents that drive
+> autonomous agent behavior.
 
 
 ## Value Proposition
@@ -116,7 +114,7 @@ agent-executable structure.
 |--------------------------|--------------------------------------------------------|
 | Source language          | Human-prose markdown                                   |
 | Target language          | Schema-validated YAML                                  |
-| Type system              | JSON Schema family                                     |
+| Type system              | JSON Schema (https://json-schema.org/)                 |
 | Static checks            | Schema validation                                      |
 | Intermediate rep (IR)    | The validated YAML (consumed directly OR projected)    |
 | Backends                 | Per-database connectors (Neo4j, Postgres, …)           |
@@ -141,18 +139,23 @@ them to compromise.
 
 Concretely:
 
-- **Per doc type, a JSON Schema** declares the structured shape of that
-  doc (a `deliberation` looks like X, a `spec` looks like Y). The
-  schema is database-agnostic — pure data shape.
-- **An AI-companion file** (validated against the schema) accompanies
-  each human-prose doc. Same content, restructured for AI
-  ingestibility. The human doc stays canonical for humans; the
-  AI-companion is the machine-readable face.
+- **Teams author JSON Schemas** — one per doc type — declaring the
+  structured shape of that doc (a `deliberation` looks like X, a `spec`
+  looks like Y). These schemas are not part of the AIP protocol; they
+  are what teams *produce using* AIP. AIP defines the conventions a
+  schema must follow to be AIP-compliant (see
+  [§AIP schema conventions](#aip-schema-conventions)). The underlying
+  type system is standard [JSON Schema](https://json-schema.org/).
+- **An AIP-compiled document** (validated against its declared schema)
+  accompanies each human-prose source. Same content, restructured for
+  AI ingestibility. The human doc stays canonical for humans; the
+  compiled document is the machine-readable face.
 - **A vendor-neutral mapping rule set** describes how schema-validated
   YAML projects into a graph (or any other storage shape).
 - **Connectors** are per-database adapters that implement the mapping.
-  Reference connector: Neo4j. Anyone could write a Postgres / DynamoDB
-  / DuckDB connector by implementing the same interface.
+  Each connector is a separate package (`aip-neo4j`, `aip-postgres`,
+  …). Anyone can write a compliant connector by implementing the
+  connector interface.
 
 ## What this is NOT
 
@@ -182,7 +185,7 @@ Concretely:
    without knowing or caring how they'll be stored.
 
 4. **Source documents are optional.** A producer can ingest an
-   AI-companion YAML alone, or include the original markdown source
+   AIP-compiled YAML alone, or include the original markdown source
    as a linked Document. The DB carries no opinion either way.
 
 5. **Strict-core, open-extensions schemas.** Every object in a schema
@@ -190,38 +193,51 @@ Concretely:
    doc-specific structure that doesn't fit. Predictability without
    brittleness.
 
-6. **Lossy is the only ingest mode.** AI-companion files in lossless
+6. **Lossy is the only ingest mode.** AIP-compiled files in lossless
    mode (with a `context:` TAIL preserving original phrasing) are not
    ingested into the DB. The lossless mode targets a different
    consumer (an agent reconstructing original tone). If lossless
    storage matters later, it gets its own schema and connector.
 
+## AIP schema conventions
+
+AIP does not define a fixed schema family. Teams create their own
+JSON Schemas for their doc types. AIP defines the conventions a
+schema must follow to be considered AIP-compliant. The
+`scripts/validate_schema.py` script bundled in the `aip` skill
+enforces these (see [§The AIP skill](#the-aip-skill)).
+
+**Required conventions:**
+
+- Schemas must not define properties using AIP-reserved names: `id`,
+  `schemaId`, `key`, `idx`, `_source`. These are injected by the
+  connector at ingest time.
+- The root schema must follow the strict-core / open-extensions
+  pattern: a closed key set plus an optional `extensions:` map.
+- `$defs` entries become node types in storage; each must have a
+  clearly-named key (becomes the node label).
+
+**The `examples/schemas/` directory** (`deliberation.schema.json`,
+`generic.schema.json`) contains reference schemas that demonstrate
+these conventions — they are not part of the AIP protocol itself.
+
 ## Components
 
-### A. Schema family
+### A. AIP-compiled documents
 
-JSON Schemas, one per doc type, plus a generic fallback. Drafted in
-`docs/workflow/schemas/`. Today:
+The output of the `compile` skill — a YAML document validated against
+a team's AIP-compliant schema. This is what agents read and what
+connectors ingest.
 
-- `generic.schema.json` — loose fallback. Required minimum: `doc`,
-  `schema`, `status`.
-- `deliberation.schema.json` — strict-core, open-extensions, for
-  deliberation/discussion docs.
+### B. Producer pipeline (human → AIP-compiled document)
 
-Future doc-type schemas (spec, release, runbook, post-mortem,
-incident, ADR, …) follow the same strict-core/open-extensions pattern.
+Two paths:
 
-### B. Producer pipeline (human → schema-validated YAML)
-
-Two paths into a schema-validated YAML companion:
-
-- **Agent path.** A human writes the prose; an agent runs the
-  `/ai-rewrite` skill (`docs/workflow/ai-rewrite.md`) to compress it
-  into the schema-validated companion. Today this is the primary
-  path.
-- **Human path (TBD).** A human authors the YAML directly, optionally
-  with template scaffolding. This needs its own skill —
-  see [Open Questions §3](#open-questions).
+- **Agent path (primary).** A human writes prose; the agent — guided
+  by the AIP skill — compiles it into the AIP-compiled companion.
+- **Schema authoring path.** The agent — guided by the AIP skill —
+  helps a team draft a new AIP-compliant JSON Schema from a
+  description, validating each iteration with `scripts/validate_schema.py`.
 
 ### C. Vendor-neutral mapping rules
 
@@ -229,23 +245,53 @@ A general rule set that derives a graph (or any storage shape) from a
 schema's structure. Database-agnostic. Documented in
 [§Mapping rules](#mapping-rules).
 
-### D. Connectors (vendor-specific)
+### D. Connectors (separate packages)
 
-Per-database adapters. Implement the connector interface (see
-[Open Questions §1](#open-questions)). Reference connector: Neo4j
-(see [§Reference connector](#reference-connector-neo4j)).
+Per-database adapters that implement the connector interface (see
+[Open Questions §1](#open-questions)). Each connector is its own
+package:
 
-### E. Skills
+- **`aip-neo4j`** — reference connector (see [§Reference connector](#reference-connector-neo4j-aip-neo4j))
+- `aip-postgres`, `aip-duckdb`, … — future connectors
 
-The agent-facing entry points. Today:
+Connectors do not live in this repo. The connector interface contract
+(what methods every connector must implement) is specified here and
+enforced by the reference connector.
 
-- `/ai-rewrite` — agent-side compression (existing).
+### E. The AIP skill (in this repo)
 
-Future:
+The `aip` skill is the canonical producer-side deliverable. It lives
+in this repo and is coupled to this spec — when AIP conventions
+change, the skill updates in lockstep. No separate binary or package
+installation is required.
 
-- `/structured-doc` — generic skill explaining the project, schema
-  family, and producer pipeline. May absorb `/ai-rewrite` or stay
-  alongside. See [Open Questions §3](#open-questions).
+**Skill folder layout:**
+
+```
+~/.claude/skills/aip/
+  SKILL.md                    ← agent knowledge (see §The AIP skill)
+  scripts/
+    validate.py               ← validates a doc against its declared schema
+    validate_schema.py        ← validates a schema against AIP conventions
+  references/
+    examples/                 ← example schemas the agent can reference
+      deliberation.schema.json
+      generic.schema.json
+```
+
+**Scripts** are self-contained Python using [PEP 723](https://peps.python.org/pep-0723/)
+inline dependency declarations, run via `uv run`:
+
+```bash
+uv run scripts/validate.py path/to/doc.yml
+uv run scripts/validate_schema.py path/to/schema.json
+```
+
+The agent invokes these as part of the conversational workflow
+(e.g. as a final check before offering to install a compiled skill).
+For CI pipelines and pre-commit hooks without an agent, the same
+scripts run directly — no separate install step, because `uv run`
+handles the isolated environment.
 
 ## Architecture
 
@@ -258,21 +304,22 @@ Future:
               ▼
    ┌─────────────────────┐
    │   producer pipeline │
-   │  (skill / template) │  ← /ai-rewrite or /structured-doc
+   │   (agent + AIP      │  ← agent guided by AIP skill; scripts/
+   │    skill + scripts) │     validate.py as final check
    └──────────┬──────────┘
               │
               ▼
    ┌─────────────────────┐
-   │   schema-validated  │  ← validates against a JSON Schema
-   │   YAML companion    │     (deliberation / spec / runbook / …)
-   │   e.g. ai-discussion│
+   │   AIP-compiled doc  │  ← validated against team's JSON Schema
+   │   (schema-validated │     (deliberation / spec / runbook / …)
+   │    YAML)            │
    └──────────┬──────────┘
               │
               │   ─── stop here if no DB needed ───
               │
               ▼
    ┌─────────────────────┐
-   │   connector         │  ← Neo4j (reference) | Postgres | …
+   │   connector         │  ← aip-neo4j (reference) | aip-postgres | …
    │   - validates       │
    │   - applies schema  │     (constraints/indexes if not exist)
    │   - ingests         │
@@ -420,7 +467,11 @@ Source ingest is opt-in per producer invocation. Some YAMLs have no
 sibling markdown (agent-authored) and that's fine — no source node,
 no `[:DERIVED_FROM]` edge.
 
-## Reference connector: Neo4j
+## Reference connector: Neo4j (`aip-neo4j`)
+
+> This connector lives in the `aip-neo4j` package, not in this repo.
+> Its design is specified here as the reference implementation of the
+> connector interface.
 
 ### Graph shape
 
@@ -486,22 +537,51 @@ descendant nodes, reconstructs the YAML, validates against the
 schema (must round-trip), writes to stdout or `--out`. The reverse
 mapper is part of v0.1 — it's how Principle 2 gets verified.
 
-## Skills
+## The AIP skill
 
-### `/ai-rewrite` (existing, agent-facing)
+One skill lives in this repo: `aip`. It is coupled to `spec.md` —
+when AIP conventions change, the skill updates in lockstep.
 
-Compresses a human-prose source into a schema-validated AI-companion
-file. Today's primary producer-side path.
+**SKILL.md** is agent-loaded knowledge, not an invocable command.
+The agent reads it to understand how to help a user produce
+AIP-compliant skills and documents. It encodes:
 
-### `/structured-doc` (proposed, generic)
+- What AIP is and when to use it
+- The three usage scenarios (create skill without schema / with schema
+  / author a schema) — see [cli-api.md § Usage scenarios](discussions/cli-api.md)
+- Output format: SKILL.md folder structure, frontmatter requirements,
+  `references/` and `meta.yml` conventions
+- AIP schema conventions (reserved property names, strict-core /
+  open-extensions pattern) — enough for the agent to validate a schema
+  in context before running a script
+- Pointers to example schemas in `references/examples/`
+- Schema discovery hints: where to look for existing schemas in a
+  user's project or installed skills
+- How to invoke `scripts/validate.py` and `scripts/validate_schema.py`
+  as a final check before offering to install
 
-A skill that explains the project to a human or agent encountering
-it for the first time: what is a schema, where do they live, how
-to author / extend / map / ingest. Could absorb `/ai-rewrite` as a
-sub-action, or stay alongside.
+**`scripts/`** contains the validation logic the agent (and CI)
+actually runs:
 
-→ See [Open Questions §3](#open-questions) for the unify-vs-split
-decision.
+- `validate.py` — loads a document, reads its declared `schema:` field,
+  fetches or resolves the schema, validates with `jsonschema`. Exits
+  non-zero with structured error output on failure.
+- `validate_schema.py` — validates a JSON Schema file against AIP
+  conventions (reserved property names, strict-core pattern, `$defs`
+  naming). Exits non-zero with structured error output on failure.
+
+Both scripts use [PEP 723](https://peps.python.org/pep-0723/) inline
+dependency declarations and are run via `uv run` — isolated
+environment, no install step:
+
+```bash
+uv run scripts/validate.py path/to/doc.yml
+uv run scripts/validate_schema.py path/to/schema.json
+```
+
+The compile, draft-schema, and install operations are things the
+agent *does* as part of the conversational workflow — not sub-commands
+of the skill.
 
 ## Open Questions
 
@@ -547,24 +627,32 @@ My weak lean: store on edge always. Bloat is small; ambiguity
 prevention is reliable. But this is design-shaped enough that it
 deserves its own discussion.
 
-### §3 — Skill: one generic vs split (human-facing vs agent-facing)
+### §3 — Skill model: resolved
 
-The producer pipeline currently has one entry point (`/ai-rewrite`)
-which is agent-facing — an agent transforms human prose into the
-companion. We may also need a human-facing entry point for authors
-who want to write the YAML directly, or who want a template.
+**Resolved 2026-05-16.** One skill: `aip` — agent-loaded knowledge,
+not an invocable command. Compile, draft-schema, and install are
+agent behaviors guided by this skill. See [§The AIP skill](#the-aip-skill).
 
-Options:
+### §8 — Schema discovery convention (open)
 
-- One generic `/structured-doc` skill with sub-actions
-  (`compress`, `scaffold`, `validate`, `ingest`).
-- Two skills: `/ai-rewrite` (agent compresses) +
-  `/structured-doc` (human authors / scaffolds).
-- Three+ skills (one per action). Probably too granular.
+For the most common usage scenario (user wants to create a skill,
+no schema specified), the agent must know what schemas already exist
+and offer informed suggestions. Three sources need discovery
+conventions:
 
-My weak lean: start with one generic skill, sub-actions, and
-demote `/ai-rewrite` to an alias if it survives. Easier to split
-later than to merge.
+1. **AIP example schemas** — bundled in `examples/schemas/` and
+   exposed via the AIP skill. Solved by the skill itself.
+2. **Project-local schemas** — agent scans for `*.schema.json` files
+   in the current working directory tree. Convention not yet
+   specified: depth limit? ignore paths? naming requirements?
+3. **Schemas in installed skills** — a skill folder may embed a
+   schema it was compiled against. Convention for where this lives
+   inside the folder (e.g., `references/schema.json`?) is not yet
+   defined.
+
+Until this is resolved, the AIP skill cannot fully implement Scenario 1.
+This likely needs its own discussion doc before the skill can be
+written.
 
 ### §4 — Source markdown schema
 
@@ -577,19 +665,11 @@ just `doc`/`schemaId`/`content`/`source_path`), or is it
 schema-less? Probably the former for consistency — every Document
 node should validate against some schema, even a minimal one.
 
-### §5 — Repo extraction timing
+### §5 — Repo extraction: resolved
 
-Protocol name committed: **AIP — Agent Instruction Protocol** (per
-[identity-and-naming.md](discussions/identity-and-naming.md)). Tool
-name (the reference compiler) deferred to extraction time. The
-remaining question is *when* to extract from `ki`: premature
-extraction means context-loss for the few remaining design
-decisions; late extraction means coupling with `ki` that's painful
-to break.
-
-Lean: extract once the v0.1 spec is settled and at least one
-non-Neo4j connector exists (validates the vendor-neutral claim).
-Pick the tool name as part of extraction.
+**Resolved 2026-05-15.** Extracted. This repo (`aip`) is the canonical
+AIP protocol resource. Reference compiler package: **aip**.
+Connector packages (`aip-neo4j`, `aip-postgres`, …) are separate repos.
 
 ### §6 — Schema versioning
 
@@ -648,25 +728,45 @@ required in CI.
 
 ## Glossary
 
-- **AI-companion file** — the YAML doc validated against a schema,
-  produced from a human-prose source. Lives next to the source as
-  `ai-<name>.md`.
-- **Connector** — a per-database adapter that implements the
-  vendor-neutral mapping rules.
+- **AIP-compiled document** — the YAML doc validated against a
+  team's AIP-compliant schema, produced from a human-prose source by
+  the `compile` skill.
+- **AIP-compliant schema** — a JSON Schema that follows AIP
+  conventions (no reserved property names, strict-core /
+  open-extensions pattern). What teams produce with agent assistance;
+  what `scripts/validate_schema.py` checks.
+- **aip skill** — the reference implementation of AIP. A Claude Code
+  skill (`~/.claude/skills/aip/`) containing SKILL.md (agent
+  knowledge) and `scripts/` (validation scripts run via `uv run`).
+  No separate binary installation required.
+- **Connector** — a per-database adapter (separate package: `aip-neo4j`,
+  `aip-postgres`, …) that implements the vendor-neutral mapping rules.
 - **Mapping rules** — vendor-neutral conventions for projecting a
-  schema-validated YAML into storage.
+  schema-validated YAML into storage. Specified here; implemented per connector.
 - **Producer** — the team / pipeline that authors and validates
-  AI-companion files. Today: `/ai-rewrite` skill.
+  AIP-compiled documents using the `compile` skill.
 - **Round-trip** — the cycle YAML → storage → YAML, where the
   reconstructed YAML re-parses to the same data structure.
-- **Schema** — a JSON Schema declaring the shape of one doc type.
-- **Schema family** — the set of schemas a producer team uses
-  (deliberation, spec, runbook, …).
+- **Schema** — a JSON Schema declaring the shape of one doc type,
+  authored by a team to follow AIP conventions.
 - **Source markdown** — the original human-prose document; optional
   ingest target.
 
 ## Change log
 
-- **2026-05-15** — Initial draft. Captured: two-purpose framing,
-  six non-negotiable principles, mapping rule set, Neo4j reference
-  connector spec, seven open questions.
+- **2026-05-16 (session 3)** — Updated to reflect: (1) no separate
+  CLI binary — validation is `scripts/validate.py` and
+  `scripts/validate_schema.py` bundled inside the `aip` skill, run
+  via `uv run`; (2) skill model: one `aip` skill (SKILL.md = agent
+  knowledge, `scripts/` = validation tooling); (3) compile,
+  draft-schema, and install are agent behaviors guided by the skill,
+  not separate commands; (4) three usage scenarios documented in
+  `cli-api.md`; (5) schema discovery added as open question §8.
+- **2026-05-15 (session 2)** — Updated to reflect: (1) CLI name
+  `aip`; (2) schemas in `examples/` are team-produced AIP-compliant
+  examples, not the protocol itself — AIP uses standard JSON Schema;
+  (3) connectors are separate packages (`aip-neo4j`, …); (4) closed
+  open questions §3 and §5.
+- **2026-05-15 (session 1)** — Initial draft. Captured: two-purpose
+  framing, six non-negotiable principles, mapping rule set, Neo4j
+  reference connector spec, seven open questions.
