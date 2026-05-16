@@ -69,4 +69,31 @@ them.
 
 ---
 
+## Get started
+
+Install the AIP skill into your Claude Code personal skills directory:
+
+```bash
+git clone https://github.com/zach-blumenfeld/aip ~/.claude/skills/aip
+```
+
+That's it. Claude Code picks up the skill automatically at the next
+session. Your agent will know how to compile, validate, and iterate
+on AIP-compliant skills and documents.
+
+**Requirements:** [uv](https://docs.astral.sh/uv/) for the bundled
+validation scripts (`uv run scripts/validate.py`,
+`uv run scripts/validate_schema.py`).
+
+**Cross-platform:** The AIP skill follows the open
+[Agent Skills](https://agentskills.io) standard and works anywhere
+that standard is supported — Claude Code, Cursor, and others.
+
+**Discoverable via community registries:**
+[ClaudSkills](https://claudskills.com/) |
+[SkillsMP](https://skillsmp.com/) |
+[Skills.sh](https://skills.sh)
+
+---
+
 See [`spec.md`](spec.md) for the technical specification.
