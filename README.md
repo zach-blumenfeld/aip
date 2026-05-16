@@ -1,6 +1,8 @@
-# AIP — Agent Instruction Protocol
+# <img src="img/aip.png" alt="aip logo" width="120" align="left" /> AIP — Agent Instruction Protocol
 
 >  Compile Skills for Autonomous Agents to engineer and govern reliable AI workflows like code.
+<br clear="left">
+
 
 Your team's skills, prompts, deliberations, and runbooks are the
 documents that drive your AI workflows. Today they live as ad-hoc
