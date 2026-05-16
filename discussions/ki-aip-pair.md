@@ -1,32 +1,34 @@
-# Discussion: ki + AIP as a complete system (and what to call it)
+# Discussion: fastKL — the information + instruction system
 
-> **Status: deliberation, early.** Captures a framing that surfaced
-> mid-AIP-work: ki (information / declarative knowledge) and AIP
-> (instruction / procedural knowledge) are two halves of a single
-> conceptual whole — the persistent knowledge an agent needs to
-> operate autonomously. Open question: is this a project we'd
-> build, or a frame we'd use in writing/talks? Naming follows the
-> answer.
+> **Status: framing settled, details in progress.** The umbrella
+> name for ki + AIP is **fastKL** — a fast, lightweight knowledge
+> layer for autonomous agents. It contains two layers: an
+> **information layer** (implemented by ki) and an **instruction
+> layer** (built on the AIP protocol, persisted via `aip-graph` /
+> `aip-graph-neo4j`). Naming is decided; open questions are about
+> architecture details and sequencing, not identity.
 
-## What triggered this
+## What fastKL is
 
-While working on AIP's identity ([identity-and-naming.md](identity-and-naming.md)),
-the relationship between ki and AIP came into focus:
+**fastKL** = a fast, lightweight knowledge layer for autonomous
+agents. It contains two layers:
 
-- **ki** = a knowledge index. Unstructured / semi-structured notes,
-  conversations, references. Retrieval-style access (vector + graph).
-  Answers "what do I / we / the team know about X?"
-- **AIP** = a structured protocol for compiled agent instructions.
-  Skills, runbooks, deliberations, specs. Schema-validated;
-  queryable; round-trippable. Answers "what should the agent do
-  about Y?"
+| Layer                 | What it is                                                                                                                                                       | Implemented by                                  |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------|
+| **Information layer** | Declarative knowledge — facts, history, prior decisions. Unstructured / semi-structured notes, conversations, references. Answers "what do we know about X?"    | `ki`                                            |
+| **Instruction layer** | Procedural knowledge — skills, runbooks, deliberations, specs. Schema-validated; queryable; round-trippable. Answers "what should the agent do about Y?"        | AIP protocol + `aip-graph` / `aip-graph-neo4j` |
 
-These map cleanly onto cognitive science's classic distinction:
+`aip-graph` is the concept of a persistent graph store for
+AIP-compiled instructions. `aip-graph-neo4j` is the tentative name
+for the Neo4j implementation of that concept. (The naming pattern
+mirrors AIP connectors generally: `aip-graph-<vendor>`.)
 
-| Type of knowledge        | Cognitive-science term | What it covers                  | Project |
-|--------------------------|------------------------|---------------------------------|---------|
-| Knowing **that**         | Declarative knowledge  | Facts, history, prior decisions | ki      |
-| Knowing **how**          | Procedural knowledge   | Skills, rules, runbooks         | AIP     |
+These map onto cognitive science's classic distinction:
+
+| Type of knowledge    | Cognitive-science term | fastKL layer       |
+|----------------------|------------------------|--------------------|
+| Knowing **that**     | Declarative knowledge  | Information (ki)   |
+| Knowing **how**      | Procedural knowledge   | Instruction (AIP)  |
 
 Cognitive science treats these as the two complementary halves of
 any complete knowledge system. **Truly autonomous behavior requires
@@ -34,11 +36,11 @@ both.** Today's agent ecosystem has fragmented tooling for each
 side (vector stores / RAG for declarative; skill frameworks /
 prompt management for procedural) and nothing that names the pair.
 
-ki + AIP together = **the persistent knowledge layer an agent
-needs to operate without continuous human supervision.** Persistent
-across sessions; growable over time; queryable by both humans and
-agents; cross-linkable (an instruction in AIP can reference a doc
-in ki for context, and vice versa).
+fastKL = **the persistent knowledge layer an agent needs to operate
+without continuous human supervision.** Persistent across sessions;
+growable over time; queryable by both humans and agents;
+cross-linkable (an instruction in AIP can reference a doc in ki
+for context, and vice versa).
 
 ## Why naming the pair matters
 
@@ -55,30 +57,27 @@ Without a name for the pair, three things are harder:
    the two, unified governance, joint queries spanning both)
    needs an umbrella to belong to.
 
-## The conceptual frame is sound
-
-Before debating names, worth being explicit about what the frame
-*is* and *isn't*:
+## What fastKL is and is not
 
 **Is:**
-- A declarative + procedural knowledge layer for autonomous agents
+- A two-layer (information + instruction) knowledge layer for autonomous agents
 - Persistent across sessions; survives between agent runs
 - Queryable by both humans (governance, audit, learning) and
   agents (context retrieval, skill loading)
-- The substrate the agent operates *on* — distinct from the
-  substrate the agent operates *with* (LLM, tools, MCP)
+- The knowledge substrate the agent operates *on* — distinct from
+  the substrate the agent operates *with* (LLM, tools, MCP)
 
 **Is not:**
 - The agent runtime (LangGraph, ADK, AgentOps live here)
 - The model layer (LLMs, embedding models)
 - The tool layer (MCP servers, function calling)
 - Working memory (in-context state during a session)
-- Just RAG — RAG is a retrieval pattern; this is an architectural
+- Just RAG — RAG is a retrieval pattern; fastKL is an architectural
   layer that may or may not use RAG mechanically
 
 ## Fast KL design principles
 
-ThnkMark's knowledge layer should be **fast to adopt** — not just
+fastKL's knowledge layer should be **fast to adopt** — not just
 fast at runtime. The guiding principles:
 
 ### 1. Easy to get started
@@ -148,7 +147,7 @@ explored, which tools it called. Companies like Foundation Capital,
 Windmill, and others position this as the core of an agent knowledge
 layer.
 
-**ThnkMark (ki + AIP) takes a deliberately different stance.**
+**fastKL (ki + AIP) takes a deliberately different stance.**
 
 A decision trace is an *instance of an instruction being executed*.
 It is downstream. The instruction itself — the runbook, the skill,
@@ -173,7 +172,7 @@ For an MVP knowledge layer:
   considered, carries the signal traces would provide — without
   requiring runtime instrumentation.
 
-This distinction should shape positioning: ThnkMark is about the
+This distinction should shape positioning: fastKL is about the
 instruction layer that drives agent behavior, not the observability
 layer that records it. Decision traces belong to a future
 observability component (see Open Question §4), not the MVP.
@@ -193,198 +192,106 @@ The dumb-reach name. Four reasons it falls short:
    not the data structure.
 4. **It leads with traces.** Most "context graph" framing centers
    on execution history and decision traces — exactly what
-   ThnkMark is *not* (see above).
+   fastKL is *not* (see above).
 
-## Candidate names
+## Naming decision — settled
 
-Each candidate carries a different framing. Worth picking the
-*framing* before the name.
+The umbrella name is **fastKL**. It captures the core promise:
+a fast, lightweight knowledge layer. No jargon, no overloaded
+terms ("context", "substrate"), works as both a concept word and
+a future project name.
 
-### Cognitive-science accurate
+**Names considered and rejected** (for the record):
+- *Agent Substrate* — accurate but abstract; "substrate" is
+  overloaded in chemistry and blockchain
+- *I&I (Information & Instruction)* — descriptive but doesn't
+  scale gracefully if the umbrella grows beyond two layers
+- *Agent Cognitive Layer / Agent Cognition Layer* — too academic
+- *Episteme & Techne* — Greek philosophy precision; alienating for
+  most audiences
+- *Agent Atlas, Almanac, Compendium* — collection metaphors; don't
+  convey speed or agent-specificity
+- *ThnkMark* — playful (think + markdown + Invincible/Omni-Man
+  reference); rejected because it doesn't convey what it is to a
+  first-time reader
 
-- **Agent Cognitive Layer** — technical, accurate, slightly academic
-- **Agent Cognition Layer** — same family, fewer adjective syllables
-- **Cognitive Substrate** — emphasizes the foundation angle
-
-### Substrate / foundation metaphor
-
-- **Agent Substrate** — what the agent runs on. Clean, technical,
-  evocative. Subtitles naturally as "Agent Substrate = ki (the
-  information layer) + AIP (the instruction layer)."
-- **Agent Bedrock** — collides with AWS Bedrock; reject
-
-### Greek philosophy (the literal info + skill dichotomy)
-
-- **Episteme & Techne** — Episteme = declarative knowledge;
-  Techne = skill/craft. Captures the dichotomy with one-word
-  precision. Pretentious; great for the right audience,
-  alienating for others. Probably reject for marketing; could
-  show up in spec-doc footnotes for the philosophy nerds.
-
-### Borrowing the user's own framing
-
-- **I&I** (Information & Instruction) — pair-of-protocols story.
-  Brands as "the I&I stack," "the I&I layer," "I&I-compliant
-  agent." More descriptive than evocative.
-
-### Comprehensive-collection metaphor
-
-- **Agent Codex** — taken (GitHub Codex). Reject.
-- **Agent Atlas** — broad mapping; available; less differentiated
-- **Agent Almanac** — reference + procedural; calendar/farm flavor;
-  unusual but evocative
-- **Agent Compendium** — comprehensive collection; heavy
-
-### Persistent-knowledge framing
-
-- **Agent Knowledge Layer (AKL)** — descriptive, accurate,
-  slightly flat
-- **Persistent Agent Knowledge** — over-specified
-- **Agent Memory Architecture** — collides with various
-  AI-memory frameworks
-
-## Tentative leans
-
-### Honest pick across the candidates
-
-**Agent Substrate.** It captures that this is what the agent
-operates *on*, names a thing people can point at, doesn't lean on
-jargon, subtitles cleanly. The two-component story is natural:
-"Agent Substrate = ki (the information layer) + AIP (the
-instruction layer)."
-
-**Runner-up: I&I / Information & Instruction.** Borrows the framing
-that surfaced the concept. Maps to a pair-of-protocols story: ki
-provides the I, AIP provides the I, together they form the I&I
-stack. More descriptive than brandable; might land harder in
-text than in talks.
-
-### But: the harder question first
-
-Before committing to a name, **decide what this is:**
-
-#### Option A — Umbrella project we'd build
-
-A real project that ships its own components: cross-link tooling
-between ki and AIP, joint query layer, unified governance, shared
-identity / auth across both. Branded; marketed; has a website.
-
-→ Name needs to be brandable. **Lean: Agent Substrate.**
-
-#### Option B — Conceptual frame we'd use in writing/talks
-
-Just a way to talk about ki and AIP together. No new code, no new
-brand. ki ships, AIP ships, the umbrella name appears in slides
-and spec docs but isn't a thing you can `pip install`.
-
-→ Name can stay descriptive. **Lean: Information & Instruction.**
-
-#### Option C — Both, sequenced
-
-Start as a conceptual frame (Option B). Promote to umbrella project
-(Option A) if and when the cross-link tooling, joint queries, or
-unified governance materialize as real work that needs an owner.
-
-→ Name should work as both. **Lean: Agent Substrate.**
-
-**My read:** Option C is the right path. Don't build umbrella
-infrastructure before there's joint work to coordinate. But pick
-a name now that *could* graduate to project-level if the umbrella
-becomes load-bearing. Substrate works as both a concept word ("the
-agent's knowledge substrate") and a project name ("Agent Substrate
-v0.1").
+**Frame vs. project:** fastKL starts as a conceptual frame (ki and
+AIP keep their own identities and repos). It can graduate to an
+umbrella project if cross-link tooling, joint governance, or joint
+queries materialize as real work. No new code or repo needed today.
 
 ## Open questions
 
-### §1 — Project vs. frame (the load-bearing question)
+### §1 — Project vs. frame (settled: frame now, project later)
 
-Settled in Option C above as a tentative lean. Re-open if/when:
+fastKL is currently a conceptual frame — ki and AIP ship
+independently; fastKL names their relationship. Promote to an
+umbrella project when:
 - Cross-doc references between ki and AIP need a shared schema
 - Joint governance / audit queries become a real ask
 - Auth / identity needs to flow across both
 
-These are the signals that the frame should graduate to a project.
+### §2 — How does ki get repositioned?
 
-### §2 — How does ki itself get extracted / repositioned?
-
-ki is currently the parent repo. AIP is a sub-project being
-extracted out. If we eventually name an umbrella over both, what
-happens to ki's identity? Three paths:
-
-- **Keep ki as-is.** ki stays a knowledge index; AIP stays an
-  instruction protocol; Agent Substrate is the conceptual umbrella.
-  Each component keeps its own positioning.
-- **Reposition ki under the umbrella.** ki becomes "the information
-  side of Agent Substrate." Tighter integration story, but ki
-  loses some standalone identity.
-- **Rebrand ki entirely** to match the umbrella naming. Disruptive;
-  probably wrong unless there's a strong reason.
-
-Lean: keep ki as-is. The umbrella names the relationship, not the
-components.
+ki is currently the parent repo; AIP is being extracted out.
+Lean: **keep ki as-is.** ki stays a knowledge index implementing
+the information layer; fastKL names the relationship, not the
+components. ki does not need to rebrand.
 
 ### §3 — Does this affect AIP's identity?
 
-AIP committed to "Agent Instruction Protocol" with a clean
-upstream-of-execution positioning. The umbrella frame doesn't
-change that — AIP is still AIP; it's just *also* the procedural
-half of a larger conceptual whole. The "AIP, with \<tool\> as the
-reference implementation" positioning is unchanged.
+No. AIP stays "Agent Instruction Protocol" with its upstream-of-
+execution positioning unchanged. Marketing copy can optionally
+reference fastKL ("AIP is the instruction layer of fastKL").
 
-What might change: AIP's marketing material can reference the
-umbrella ("AIP is the instruction half of the Agent Substrate
-pair"). Optional; not required.
+### §4 — aip-graph naming (tentative, needs its own discussion)
 
-### §4 — Would other components join the umbrella later?
+The instruction layer's persistence mechanism is tentatively called
+`aip-graph` (concept) / `aip-graph-neo4j` (Neo4j implementation).
+This name hasn't been fully deliberated. Open questions:
+- Is `aip-graph` distinct enough from `aip-neo4j` (previous
+  connector naming)? Does it imply graph-only storage?
+- Should it be `aip-store` or `aip-publish` to stay
+  backend-neutral?
+- How does `aip-graph` relate to the connector interface contract
+  (spec.md §1 open question)?
 
-Today: ki (information) + AIP (instruction). Future plausible
+Needs its own discussion doc before implementation.
+
+### §5 — Would other layers join fastKL later?
+
+Today: information (ki) + instruction (AIP). Future plausible
 additions:
+- **Working memory** — ephemeral in-session state; ki covers
+  long-term, this would be short-term.
+- **Identity / auth** — who the agent IS vs. what it knows or does.
+- **Observability** — traces and execution history (deliberately
+  out of MVP scope; see [§ Instructions first, traces
+  later](#instructions-first-traces-later--a-deliberate-stance)).
 
-- A **memory** layer — ephemeral, in-session working memory that
-  agents accumulate during a task and discard at task end. ki is
-  long-term memory; this would be short-term.
-- A **identity / auth** layer — who the agent IS (its persona,
-  permissions, history) vs. what it knows or does.
-- A **observability** layer — what the agent did, what it said,
-  what it looked at. Adjacent to ki (which captures decisions)
-  but operationally distinct.
+fastKL as a name accommodates additional layers gracefully.
 
-If any of these grow into real components, the umbrella name
-should accommodate them. Substrate / Cognitive Layer both
-accommodate gracefully; "I&I" doesn't (it's literally just two
-things by name).
+### §6 — Brand / domain availability
 
-This argues mildly for Substrate or Cognitive Layer over I&I if
-we expect the umbrella to grow.
+`fastKL` — check `fastkl.dev`, `.io`, `.org` before public
+launch. No known collisions.
 
-### §5 — Brand / domain availability
+## Decisions summary
 
-Defer to the same extraction-time check as AIP. Quick mental
-collision check on Agent Substrate:
-
-- "Substrate" alone is heavily used (chemistry, biology, blockchain
-  / Polkadot)
-- "Agent Substrate" specifically is less used; possibly available
-- Domain check needed: `agentsubstrate.dev`, `.io`, `.org`
-
-## Tentative leans summary
-
-| Question                                  | Lean                                                                              |
-|-------------------------------------------|-----------------------------------------------------------------------------------|
-| Is this a real project or just a frame?   | **Frame now, project later** (Option C); promote when joint work materializes     |
-| Umbrella name lean                        | **Agent Substrate** — works as concept word AND as future project name            |
-| Runner-up name                            | I&I (Information & Instruction) — descriptive, borrows the framing                |
-| Why not "context graph"?                  | "Context" overloaded + passive; "graph" too narrow (data structure ≠ value)       |
-| Does this change ki's identity?           | No — ki stays ki; the umbrella names the relationship, not the components         |
-| Does this change AIP's identity?          | No — AIP stays "Agent Instruction Protocol" with upstream-of-execution positioning |
+| Question                               | Decision                                                                          |
+|----------------------------------------|-----------------------------------------------------------------------------------|
+| Umbrella name                          | **fastKL** — fast, lightweight knowledge layer                                    |
+| Structure                              | Information layer (ki) + Instruction layer (AIP + aip-graph)                     |
+| Frame vs. project?                     | Frame now; promote to project when joint work materializes                        |
+| Does this change ki's identity?        | No — ki stays ki, implements the information layer                                |
+| Does this change AIP's identity?       | No — AIP stays "Agent Instruction Protocol", implements the instruction layer     |
+| Why not "context graph"?               | Overloaded, passive, trace-centric — the opposite of fastKL's stance             |
 
 ## Items deferred
 
-- Brand / domain / repo / package naming for the umbrella, if/when
-  it graduates to a project.
-- Cross-link schema between ki and AIP (e.g., an AIP doc citing a
-  ki note, or a ki note referencing an AIP-validated runbook).
-  Real work, but only when the joint use case is concrete.
-- Joint governance / audit story across both.
-- The "memory / identity / observability" components that might
-  later join the umbrella (Open Question §4).
+- `aip-graph` naming deliberation (Open Question §4 above).
+- Cross-link schema between ki and AIP documents.
+- Joint governance / audit story across both layers.
+- Observability / working memory / identity as future fastKL layers
+  (Open Question §5).
+- Brand / domain check for `fastKL` before public launch.
