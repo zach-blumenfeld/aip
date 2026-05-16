@@ -76,9 +76,111 @@ Before debating names, worth being explicit about what the frame
 - Just RAG — RAG is a retrieval pattern; this is an architectural
   layer that may or may not use RAG mechanically
 
+## Fast KL design principles
+
+ThnkMark's knowledge layer should be **fast to adopt** — not just
+fast at runtime. The guiding principles:
+
+### 1. Easy to get started
+One command to install, zero configuration to run. The first useful
+thing should work within minutes, not after a setup session. The AIP
+skill's conversational compile flow is the on-ramp — if you've never
+authored a structured skill before, the agent walks you through it.
+
+### 2. No specialized knowledge required
+Users should not need to know JSON Schema, graph databases, or any
+AIP internals to get value. Standard formats (Markdown, JSON Schema,
+YAML) that practitioners already know, or can pick up from the output
+the tool produces. The skill itself teaches the format by example.
+
+### 3. No infrastructure required to start
+No database, no cloud service, no third-party account. The core
+value — schema validation, structured compilation, agent-readable
+output — is available with just the skill and `uv`. Connectors
+(`aip-neo4j`, `aip-postgres`) unlock corpus-scale queries but are
+strictly optional and come later.
+
+### 4. No complex multi-vendor lock-in
+Schemas are pure JSON Schema — no database-specific keywords, no
+proprietary extensions. Switching storage backends means swapping a
+connector package, not re-authoring your documents. Nothing
+Anthropic-specific except the reference implementation's delivery
+format (AgentSkills SKILL.md — itself an open standard).
+
+### 5. Standard formats throughout
+Markdown → YAML → JSON Schema. No custom DSL, no proprietary graph
+language, no special query format required at the protocol layer.
+Connectors translate to the target store's native query language —
+Cypher for Neo4j, SQL for Postgres — but that's a connector concern,
+not an AIP concern.
+
+### 6. Incremental adoption
+Each step delivers standalone value:
+
+| Step               | What you get                                  |
+|--------------------|-----------------------------------------------|
+| Install the skill  | Conversational skill authoring + validation   |
+| Compile one doc    | Schema-validated, token-efficient agent input |
+| Add a connector    | Cross-doc queries, corpus-scale insights      |
+| Add more schemas   | Richer corpus; training data; governance      |
+
+You stop at any step and the prior steps still pay off.
+
+### 7. Human-readable source stays canonical
+The prose document is the source of truth. The compiled YAML is a
+build artifact — disposable and reproducible. Authors edit Markdown;
+the compiled form follows. No round-trip brittleness where "you must
+edit the JSON or the compile will overwrite it."
+
+### 8. Instructions-first, not instrumentation-first
+Getting value does not require runtime tracing, logging
+infrastructure, or execution history. The knowledge layer is useful
+*before the first agent run.* See [§ Instructions first, traces
+later](#instructions-first-traces-later--a-deliberate-stance) for
+the full positioning argument.
+
+## Instructions first, traces later — a deliberate stance
+
+The broader industry discourse around "context graphs" and
+"knowledge layers" tends to foreground **decision traces and
+execution history** — logs of what the agent did, what paths it
+explored, which tools it called. Companies like Foundation Capital,
+Windmill, and others position this as the core of an agent knowledge
+layer.
+
+**ThnkMark (ki + AIP) takes a deliberately different stance.**
+
+A decision trace is an *instance of an instruction being executed*.
+It is downstream. The instruction itself — the runbook, the skill,
+the deliberation — is upstream. An agent that reads a well-authored
+AIP-compiled skill before acting is already at a higher quality
+baseline than one that only learns from its own traces. Traces are
+derivative; instructions are constitutive.
+
+|                | Instructions (ki + AIP focus)          | Traces (context-graph focus)             |
+|----------------|----------------------------------------|------------------------------------------|
+| **When**       | Before execution — what the agent reads | After execution — what the agent did    |
+| **Role**       | Constitute agent behavior              | Record agent behavior                    |
+| **Authorship** | Human-authored, agent-compiled         | System-generated, agent-produced         |
+| **Persistence**| Durable across agents and runs         | Tied to a specific run / agent instance  |
+
+For an MVP knowledge layer:
+- **Traces are nice-to-haves.** They add value — learning from
+  past runs, surfacing patterns, diagnosing failures. But they are
+  not the foundation.
+- **Traces can often be inferred.** A ki note documenting a prior
+  decision, or an AIP deliberation schema capturing options
+  considered, carries the signal traces would provide — without
+  requiring runtime instrumentation.
+
+This distinction should shape positioning: ThnkMark is about the
+instruction layer that drives agent behavior, not the observability
+layer that records it. Decision traces belong to a future
+observability component (see Open Question §4), not the MVP.
+
 ## Why "context graph" doesn't land
 
-The dumb-reach name. Three reasons it falls short:
+The dumb-reach name. Four reasons it falls short:
 
 1. **"Context" is overloaded.** Already means LLM context windows,
    MCP context, prompt context. Adding another meaning is lossy.
@@ -89,6 +191,9 @@ The dumb-reach name. Three reasons it falls short:
    value, when the value is what the structure *enables*
    (autonomous operation). A name should anchor on the outcome,
    not the data structure.
+4. **It leads with traces.** Most "context graph" framing centers
+   on execution history and decision traces — exactly what
+   ThnkMark is *not* (see above).
 
 ## Candidate names
 
