@@ -1,9 +1,17 @@
-<div>
-  <img src="img/aip.png" alt="aip logo" width="120" align="left" style="margin-right: 16px;" />
-  <h1>AIP — Agent Instruction Protocol</h1>
-  <blockquote>Compile Skills for Autonomous Agents to engineer and govern reliable AI workflows like code.</blockquote>
-</div>
-<br clear="left">
+<table>
+  <tr>
+    <td width="140" align="center" valign="middle">
+      <img src="img/aip.png" alt="aip logo" width="120" />
+    </td>
+    <td valign="middle">
+      <h1>AIP — Agent Instruction Protocol</h1>
+      <p><em>Compile Skills for Autonomous Agents to engineer and govern reliable AI workflows like code.</em></p>
+    </td>
+  </tr>
+</table>
+
+Your team's skills, prompts, deliberations, and runbooks are the
+// ... existing code ...
 
 
 Your team's skills, prompts, deliberations, and runbooks are the
