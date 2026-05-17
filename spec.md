@@ -118,8 +118,8 @@ agent-executable structure.
 | Static checks            | Schema validation                                      |
 | Intermediate rep (IR)    | The validated YAML (consumed directly OR projected)    |
 | Backends                 | Per-database connectors (Neo4j, Postgres, …)           |
-| Build artifact           | Agent-readable companion file                          |
-| Source preservation      | Human doc stays canonical (.c isn't deleted after .o)  |
+| Build artifact           | Instruction (agent-readable folder; see §Instruction format) |
+| Source preservation      | Source kept inside the Instruction (`source/`)         |
 
 The analogy also explains the case-gating: **you don't compile
 code you'll run once and discard. You compile code that runs in
@@ -146,10 +146,11 @@ Concretely:
   schema must follow to be AIP-compliant (see
   [§AIP schema conventions](#aip-schema-conventions)). The underlying
   type system is standard [JSON Schema](https://json-schema.org/).
-- **An AIP-compiled document** (validated against its declared schema)
-  accompanies each human-prose source. Same content, restructured for
-  AI ingestibility. The human doc stays canonical for humans; the
-  compiled document is the machine-readable face.
+- **An Instruction** (see [§Instruction format](#instruction-format))
+  bundles the human-prose source, the schema, and the validated
+  YAML-compliant `SKILL.md` body that agents read. The source stays
+  canonical for humans (inside `source/`); the **Instruction body** —
+  the validated content of `SKILL.md` — is the machine-readable face.
 - **A vendor-neutral mapping rule set** describes how schema-validated
   YAML projects into a graph (or any other storage shape).
 - **Connectors** are per-database adapters that implement the mapping.
@@ -184,16 +185,16 @@ Concretely:
    — not from author-provided graph hints. Schemas are written
    without knowing or caring how they'll be stored.
 
-4. **Source documents are optional.** A producer can ingest an
-   AIP-compiled YAML alone, or include the original markdown source
-   as a linked Document. The DB carries no opinion either way.
+4. **Source markdown ingest is optional.** A producer can ingest an
+   Instruction body alone, or also ingest the Instruction's source
+   markdown as a linked Document. The DB carries no opinion either way.
 
 5. **Strict-core, open-extensions schemas.** Every object in a schema
    has a closed key set, plus an optional `extensions:` map for
    doc-specific structure that doesn't fit. Predictability without
    brittleness.
 
-6. **Lossy is the only ingest mode.** AIP-compiled files in lossless
+6. **Lossy is the only ingest mode.** Instruction bodies in lossless
    mode (with a `context:` TAIL preserving original phrasing) are not
    ingested into the DB. The lossless mode targets a different
    consumer (an agent reconstructing original tone). If lossless
@@ -207,34 +208,299 @@ schema must follow to be considered AIP-compliant. The
 `scripts/validate_schema.py` script bundled in the `aip` skill
 enforces these (see [§The AIP skill](#the-aip-skill)).
 
-**Required conventions:**
+AIP-compliance has two layers: **required metadata** (root-level
+annotation keywords that identify and describe the schema) and
+**required structural conventions** (rules about how schemas declare
+shape).
+
+### Required metadata
+
+Schemas declare identity and discovery metadata at the root using
+standard JSON Schema meta-data annotation keywords, plus an AIP-
+namespaced object for AIP-specific fields:
+
+| Keyword         | Required? | Standard?          | Notes                                                                                                                   |
+|-----------------|-----------|--------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `$schema`       | Required  | Yes                | Declares JSON Schema dialect, e.g. `https://json-schema.org/draft/2020-12/schema`.                                      |
+| `$id`           | Required  | Yes                | Global identifier. Use a UUID URN (`urn:uuid:...`) for guaranteed uniqueness without requiring an HTTP host.            |
+| `title`         | Required  | Yes                | Short human-readable display name.                                                                                      |
+| `description`   | Required  | Yes                | Short human-readable description (one or two sentences). Keep it short — README is for prose.                           |
+| `aip.version`   | Optional  | No (AIP namespace) | Version string if multiple versions exist. Schema versioning itself is out of scope for v0.1 (Open Q §6).               |
+| `aip.tag`       | Optional  | No (AIP namespace) | Search tag for schema discovery (Open Q §8).                                                                            |
+
+AIP-specific metadata lives under a top-level `aip:` object to avoid
+colliding with future JSON Schema keywords:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+  "title": "Deliberation",
+  "description": "Structured deliberation: items, options, lean, decision.",
+  "aip": {
+    "version": "0.1",
+    "tag": "decision-process"
+  },
+  "type": "object",
+  "properties": { ... }
+}
+```
+
+`$id` is a JSON Schema URI. A UUID URN form (`urn:uuid:...`) is
+intentionally non-dereferenceable, which matches the goal of
+"schemas authored anywhere, globally unique without coordination."
+This `$id` is what `metadata.aip.schemaId` in an Instruction's
+`SKILL.md` frontmatter (see [§SKILL.md format](#skillmd-format)) and
+`schemaId` on storage nodes (see [§Mapping rules](#mapping-rules))
+reference.
+
+### Required structural conventions
 
 - Schemas must not define properties using AIP-reserved names: `id`,
   `schemaId`, `key`, `idx`, `_source`. These are injected by the
   connector at ingest time.
 - The root schema must follow the strict-core / open-extensions
-  pattern: a closed key set plus an optional `extensions:` map.
+  pattern: a closed key set plus an optional `extensions:` map for
+  doc-specific structure that doesn't fit.
 - `$defs` entries become node types in storage; each must have a
   clearly-named key (becomes the node label).
+
+### Optional README.md
+
+A schema directory may include a `README.md` alongside the schema
+file: prose explanation of what the schema is, when to use it, when
+not to use it. Required for AIP-published reference schemas;
+optional for team-local schemas. A schema with a clear `title` and
+`description` doesn't necessarily need separate prose — the README
+is for context that doesn't fit a one-sentence description.
 
 **The `examples/schemas/` directory** (`deliberation.schema.json`,
 `generic.schema.json`) contains reference schemas that demonstrate
 these conventions — they are not part of the AIP protocol itself.
 
+## Instruction format
+
+The deliverable AIP produces is an **Instruction** — a skill folder
+that conforms to the [Agent Skills spec](https://agentskills.io/specification)
+and adds AIP-specific requirements on top. An Instruction is loadable
+by any Agent Skills-compatible runtime; the AIP-specific structure
+gives the team the schema, source, and validation guarantees that
+distinguish an AIP Instruction from an ad-hoc skill.
+
+### Terminology
+
+- **Instruction** — the artifact AIP produces. A type of
+  [Agent Skill](https://agentskills.io). The Instruction format is an
+  extension of the Agent Skills spec — conforming to it and adding the
+  requirements below.
+- **schema** — the AIP-compliant JSON Schema that governs the
+  Instruction's `SKILL.md` body.
+- **source** — the canonical human-readable materials used to produce
+  the Instruction. The `source → build artifact` analogy is loose: the
+  source need not be proprietary, and is not guaranteed to contain
+  enough information to deterministically reproduce the Instruction.
+  What it does provide is a canonical, human-readable record of the
+  information and reasoning behind the Instruction.
+
+### Directory structure
+
+```shell
+instruction-name/
+├── SKILL.md                       # Required: metadata + YAML-compliant instructions
+├── schema/                        # Required: AIP schema
+│   ├── schema-name.schema.json    # Required: schema spec
+│   └── README.md                  # Optional: additional schema documentation
+├── source/                        # Required: canonical human-readable source
+│   ├── README.md                  # Required: main source doc
+│   ├── SOURCE_SKILL.md            # Optional: Agent Skill (non-AIP) used as source
+│   └── ...                        # Any additional files or directories
+├── scripts/                       # Optional: executable code
+├── assets/                        # Optional: templates, resources
+├── references/                    # Optional: documentation
+└── ...                            # Any additional files or directories
+```
+
+**AIP-specific requirements (in addition to `SKILL.md` from the Agent
+Skills spec):**
+
+- `schema/` containing one `*.schema.json` — the AIP-compliant schema
+  the `SKILL.md` body validates against. Optional `README.md` for
+  schema documentation.
+- `source/` containing at minimum a `README.md` — the canonical
+  human-readable source the Instruction was produced from. Optional
+  `SOURCE_SKILL.md` when the Instruction was derived from a non-AIP
+  Agent Skill.
+
+**Open extensions.** AIP preserves the Agent Skills spec's "any
+additional files or directories" property at two levels:
+
+- **At the Instruction root** — teams may add directories beyond the
+  Agent Skills well-known set (`scripts/`, `references/`, `assets/`)
+  and the AIP-required set (`schema/`, `source/`).
+- **Inside `source/`** — teams freely store deliberation drafts, prior
+  conversation logs, diagrams, or related notes alongside the
+  canonical `README.md`.
+
+This keeps AIP a true extension of the Agent Skills spec rather than a
+stricter dialect.
+
+### Why these directories are top-level (not nested)
+
+`schema/` and `source/` sit at the Instruction root rather than under
+`references/` or a dedicated `aip/` namespace directory:
+
+- The Agent Skills spec's directory diagram explicitly permits
+  *"Any additional files or directories"* at the root.
+- Neither is documentation. The Agent Skills spec defines `references/`
+  as *"additional documentation that agents can read when needed."* A
+  schema is a validation contract; the source is the canonical
+  human-readable origin. Neither role fits `references/`.
+- The Agent Skills spec advises *"Keep file references one level deep
+  from `SKILL.md`."* `schema/foo.schema.json` is one level;
+  `references/schema/foo.schema.json` is two.
+
+## SKILL.md format
+
+`SKILL.md` is the Instruction's main file. The YAML frontmatter
+declares Agent Skills metadata plus AIP linkage; the body is the
+schema-validated Instruction body that agents read and connectors
+ingest.
+
+### Frontmatter
+
+Conforms to the
+[Agent Skills spec frontmatter fields](https://agentskills.io/specification#frontmatter),
+with two AIP-specific additions nested under `metadata.aip:`.
+
+| Field                   | Required? | Source            | Notes                                                                                                                                              |
+|-------------------------|-----------|-------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `name`                  | Required  | Agent Skills spec | 1–64 chars; lowercase `a–z`/`0–9`/`-`; no leading/trailing/consecutive hyphens; **must match the Instruction's parent directory name**.            |
+| `description`           | Required  | Agent Skills spec | 1–1024 chars. Describes *what* the Instruction encodes and *when* to use it. See §Discovery considerations below.                                  |
+| `metadata.aip.spec`     | Required  | AIP               | URL to the AIP spec this Instruction conforms to. Current placeholder: `https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md`. Makes the Instruction self-describing — see §Self-description below. |
+| `metadata.aip.schemaId` | Required  | AIP               | UUID URN matching the `$id` of the schema in the Instruction's `schema/` directory.                                                                |
+| `license`               | Optional  | Agent Skills spec | Pass-through.                                                                                                                                      |
+| `compatibility`         | Optional  | Agent Skills spec | Pass-through. 1–500 chars.                                                                                                                         |
+| Other `metadata.*` keys | Optional  | Agent Skills spec | Arbitrary string→string mapping for additional team-specific metadata.                                                                             |
+| `allowed-tools`         | Optional  | Agent Skills spec | Pass-through (experimental in Agent Skills).                                                                                                       |
+
+The Agent Skills spec recommends putting client-specific properties
+under `metadata` (with reasonably unique key names) to avoid collision
+with future spec additions. Nesting under `metadata.aip:` keeps
+AIP-specific frontmatter cleanly namespaced.
+
+### Body — the Instruction body
+
+The content following the frontmatter is the **Instruction body**:
+exactly one fenced YAML code block (language tag `yaml` or `yml`),
+preceded and followed only by optional whitespace. No surrounding
+prose, no second code block. The fence contents validate against the
+schema referenced by `metadata.aip.schemaId`.
+
+The body's top-level `schemaId` field (inside the fence) is required
+and must equal `metadata.aip.schemaId`:
+
+````markdown
+---
+name: launch-decision
+description: Deliberation for v0.1 launch sequencing.
+metadata:
+  aip:
+    spec: https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md
+    schemaId: urn:uuid:550e8400-e29b-41d4-a716-446655440000
+---
+
+```yaml
+schemaId: urn:uuid:550e8400-e29b-41d4-a716-446655440000
+title: Launch sequencing
+items:
+  - id: 1a
+    description: ...
+options:
+  - id: A
+    description: ...
+lean:
+  pick: 1a-A
+  rationale: ...
+```
+````
+
+The two `schemaId` declarations are intentionally redundant:
+
+- `metadata.aip.schemaId` in the frontmatter is loaded at skill
+  startup — agents discover the schema linkage before parsing the
+  body.
+- The body's top-level `schemaId` makes the Instruction body
+  self-describing when extracted from the Instruction folder (e.g.,
+  when a connector ingests it into a database). Matches the spec's
+  convention of `schemaId` on every storage node — see
+  [§Mapping rules](#mapping-rules).
+
+### Discovery considerations
+
+Per the Agent Skills spec's progressive disclosure model, only `name`
+and `description` load at startup for every installed skill. For AIP
+Instructions, that makes `description` the *only* signal available
+before the agent decides to activate the Instruction. Two
+recommendations:
+
+1. **Reference the schema's domain in `description`.** Beyond the
+   Agent Skills convention of "what + when," include enough domain
+   context for AIP-aware discovery to recognize the Instruction as a
+   candidate match. *"Deliberation for v0.1 launch sequencing"* tells
+   discovery both the schema family (deliberation) and the subject.
+2. **Keep `description` short when possible.** The hard limit is
+   1024 chars, but every installed skill's description loads at
+   startup — shorter descriptions across the corpus mean less startup
+   cost.
+
+### Self-description for AIP-unaware agents
+
+The required `metadata.aip.spec` field makes every Instruction
+self-describing. An agent encountering an unfamiliar Instruction sees
+the `metadata.aip.*` block, recognizes that an extension is in use,
+and can fetch the spec URL to learn the format from first principles
+before interpreting the rest of the file.
+
+This mirrors the pattern used by JSON Schema's `$schema` keyword
+(declare the dialect with a fetchable URL) and HTTP's `Content-Type`
+header (declare the format inline with the payload).
+
+**Current placeholder URL:**
+`https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md`.
+Raw markdown directly from the repo — agent-fetchable today, no
+website infrastructure required. Tracks `main`, so it isn't pinned to
+a version; that's an acceptable trade for v0.1, and gets replaced with
+versioned URLs (e.g., `https://aip.dev/spec/v0.1`) once the AIP
+website exists.
+
+### Body size
+
+The Agent Skills spec recommends keeping `SKILL.md` under 500 lines /
+~5000 tokens (the body loads in full when the Instruction activates).
+For AIP Instructions this is usually easy: the compiled YAML body is
+typically 40–60% smaller than the markdown source.
+
+If the body would exceed the budget, the team should consider
+splitting the underlying domain into multiple smaller Instructions
+rather than spilling content into `references/`. References load on
+demand and don't shape behavior — they're for documentation an agent
+might consult, not the instructions themselves.
+
 ## Components
 
-### A. AIP-compiled documents
+### A. Instructions
 
-The output of the `compile` skill — a YAML document validated against
-a team's AIP-compliant schema. This is what agents read and what
-connectors ingest.
+The deliverable AIP produces (see [§Instruction format](#instruction-format)).
+The **Instruction body** — the YAML-compliant content of `SKILL.md`,
+validated against the Instruction's schema — is what agents read and
+what connectors ingest.
 
-### B. Producer pipeline (human → AIP-compiled document)
+### B. Producer pipeline (human → Instruction)
 
 Two paths:
 
 - **Agent path (primary).** A human writes prose; the agent — guided
-  by the AIP skill — compiles it into the AIP-compiled companion.
+  by the AIP skill — compiles it into an Instruction.
 - **Schema authoring path.** The agent — guided by the AIP skill —
   helps a team draft a new AIP-compliant JSON Schema from a
   description, validating each iteration with `scripts/validate_schema.py`.
@@ -288,7 +554,7 @@ uv run scripts/validate_schema.py path/to/schema.json
 ```
 
 The agent invokes these as part of the conversational workflow
-(e.g. as a final check before offering to install a compiled skill).
+(e.g. as a final check before offering to install an Instruction).
 For CI pipelines and pre-commit hooks without an agent, the same
 scripts run directly — no separate install step, because `uv run`
 handles the isolated environment.
@@ -310,9 +576,9 @@ handles the isolated environment.
               │
               ▼
    ┌─────────────────────┐
-   │   AIP-compiled doc  │  ← validated against team's JSON Schema
-   │   (schema-validated │     (deliberation / spec / runbook / …)
-   │    YAML)            │
+   │     Instruction     │  ← folder; SKILL.md body validated against
+   │  (SKILL.md body +   │     team's JSON Schema (deliberation /
+   │   schema/ + source/)│     spec / runbook / …)
    └──────────┬──────────┘
               │
               │   ─── stop here if no DB needed ───
@@ -458,14 +724,15 @@ recognizes this as a singleton property.
 
 The source markdown is its own `:Document` node, with
 `schemaId: 'source-markdown'` (or similar — TBD). Linked from the
-companion's `:Document` via an optional `[:DERIVED_FROM]` edge. The
+Instruction's `:Document` via an optional `[:DERIVED_FROM]` edge. The
 markdown content lives on the source `:Document.content` property.
 Round-trip writes the markdown back to the path stored in
 `source._path`.
 
-Source ingest is opt-in per producer invocation. Some YAMLs have no
-sibling markdown (agent-authored) and that's fine — no source node,
-no `[:DERIVED_FROM]` edge.
+Source ingest is opt-in per producer invocation. (Every Instruction
+has a `source/` directory per §Instruction format, but the connector
+may choose to ingest the Instruction body alone — no source node,
+no `[:DERIVED_FROM]` edge.)
 
 ## Reference connector: Neo4j (`aip-neo4j`)
 
@@ -489,7 +756,7 @@ no `[:DERIVED_FROM]` edge.
   `:Document` to other `:Document` nodes (one per `refs:` entry).
 - **Source markdown**: a `:Document {schemaId: 'source-markdown'}`
   node with full content under a fulltext index, linked from the
-  companion via optional `[:DERIVED_FROM]`.
+  Instruction via optional `[:DERIVED_FROM]`.
 
 ### Constraints (auto-generated from schema family)
 
@@ -507,9 +774,9 @@ makes them idempotent across runs.
 ### Mapper invocation (target shape)
 
 ```bash
-mapper.py --schema   <path-to-json-schema> \
-          --rewrite  <path-to-ai-companion-yaml> \
-          [--source <path-to-original-markdown>] \
+mapper.py --schema       <path-to-json-schema> \
+          --instruction  <path-to-instruction-skill-md> \
+          [--source      <path-to-source-readme>] \
           [--connector neo4j] \
           [--neo4j-uri bolt://localhost --user … --password …] \
           [--emit-only]
@@ -544,16 +811,21 @@ when AIP conventions change, the skill updates in lockstep.
 
 **SKILL.md** is agent-loaded knowledge, not an invocable command.
 The agent reads it to understand how to help a user produce
-AIP-compliant skills and documents. It encodes:
+Instructions. It encodes:
 
 - What AIP is and when to use it
-- The three usage scenarios (create skill without schema / with schema
-  / author a schema) — see [cli-api.md § Usage scenarios](discussions/cli-api.md)
-- Output format: SKILL.md folder structure, frontmatter requirements,
-  `references/` and `meta.yml` conventions
-- AIP schema conventions (reserved property names, strict-core /
-  open-extensions pattern) — enough for the agent to validate a schema
-  in context before running a script
+- The three usage scenarios (create Instruction without schema / with
+  schema / author a schema) — see
+  [cli-api.md § Usage scenarios](discussions/cli-api.md)
+- Instruction folder structure — see
+  [§Instruction format](#instruction-format)
+- SKILL.md frontmatter and body conventions — see
+  [§SKILL.md format](#skillmd-format)
+- AIP schema conventions: required metadata keywords (`$schema`,
+  `$id`, `title`, `description`, AIP namespace), reserved property
+  names, and the strict-core / open-extensions pattern — enough for
+  the agent to validate a schema in context before running a script.
+  See [§AIP schema conventions](#aip-schema-conventions).
 - Pointers to example schemas in `references/examples/`
 - Schema discovery hints: where to look for existing schemas in a
   user's project or installed skills
@@ -563,19 +835,22 @@ AIP-compliant skills and documents. It encodes:
 **`scripts/`** contains the validation logic the agent (and CI)
 actually runs:
 
-- `validate.py` — loads a document, reads its declared `schema:` field,
-  fetches or resolves the schema, validates with `jsonschema`. Exits
+- `validate.py` — loads an Instruction, reads `metadata.aip.schemaId`
+  from frontmatter, resolves the schema in `schema/`, extracts the
+  body's fenced YAML block, and validates it with `jsonschema`. Exits
   non-zero with structured error output on failure.
 - `validate_schema.py` — validates a JSON Schema file against AIP
-  conventions (reserved property names, strict-core pattern, `$defs`
-  naming). Exits non-zero with structured error output on failure.
+  conventions: required metadata keywords (`$schema`, `$id`, `title`,
+  `description`), AIP namespace presence, reserved property names,
+  strict-core pattern, and `$defs` naming. Exits non-zero with
+  structured error output on failure.
 
 Both scripts use [PEP 723](https://peps.python.org/pep-0723/) inline
 dependency declarations and are run via `uv run` — isolated
 environment, no install step:
 
 ```bash
-uv run scripts/validate.py path/to/doc.yml
+uv run scripts/validate.py path/to/instruction/
 uv run scripts/validate_schema.py path/to/schema.json
 ```
 
@@ -728,13 +1003,31 @@ required in CI.
 
 ## Glossary
 
-- **AIP-compiled document** — the YAML doc validated against a
-  team's AIP-compliant schema, produced from a human-prose source by
-  the `compile` skill.
+- **Instruction** — the deliverable AIP produces. A folder conforming
+  to the [Agent Skills spec](https://agentskills.io/specification),
+  extended with AIP-required `schema/` and `source/` directories. See
+  [§Instruction format](#instruction-format). Produced from
+  human-prose source by the AIP skill.
+- **Instruction body** — the YAML-compliant content of an
+  Instruction's `SKILL.md`, contained in a single fenced YAML code
+  block in the body. What the schema validates and what connectors
+  ingest. See [§SKILL.md format](#skillmd-format).
+- **`metadata.aip.spec`** — required `SKILL.md` frontmatter field. URL
+  to the AIP spec version the Instruction conforms to. Makes the
+  Instruction self-describing to AIP-unaware agents. See
+  [§SKILL.md format](#skillmd-format).
+- **`metadata.aip.schemaId`** — required `SKILL.md` frontmatter field.
+  UUID URN matching the `$id` of the schema in the Instruction's
+  `schema/` directory. Same value also appears as `schemaId` at the
+  top of the Instruction body, for self-description after extraction.
+  See [§SKILL.md format](#skillmd-format).
 - **AIP-compliant schema** — a JSON Schema that follows AIP
-  conventions (no reserved property names, strict-core /
-  open-extensions pattern). What teams produce with agent assistance;
-  what `scripts/validate_schema.py` checks.
+  conventions: required root-level metadata keywords (`$schema`,
+  `$id`, `title`, `description`, plus an `aip:` namespace for
+  AIP-specific metadata), no reserved property names, strict-core /
+  open-extensions pattern. What teams produce with agent assistance;
+  what `scripts/validate_schema.py` checks. See
+  [§AIP schema conventions](#aip-schema-conventions).
 - **aip skill** — the reference implementation of AIP. A Claude Code
   skill (`~/.claude/skills/aip/`) containing SKILL.md (agent
   knowledge) and `scripts/` (validation scripts run via `uv run`).
@@ -744,7 +1037,7 @@ required in CI.
 - **Mapping rules** — vendor-neutral conventions for projecting a
   schema-validated YAML into storage. Specified here; implemented per connector.
 - **Producer** — the team / pipeline that authors and validates
-  AIP-compiled documents using the `compile` skill.
+  Instructions using the AIP skill.
 - **Round-trip** — the cycle YAML → storage → YAML, where the
   reconstructed YAML re-parses to the same data structure.
 - **Schema** — a JSON Schema declaring the shape of one doc type,
@@ -754,6 +1047,37 @@ required in CI.
 
 ## Change log
 
+- **2026-05-16 (session 5)** — Expanded §AIP schema conventions with
+  a §Required metadata subsection (required root-level annotation
+  keywords `$schema`, `$id`, `title`, `description`; AIP-specific
+  metadata namespaced under a top-level `aip:` object; optional
+  `aip.version` and `aip.tag`). Promoted existing rules to
+  §Required structural conventions and added §Optional README.md
+  guidance. Added new top-level §SKILL.md format section:
+  frontmatter table including two new required AIP fields
+  (`metadata.aip.spec` and `metadata.aip.schemaId`); body spec'd as
+  exactly one fenced YAML code block; discovery and self-description
+  considerations including the placeholder spec URL
+  (`https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md`).
+  Fixed §The AIP skill: removed stale `meta.yml` reference, pointed
+  bullets to the new sections, updated validator descriptions to
+  reflect the new Instruction folder layout and frontmatter fields.
+  Synced directory diagram ordering (required dirs first). Added
+  glossary entries for `metadata.aip.spec` and
+  `metadata.aip.schemaId`; updated `AIP-compliant schema` and
+  `Instruction body` entries.
+- **2026-05-16 (session 4)** — Added §Instruction format: settled
+  terminology (Instruction / schema / source), directory structure for
+  an AIP Instruction (extension of the Agent Skills spec), AIP-specific
+  required dirs (`schema/`, `source/`), and the open-extension property
+  preserved at the root and inside `source/`. Reconciled terminology
+  across the rest of the spec: "AIP-compiled document" → **Instruction**
+  (the folder) and **Instruction body** (the validated YAML content of
+  `SKILL.md`). Updated §What this is, §Non-negotiable principles 4 & 6,
+  the compiler-analogy table, §Components A/B, the architecture
+  diagram, §Source markdown round-trip, the Neo4j graph shape, the
+  mapper invocation example, §The AIP skill, and the glossary
+  (Instruction + Instruction body now two distinct entries).
 - **2026-05-16 (session 3)** — Updated to reflect: (1) no separate
   CLI binary — validation is `scripts/validate.py` and
   `scripts/validate_schema.py` bundled inside the `aip` skill, run
