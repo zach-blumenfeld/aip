@@ -305,35 +305,10 @@ the body loads when the skill triggers; `references/`, `scripts/`,
 invocation. If the body would overflow, split into multiple smaller
 Instructions before pushing content into `references/`.
 
-### AIP-compliant schema
-
-Required root metadata:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
-  "title": "Short display name",
-  "description": "One or two sentences.",
-  "aip": { "version": "0.1", "tag": "discovery-tag" },
-  "type": "object",
-  "properties": { ... }
-}
-```
-
-Generate `$id` with `uuidgen` or `uuid.uuid4()`.
-
-Structural rules:
-
-- **Reserved property names** (never define, anywhere in the schema):
-  `id`, `schemaId`, `key`, `idx`, `_source`. All five are
-  connector-injected at ingest time.
-- **Strict-core / open-extensions:** closed key set at each object,
-  plus an optional `extensions:` map for doc-specific overflow.
-- **`$defs` entries become node types in storage** when a connector
-  ingests — give each a clearly-named key.
-- **No DB-specific keywords** (no `x-graph-*`, `x-neo4j-*`). Schemas
-  are vendor-neutral.
+Schema-authoring details (required root metadata, structural rules,
+reserved names) live in
+[references/scenario-3-schema-authoring.md](references/scenario-3-schema-authoring.md)
+— relevant only when drafting a new schema (Scenario 3).
 
 ## Draft and install
 

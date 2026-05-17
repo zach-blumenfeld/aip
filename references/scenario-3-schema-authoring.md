@@ -9,9 +9,9 @@ rather than compile a doc. Conversational — no fixed step sequence.
    reference material: other schemas, user examples, web sources.
 2. **Identify the core structure**: main fields, required vs
    optional, the strict-core / open-extensions split.
-3. **Draft and validate** with required AIP root metadata (see
-   SKILL.md → Format essentials → AIP-compliant schema). Run
-   `uv run scripts/validate_schema.py <draft>`.
+3. **Draft and validate** with required AIP root metadata and
+   structural rules (see [AIP-compliant schema requirements](#aip-compliant-schema-requirements)
+   below). Run `uv run scripts/validate_schema.py <draft>`.
 4. **Iterate.** Don't dump the schema JSON by default — offer:
    *"Want to see the schema, or should I describe what's in it?"*
    Most users will want a description. Gather feedback, refine,
@@ -45,7 +45,9 @@ reuse. If it's genuinely a new category, scope the new schema as
 broadly as that category warrants — one schema should support many
 related skills.
 
-## Required AIP root metadata (reference)
+## AIP-compliant schema requirements
+
+Required root metadata:
 
 ```json
 {
@@ -55,8 +57,20 @@ related skills.
   "description": "One or two sentences.",
   "aip": { "version": "0.1", "tag": "discovery-tag" },
   "type": "object",
-  "properties": { "schemaId": { "const": "urn:uuid:<same-as-$id>" }, ... }
+  "properties": { ... }
 }
 ```
 
 Generate `$id` with `uuidgen` or Python `uuid.uuid4()`.
+
+Structural rules:
+
+- **Reserved property names** (never define, anywhere in the schema):
+  `id`, `schemaId`, `key`, `idx`, `_source`. All five are
+  connector-injected at ingest time.
+- **Strict-core / open-extensions:** closed key set at each object,
+  plus an optional `extensions:` map for doc-specific overflow.
+- **`$defs` entries become node types in storage** when a connector
+  ingests — give each a clearly-named key.
+- **No DB-specific keywords** (no `x-graph-*`, `x-neo4j-*`). Schemas
+  are vendor-neutral.
