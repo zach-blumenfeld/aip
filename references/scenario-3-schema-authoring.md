@@ -12,8 +12,10 @@ rather than compile a doc. Conversational — no fixed step sequence.
 3. **Draft and validate** with required AIP root metadata (see
    SKILL.md → Format essentials → AIP-compliant schema). Run
    `uv run scripts/validate_schema.py <draft>`.
-4. **Iterate.** Show the draft, gather feedback, refine, re-validate.
-   Watch for:
+4. **Iterate.** Don't dump the schema JSON by default — offer:
+   *"Want to see the schema, or should I describe what's in it?"*
+   Most users will want a description. Gather feedback, refine,
+   re-validate. Watch for:
    - Reserved property names (`id`, `schemaId` inside `$defs`, `key`,
      `idx`, `_source`) — not allowed
    - DB-specific keywords (`x-graph-*`, `x-neo4j-*`) — not allowed

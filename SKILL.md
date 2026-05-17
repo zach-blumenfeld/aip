@@ -43,8 +43,13 @@ AIP authors range from senior engineers to domain experts with no
 JSON Schema background. Calibrate language: explain terms like "JSON
 Schema," "validator," "fenced YAML" on first use unless the user
 signals familiarity. The user is **never** expected to read or pick
-schemas by hand — schema selection is your job. When in doubt, briefly
-define and continue.
+schemas by hand — schema selection is your job.
+
+**Default to summaries, not raw artifacts.** Before dumping a JSON
+Schema, a fenced YAML body, or validator output to the chat, ask if
+the user wants to see it — most will say no. Lead with a natural-
+language description ("the schema has fields X, Y, Z; the body
+validates"). The artifacts are on disk; the chat is for the human.
 
 ## The three usage scenarios
 
@@ -59,6 +64,10 @@ Bias to schema reuse over drafting new ones. When no bundled
 candidate fits, draft a *permissive* schema (required-minimum core,
 freeform-text leaves where structure isn't earning) rather than a
 heavily-typed one — see [Selective typing](#selective-typing).
+**Scope the schema to the category of work, not the specific skill.**
+If the skill is "search-first before writing code," the schema is
+`runbook` — not `search-first`. The category is what future skills
+reuse.
 
 ### Scenario 2 — Schema specified
 
@@ -134,7 +143,9 @@ Four points to **always** confirm, regardless of depth.
 1. **Chosen schema before compiling.** *"I'll use the deliberation
    schema — it fits because [reason]. OK?"* If sections could go
    either typed or freeform, fold in: *"Typed for `<list>`, freeform
-   text for `<list>` — sound right?"*
+   text for `<list>` — sound right?"* Offer (don't auto-show) the
+   schema's structure: *"Want me to show the schema, or just go on
+   the description?"* Most users will say go on.
 
 2. **`description` field text.** Show before finalizing — this is
    the only signal Claude reads at session startup to decide whether
@@ -146,9 +157,10 @@ Four points to **always** confirm, regardless of depth.
    - **Mention the schema's domain** (e.g., "Deliberation for…")
      so AIP-aware discovery recognizes it as a candidate.
 
-3. **Final preview before install.** Show the rendered `SKILL.md`
-   (or a clean structured summary) so the user sees what's about to
-   land on disk.
+3. **Final preview before install.** Show a clean structured summary
+   (what it does, the body's top-level fields, the schema's role).
+   Offer to dump the full rendered `SKILL.md` if the user wants —
+   default to the summary; most won't.
 
 4. **Install location.** Ask user-global (`~/.claude/skills/`,
    everywhere) vs project-local (`./.claude/skills/`, only here).
@@ -325,19 +337,28 @@ Structural rules:
 - **No DB-specific keywords** (no `x-graph-*`, `x-neo4j-*`). Schemas
   are vendor-neutral.
 
-## Install procedure
+## Draft and install
 
-After all checkpoints pass:
+Always draft into a temp folder first — never write directly into
+`.claude/skills/` (or any other live skill path) until the user has
+confirmed both the artifact and the destination.
 
-1. **Confirm install location** (Checkpoint #4).
-2. **Create `<location>/<name>/`** — folder name must equal `name`
-   in frontmatter.
-3. **Write contents:** `SKILL.md`, `schema/<schema-name>.schema.json`,
+1. **Create temp draft** at a tempdir like `/tmp/aip-draft-<name>/`.
+2. **Write contents:** `SKILL.md`, `schema/<schema-name>.schema.json`,
    `source/README.md`.
-4. **Run `uv run scripts/validate.py <path>/`** as the final smoke
-   check. Apply tiered recovery on failure.
-5. **Tell the user where it landed.** For project-local installs, a
+3. **Run `uv run scripts/validate.py /tmp/aip-draft-<name>/`** as
+   the smoke check. Apply tiered recovery on failure.
+4. **Preview to the user** (Checkpoint #3) — summary first, full
+   artifact on request.
+5. **Confirm install location** (Checkpoint #4). Don't move anything
+   until the user has chosen.
+6. **Move `/tmp/aip-draft-<name>/` → `<location>/<name>/`** (folder
+   name must equal `name` in frontmatter).
+7. **Tell the user where it landed.** For project-local installs, a
    new Claude Code session may be needed for activation.
+
+If the user declines to install or wants to revise, leave the temp
+folder in place and iterate there.
 
 ### Existing folders and source content
 
@@ -383,8 +404,12 @@ iteration loop are complementary, not overlapping.
   schema metadata go under the `aip:` namespace, not bare at the root.
 - **Don't write source from scratch when the user gave you a doc.**
   Preserve their content; the compiled body is derivative.
-- **Don't compile and install in one breath.** The preview checkpoint
-  exists so the user catches issues *before* the folder lands.
+- **Don't compile and install in one breath.** Draft in temp,
+  preview, confirm location, then move. The user has to catch issues
+  *before* the folder lands in a live skill path.
+- **Don't dump JSON Schemas or YAML bodies into chat without asking.**
+  Default to a natural-language summary; offer the raw artifact.
+  Most users will pass.
 - **Don't over-decompose tight source.** Freeform-reference sections
   default to `|`-block strings. Type only what the agent would iterate
   or filter by — see [Selective typing](#selective-typing).
