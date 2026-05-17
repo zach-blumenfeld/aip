@@ -374,31 +374,7 @@ def validate_instruction(instruction_path: Path) -> tuple[int, dict | None]:
     if body_data is None:
         return emit_errors(errors), None
 
-    # 6. Body must have top-level schemaId mirroring frontmatter
-    if isinstance(body_data, dict):
-        body_schema_id = body_data.get("schemaId")
-        if body_schema_id is None:
-            errors.append(Error(
-                path=str(skill_md_path),
-                kind="missing_body_schema_id",
-                message=(
-                    "body must have a top-level `schemaId` matching frontmatter "
-                    "`metadata.aip.schemaId` (self-description after extraction)"
-                ),
-                location="body:$.schemaId",
-            ))
-        elif body_schema_id != schema_id:
-            errors.append(Error(
-                path=str(skill_md_path),
-                kind="body_schema_id_mismatch",
-                message=(
-                    f"body top-level `schemaId` (`{body_schema_id}`) must equal "
-                    f"frontmatter `metadata.aip.schemaId` (`{schema_id}`)"
-                ),
-                location="body:$.schemaId",
-            ))
-
-    # 7. Validate body against the resolved schema
+    # 6. Validate body against the resolved schema
     errors.extend(
         validate_body_against_schema(body_data, schema, skill_md_path, schema_path)
     )

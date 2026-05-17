@@ -16,8 +16,8 @@ rather than compile a doc. Conversational — no fixed step sequence.
    *"Want to see the schema, or should I describe what's in it?"*
    Most users will want a description. Gather feedback, refine,
    re-validate. Watch for:
-   - Reserved property names (`id`, `schemaId` inside `$defs`, `key`,
-     `idx`, `_source`) — not allowed
+   - Reserved property names (`id`, `schemaId`, `key`, `idx`,
+     `_source`) — never allowed, anywhere in the schema
    - DB-specific keywords (`x-graph-*`, `x-neo4j-*`) — not allowed
    - Strict-core pattern violations (open key sets at object roots)
 5. **Settle.** When the validator passes and the user is satisfied,

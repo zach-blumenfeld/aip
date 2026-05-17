@@ -148,8 +148,8 @@ Four points to **always** confirm, regardless of depth.
    the description?"* Most users will say go on.
 
 2. **`description` field text.** Show before finalizing — this is
-   the only signal Claude reads at session startup to decide whether
-   to activate the Instruction. Two rules:
+   the only signal the host agent reads at session startup to decide
+   whether to activate the Instruction. Two rules:
    - **What + when, slightly pushy.** Skills under-trigger by
      default; descriptions need to actively recruit. Name the
      contexts an agent should reach for it in, including phrasings
@@ -162,10 +162,11 @@ Four points to **always** confirm, regardless of depth.
    Offer to dump the full rendered `SKILL.md` if the user wants —
    default to the summary; most won't.
 
-4. **Install location.** Ask user-global (`~/.claude/skills/`,
-   everywhere) vs project-local (`./.claude/skills/`, only here).
-   Default: project-local if CWD is in a git repo, user-global
-   otherwise.
+4. **Install location.** Ask user-global (the host agent's
+   user-wide skills directory — e.g., `~/.claude/skills/` for
+   Claude Code) vs project-local (`./.claude/skills/` or equivalent
+   for the host agent). Default: project-local if CWD is in a git
+   repo, user-global otherwise.
 
 ## Schema discovery
 
@@ -276,10 +277,9 @@ Optional: `license`, `compatibility`, `metadata.*` (free-form),
 ### SKILL.md body — rules
 
 Exactly one fenced YAML code block (tag `yaml` or `yml`), no
-surrounding prose, no second code block. The body's top-level
-`schemaId` field is required and must equal `metadata.aip.schemaId`.
-The body validates against the schema referenced by
-`metadata.aip.schemaId`.
+surrounding prose, no second code block. The body validates against
+the schema referenced by `metadata.aip.schemaId`. The body does
+*not* repeat `schemaId` — frontmatter is the single source of truth.
 
 ````markdown
 ---
@@ -292,19 +292,18 @@ metadata:
 ---
 
 ```yaml
-schemaId: urn:uuid:...
 # body fields per schema...
 ```
 ````
 
 ### Body size — keep it lean
 
-Target `SKILL.md` under ~500 lines / ~5000 tokens. Claude loads
-skills in three levels: metadata (name + description) is always in
-context; the body loads when the skill triggers; `references/`,
-`scripts/`, `assets/` load on demand. Body bloat costs tokens on
-every invocation. If the body would overflow, split into multiple
-smaller Instructions before pushing content into `references/`.
+Target `SKILL.md` under ~500 lines / ~5000 tokens. Skills load in
+three levels: metadata (name + description) is always in context;
+the body loads when the skill triggers; `references/`, `scripts/`,
+`assets/` load on demand. Body bloat costs tokens on every
+invocation. If the body would overflow, split into multiple smaller
+Instructions before pushing content into `references/`.
 
 ### AIP-compliant schema
 
@@ -318,18 +317,17 @@ Required root metadata:
   "description": "One or two sentences.",
   "aip": { "version": "0.1", "tag": "discovery-tag" },
   "type": "object",
-  "properties": { "schemaId": { "const": "urn:uuid:550e8400-..." }, ... }
+  "properties": { ... }
 }
 ```
 
-Generate `$id` with `uuidgen` or `uuid.uuid4()`. The root
-`properties` must declare `schemaId` (usually `const` matching `$id`)
-so body validation succeeds.
+Generate `$id` with `uuidgen` or `uuid.uuid4()`.
 
 Structural rules:
 
-- **Reserved property names** (never define): `id`, `schemaId`,
-  `key`, `idx`, `_source`. Exception: `schemaId` at the schema root.
+- **Reserved property names** (never define, anywhere in the schema):
+  `id`, `schemaId`, `key`, `idx`, `_source`. All five are
+  connector-injected at ingest time.
 - **Strict-core / open-extensions:** closed key set at each object,
   plus an optional `extensions:` map for doc-specific overflow.
 - **`$defs` entries become node types in storage** when a connector
@@ -340,8 +338,8 @@ Structural rules:
 ## Draft and install
 
 Always draft into a temp folder first — never write directly into
-`.claude/skills/` (or any other live skill path) until the user has
-confirmed both the artifact and the destination.
+the host agent's live skills directory (e.g., `.claude/skills/`)
+until the user has confirmed both the artifact and the destination.
 
 1. **Create temp draft** at a tempdir like `/tmp/aip-draft-<name>/`.
 2. **Write contents:** `SKILL.md`, `schema/<schema-name>.schema.json`,
@@ -354,8 +352,9 @@ confirmed both the artifact and the destination.
    until the user has chosen.
 6. **Move `/tmp/aip-draft-<name>/` → `<location>/<name>/`** (folder
    name must equal `name` in frontmatter).
-7. **Tell the user where it landed.** For project-local installs, a
-   new Claude Code session may be needed for activation.
+7. **Tell the user where it landed.** For project-local installs,
+   a fresh agent session in this directory may be needed for the
+   skill to activate.
 
 If the user declines to install or wants to revise, leave the temp
 folder in place and iterate there.

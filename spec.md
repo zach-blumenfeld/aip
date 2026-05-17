@@ -263,19 +263,16 @@ intentionally non-dereferenceable, which matches the goal of
 This `$id` is what `metadata.aip.schemaId` in an Instruction's
 `SKILL.md` frontmatter (see [§SKILL.md format](#skillmd-format)) and
 `schemaId` on storage nodes (see [§Mapping rules](#mapping-rules))
-reference.
+reference. The connector derives the storage-node `schemaId` from
+the Instruction's `metadata.aip.schemaId` (or equivalently from the
+schema's own `$id`) at ingest time.
 
 ### Required structural conventions
 
 - Schemas must not define properties using AIP-reserved names: `id`,
-  `schemaId`, `key`, `idx`, `_source`. These are injected by the
-  connector at ingest time. **Exception:** `schemaId` is required at
-  the body root per [§SKILL.md format](#skillmd-format), so the root
-  schema *must* declare `schemaId` in its `properties` (typically as
-  a `const` matching the schema's `$id`). The reserved-names rule
-  still applies to `schemaId` inside `$defs` (connector-injected at
-  storage-node level), and the other four reserved names remain
-  off-limits everywhere.
+  `schemaId`, `key`, `idx`, `_source`. These are all injected by the
+  connector at ingest time and may not be declared in any schema —
+  not at the schema root, not inside `$defs`, not anywhere.
 - The root schema must follow the strict-core / open-extensions
   pattern: a closed key set plus an optional `extensions:` map for
   doc-specific structure that doesn't fit.
@@ -413,9 +410,6 @@ preceded and followed only by optional whitespace. No surrounding
 prose, no second code block. The fence contents validate against the
 schema referenced by `metadata.aip.schemaId`.
 
-The body's top-level `schemaId` field (inside the fence) is required
-and must equal `metadata.aip.schemaId`:
-
 ````markdown
 ---
 name: launch-decision
@@ -427,7 +421,6 @@ metadata:
 ---
 
 ```yaml
-schemaId: urn:uuid:550e8400-e29b-41d4-a716-446655440000
 title: Launch sequencing
 items:
   - id: 1a
@@ -441,16 +434,12 @@ lean:
 ```
 ````
 
-The two `schemaId` declarations are intentionally redundant:
-
-- `metadata.aip.schemaId` in the frontmatter is loaded at skill
-  startup — agents discover the schema linkage before parsing the
-  body.
-- The body's top-level `schemaId` makes the Instruction body
-  self-describing when extracted from the Instruction folder (e.g.,
-  when a connector ingests it into a database). Matches the spec's
-  convention of `schemaId` on every storage node — see
-  [§Mapping rules](#mapping-rules).
+The body does **not** repeat `schemaId` — the frontmatter's
+`metadata.aip.schemaId` is the single source of truth for schema
+linkage. Consumers that extract the body alone (e.g., a connector
+ingesting into a database) must read frontmatter for schema context;
+the body is not designed to be self-describing without it. This
+keeps authoring non-redundant.
 
 ### Discovery considerations
 
@@ -712,13 +701,16 @@ These names are reserved on every node and must be preserved
 round-trip:
 
 - `id` — canonical node id (path-derived stable string)
-- `schemaId` — declares which schema this node belongs to
+- `schemaId` — declares which schema this node belongs to.
+  Connector-derived from the Instruction's `metadata.aip.schemaId`
+  (or, equivalently, from the resolved schema's own `$id`) — never
+  declared in the schema or written into the body.
 - `key` — for nodes reached via a map (preserves original YAML key)
 - `idx` — for nodes reached via a list (preserves original YAML order)
 - `_source` — optional path to the source markdown for the root doc
 
-Schemas must not define properties with these names. (Add to the
-strict-core schema validator as a future enforcement check.)
+Schemas must not define properties with these names anywhere.
+Enforced by `scripts/validate_schema.py`.
 
 ### Edge naming
 
@@ -1172,9 +1164,9 @@ required in CI.
   [§SKILL.md format](#skillmd-format).
 - **`metadata.aip.schemaId`** — required `SKILL.md` frontmatter field.
   UUID URN matching the `$id` of the schema in the Instruction's
-  `schema/` directory. Same value also appears as `schemaId` at the
-  top of the Instruction body, for self-description after extraction.
-  See [§SKILL.md format](#skillmd-format).
+  `schema/` directory. The body itself does not repeat `schemaId`;
+  consumers extracting the body alone must read the frontmatter for
+  schema linkage. See [§SKILL.md format](#skillmd-format).
 - **AIP-compliant schema** — a JSON Schema that follows AIP
   conventions: required root-level metadata keywords (`$schema`,
   `$id`, `title`, `description`, plus an `aip:` namespace for
@@ -1200,6 +1192,20 @@ required in CI.
   ingest target.
 
 ## Change log
+
+- **2026-05-17** — Dropped the body-root `schemaId` requirement.
+  Frontmatter `metadata.aip.schemaId` is now the single source of
+  truth; the body no longer repeats it. Schemas may not declare
+  `schemaId` anywhere (the previous root-properties exception is
+  removed). Connector derives storage-node `schemaId` from
+  frontmatter at ingest time. Reduces authoring redundancy at the
+  cost of body-alone self-description — consumers extracting the
+  YAML body without the surrounding SKILL.md must read frontmatter
+  for schema linkage. Updated §SKILL.md format → Body section,
+  §AIP schema conventions → required structural conventions,
+  §Mapping rules → reserved property names, and the glossary entry
+  for `metadata.aip.schemaId`. Validators (`validate.py`,
+  `validate_schema.py`) updated to match.
 
 - **2026-05-16 (session 6)** — Added §Schema discovery (new
   top-level section): three-source model — bundled examples,

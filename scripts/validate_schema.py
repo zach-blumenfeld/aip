@@ -39,10 +39,6 @@ from jsonschema.validators import validator_for
 
 
 RESERVED_PROPERTY_NAMES = frozenset({"id", "schemaId", "key", "idx", "_source"})
-# `schemaId` is required at the body root per spec.md §SKILL.md format, so it
-# must be declarable in the root schema's `properties`. The reserved-names
-# rule still applies inside `$defs` (connector-injected at storage-node level).
-ROOT_RESERVED_EXEMPT = frozenset({"schemaId"})
 
 
 @dataclass
@@ -137,7 +133,7 @@ def check_aip_namespace(schema: dict, path: str) -> Iterable[Error]:
 
 def check_reserved_names(schema: dict, path: str) -> Iterable[Error]:
     for prop_name in schema.get("properties", {}):
-        if prop_name in RESERVED_PROPERTY_NAMES and prop_name not in ROOT_RESERVED_EXEMPT:
+        if prop_name in RESERVED_PROPERTY_NAMES:
             yield Error(
                 path=path,
                 kind="reserved_property_name",

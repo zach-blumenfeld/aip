@@ -11,7 +11,7 @@ user's intent.
 |------------------------|----------------------------------------------------------------------------------------|--------------------------------------------------------|
 | Bundled examples       | `references/examples/*/` (in this skill's folder)                                      | Always include.                                        |
 | Project-local schemas  | `*.schema.json` under CWD (max depth 4, respect `.gitignore`)                          | Schema has a top-level `aip:` object.                  |
-| Installed Instructions | `~/.claude/skills/*/schema/*.schema.json` and `./.claude/skills/*/schema/*.schema.json` | Containing skill's `SKILL.md` has `metadata.aip.spec`. |
+| Installed Instructions | `<host-agent>/skills/*/schema/*.schema.json` in user-global and project-local skill dirs (e.g., `~/.claude/skills/` and `./.claude/skills/` for Claude Code) | Containing skill's `SKILL.md` has `metadata.aip.spec`. |
 
 ## Dedup precedence
 
