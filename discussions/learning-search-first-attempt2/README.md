@@ -1,11 +1,13 @@
 ## Human Feedback
 
-3. chose a very specific custom schema: search-first.schema.json.  Would have been better to generalize a bit more to something like runbook. 
+1. chose a very specific custom schema: search-first.schema.json.  Would have been better to generalize a bit more to something like runbook. 
 2. asking user to validate proposed schema structure can be tough.  They aren't experts.  Ask if they would like to see schema or iuf you should just go forward before presenting
 3. dont start by creating diectly in the .claude/skills folcder.  draft in some other temp location and get permission from user in install step to move over or put in a root directory first. 
 4. schemaId in both frontmatter and yaml is redundent.  Remove from yaml
 5. make sure to remove any vendor specific references in aip SKILL.md - this could be used by codex, cursor, etc. 
 6. \#2 under friction and gaps from agent feedbsck below - we haven't considered usage of ./references, /.assets, ./scripts directories yet, may complicate things a bit. 
+7. Not really in this run...but composability should be another thing we allow.  Which means a skill (or in struction) should be a reserve word for a property - scope for future work. 
+8. Incorperate https://github.com/anthropics/skills/blob/main/skills/skill-creator/SKILL.md
 
 
 ## Feedback from Claude-code:
