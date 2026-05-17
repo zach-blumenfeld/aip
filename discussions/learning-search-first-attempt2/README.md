@@ -1,5 +1,15 @@
 ## Human Feedback
 
+1. The last run ended up producing a "search-first.schema.json" when I really wanted something more general like "runbook". I'd say incorperate this advbice
+        - If you are creating a custom schema, scope it to the category of work the skill has you do - i.e. is this a runbook for a workflow - something for producing a document template? reference for agent domain knowledge etc. 
+2. The agent tried to show the user the schema in the terminal to validate. It was too challenging and advanced for most human users.  They aren't experts. 
+        - Ask user if they would like to see yes/no before prcoessing.  Most will say no
+3. In the last run the agent  started by creating diectly in the .claude/skills folder, but as a user i'd prefer it drafted in a temp folder then promptiung if I want to install local or global before placing there. 
+4. schemaId in both frontmatter and yaml is redundent.  Remove from yaml
+5.  make sure to remove any vendor specific references in aip SKILL.md - this could be used by codex, cursor, etc. not just claude
+
+
+
 1. chose a very specific custom schema: search-first.schema.json.  Would have been better to generalize a bit more to something like runbook. 
 2. asking user to validate proposed schema structure can be tough.  They aren't experts.  Ask if they would like to see schema or iuf you should just go forward before presenting
 3. dont start by creating diectly in the .claude/skills folcder.  draft in some other temp location and get permission from user in install step to move over or put in a root directory first. 
