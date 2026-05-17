@@ -11,10 +11,6 @@
 </table>
 
 Your team's skills, prompts, deliberations, and runbooks are the
-// ... existing code ...
-
-
-Your team's skills, prompts, deliberations, and runbooks are the
 documents that drive your AI workflows. Today they live as ad-hoc
 markdown — they drift between revisions, they fail silently when an
 agent reads them, and the corpus can't be queried to see what's
