@@ -45,6 +45,38 @@ If unsure: AIP Instructions earn their structure when an autonomous
 agent will consume the content repeatedly. If a human will read it
 once, plain markdown is fine.
 
+## Selective typing
+
+The single highest-leverage authoring decision is which sections to
+*type* (list-of-objects, structured records) vs leave as freeform
+text under a `|`-block. Get this right and an Instruction compresses
+40–60% below its markdown source while staying agent-queryable. Get
+it wrong — type everything — and the Instruction can compile
+*larger* than its source, while being harder to read.
+
+**Heuristic:** would the agent ever `for` over this section, or
+filter / look up by one of its sub-fields? If yes, type it. If no,
+leave it as text.
+
+Worked example (from a real compile —
+`discussions/learning-search-first/`, Attempt 3):
+
+- **Typed** — `steps` (id / do / parallel? / one_of?), `decisions`
+  (when / then pairs), `examples` (need / found / action). An agent
+  iterates over steps, looks up the right decision by condition,
+  scans examples for a matching need. Structure earns its keep.
+- **Freeform `|`-block** — `shortcuts` (categorised reference list),
+  `modes.quick` / `modes.full` (terse prose blocks), `integrations`
+  (one-line strings per partner). The agent reads these once for
+  context; decomposing into records inflates size without enabling
+  any new query.
+
+**Corollary — don't fight tight source.** Markdown tables and ASCII
+workflow diagrams in the source are already structured. Drop them
+into `|`-block strings without apology; don't re-encode every row
+as a typed record just because you can. Tight source resists
+compression — that's a feature, not a failing to correct.
+
 ## The three usage scenarios
 
 Every session falls into one of three shapes. Detect which from the
@@ -57,7 +89,10 @@ JSON Schema; that's your job.
 
 **You own schema selection and reuse. The user is not expected to
 understand JSON Schema or open schema files. Your bias is to reuse
-existing schemas over drafting new ones.**
+existing schemas over drafting new ones, and — when no bundled
+candidate fits — to draft a permissive schema (required-minimum
+core, freeform-text leaves where structure isn't earning) rather
+than a heavily-typed one. See [Selective typing](#selective-typing).**
 
 Flow: [walkthrough entry](#entry-sequence) → [schema discovery](#schema-discovery)
 → [walkthrough middle](#depth-adapted-middle) →
@@ -136,6 +171,8 @@ refinement. It adapts to the chosen depth:
   - "One Instruction or two?"
   - "What's the primary axis of organization — chronological, by
     topic, by decision-point?"
+  - "For each significant section: freeform text or queryable
+    structure?" (see [Selective typing](#selective-typing))
 - **Thorough:** walk through each significant field with the user
   before validating and presenting.
 
@@ -163,6 +200,13 @@ of depth setting. Skip none of these.
    OK to proceed?"*
 
    Prevents wasted body-drafting effort if the user disagrees.
+
+   When the schema leaves room for either typed records or freeform
+   text in significant sections, fold a sub-question into this
+   checkpoint: *"For these sections — `<list>` — I'm planning typed
+   records; for these — `<list>` — freeform text. Sound right?"*
+   The user often has a clearer sense than you do of which sections
+   will be queried. See [Selective typing](#selective-typing).
 
 2. **`description` field text.** Show the proposed description
    before finalizing.
@@ -399,3 +443,15 @@ being promoted to `references/examples/`.
 - **Don't compile and install in one breath.** The preview
   checkpoint exists so the user catches issues *before* the folder
   lands on disk. Always show, then install.
+- **Don't over-decompose tight source.** Freeform-reference
+  sections (shortcuts by category, integration notes, mode prose)
+  default to `|`-block strings, not typed record lists. Tables and
+  ASCII workflow diagrams from the source can go in as `|`-blocks
+  too. Type only what the agent would iterate or filter by — see
+  [Selective typing](#selective-typing).
+- **Don't promise compression for tight, already-structured
+  source.** `spec.md` §Value Proposition's 40–60% reduction assumes
+  prose-heavy source AND selective-typing discipline. Tight markdown
+  + rigid full-typed schema can compress *negatively* (a real
+  compile saw +4.2%). Set expectations honestly when the source is
+  already terse.
