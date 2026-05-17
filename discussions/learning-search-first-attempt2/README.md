@@ -1,4 +1,6 @@
-2. chose a very specific custom schema: search-first.schema.json.  Would have been better to generalize a bit more to something like runbook. 
+## Human Feedback
+
+3. chose a very specific custom schema: search-first.schema.json.  Would have been better to generalize a bit more to something like runbook. 
 2. asking user to validate proposed schema structure can be tough.  They aren't experts.  Ask if they would like to see schema or iuf you should just go forward before presenting
 3. dont start by creating diectly in the .claude/skills folcder.  draft in some other temp location and get permission from user in install step to move over or put in a root directory first. 
 4. schemaId in both frontmatter and yaml is redundent.  Remove from yaml
@@ -6,7 +8,8 @@
 6. \#2 under friction and gaps from agent feedbsck below - we haven't considered usage of ./references, /.assets, ./scripts directories yet, may complicate things a bit. 
 
 
-Feedback from Claude-code:
+## Feedback from Claude-code:
+
 ❯ any feedback to provide to the AIP dev?  He is actiuvily soliciting feedback on your usage experience and wants       
   candid feedback                                                                                                       
   
@@ -68,4 +71,63 @@ Feedback from Claude-code:
   combined question (selective-typing table + naming + redundancy merge). That worked, but the skill didn't tell me it
   was OK to combine — strict reading says I should fire 3-5 separate questions. Worth adding: "combine into one
   preview-style question if the choices are interdependent."
+
+
+## A bit more Feedback from Claude (Separate Session)
+
+❯ check your search-first skill.  Provide feedback as to whether SKILL.md or source/README.md is easier to understand   
+  and action on as a skill for you                                                                                      
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+❯ sorry look only in  the local project not global                                                                      
+
+  Searched for 1 pattern, read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Read both. Honest comparison for me as the consumer:
+
+  SKILL.md is slightly easier to action; README.md is slightly easier to read.
+
+  Where SKILL.md wins (for me)
+
+  - Explicit field names map to decision points. When I'm at "which action class?", I jump to decisions[] and
+  pattern-match on signal → action → guidance. In README the same content lives in a markdown table under a heading I
+  have to scan for.
+  - triggers:, scope_and_approval:, modes.quick.checks: are addressable. README scatters the same info across "Trigger",
+   "Scope and Approval Rules", "How to Use → Quick Mode", and a duplicated "When to Use This Skill" section at the
+  bottom.
+  - No redundancy. README has trigger info in two places (top "Trigger" list and bottom "When to Use This Skill").
+  SKILL.md consolidates.
+  - Phase IDs (need_analysis, parallel_search…) give me stable handles if I ever need to reference a step.
+  - Examples are structured (need / search / found / action / result as keyed fields) vs. README's free-form code blocks
+   — easier to extract a template from.
+
+  Where README.md wins
+
+  - The ASCII workflow diagram is genuinely nice for a human skimming. For me it's decorative — the workflow.phases list
+   carries the same info more compactly.
+  - The decision matrix as a markdown table is more scannable on first read than the YAML list. If I were reading once
+  and never again, the table wins.
+  - Prose flows naturally — no need to mentally parse YAML inside a fenced block.
+
+  Friction points in SKILL.md
+
+  - The whole body is wrapped in a ```yaml fence, which is slightly awkward — it signals "this is data" but I still need
+   to read it as instructions. A reader could mistake it for a config sample.
+  - shortcuts: and integration_points: are typed as | block strings (free prose), which undercuts the otherwise
+  structured shape. If those were lists/objects too, the structured advantage would be stronger.
+
+  Bottom line
+
+  For a skill I'll dispatch on (look up triggers → check decisions → pick action), SKILL.md's keyed structure is more 
+  useful — I can go straight to the relevant field instead of scanning headings. README is friendlier for a one-time
+  human read. If the goal is agent-actionable, SKILL.md is the right shape; the main improvement would be promoting
+  shortcuts and integration_points from prose blocks into structured lists too.
+
+✻ Cooked for 38s
+
+※ recap: You're comparing SKILL.md vs source/README.md in the local search-first skill to decide which format is easier 
+  for me to action. I gave feedback favoring SKILL.md's keyed structure; next action is your call on whether to refine 
+  it. (disable recaps in /config)
+
 
