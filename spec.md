@@ -258,7 +258,13 @@ reference.
 
 - Schemas must not define properties using AIP-reserved names: `id`,
   `schemaId`, `key`, `idx`, `_source`. These are injected by the
-  connector at ingest time.
+  connector at ingest time. **Exception:** `schemaId` is required at
+  the body root per [§SKILL.md format](#skillmd-format), so the root
+  schema *must* declare `schemaId` in its `properties` (typically as
+  a `const` matching the schema's `$id`). The reserved-names rule
+  still applies to `schemaId` inside `$defs` (connector-injected at
+  storage-node level), and the other four reserved names remain
+  off-limits everywhere.
 - The root schema must follow the strict-core / open-extensions
   pattern: a closed key set plus an optional `extensions:` map for
   doc-specific structure that doesn't fit.
