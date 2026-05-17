@@ -1,10 +1,24 @@
 # Discussion: CLI / API surface (v0.1 candidate)
 
-> **Status: deliberation, not spec.** Captures the open design
-> questions around the AIP skill and its bundled validation scripts.
-> Defers all DB-publishing concerns to a later discussion. Key
-> resolution (2026-05-16): no separate CLI binary — validation lives
-> in `scripts/` inside the `aip` skill, run via `uv run`.
+> **Status: superseded for format mechanics; retained for scenarios.**
+>
+> Sessions 4–6 settled the Instruction folder layout, SKILL.md
+> format, schema metadata, schema discovery, and walkthrough UX —
+> replacing the `meta.yml` sidecar pattern, the `references/source.md`
+> source location, the single-file-for-non-skill-docs pattern, and
+> the well-structured-markdown body lean described below. **For
+> current format mechanics, see `spec.md`** (especially
+> §Instruction format, §SKILL.md format, §AIP schema conventions,
+> §Schema discovery, and §The AIP skill).
+>
+> Still authoritative here: the three usage scenarios
+> (§Usage scenarios) and the "Scenario 1: agent owns schema
+> selection, user is not expected to understand JSON Schema" stance.
+>
+> *Original status note (2026-05-16, session 3):* Key resolution —
+> no separate CLI binary; validation lives in `scripts/` inside the
+> `aip` skill, run via `uv run`. This decision still holds and is
+> reflected in `spec.md`.
 
 ## What triggered this
 

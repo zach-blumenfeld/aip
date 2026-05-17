@@ -486,6 +486,71 @@ rather than spilling content into `references/`. References load on
 demand and don't shape behavior — they're for documentation an agent
 might consult, not the instructions themselves.
 
+## Schema discovery
+
+When the agent helps a user produce an Instruction without a
+pre-specified schema (Scenario 1 — see
+[§The AIP skill](#the-aip-skill)), it must recommend candidate
+schemas. The schema discovery convention defines where the agent
+looks and how it filters candidates.
+
+> Resolves [Open Q §8](#8--schema-discovery-convention-resolved).
+
+### Three sources
+
+| Source                 | Location                                                                                  | Filter                                                                                                              |
+|------------------------|-------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Bundled examples       | `~/.claude/skills/aip/references/examples/*/`                                             | All subfolders (trusted source).                                                                                    |
+| Project-local          | `*.schema.json` under CWD (max depth 4, respect `.gitignore`)                             | Schema has a top-level `aip:` object (AIP-compliant per [§AIP schema conventions](#aip-schema-conventions)).        |
+| Installed Instructions | `~/.claude/skills/*/schema/*.schema.json` and `./.claude/skills/*/schema/*.schema.json`   | Containing skill's `SKILL.md` has `metadata.aip.spec` in frontmatter.                                               |
+
+For each candidate, the agent reads `$id`, `title`, `description`,
+and `aip.tag` (all required per
+[§AIP schema conventions](#aip-schema-conventions)) and ranks against
+the user's intent.
+
+### Dedup precedence
+
+When the same `$id` appears in multiple sources, prefer
+**bundled > project-local > installed**. Closest-to-user wins for
+trust and predictability.
+
+### Why the filters work
+
+The schema metadata requirements double as discovery filters:
+
+- `metadata.aip.spec` in a `SKILL.md` is the "is this installed skill
+  an AIP Instruction?" signal.
+- A top-level `aip:` object in a `*.schema.json` is the "is this
+  schema AIP-compliant?" signal.
+
+These filters prevent false positives from random `*.schema.json`
+files (AJV fixtures, JSON Schema store, npm package schemas) and
+from non-AIP installed skills. No additional naming conventions or
+registries are needed.
+
+### Project-local scan parameters
+
+- Maximum depth: 4 levels from CWD.
+- Respect `.gitignore` (excludes `node_modules/` and similar by
+  default).
+- Most schema files in a real project live within 2–3 levels of CWD,
+  so depth 4 covers the realistic cases without pathological
+  recursion on large monorepos.
+
+### What's deferred
+
+For v0.1, AIP does not specify:
+
+- Cross-corpus discovery ("find schemas similar to this one across
+  all installed Instructions").
+- A registry, marketplace, or remote schema fetching.
+- Schema indexing or caching strategies.
+
+The agent can always fall back to drafting custom (Scenario 3) when
+bundled and discovered schemas don't fit. Discovery is a
+recommendation surface, not a hard requirement.
+
 ## Components
 
 ### A. Instructions
@@ -858,6 +923,83 @@ The compile, draft-schema, and install operations are things the
 agent *does* as part of the conversational workflow — not sub-commands
 of the skill.
 
+### Walkthrough UX
+
+`SKILL.md` instructs the agent to run a structured walkthrough when
+helping a user produce an Instruction. The walkthrough has a fixed
+entry, a depth-adapted middle, and a small set of always-confirm
+checkpoints regardless of depth.
+
+This UX is specific to the reference `aip` skill — it is not a
+protocol-level constraint. Other AIP skill implementations may
+choose different walkthrough shapes.
+
+#### Entry sequence
+
+At the start of every new Instruction:
+
+1. **Confirm intent.** Agent acknowledges what the user wants to
+   make and surfaces any ambiguity in plain language.
+2. **Ask depth.** Single question, three options:
+   - **Quick** (~2 min) — agent makes most decisions, shows result
+     for review
+   - **Balanced** (~5–10 min) — agent asks about the 3–5 most
+     important structural choices
+   - **Thorough** (~20+ min) — field-by-field collaboration
+3. **Determine source materials path.** Three valid starting points:
+   - User pastes/describes a doc inline
+   - User points to an existing markdown file
+   - User describes verbally → agent drafts `source/README.md` first
+     as the canonical source
+
+   Agent asks only when the answer isn't obvious from context.
+
+#### Depth-adapted middle
+
+The middle (schema discovery, body compilation, refinement) adapts
+to the chosen depth:
+
+- **Quick** — agent picks the most likely schema match, drafts the
+  body, presents the result. Asks only the always-confirm
+  checkpoints (below).
+- **Balanced** — agent surfaces 3–5 key structural choices for user
+  input (e.g., "deliberation vs. spec schema?", "should this be one
+  Instruction or two?", "what's the primary axis of organization?").
+- **Thorough** — agent walks through each significant field with the
+  user before validating and presenting.
+
+#### Validation failures: tiered recovery
+
+When `validate.py` or `validate_schema.py` fails:
+
+- **Trivial** (typos, obviously missing required field, formatting):
+  agent silently retries with the fix.
+- **Substantive** (semantic mismatch, schema doesn't fit content,
+  structural conflict): agent surfaces the error in plain language
+  plus its proposed fix and asks for confirmation before retrying.
+
+Keeps signal-to-noise high — the user is interrupted only when their
+judgment is actually needed.
+
+#### Always-confirm checkpoints
+
+Four points where the agent always confirms with the user,
+regardless of depth setting:
+
+1. **Chosen schema before compiling body.** Prevents wasted
+   body-drafting effort if the user disagrees.
+2. **`description` field text.** Show and confirm before finalizing
+   — `description` is the only signal at skill discovery time (see
+   [§SKILL.md format](#skillmd-format)), and the user knows their
+   phrasing preferences better than the agent.
+3. **Final Instruction preview before install.** Show the rendered
+   `SKILL.md` (or a clean summary) so the user sees exactly what's
+   about to land on disk.
+4. **Install location.** Ask user-global (`~/.claude/skills/`) vs
+   project-local (`./.claude/skills/`), with a default suggestion
+   based on whether CWD is in a git repo (project-local when in a
+   repo, user-global when not).
+
 ## Open Questions
 
 ### §1 — Connector interface contract
@@ -908,26 +1050,15 @@ deserves its own discussion.
 not an invocable command. Compile, draft-schema, and install are
 agent behaviors guided by this skill. See [§The AIP skill](#the-aip-skill).
 
-### §8 — Schema discovery convention (open)
+### §8 — Schema discovery convention: resolved
 
-For the most common usage scenario (user wants to create a skill,
-no schema specified), the agent must know what schemas already exist
-and offer informed suggestions. Three sources need discovery
-conventions:
-
-1. **AIP example schemas** — bundled in `examples/schemas/` and
-   exposed via the AIP skill. Solved by the skill itself.
-2. **Project-local schemas** — agent scans for `*.schema.json` files
-   in the current working directory tree. Convention not yet
-   specified: depth limit? ignore paths? naming requirements?
-3. **Schemas in installed skills** — a skill folder may embed a
-   schema it was compiled against. Convention for where this lives
-   inside the folder (e.g., `references/schema.json`?) is not yet
-   defined.
-
-Until this is resolved, the AIP skill cannot fully implement Scenario 1.
-This likely needs its own discussion doc before the skill can be
-written.
+**Resolved 2026-05-16.** Three-source discovery model: bundled
+examples (`references/examples/`), project-local schemas
+(`*.schema.json` under CWD, max depth 4, respect `.gitignore`,
+filtered to those with a top-level `aip:` object), and installed AIP
+Instructions (filtered to skills whose `SKILL.md` has
+`metadata.aip.spec`). Dedup precedence: bundled > project-local >
+installed. See [§Schema discovery](#schema-discovery).
 
 ### §4 — Source markdown schema
 
@@ -1047,6 +1178,21 @@ required in CI.
 
 ## Change log
 
+- **2026-05-16 (session 6)** — Added §Schema discovery (new
+  top-level section): three-source model — bundled examples,
+  project-local schemas, and installed AIP Instructions — with
+  filters that reuse session 5 metadata requirements (`metadata.aip.spec`
+  on `SKILL.md` and the top-level `aip:` object on schemas both
+  serve as "is this AIP?" filters). Dedup precedence
+  bundled > project-local > installed; project-local scan depth
+  capped at 4. Marks Open Q §8 resolved. Added §The AIP skill →
+  ### Walkthrough UX subsection: fixed entry (confirm intent →
+  depth selector → source materials path), depth-adapted middle
+  (Quick / Balanced / Thorough), tiered validation recovery, and
+  four always-confirm checkpoints regardless of depth (chosen
+  schema, `description` text, final preview, install location).
+  This UX is explicitly scoped to the reference `aip` skill, not the
+  protocol.
 - **2026-05-16 (session 5)** — Expanded §AIP schema conventions with
   a §Required metadata subsection (required root-level annotation
   keywords `$schema`, `$id`, `title`, `description`; AIP-specific
