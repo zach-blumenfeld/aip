@@ -157,24 +157,13 @@ Four points to **always** confirm, regardless of depth.
 
 ## Schema discovery
 
-Used in Scenario 1. Search three sources; for each candidate, read
-`$id`, `title`, `description`, `aip.tag`, then rank against intent.
+Used in Scenario 1. Search three sources (bundled examples,
+project-local schemas, installed Instructions), rank candidates
+against the user's intent, prefer reuse. If nothing fits, offer to
+draft a custom schema (Scenario 3).
 
-| Source                 | Where                                                                                  | Include only if…                                       |
-|------------------------|----------------------------------------------------------------------------------------|--------------------------------------------------------|
-| Bundled examples       | `references/examples/*/` (in this skill's folder)                                      | Always include.                                        |
-| Project-local schemas  | `*.schema.json` under CWD (max depth 4, respect `.gitignore`)                          | Schema has a top-level `aip:` object.                  |
-| Installed Instructions | `~/.claude/skills/*/schema/*.schema.json` and `./.claude/skills/*/schema/*.schema.json` | Containing skill's `SKILL.md` has `metadata.aip.spec`. |
-
-**Dedup precedence** (same `$id` in multiple sources): bundled >
-project-local > installed.
-
-The filters keep out random `*.schema.json` files (AJV fixtures, npm
-package schemas) and non-AIP installed skills — non-AIP schemas
-won't validate and won't carry the metadata an agent expects.
-
-If no candidate fits, offer to draft a custom schema (Scenario 3).
-Try discovery first — schema reuse is the preference.
+Read **[references/schema-discovery.md](references/schema-discovery.md)**
+for the source table, filters, dedup precedence, and rationale.
 
 ## Selective typing
 
@@ -369,23 +358,13 @@ prior logs, diagrams) go alongside `README.md` in `source/`.
 
 ## Scenario 3 details
 
-Schema authoring is conversational — no fixed step sequence.
+Schema authoring is conversational — no fixed step sequence. Scope
+new schemas to the **category of work** (runbook, document-template,
+reference, post-mortem), not to the specific skill instance.
 
-1. **Understand the domain** the schema will validate; pull in
-   reference material (other schemas, user examples, web).
-2. **Identify the core structure**: main fields, required vs
-   optional, strict-core / open-extensions split.
-3. **Draft and validate** with required AIP root metadata (see
-   [Format essentials](#aip-compliant-schema)). Run
-   `uv run scripts/validate_schema.py <draft>`.
-4. **Iterate.** Show, gather feedback, refine, re-validate. Watch
-   for reserved property names, DB-specific keywords, and
-   strict-core violations.
-5. **Settle.** When the validator passes and the user is satisfied,
-   offer to install at `references/examples/<name>/` as a bundled
-   reference, or use it immediately for a Scenario 2 compile.
-
-Depth selector applies the same way as Scenarios 1–2.
+Read **[references/scenario-3-schema-authoring.md](references/scenario-3-schema-authoring.md)**
+for the full procedure, depth-selector phrasing, scoping guidance,
+and the required-root-metadata reference.
 
 ## After install
 
