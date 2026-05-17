@@ -51,6 +51,17 @@ required.
   loose structure). Predictable shape means agents code against
   the schema, not per-file examples. Removes narrative scaffolding
   that's signal for humans but noise for agents.
+
+  *Caveat — when compression is real.* The 40–60% figure assumes
+  prose-heavy source AND selective-typing schema discipline (type
+  sections an agent will iterate or filter by; leave the rest as
+  freeform text). Tight, already-structured source compiled against
+  a rigid full-typed schema can compress *negatively* (a real
+  compile in this project saw +4.2% — see
+  [discussions/learning-search-first/](discussions/learning-search-first/)).
+  Selective typing is covered in the reference `aip` skill's
+  `SKILL.md`; schema-side guidance lives in
+  [§AIP schema conventions](#aip-schema-conventions).
 - **Forces clarity at write time.** Vague skills, prompts, and
   specs can't validate against a strict schema. The validator is
   a quality gate that catches under-specified structure before
@@ -970,7 +981,13 @@ to the chosen depth:
   checkpoints (below).
 - **Balanced** — agent surfaces 3–5 key structural choices for user
   input (e.g., "deliberation vs. spec schema?", "should this be one
-  Instruction or two?", "what's the primary axis of organization?").
+  Instruction or two?", "what's the primary axis of organization?",
+  "for each significant section: freeform text or queryable
+  structure?"). The last question — selective typing — is high
+  leverage; it's the difference between an Instruction that
+  compresses 40–60% below source and one that compiles larger than
+  its source. See [§Value Proposition](#value-proposition) and the
+  reference `aip` skill's `SKILL.md` for the heuristic.
 - **Thorough** — agent walks through each significant field with the
   user before validating and presenting.
 
