@@ -68,8 +68,13 @@ Structural rules:
 - **Reserved property names** (never define, anywhere in the schema):
   `id`, `schemaId`, `key`, `idx`, `_source`. All five are
   connector-injected at ingest time.
-- **Strict-core / open-extensions:** closed key set at each object,
-  plus an optional `extensions:` map for doc-specific overflow.
+- **Strict-core / open-extensions:** every object subschema (root,
+  `$defs` entries, nested properties, array items, `oneOf` branches)
+  must explicitly declare `additionalProperties` — `false` to close
+  the key set (the default choice), or `true` / a schema when
+  intentionally open. JSON Schema's silent default of `true` is not
+  allowed. Pattern for doc-specific overflow: closed parent with an
+  `extensions:` property whose value is an open object.
 - **`$defs` entries become node types in storage** when a connector
   ingests — give each a clearly-named key.
 - **No DB-specific keywords** (no `x-graph-*`, `x-neo4j-*`). Schemas

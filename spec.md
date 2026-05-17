@@ -200,10 +200,14 @@ Concretely:
    Instruction body alone, or also ingest the Instruction's source
    markdown as a linked Document. The DB carries no opinion either way.
 
-5. **Strict-core, open-extensions schemas.** Every object in a schema
-   has a closed key set, plus an optional `extensions:` map for
-   doc-specific structure that doesn't fit. Predictability without
-   brittleness.
+5. **Strict-core, open-extensions schemas.** Every object subschema
+   explicitly declares its policy on additional properties — `false`
+   to close the key set (the common case), or `true` / a schema when
+   the object is intentionally open. Relying on JSON Schema's default
+   (`true`) is not allowed; silent drift defeats the point. The
+   common pattern for doc-specific overflow is a closed parent with
+   an `extensions:` property whose value is an open object.
+   Predictability without brittleness.
 
 6. **Lossy is the only ingest mode.** Instruction bodies in lossless
    mode (with a `context:` TAIL preserving original phrasing) are not
@@ -273,9 +277,15 @@ schema's own `$id`) at ingest time.
   `schemaId`, `key`, `idx`, `_source`. These are all injected by the
   connector at ingest time and may not be declared in any schema —
   not at the schema root, not inside `$defs`, not anywhere.
-- The root schema must follow the strict-core / open-extensions
-  pattern: a closed key set plus an optional `extensions:` map for
-  doc-specific structure that doesn't fit.
+- **Every object subschema** must explicitly declare
+  `additionalProperties` — `false` to close the key set, or `true` /
+  a schema when intentionally open. This applies at the root, inside
+  `$defs`, in nested `properties`, in array `items`, and inside
+  `oneOf` / `anyOf` / `allOf` branches. JSON Schema's silent default
+  of `true` is not allowed; it lets drift through unnoticed. The
+  common pattern for doc-specific overflow is a closed parent with
+  an `extensions:` property whose value is an open object.
+  Enforced by `scripts/validate_schema.py`.
 - `$defs` entries become node types in storage; each must have a
   clearly-named key (becomes the node label).
 
@@ -1192,6 +1202,17 @@ required in CI.
   ingest target.
 
 ## Change log
+
+- **2026-05-17 (b)** — Tightened the strict-core rule. Every object
+  subschema must now explicitly declare `additionalProperties`
+  (`false` to close, `true` or a schema for intentional opens) —
+  not just the root. Resolves a contradiction between principle 5
+  ("every object") and the prior §AIP schema conventions wording
+  ("root schema"). `validate_schema.py` walks $defs, nested
+  properties, array items, and oneOf/anyOf/allOf branches and
+  reports per-path violations. Authors who were setting
+  `additionalProperties: false` defensively on nested objects are
+  now backed up by the validator.
 
 - **2026-05-17** — Dropped the body-root `schemaId` requirement.
   Frontmatter `metadata.aip.schemaId` is now the single source of

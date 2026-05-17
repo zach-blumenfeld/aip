@@ -15,8 +15,10 @@ Checks performed (see spec.md §AIP schema conventions):
   are optional for v0.1).
 - No reserved AIP property names anywhere in the schema's declared shape:
   id, schemaId, key, idx, _source.
-- Root follows strict-core / open-extensions pattern
-  (additionalProperties: false).
+- Every object subschema (root, $defs, nested properties, items,
+  oneOf/anyOf/allOf branches) explicitly declares additionalProperties
+  — false to close, true or a schema to intentionally open. Relying on
+  JSON Schema's default (true) is not allowed; silent drift.
 - $defs entry names are clearly named (become node labels in storage).
 - The schema is itself a valid JSON Schema per its declared $schema
   dialect.
@@ -159,18 +161,72 @@ def check_reserved_names(schema: dict, path: str) -> Iterable[Error]:
                 )
 
 
+def _is_object_subschema(sub: dict) -> bool:
+    """An object-like subschema is one where additionalProperties is meaningful.
+
+    True when the subschema explicitly declares object-ness via `type: object`
+    or implies it by declaring keys via `properties` or `patternProperties`.
+    """
+    return (
+        sub.get("type") == "object"
+        or "properties" in sub
+        or "patternProperties" in sub
+    )
+
+
+def _walk_object_subschemas(schema: dict, path: str = "$"):
+    """Yield (subschema, path) for every object-like subschema in the tree."""
+    if not isinstance(schema, dict):
+        return
+
+    if _is_object_subschema(schema):
+        yield schema, path
+
+    for name, defs_schema in schema.get("$defs", {}).items():
+        yield from _walk_object_subschemas(defs_schema, f"{path}.$defs.{name}")
+
+    for name, prop_schema in schema.get("properties", {}).items():
+        yield from _walk_object_subschemas(prop_schema, f"{path}.properties.{name}")
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        yield from _walk_object_subschemas(items, f"{path}.items")
+    elif isinstance(items, list):
+        for i, item in enumerate(items):
+            yield from _walk_object_subschemas(item, f"{path}.items[{i}]")
+
+    for combinator in ("oneOf", "anyOf", "allOf"):
+        for i, sub in enumerate(schema.get(combinator, [])):
+            yield from _walk_object_subschemas(sub, f"{path}.{combinator}[{i}]")
+
+    ap = schema.get("additionalProperties")
+    if isinstance(ap, dict):
+        yield from _walk_object_subschemas(ap, f"{path}.additionalProperties")
+
+    for pattern, pp_schema in schema.get("patternProperties", {}).items():
+        yield from _walk_object_subschemas(pp_schema, f"{path}.patternProperties[{pattern}]")
+
+
 def check_strict_core(schema: dict, path: str) -> Iterable[Error]:
-    if schema.get("additionalProperties") is not False:
-        yield Error(
-            path=path,
-            kind="not_strict_core",
-            message=(
-                "root schema must set `additionalProperties: false` "
-                "(strict-core / open-extensions pattern; use an "
-                "`extensions` property for doc-specific structure)"
-            ),
-            location="$.additionalProperties",
-        )
+    """Every object subschema must explicitly declare additionalProperties.
+
+    Closed by default (`additionalProperties: false`) is the common case;
+    intentionally open uses `true` or a schema. Relying on JSON Schema's
+    default of `true` is not allowed — it silently lets drift through.
+    """
+    for sub, sub_path in _walk_object_subschemas(schema):
+        if "additionalProperties" not in sub:
+            yield Error(
+                path=path,
+                kind="missing_additional_properties",
+                message=(
+                    f"object subschema at `{sub_path}` must explicitly "
+                    f"declare `additionalProperties` (false to close the "
+                    f"key set, or true / a schema to intentionally open). "
+                    f"JSON Schema's default of true silently allows drift."
+                ),
+                location=f"{sub_path}.additionalProperties",
+            )
 
 
 def check_defs_naming(schema: dict, path: str) -> Iterable[Error]:
