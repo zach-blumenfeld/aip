@@ -69,6 +69,10 @@ If the skill is "search-first before writing code," the schema is
 `runbook` — not `search-first`. The category is what future skills
 reuse.
 
+When you draft a new schema mid-Scenario-1, you've entered Scenario 3
+for that artifact — run `validate_schema.py` on it *before* compiling
+the body (see [Validation scripts](#validation-scripts)).
+
 ### Scenario 2 — Schema specified
 
 User provides both source material and a schema reference.
@@ -226,13 +230,25 @@ uv run scripts/validate.py path/to/instruction/   # Instruction
 uv run scripts/validate_schema.py path/to/schema.json   # Schema
 ```
 
-When to invoke:
+When to invoke — keyed on the write, not the scenario:
 
-- **Scenario 1:** `validate.py` on the compiled Instruction before
-  install.
-- **Scenario 2:** `validate_schema.py` on the user's schema first;
-  `validate.py` on the result before install.
-- **Scenario 3:** `validate_schema.py` on each draft iteration.
+**Run a validator after any write to a schema or Instruction.**
+Initial compile, schema authoring, post-install edits, renaming a
+field across two files — all of them.
+
+- Wrote/edited a schema file → `validate_schema.py <file>`
+- Wrote/edited a `SKILL.md` or an Instruction folder →
+  `validate.py <folder>`
+- Both changed in the same turn → run both
+- Scenario-1 reuse failed and you drafted a new schema → you've
+  entered Scenario 3 for that artifact. Run `validate_schema.py` on
+  the new schema *before* compiling the body against it. `validate.py`
+  on the Instruction does not catch schema-side AIP-compliance bugs;
+  the body can fit a non-compliant schema silently.
+
+Don't substitute manual review. The validators take ~1 second; an
+eyeball check is not equivalent and routinely misses AIP-namespace
+and required-metadata bugs.
 
 Apply [tiered recovery](#validation-failures--tiered-recovery) on
 failure.
@@ -390,5 +406,10 @@ iteration loop are complementary, not overlapping.
 - **Don't promise compression for tight, already-structured source.**
   40–60% reduction assumes prose-heavy source AND selective-typing.
   Tight markdown + rigid full-typed schema can compress *negatively*.
+- **Don't treat the bundled validators as out-of-scope under user
+  scope restrictions.** When the user says "do it without X" or
+  restricts external resources, the validators in this skill's
+  `scripts/` are part of the skill's contract — not third-party
+  resources. Run them anyway, and surface that you're doing so.
 - **Don't pile on all-caps MUSTs.** Explain why once; LLMs reason
   from intent.
