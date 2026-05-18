@@ -681,6 +681,100 @@ Issue 1 in the first place.
 
 ---
 
+## Strategic note: typed schemas as evaluable design
+
+A thread that emerged late in the session, worth recording at a
+different altitude than the issues above. Most of this feedback has
+treated typed schemas as *governance scaffolding* — useful for audit,
+drift detection, cross-skill queryability. That undersells them.
+
+### The thesis
+
+Typed schemas turn structural design into something *empirically
+evaluable*. With freeform prose, every change is confounded: tweak
+wording and you've also changed length, framing, position, all at
+once. You can't isolate which structural choice mattered. With typed
+schemas, you can hold content constant and vary structure — add
+`when_to_use`, remove `examples`, change `decisions` from typed rows
+to a `|`-block — then run the same task corpus against each variant
+and measure.
+
+The schema becomes a **hyperparameter you can tune**. Prompt
+engineering shifts from alchemy to something with empirical feedback
+loops.
+
+This is potentially a significant differentiator. Most skill
+frameworks can't do this because their structure is too loose to
+support controlled comparison. Anthropic's skill-creator has an eval
+loop, but it measures *content* tweaks — wording, examples, length —
+not *structural design choices*. If AIP can make structural choices
+comparable and measurable across a corpus, "we have data on which
+schema patterns work" becomes a harder claim to compete with than
+"we have nice governance metadata."
+
+### The IFF conditions
+
+The empirical-evaluation thesis is **HUGE-iff**, not
+HUGE-by-default. The "iff" is:
+
+1. **Evals exist and are meaningful.** Per-skill evals are expensive
+   to build. Noisy or domain-specific evals can't pool evidence
+   across the corpus to learn general structural lessons.
+2. **Structural effects can be isolated from content effects.**
+   When v1 vs v2 produces different agent behavior, was it the
+   schema or the content the author wrote into it? Controlled
+   comparisons — same source compiled against two schemas — are
+   what answer this, not "skills authored against v1 vs v2."
+3. **Sample size.** Each skill is one data point per variant.
+   Statistical comparison across schema designs needs many skills
+   per variant — a corpus-scale problem.
+4. **Clear north-star metric.** Activation rate? Task success?
+   Token efficiency? User satisfaction? Different metrics point to
+   different optimal schemas. Pick before iterating.
+5. **Structural variance actually matters.** If 80% of performance
+   variance comes from the `description` field (freeform), optimizing
+   body structure is fine-tuning where coarse tuning is needed first.
+   Worth checking the variance budget early before investing heavily.
+
+### Tension with the universal-schema simplification
+
+Issue 5 proposed a universal "headers → nested YAML" schema as a
+massive simplification. The two threads pull opposite directions:
+
+- **Universal-schema** trades the discipline that enables systematic
+  evaluation.
+- **Typed schemas** preserve the substrate for empirical iteration
+  but cost authoring effort and require the eval infrastructure to
+  pay off.
+
+You can't have both at once. The strategic question is whether the
+eval-and-iterate thesis is on the roadmap. If yes, the typed-schema
+discipline isn't bureaucracy — it's the foundation, and the
+universal-schema route forecloses the bigger payoff. If no, the
+universal-schema simplification is the right call and AIP becomes a
+"better-organized skills" product rather than an empirical-prompt-
+engineering platform.
+
+### Implication
+
+If the thesis is real, **the eval loop isn't a nice-to-have — it's
+what turns the schema discipline into a moat.** Co-invest in eval
+infrastructure alongside the schema work; they're co-dependent.
+Schemas without evals are opinionated structure; schemas with evals
+are an empirical engineering discipline for prompt design.
+
+The first compelling finding from such a system would likely be
+something like:
+
+> *"Runbooks with typed `decisions` outperform freeform decision
+> prose on tasks requiring conditional logic by N%."*
+
+A structural finding nobody else can claim — because nobody else has
+the controlled corpus to measure it. That's the bet worth taking, if
+the answer to "is the eval loop on the path" is yes.
+
+---
+
 ## Severity
 
 Medium. The Instruction validator passed in this run, so no broken
