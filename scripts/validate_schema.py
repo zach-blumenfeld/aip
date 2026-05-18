@@ -23,11 +23,19 @@ Checks performed (see spec.md §AIP schema conventions):
 - The schema is itself a valid JSON Schema per its declared $schema
   dialect.
 
-Output contract (also produced by scripts/validate.py):
-- Exit 0 on success; 1 on any failure.
+Soft warnings (don't fail validation, advisory only):
+
+- Property names that collide with JSON Schema annotation keywords
+  (`examples`, `enum`, `required`, `format`, `const`, `default`) —
+  spec-legal, but IDE linters in VS Code / JetBrains flag them as
+  type mismatches against the meta-schema.
+
+Output contract:
+- Exit 0 on success (no errors; warnings allowed); 1 on any error.
 - stdout: single-line human summary.
-- stderr: JSON Lines, one error record per line. Each record has fields
-  `path`, `kind`, `message`, and optional `location`.
+- stderr: JSON Lines, one record per line. Each record has fields
+  `path`, `kind`, `message`, optional `location`, and `severity`
+  ("error" or "warning"; absent = "error").
 """
 
 import argparse
@@ -42,6 +50,14 @@ from jsonschema.validators import validator_for
 
 RESERVED_PROPERTY_NAMES = frozenset({"id", "schemaId", "key", "idx", "_source"})
 
+# JSON Schema annotation keywords whose meta-schema type is non-object.
+# Naive IDE linters (VS Code, JetBrains) flag `properties.<name>` against
+# these as a type mismatch, even though the schema is spec-legal. Soft
+# warning, not an error; pick a synonym to avoid silent author friction.
+JSON_SCHEMA_RESERVED_KEYWORDS = frozenset({
+    "examples", "enum", "required", "format", "const", "default",
+})
+
 
 @dataclass
 class Error:
@@ -49,13 +65,27 @@ class Error:
     kind: str
     message: str
     location: str | None = None
+    severity: str = "error"
 
 
-def emit_errors(errors: list[Error]) -> int:
-    for err in errors:
-        record = {k: v for k, v in asdict(err).items() if v is not None}
+def emit_records(records: list[Error]) -> tuple[int, int]:
+    """Emit all records to stderr as JSON Lines.
+
+    Returns (error_count, warning_count). Errors fail validation;
+    warnings are advisory and don't change the exit code.
+    """
+    err_count = 0
+    warn_count = 0
+    for r in records:
+        record = {k: v for k, v in asdict(r).items() if v is not None}
+        if record.get("severity") == "error":
+            record.pop("severity")  # default; omit to keep output compact
         print(json.dumps(record), file=sys.stderr)
-    return len(errors)
+        if r.severity == "warning":
+            warn_count += 1
+        else:
+            err_count += 1
+    return err_count, warn_count
 
 
 def check_required_metadata(schema: dict, path: str) -> Iterable[Error]:
@@ -158,6 +188,44 @@ def check_reserved_names(schema: dict, path: str) -> Iterable[Error]:
                         f"is reserved by AIP"
                     ),
                     location=f"$.$defs.{def_name}.properties.{prop_name}",
+                )
+
+
+def check_json_schema_keyword_collisions(schema: dict, path: str) -> Iterable[Error]:
+    """Soft-warn on property names that collide with JSON Schema annotation keywords.
+
+    These don't break the AIP validators or spec-compliant JSON Schema
+    validators, but naive IDE linters flag them as type mismatches.
+    """
+    for prop_name in schema.get("properties", {}):
+        if prop_name in JSON_SCHEMA_RESERVED_KEYWORDS:
+            yield Error(
+                path=path,
+                kind="json_schema_keyword_collision",
+                message=(
+                    f"property `{prop_name}` collides with a JSON Schema "
+                    f"reserved annotation keyword. Spec-legal, but naive "
+                    f"IDE linters will flag it. Consider a synonym."
+                ),
+                location=f"$.properties.{prop_name}",
+                severity="warning",
+            )
+    for def_name, def_schema in schema.get("$defs", {}).items():
+        if not isinstance(def_schema, dict):
+            continue
+        for prop_name in def_schema.get("properties", {}):
+            if prop_name in JSON_SCHEMA_RESERVED_KEYWORDS:
+                yield Error(
+                    path=path,
+                    kind="json_schema_keyword_collision",
+                    message=(
+                        f"property `{prop_name}` in $defs.{def_name} "
+                        f"collides with a JSON Schema reserved annotation "
+                        f"keyword. Spec-legal, but naive IDE linters will "
+                        f"flag it. Consider a synonym."
+                    ),
+                    location=f"$.$defs.{def_name}.properties.{prop_name}",
+                    severity="warning",
                 )
 
 
@@ -268,50 +336,52 @@ def check_schema_validity(schema: dict, path: str) -> Iterable[Error]:
         )
 
 
-def validate_schema_file(schema_path: Path) -> tuple[int, str | None]:
-    """Run all checks. Returns (error_count, title_if_valid)."""
+def validate_schema_file(schema_path: Path) -> tuple[int, int, str | None]:
+    """Run all checks. Returns (error_count, warning_count, title_if_valid)."""
     path_str = str(schema_path)
 
     if not schema_path.exists():
-        return emit_errors([
+        err, warn = emit_records([
             Error(path=path_str, kind="file_not_found", message="schema file does not exist")
-        ]), None
+        ])
+        return err, warn, None
 
     try:
         schema = json.loads(schema_path.read_text())
     except json.JSONDecodeError as exc:
-        return emit_errors([
+        err, warn = emit_records([
             Error(
                 path=path_str,
                 kind="invalid_json",
                 message=f"failed to parse JSON: {exc.msg}",
                 location=f"line {exc.lineno}, col {exc.colno}",
             )
-        ]), None
+        ])
+        return err, warn, None
 
     if not isinstance(schema, dict):
-        return emit_errors([
+        err, warn = emit_records([
             Error(
                 path=path_str,
                 kind="invalid_root",
                 message=f"schema root must be an object, got {type(schema).__name__}",
             )
-        ]), None
+        ])
+        return err, warn, None
 
-    errors: list[Error] = []
-    errors.extend(check_required_metadata(schema, path_str))
-    errors.extend(check_id_form(schema, path_str))
-    errors.extend(check_aip_namespace(schema, path_str))
-    errors.extend(check_reserved_names(schema, path_str))
-    errors.extend(check_strict_core(schema, path_str))
-    errors.extend(check_defs_naming(schema, path_str))
-    errors.extend(check_schema_validity(schema, path_str))
+    records: list[Error] = []
+    records.extend(check_required_metadata(schema, path_str))
+    records.extend(check_id_form(schema, path_str))
+    records.extend(check_aip_namespace(schema, path_str))
+    records.extend(check_reserved_names(schema, path_str))
+    records.extend(check_strict_core(schema, path_str))
+    records.extend(check_defs_naming(schema, path_str))
+    records.extend(check_schema_validity(schema, path_str))
+    records.extend(check_json_schema_keyword_collisions(schema, path_str))
 
-    if errors:
-        return emit_errors(errors), None
-
+    err_count, warn_count = emit_records(records)
     title = schema.get("title") if isinstance(schema.get("title"), str) else None
-    return 0, title
+    return err_count, warn_count, title
 
 
 def main() -> int:
@@ -324,13 +394,14 @@ def main() -> int:
     parser.add_argument("schema_path", type=Path, help="path to the .schema.json file")
     args = parser.parse_args()
 
-    error_count, title = validate_schema_file(args.schema_path)
+    error_count, warning_count, title = validate_schema_file(args.schema_path)
+    warning_suffix = f" ({warning_count} warning(s) — see stderr)" if warning_count else ""
 
     if error_count == 0:
-        suffix = f" (title: {title})" if title else ""
-        print(f"VALID: {args.schema_path}{suffix}")
+        title_suffix = f" (title: {title})" if title else ""
+        print(f"VALID: {args.schema_path}{title_suffix}{warning_suffix}")
         return 0
-    print(f"INVALID: {error_count} error(s) — see stderr")
+    print(f"INVALID: {error_count} error(s){warning_suffix} — see stderr")
     return 1
 
 

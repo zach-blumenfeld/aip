@@ -79,3 +79,32 @@ Structural rules:
   ingests — give each a clearly-named key.
 - **No DB-specific keywords** (no `x-graph-*`, `x-neo4j-*`). Schemas
   are vendor-neutral.
+
+## Avoid JSON Schema reserved keywords as property names
+
+JSON Schema's meta-schema types some annotation keywords (`examples`,
+`enum`, `required`, `format`) as non-object values. Naive linters in
+VS Code, JetBrains, and similar IDEs apply this rule path-blind —
+flagging `properties.examples` (a data property whose value is
+correctly a sub-schema object) as the wrong type. Spec-compliant
+validators (jsonschema, ajv default mode, the AIP validators)
+correctly distinguish keyword-position from data-position and don't
+flag this. But every author who opens the schema in a JSON-Schema-
+aware IDE sees the squiggle.
+
+`validate_schema.py` emits a soft warning when it sees one of these
+names under `properties` or `$defs.*.properties`. Pick a synonym
+instead:
+
+| Reserved keyword | Meta-schema type | Suggested alternatives                  |
+|------------------|------------------|------------------------------------------|
+| `examples`       | array            | `worked_examples`, `cases`, `scenarios`  |
+| `enum`           | array            | `options`, `choices`, `valid_values`     |
+| `required`       | array            | `required_fields`, `mandatory`           |
+| `format`         | string           | `format_type`, `style`                   |
+| `const`          | (special)        | `fixed_value`, `literal`                 |
+| `default`        | (annotation)     | `default_value`, `initial`               |
+
+Keywords like `title`, `description`, `type` are also reserved but
+their meta-schema types are strings — they typically don't trip
+linters but are confusing as data-property names. Prefer synonyms.
