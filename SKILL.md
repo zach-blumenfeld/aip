@@ -184,26 +184,38 @@ for the source table, filters, dedup precedence, and rationale.
 
 ## Selective typing
 
-The highest-leverage authoring decision is which sections to *type*
-(list-of-objects, structured records) vs leave as freeform text
-under a `|`-block. Get this right and an Instruction compresses
-40–60% below its markdown source while staying agent-queryable. Get
-it wrong — type everything — and the Instruction can compile
-*larger* than its source while being harder to read.
+The highest-leverage authoring decision is the *shape* of each
+section. Get it right and an Instruction compresses below its
+markdown source while staying agent-queryable. Type everything and
+the Instruction can compile *larger* than its source while being
+harder to read.
 
-**Heuristic:** would the agent ever `for` over this section, or
-filter / look up by one of its sub-fields? If yes, type it. If no,
-leave it as text.
+Two independent questions for any section:
 
-Worked example (from `discussions/learning-search-first/`, Attempt 3):
+1. **Is the field plural?** Plural-named fields default to lists,
+   not single `|`-blocks. The label of each item stays queryable.
+2. **Should each item's body be typed?** Heuristic: would the agent
+   ever `for` over the items and filter / look up by a sub-field?
+   If yes, type. If no, prose.
 
-- **Typed** — `steps` (id / do / parallel? / one_of?), `decisions`
-  (when / then pairs), `examples` (need / found / action). The agent
-  iterates over them.
-- **Freeform `|`-block** — `shortcuts` (categorised reference list),
-  `modes.quick` / `modes.full` (terse prose blocks), `integrations`
-  (one-line strings). The agent reads these once for context;
-  decomposing inflates size without enabling any new query.
+Combining those gives four shapes:
+
+- **Full typed records** — `steps` (`[{id, do, parallel?, one_of?}]`),
+  `decisions` (`[{when, then}]`), `examples` (`[{need, found, action}]`).
+  Iterated by sub-field.
+- **Thin `{label, body}` envelopes** — `modes`
+  (`[{name: quick, body: |...}, {name: full, body: |...}]`),
+  `search_shortcuts` (`[{category, body}]`). Plural with natural
+  labels; bodies stay as prose. Label is queryable without
+  re-encoding the body.
+- **List of strings** — `integrations`, `triggers`, `anti_patterns`.
+  Plural with one-line items. Don't envelope unnecessarily.
+- **Single `|`-block** — singular content (`scope`, `context`) or
+  plural content with no useful label or sub-field structure.
+
+Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding
+per item. Negligible for 2–10 items; consider flat strings or
+splitting the skill at 50+.
 
 **Don't fight tight source.** Markdown tables and ASCII workflow
 diagrams in the source are already structured. Drop them into
@@ -219,6 +231,11 @@ diagrams in the source are already structured. Drop them into
   tokens on every invocation.
 - **No surprises.** Body contents should match what `description`
   promises.
+- **Block scalars inside a sequence are indentation-sensitive.** A
+  top-level `|`-block is easy; `[{name, body: |...}]` items with
+  code fences or already-indented content are tricky. If an envelope
+  keeps breaking, fall back to a list of strings with the label as
+  a prefix.
 
 ## Validation scripts
 
@@ -403,9 +420,13 @@ iteration loop are complementary, not overlapping.
 - **Don't over-decompose tight source.** Freeform-reference sections
   default to `|`-block strings. Type only what the agent would iterate
   or filter by — see [Selective typing](#selective-typing).
-- **Don't promise compression for tight, already-structured source.**
-  40–60% reduction assumes prose-heavy source AND selective-typing.
-  Tight markdown + rigid full-typed schema can compress *negatively*.
+- **Don't quote the 40–60% compression range to authors of tight,
+  already-structured source.** That figure assumes prose-heavy
+  material where selective typing has room to eliminate redundancy.
+  For tight source (markdown tables, terse bulleted lists, ASCII
+  diagrams), realistic compression is **5–15%**. If a compile looks
+  like a much bigger win, first check for silently dropped content
+  before celebrating.
 - **Don't treat the bundled validators as out-of-scope under user
   scope restrictions.** When the user says "do it without X" or
   restricts external resources, the validators in this skill's
