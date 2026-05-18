@@ -1,6 +1,6 @@
 # AIP feedback — run 3
 
-## Issue: validators were not run
+## Issue 1: validators were not run
 
 In this session I compiled `productivity-skill.md` into a `search-first` AIP
 Instruction, then iterated on the schema (renamed `id` → `name` in `steps`).
@@ -31,7 +31,7 @@ The first case is a *scope-interpretation* failure; the second is a
 *habit* failure. Both result in the same thing: shipping unvalidated
 artifacts.
 
-## What the aip skill currently says
+### What the aip skill currently says
 
 From `SKILL.md`:
 
@@ -61,11 +61,11 @@ Gaps that allowed me to skip:
   user restricts scope, the skill doesn't tell the agent that its own
   validators are still in-scope.
 
-## Recommended fix to the aip skill
+### Recommended fix to the aip skill
 
 Three small edits to `.claude/skills/aip/SKILL.md`:
 
-### 1. Make validation non-optional after every write
+#### 1. Make validation non-optional after every write
 
 Replace the conditional "When to invoke" list with a rule keyed on the
 write, not the scenario:
@@ -83,7 +83,7 @@ write, not the scenario:
 > eyeball check is not equivalent and routinely misses
 > AIP-namespace and required-metadata bugs.
 
-### 2. Cover the Scenario-1-becomes-Scenario-3 case
+#### 2. Cover the Scenario-1-becomes-Scenario-3 case
 
 Add to Scenario 1:
 
@@ -92,7 +92,7 @@ Add to Scenario 1:
 > schema before compiling the body against it — `validate.py` on the
 > compiled Instruction does not catch schema-side AIP-compliance bugs.
 
-### 3. Scope-restriction carve-out
+#### 3. Scope-restriction carve-out
 
 Add to the anti-patterns list:
 
