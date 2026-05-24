@@ -96,33 +96,19 @@ AIP has the following benefits over the base Agent Skill Spec:
 
 ## Authoring an Agent Skill
 
-Steps:
+Checklist.  Follow sequentially.
 
-1. Establish the type of skill they want to author
-
-    ...?
-    
-    Try to use existing schemas rather than creating new ones.
-
-2. Get the schema
-
-    If you must draft a new schema see `references/draft-schema.md`
-    Otherwise get your schema from `assets/aip-schemas`
-
-3. Identify source materials
-
-    Expect users to bring previous Markdown files, SKILL.md or other documentation.
-    If users have no source - collect all the details you need from them to make a complete skill
-    source materials require a reference markdown SKILL.md in base agent skill format. This either comes from the user, or you need to create it.  See anthropic skill guidance for creating a good skill `references/md-skill-guidance` if you are creating. 
-
-4. Lock the skill name
-
-    Ask the user want they want to call the skill names should be ...?
-    Offer a multiple choice list with your recommendations and an option for them to type something.
-    If they type their own, validate against recommendations above
-    if validation fails, state why and provide a multiple choice list with suggested variations and option for them to type something.  repeat until a choice is made
-
-5. Scaffold skill directory 
+1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same advise here. 
+2. Establish the type of skill the user wants to author
+3. Identify source materials for domain-specific context
+4. Establish the Schema to use:
+    - Bias to schema reuse over drafting new ones.
+    - Find existing schemas in `assets/aip-schemas` 
+    - If you must draft a new schema see `references/draft-schema.md`
+5. Lock the skill name
+    - Ask the user what to call the skill. The name is short and slightly descriptive — it becomes the folder name. Lowercase kebab-case, <65 chars, no leading/trailing/consecutive hyphens.
+    - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the rules above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
+6. Scaffold skill directory 
     write first to a temporary location
     ```shell
     skill-name/
@@ -135,12 +121,34 @@ Steps:
     ```
     fill in the /source materials.  With
     - The schema used above
-    - reference docs used to create the skill.  including
+    - reference docs you will use to create the skill (domain-specific context).  including
       - a source SKILL.md a user provided for transition to AIP format
       - a README.md outlining you logic from above and intent of the skill
-      - Any other documentation or referenced you will use to create the AIP skill
-    
-6. Create and validate the AIP SKILL - see 
+      - Any other documentation or reference you will use to create the AIP skill 
+7. Create and validate the AIP `SKILL.md`
+   1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
+         - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
+         - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema. 
+   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs. On failure, apply tiered recovery:                                          
+      - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
+      - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
+   3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         
+      - **Mapped** — captured faithfully in the body.                                                                                    
+      - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile.                                  
+      - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
+      - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
+   4. Iterate until the body validates AND every source item is classified.
+8. Install
+   1. Ask the user what to do next:
+      - **Install now** — proceed below.
+      - **Iterate further** — keep editing in the temp folder.
+      - **Leave it as-is** — they'll handle placement manually. Tell them the temp path and stop.
+   2. If installing, confirm the location with the user. Standard Agent Skills locations:
+      - **Project-local** — the host agent's project skills directory (e.g., `./.claude/skills/<name>/` for Claude Code). Default if CWD is in a git repo.
+      - **User-global** — the host agent's user-wide skills directory (e.g., `~/.claude/skills/<name>/` for Claude Code). Default otherwise.
+   3. If a folder already exists at the destination, ask before overwriting. For prior AIP Instructions, preserve top-level `scripts/`, `assets/`, `references/` and overwrite only `SKILL.md` and `source/`.
+   4. Move `<temp-folder>/` → `<install-location>/<name>/` (folder name must equal `name` in frontmatter).
+   5. Tell the user the install path. Project-local installs may need a fresh agent session to activate.
 
 
 ## Anti-Patterns
