@@ -5,7 +5,6 @@ Guide for authoring AIP compliant schemas
 The user wants to create or refine an AIP-compliant JSON Schema
 
 ## AIP Schema Spec
-
 AIP schemas represent families/categories of AIP skills. They are used to govern and validate the AIP skill. 
 
 ### AIP Schema Requirements
@@ -49,13 +48,21 @@ Follow these steps sequentially
       - The title is short and slightly descriptive, optimized for human display and understanding. <65 chars.
       - descriptions described the category in 1-2 sentences
       - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the methodology above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
-4. Identify the core structure: main fields, required vs optional, etc.
-5. Write schema file to a temporary location. `<lowercase kebab-case of title field>.schema.json`
-6. Validate:
+4. Establish identity and AIP metadata. For each item below, propose a value; the user can accept the recommendation or provide their own.
+   - `$id`: propose a URI in this priority order. User-supplied alternatives must be a URI in a namespace they control.
+      - Refining an existing schema → keep its current `$id`.
+      - Other AIP schemas exist in the project → reuse their namespace pattern with the new filename.
+      - Git remote available → derive from it (e.g., `https://github.com/<owner>/<repo>/schemas/<kebab-title>.schema.json`).
+      - None of the above → propose a placeholder based on the user's stated org/handle.
+   - `aip.version`: propose `0.1` for new schemas; bump from the previous version when refining.
+   - `aip.tag`: propose omitting; include only when a discovery hint clearly helps.
+5. Identify the core structure: main fields, required vs optional, etc.
+6. Write schema file to a temporary location. `<lowercase kebab-case of title field>.schema.json`
+7. Validate:
    1. Run `uv run scripts/validate_schema.py <draft>` 
    2. Manually check against [AIP Schema Best Practices](#aip-schema-best-practices)
    On failure, apply tiered recovery:                                          
       - Trivial (typo, missing required field, formatting drift): fix silently and re-run.
       - Substantive (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
-7. Iterate until clean.
-8. Move schema file to appropriate location
+8. Iterate until clean.
+9. Move schema file to appropriate location

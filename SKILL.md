@@ -135,8 +135,8 @@ Checklist.  Follow sequentially.
       - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
       - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
    3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         
-      - **Mapped** — captured faithfully in the body.                                                                                    
-      - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile.                                  
+      - **Mapped** — captured faithfully in the body. 
+      - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile. 
       - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
       - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
    4. Iterate until the body validates AND every source item is classified.
