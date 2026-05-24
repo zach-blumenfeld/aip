@@ -6,7 +6,7 @@
   "description": "<One-or-two-sentence description of what skill family this schema represents>",
   "aip": {
     "version": "<0.1 for new schemas, otherwise iterate version from previous schema>",
-    "tag": "<schema-family-tag-for-discovery>"
+    "tag": "<optional — schema-family-tag-for-discovery; omit this line if not used>"
   },
   "type": "object",
   "additionalProperties": false,

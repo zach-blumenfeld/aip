@@ -130,7 +130,8 @@ Checklist.  Follow sequentially.
    1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
          - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
          - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema. 
-   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs. On failure, apply tiered recovery:                                          
+   **#TODO:** Instead of the below have validate.py check for schema and run validate_schema itself
+   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs. If editing schemas, also run `uv run scripts/validate_schema.py <schema file>`. On failure, apply tiered recovery:                                          
       - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
       - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
    3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         

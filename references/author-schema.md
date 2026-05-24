@@ -12,6 +12,7 @@ AIP schemas represent families/categories of AIP skills. They are used to govern
 Hard requirements validated by the [`validate_schema.py`](../scripts/validate_schema.py).
 
 - AIP schemas follow [the JSON Schema spec](https://json-schema.org/draft/2020-12/json-schema-core). 
+- Required root metadata (all must be non-empty strings): `$schema`, `$id` (URI form), `title`, `description`.
 - Additional required metadata and floor properties are declared in [`assets/base.schema.json`](../assets/base.schema.json) — copy it into each new schema; do not `$ref` it.
 
 Beyond the base schema, every AIP schema must also satisfy:
