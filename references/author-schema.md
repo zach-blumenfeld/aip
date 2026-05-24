@@ -6,8 +6,10 @@ The user wants to create or refine an AIP-compliant JSON Schema
 
 ## AIP Schema Spec
 
+AIP schemas represent families/categories of AIP skills. They are used to govern and validate the AIP skill. 
+
 ### AIP Schema Requirements
-Hard requirements validated by the [`validate_schema.py`](../scripts/validate_schema.py) script.
+Hard requirements validated by the [`validate_schema.py`](../scripts/validate_schema.py).
 
 - AIP schemas follow [the JSON Schema spec](https://json-schema.org/draft/2020-12/json-schema-core). 
 - Additional required metadata and floor properties are declared in [`assets/base.schema.json`](../assets/base.schema.json) — copy it into each new schema; do not `$ref` it.
@@ -34,20 +36,25 @@ Beyond the base schema, every AIP schema must also satisfy:
   - Bad names: `search-first`, `friday-deploy-check` — those are skills *built on* a schema, not schemas themselves.
   - If the user's content fits an existing schema, prefer
   reuse. If it's genuinely a new category, scope the new schema as broadly as that category warrants — one schema should support many related skills.
-
+- AIP schema files should be named with the convention: `<lowercase kebab-case of title field>.schema.json`
+- New AIP schemas  should be distinct from existing schemas in [`assets/aip-schemas`](../assets/aip-schemas)
 
 ## Checklist
-Follow these steps sequentially when 
-1. Read the AIP schema spec in this directory: `aip-schema-spec.md`. YOu must comply
-2. Understand the users domain-specific context and keep in context what makes a good skill as outlined in `skill-creation-best-practices.md`
-3. Identify the type/category of skill this schema will cover and title and description for the skill.  
-   1. should not be scoped to single-skill.  i.e. ... but instead represent a category ...
-   2. Should be distinct from existing schemas in [assets/aip-schemas](..assets/aip-schemas)
-   3. Ask the user with proposed names and descriptions. Offer a multiple-choice list of recommendations plus a free-text option. 
-      - The title is short and slightly descriptive, optimized for human display and understanding. <65 chars
-      - descriptions described the type category of skill. 
+Follow these steps sequentially
+1. Read the [AIP Schema Spec](#aip-schema-spec)
+2. Understand [what makes a good skill](skill-creation-best-practices.md). It is helpful background context when authoring schemas.
+3. Identify the category of skill this schema will cover and the title and description fields for the skill.
+   - Offer a multiple-choice list of recommendations plus a free-text option to the user 
+      - The title is short and slightly descriptive, optimized for human display and understanding. <65 chars.
+      - descriptions described the category in 1-2 sentences
       - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the methodology above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
-4. 
-
-
-Lowercase kebab-case,
+4. Identify the core structure: main fields, required vs optional, etc.
+5. Write schema file to a temporary location. `<lowercase kebab-case of title field>.schema.json`
+6. Validate:
+   1. Run `uv run scripts/validate_schema.py <draft>` 
+   2. Manually check against [AIP Schema Best Practices](#aip-schema-best-practices)
+   On failure, apply tiered recovery:                                          
+      - Trivial (typo, missing required field, formatting drift): fix silently and re-run.
+      - Substantive (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
+7. Iterate until clean.
+8. Move schema file to appropriate location
