@@ -16,7 +16,6 @@ description: Create skills as governance-ready AIP Instructions — schema-valid
 - Authoring one-off prompts
 - Authoring content no agent will consume (human-only wikis, FAQs, casual notes)
 
-
 ## What AIP is
 
 AIP is a thin protocol for creating YAML structured agent skills that comply with json schemas. 
@@ -85,8 +84,6 @@ always_remember:...
 ```
 ````
 
-
-
 ## Why Use AIP
 
 AIP has the following benefits over the base Agent Skill Spec:
@@ -103,8 +100,8 @@ Checklist.  Follow sequentially.
 3. Identify source materials for domain-specific context
 4. Establish the Schema to use:
     - Bias to schema reuse over drafting new ones.
-    - Find existing schemas in `assets/aip-schemas` 
-    - If you must draft a new schema see `references/draft-schema.md`
+    - Find existing schemas in [](assets/aip-schemas) 
+    - If you must draft a new schema see [references/author-schema.md](references/author-schema.md)
 5. Lock the skill name
     - Ask the user what to call the skill. The name is short and slightly descriptive — it becomes the folder name. Lowercase kebab-case, <65 chars, no leading/trailing/consecutive hyphens.
     - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the rules above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
@@ -119,12 +116,16 @@ Checklist.  Follow sequentially.
     ├── references/                    # Optional: documentation
     └── ...                            # Any additional files or directories
     ```
-    fill in the /source materials.  With
+    fill in the /source materials with
     - The schema used above
     - reference docs you will use to create the skill (domain-specific context).  including
       - a source SKILL.md a user provided for transition to AIP format
       - a README.md outlining you logic from above and intent of the skill
-      - Any other documentation or reference you will use to create the AIP skill 
+      - Any other documentation or reference you will use to create the AIP skill
+    Also populate the following at the temp folder root if the skill needs them:
+    - `scripts/` — executable code the skill invokes (e.g., validators, processors).
+    - `assets/` — templates, output formats, or other resources the skill references.
+    - `references/` — supporting documentation the skill loads on demand (progressive disclosure).
 7. Create and validate the AIP `SKILL.md`
    1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
          - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
