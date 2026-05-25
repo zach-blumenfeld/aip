@@ -16,13 +16,34 @@ description: Create skills as governance-ready AIP Instructions — schema-valid
 - Authoring one-off prompts
 - Authoring content no agent will consume (human-only wikis, FAQs, casual notes)
 
-## What AIP is
 
-AIP is a thin protocol for creating YAML structured agent skills that comply with json schemas. 
+## What AIP Is
 
-AIP complies with the Agent Skills Spec but adds this YAML structure
+AIP is a thin extension to the [Agent Skills Spec](https://agentskills.io/specification.md). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/).
 
-**Base Agent Skill**
+## Why Use AIP
+
+AIP provides improved performance and stronger governance for autonomous agent skills.
+
+**Performance**
+- **Early A/B evidence.** AIP-structured skills scored higher than freeform-markdown equivalents on a behavior rubric in every session (+0.37 mean, 1–5 scale; largest gap +0.67 on a weaker agent — structure helps cheaper models close the gap). Small sample.
+- **Tuning surface.** Schemas give a structured place to iterate when a skill underperforms — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
+- **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
+
+**Governance**
+- **Validated against a standard.** Every skill conforms to its schema; every schema to the AIP base. Quality gate before any consumer sees the skill.
+- **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
+- **Database-ingestable.** Schema-validated YAML projects into a graph database for audit and analytics, no per-skill ETL.
+
+
+
+## AIP Specification
+
+### Directory Structure
+
+AIP extends the directory structure of [Agent Skills](https://agentskills.io/specification.md):
+
+**Agent Skill**
 ```shell
 skill-name/
 ├── SKILL.md                       # Required: metadata + YAML-compliant instructions
@@ -44,7 +65,7 @@ skill-name/
 └── ...                            # Any additional files or directories
 ```
 
-The `schema.json` follows the [json-schema.org](https://json-schema.org/) with some required fields. You can find out more below if required
+The `schema.json` follows the [json-schema.org](https://json-schema.org/) with some required fields. You can find out more below if required.
 
 The `schema.json` is not unique to a skill but rather skill types/categories
 - runbooks 
@@ -52,7 +73,16 @@ The `schema.json` is not unique to a skill but rather skill types/categories
 - doc-templates
 - ...
 
-An AIP skill uses the SKILL.md and keeps the markdown format and file type.  The YAML body is fenced in a code block:
+### `SKILL.md` Format
+
+An AIP skill uses the SKILL.md and keeps the markdown format and file type.  
+
+An AIP Skill has two components
+1. Frontmatter
+2. Body
+
+
+The YAML body is fenced in a code block:
 
 
 ````markdown
@@ -64,7 +94,6 @@ metadata:
   aip:
     spec: https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md
     schemaId: urn:uuid:8c4f7e3a-1b5d-4f8e-9a2c-6b3e5f7d8c9a
-  origin: ECC
 ---
 
 ```yaml
@@ -83,29 +112,37 @@ always_remember:...
 
 ```
 ````
+AIP Skills have the following 
+
 
 ## Why Use AIP
 
 AIP has the following benefits over the base Agent Skill Spec:
 
 - Higher performance on procedure heavy workflows:  Recent research (links TBD) note
+- Concrete Knob for tuning skills for better model performance.  
 - ...?
+
+
+## AIP Skill Spec
+An Agent 
+
+
 
 ## Authoring an Agent Skill
 
 Checklist.  Follow sequentially.
 
-1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same advise here. 
-2. Establish the type of skill the user wants to author
-3. Identify source materials for domain-specific context
-4. Establish the Schema to use:
+1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same advise here.
+2. Identify source materials for domain-specific context
+3. Establish the type of skill the user wants to author and the schema to use:
     - Bias to schema reuse over drafting new ones.
-    - Find existing schemas in [](assets/aip-schemas) 
+    - Find existing schemas in [aip-schemas](assets/aip-schemas) 
     - If you must draft a new schema see [references/author-schema.md](references/author-schema.md)
-5. Lock the skill name
+4. Lock the skill name
     - Ask the user what to call the skill. The name is short and slightly descriptive — it becomes the folder name. Lowercase kebab-case, <65 chars, no leading/trailing/consecutive hyphens.
     - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the rules above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
-6. Scaffold skill directory 
+5. Scaffold skill directory 
     write first to a temporary location
     ```shell
     skill-name/
@@ -126,7 +163,7 @@ Checklist.  Follow sequentially.
     - `scripts/` — executable code the skill invokes (e.g., validators, processors).
     - `assets/` — templates, output formats, or other resources the skill references.
     - `references/` — supporting documentation the skill loads on demand (progressive disclosure).
-7. Create and validate the AIP `SKILL.md`
+6. Create and validate the AIP `SKILL.md`
    1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
          - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
          - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema. 
@@ -140,7 +177,7 @@ Checklist.  Follow sequentially.
       - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
       - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
    4. Iterate until the body validates AND every source item is classified.
-8. Install
+7. Install
    1. Ask the user what to do next:
       - **Install now** — proceed below.
       - **Iterate further** — keep editing in the temp folder.
@@ -152,6 +189,11 @@ Checklist.  Follow sequentially.
    4. Move `<temp-folder>/` → `<install-location>/<name>/` (folder name must equal `name` in frontmatter).
    5. Tell the user the install path. Project-local installs may need a fresh agent session to activate.
 
+## Creating an AIP Schema
+Follow the directions in [`author-schema.md`](references/author-schema.md)
+
+## Validating an AIP Skill or Schema
+For an AIP Skill 
 
 ## Anti-Patterns
 

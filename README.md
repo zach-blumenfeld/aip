@@ -93,3 +93,26 @@ that standard is supported — Claude Code, Cursor, and others.
 ---
 
 See [`spec.md`](spec.md) for the technical specification.
+
+
+# TO ADD
+The idea is to improve skill Performsnce & Governance. 
+
+The Protocol is simple.  Instead of free-form markdown write skills as YAML that comply with a json schema
+
+Still human readable- but validatablile to schema.  
+
+So Why 
+
+Performance
+- They do better than free form markdown by default
+- They provide a concrete method for tuning skills to perform better for specific models and run time (adjust the schema)
+
+Governance
+- skill compy with standard
+- they are vlaidated
+- they are easier to track and maintain in a database 
+
+## Why is the AIP SKILL.MD not Written in AIP?
+
+For the same reason that AI requires humans to build it.  Something had to exist before.  Eventually the AIP skill will be written in AIP, just as agents may eventually build agents, we just aren't there yet. 

@@ -5,7 +5,7 @@ Guide for authoring AIP compliant schemas
 The user wants to create or refine an AIP-compliant JSON Schema
 
 ## AIP Schema Spec
-AIP schemas represent families/categories of AIP skills. They are used to govern and validate the AIP skill. 
+AIP schemas represent families/categories of AIP skills. They are used to govern and validate AIP skills. 
 
 ### AIP Schema Requirements
 Hard requirements validated by the [`validate_schema.py`](../scripts/validate_schema.py).
