@@ -16,7 +16,6 @@ description: Create skills as governance-ready AIP Instructions — schema-valid
 - Authoring one-off prompts
 - Authoring content no agent will consume (human-only wikis, FAQs, casual notes)
 
-
 ## What AIP Is
 
 AIP is a thin extension to the [Agent Skills Spec](https://agentskills.io/specification.md). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/).
@@ -34,7 +33,6 @@ AIP provides improved performance and stronger governance for autonomous agent s
 - **Validated against a standard.** Every skill conforms to its schema; every schema to the AIP base. Quality gate before any consumer sees the skill.
 - **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
 - **Database-ingestable.** Schema-validated YAML projects into a graph database for audit and analytics, no per-skill ETL.
-
 
 
 ## AIP Specification
@@ -57,7 +55,7 @@ skill-name/
 skill-name/
 ├── SKILL.md                       # Required: metadata + YAML-compliant instructions
 ├── source/                        # Required: AIP schema & canonical human-readable source
-│   ├── skill-type.schema.json     # Required: schema spec
+│   ├── skill-type.schema.json     # Required: the schema this skill validates against. Bundled locally even when reusing a shared schema, so the skill is self-contained.
 │   └── ...                        # Any additional files or directories sourced to create this AIP skill
 ├── scripts/                       # Optional: executable code
 ├── assets/                        # Optional: templates, resources
@@ -75,65 +73,250 @@ The `schema.json` is not unique to a skill but rather skill types/categories
 
 ### `SKILL.md` Format
 
-An AIP skill uses the SKILL.md and keeps the markdown format and file type.  
+An AIP skill uses the `SKILL.md` file with Markdown format and file type. 
 
-An AIP Skill has two components
+An AIP `SKILL.md` has two components
 1. Frontmatter
 2. Body
 
+#### Frontmatter
 
-The YAML body is fenced in a code block:
+YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
+| Field                   | Required | Notes                                                                                              |
+|-------------------------|----------|----------------------------------------------------------------------------------------------------|
+| `name`                  | Yes      | 1–64 chars; lowercase `a–z`, `0–9`, `-`. Must match the parent directory name.                     |
+| `description`           | Yes      | 1–1024 chars. Describes *what* the skill encodes and *when* to use it; include specific keywords that help agents identify relevant tasks. |
+| `metadata.aip.spec`     | Yes      | URL to the AIP spec version this skill conforms to. *AIP-specific.*                                |
+| `metadata.aip.schemaId` | Yes      | URI matching the `$id` of the schema this skill validates against. The schema file is bundled in `source/` so the skill is self-contained, even when the `$id` points to a shared canonical URL. *AIP-specific.* |
+| `license`               | No       | License name or reference to a bundled license file.                                               |
+| `compatibility`         | No       | 1–500 chars. Environment requirements (intended product, system packages, network, runtime).       |
+| Other `metadata.*` keys | No       | Arbitrary string→string mapping for team-specific metadata. Use unique key names.                  |
+| `allowed-tools`         | No       | Space-separated string of pre-approved tools. Experimental — support varies.                       |
 
-````markdown
----
-name: search-first
-description: >
-  Runbook for the search-first workflow — .....
-metadata:
-  aip:
-    spec: https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md
-    schemaId: urn:uuid:8c4f7e3a-1b5d-4f8e-9a2c-6b3e5f7d8c9a
----
+##### `name`
+
+- 1–64 characters
+- Lowercase Unicode alphanumeric (`a–z`, `0–9`) and hyphens only
+- Must not start or end with a hyphen
+- Must not contain consecutive hyphens (`--`)
+- Must match the parent directory name
+
+**Valid:** `pdf-processing`, `data-analysis`, `code-review`
+**Invalid:** `PDF-Processing` (uppercase), `-pdf` (leading hyphen), `pdf--processing` (consecutive hyphens)
+
+##### `description`
+
+- 1–1024 characters
+- Describes both *what* the skill does and *when* to use it
+- Include specific keywords that help agents identify relevant tasks
+
+**Good:** `Extracts text and tables from PDF files, fills PDF forms, and merges multiple PDFs. Use when working with PDF documents or when the user mentions PDFs, forms, or document extraction.`
+
+**Poor:** `Helps with PDFs.`
+
+##### `metadata.aip.spec` *(AIP-specific)*
+
+URL to the AIP spec version this skill conforms to. Makes the skill self-describing — an AIP-unaware agent encountering the file can fetch the URL to learn the AIP format.
+
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/main/README.md`
+
+##### `metadata.aip.schemaId` *(AIP-specific)*
+
+URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
+
+**Example:** `https://github.com/zach-blumenfeld/aip/assets/aip-schemas/runbook.schema.json`
+
+##### `license`
+
+License name or short reference to a bundled license file. Keep it short.
+
+**Example:** `Apache-2.0` or `Proprietary. LICENSE.txt has complete terms`
+
+##### `compatibility`
+
+- 1–500 characters
+- Use only when the skill has specific environment requirements (intended product, system packages, network access, runtime versions)
+- Most skills don't need this field
+
+**Examples:**
+- `Designed for Claude Code (or similar products)`
+- `Requires git, docker, jq, and access to the internet`
+- `Requires Python 3.14+ and uv`
+
+##### `metadata`
+
+- Map of string keys to string values for arbitrary team-specific properties
+- AIP reserves the `metadata.aip.*` namespace for its own fields (see above)
+- Use unique key names to avoid conflicts with future spec additions
+
+**Example:**
 
 ```yaml
+metadata:
+  aip:
+    spec: https://raw.githubusercontent.com/zach-blumenfeld/aip/main/README.md
+    schemaId: https://github.com/zach-blumenfeld/aip/assets/aip-schemas/runbook.schema.json
+  author: example-org
+  version: "1.0"
+```
+
+##### `allowed-tools`
+
+- Space-separated string of pre-approved tools the skill may use
+- Experimental — support varies between agent implementations
+
+**Example:** `Bash(git:*) Bash(jq:*) Read`
+
+#### Body
+
+The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the schema referenced by `metadata.aip.schemaId`.
+
+Example:
+
+````markdown
+```yaml
 purpose: >
-  Research existing tools, libraries, MCP servers, ...
+  Research existing tools before writing custom code; recommend reuse or
+  extension wherever an existing solution fits.
 
-trigger_when: ...
+trigger_when:
+  - Starting a new feature that likely has existing solutions.
+  - Adding a dependency or integration.
+  - User asks "add X functionality" and you're about to write code.
 
-steps:...
+steps:
+  - name: need-analysis
+    description: Define what functionality is needed; identify language and framework constraints.
+  - name: parallel-search
+    description: Search npm/PyPI, MCP servers, available skills, and GitHub in parallel.
+    parallel: true
+  - name: evaluate
+    description: Score candidates on functionality, maintenance, community, docs, license, and dependencies.
+  - name: decide
+    description: Choose Adopt as-is, Extend/Wrap, Compose, or Build Custom.
+    one_of:
+      - Adopt as-is
+      - Extend / Wrap
+      - Compose
+      - Build Custom
 
-anti_patterns:...
+decisions:
+  - signal: Exact match, well-maintained, permissive license.
+    action: Adopt — recommend the package and request approval before install.
+  - signal: Partial match with good foundation.
+    action: Extend — recommend the package plus a thin wrapper.
+  - signal: Nothing suitable found.
+    action: Build — explain why custom code is warranted.
 
-always_remember:...
-
-...
-
+anti_patterns:
+  - Jumping to code without checking if a tool exists.
+  - Ignoring MCP servers that already provide the capability.
+  - Wrapping a library so heavily it loses its benefits.
 ```
 ````
+
+### Optional directories
+
+#### `scripts/`
+
+Contains executable code that agents can run. Scripts should:
+
+* Be self-contained or clearly document dependencies
+* Include helpful error messages
+* Handle edge cases gracefully
+
+Supported languages depend on the agent implementation. Common options include Python, Bash, and JavaScript.
+
+#### `references/`
+
+Contains additional documentation that agents can read when needed:
+
+* `REFERENCE.md` - Detailed technical reference
+* `FORMS.md` - Form templates or structured data formats
+* Domain-specific files (`finance.md`, `legal.md`, etc.)
+
+Keep individual [reference files](#file-references) focused. Agents load these on demand, so smaller files mean less use of context.
+
+#### `assets/`
+
+Contains static resources:
+
+* Templates (document templates, configuration templates)
+* Images (diagrams, examples)
+* Data files (lookup tables, schemas)
+
+### Progressive disclosure
+
+Agents load skills in three tiers, pulling more detail only as needed:
+
+1. **Metadata (~100 tokens).** `name` and `description` load at startup for *every* installed skill. `description` is the only signal an agent has before deciding to activate the skill — make it specific and keyword-rich.
+2. **Body (target <5000 tokens, ~500 lines).** The full `SKILL.md` body loads once the skill activates.
+3. **Resources (on demand).** Files under `scripts/`, `references/`, and `assets/` load only when the skill body references them. Tell the agent *when* to load each (e.g., "Read `references/api-errors.md` if the API returns a non-200 status").
+
+If the body would exceed the budget, push detail into `references/` rather than letting `SKILL.md` bloat. Body tokens cost every invocation; reference tokens cost only when loaded.
+
+### File references
+
+When referencing other files in your skill, use relative paths from the skill root:
+
+```markdown SKILL.md theme={null}
+See [the reference guide](references/REFERENCE.md) for details.
+
+Run the extraction script:
+scripts/extract.py
+```
+
 AIP Skills have the following 
-
-
-## Why Use AIP
-
-AIP has the following benefits over the base Agent Skill Spec:
-
-- Higher performance on procedure heavy workflows:  Recent research (links TBD) note
-- Concrete Knob for tuning skills for better model performance.  
-- ...?
-
-
-## AIP Skill Spec
-An Agent 
-
 
 
 ## Authoring an Agent Skill
 
-Checklist.  Follow sequentially.
+### Best Practices
 
-1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same advise here.
+#### Selective Typing
+
+The highest-leverage authoring decision is the *shape* of each field in the body. Over-type and the body grows larger AND harder to read; under-type and the body stops being queryable.
+
+**Rule: type a field only when an agent or a governance query would iterate or filter by a sub-field of it.** Otherwise leave it as prose.
+
+Two independent questions per field:
+
+1. **Is the content plural?** If yes, it's a list. The label of each item stays queryable even when the body is prose.
+2. **Would something loop over items and look up a sub-field?** If yes, type the items as records. If no, keep items as prose.
+
+Four shapes fall out:
+
+- **Full typed records** — `steps` (`[{name, description, parallel?, one_of?}]`), `decisions` (`[{signal, action}]`), `examples` (`[{need, found, action, ...}]`). Iterated by sub-field.
+- **Thin `{label, body}` envelopes** — `modes` (`[{name, body: |...}]`), `search_shortcuts` (`[{category, body: |...}]`), `integrations` (`[{partner, body: |...}]`). Label is queryable; body stays as prose.
+- **List of strings** — `trigger_when`, `anti_patterns`. Plural with one-line items. Don't envelope.
+- **Single `|`-block** — singular freeform content (`purpose`, `scope_and_approval`). Nothing iterates; nothing filters.
+
+Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding per item. Negligible for 2–10 items; consider flat strings or splitting the skill at 50+.
+
+**Default to less typing.** If a field doesn't pass the "would something filter by a sub-field?" test, it's prose. Don't re-encode every bullet as a record or every table row as a sub-field. Over-typing is the failure mode — bigger body, harder to read, no queryability gain.
+
+#### Body Drafting Style
+
+- **Imperative form.** "Search npm before writing a utility" beats
+  "the user should consider searching npm."
+- **Explain the *why*, sparingly.** A short line of reasoning beats
+  a paragraph of all-caps MUSTs. LLMs reason from intent.
+- **Keep the prompt lean.** Skill bodies that feel padded waste
+  tokens on every invocation.
+- **No surprises.** Body contents should match what `description`
+  promises.
+- **Block scalars inside a sequence are indentation-sensitive.** A
+  top-level `|`-block is easy; `[{name, body: |...}]` items with
+  code fences or already-indented content are tricky. If an envelope
+  keeps breaking, fall back to a list of strings with the label as
+  a prefix.
+
+### Checklist.  
+
+Follow sequentially.
+
+1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same spirit here in addition to above AIP spec and best practices.
 2. Identify source materials for domain-specific context
 3. Establish the type of skill the user wants to author and the schema to use:
     - Bias to schema reuse over drafting new ones.
