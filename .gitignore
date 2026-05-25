@@ -4,3 +4,4 @@ notes.md
 .DS_Store
 .idea/
 .claude
+__pycache__/

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://<your-namespace>/<schema-family-name>.schema.json",
+  "title": "<Category of skill (e.g., Runbook, Rulebook, Doc Template). short and slightly descriptive, optimized for human display and understanding. less than 65 chars>",
+  "description": "<One-or-two-sentence description of what skill family this schema represents>",
+  "aip": {
+    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.2",
+    "version": "<0.1 for new schemas, otherwise iterate version from previous schema>",
+    "tag": "<optional — schema-family-tag-for-discovery; omit this line if not used>"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["purpose", "trigger_when"],
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "description": "What the skill encapsulates as a coherent unit of work — the scope it covers and what it adds beyond general agent knowledge. One short paragraph."
+    },
+    "trigger_when": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Conditions under which the agent should consider this skill. Mixed granularity expected — immediate invocation triggers (e.g., 'user asks to add functionality') alongside broader applicability contexts (e.g., 'evaluating technology choices') belong in the same list."
+    },
+    "do_not_use_when": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional. Conditions under which the agent should NOT use this skill — explicit non-purposes that pair with trigger_when to sharpen activation. Helps the agent calibrate when adjacent skills or general reasoning would serve better."
+    },
+    "anti_patterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional. Common mistakes the skill steers the agent away from. Concrete corrections to errors the agent would otherwise make."
+    }
+  }
+}

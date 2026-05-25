@@ -1,227 +1,298 @@
 ---
 name: aip
 description: Create skills as governance-ready AIP Instructions — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems), and drafting/refining the JSON Schemas skills validate against. Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
+metadata:
+  aip:
+    version: "0.2"
 ---
 
 # AIP — Agent Instruction Protocol
 
-Produces an **Instruction**: an Agent-Skills-compatible folder with a
-schema-validated YAML body in `SKILL.md`, plus `schema/` and `source/`
-directories. Structure earns its keep when an autonomous agent
-consumes the content repeatedly — validation catches drift, the
-schema makes a corpus queryable, and the discipline forces clarity
-plain markdown skills can avoid.
+## Trigger When
 
-> **Note:** this `SKILL.md` is a regular Agent Skill (markdown body),
-> not an AIP Instruction. It's the tool that produces Instructions.
+1. Authoring an agent skill (SKILL.md) for an autonomous agent
+2. Creating an AIP schema
+3. Validating an AIP skill or schema
 
-## When to use
+## Do not Use When
 
-- Authoring any skill an autonomous or long-running agent will consume
-- "Create / make / compile a skill" (with or without source material)
-- "Turn this doc into an AIP Instruction"
-- "Build a deliberation / runbook / spec / decision log / post-mortem
-  as an Instruction"
-- "Author / draft / refine an AIP schema"
-- "Update this AIP Instruction" — check the existing
-  `metadata.aip.schemaId` before changing structure
+- Authoring one-off prompts
+- Authoring content no agent will consume (human-only wikis, FAQs, casual notes)
 
-Default to using this any time the eventual consumer is an
-autonomous agent. The harder it is to inspect the agent's behavior
-in real time (long-running, multi-step, production), the more the
-structural validation earns its keep.
+## What AIP Is
 
-## When NOT to use
+AIP is a thin extension to the [Agent Skills Spec](https://agentskills.io/specification.md). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/).
 
-- Content no agent will consume (human-only wikis, FAQs, casual notes)
-- One-off shell helpers where no schema family applies
-- Free prose with no structural payoff and no plan for cross-doc query
+## Why Use AIP
 
-## Audience awareness
+AIP provides improved performance and stronger governance for autonomous agent skills.
 
-AIP authors range from senior engineers to domain experts with no
-JSON Schema background. Calibrate language: explain terms like "JSON
-Schema," "validator," "fenced YAML" on first use unless the user
-signals familiarity. The user is **never** expected to read or pick
-schemas by hand — schema selection is your job.
+**Performance**
+- **Early A/B evidence.** AIP-structured skills scored higher than freeform-markdown equivalents on a behavior rubric in every session (+0.37 mean, 1–5 scale; largest gap +0.67 on a weaker agent — structure helps cheaper models close the gap). Small sample.
+- **Tuning surface.** Schemas give a structured place to iterate when a skill underperforms — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
+- **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
 
-**Default to summaries, not raw artifacts.** Before dumping a JSON
-Schema, a fenced YAML body, or validator output to the chat, ask if
-the user wants to see it — most will say no. Lead with a natural-
-language description ("the schema has fields X, Y, Z; the body
-validates"). The artifacts are on disk; the chat is for the human.
+**Governance**
+- **Validated against a standard.** Every skill conforms to its schema; every schema to the AIP base. Quality gate before any consumer sees the skill.
+- **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
+- **Database-ingestable.** Schema-validated YAML projects into a graph database for audit and analytics, no per-skill ETL.
 
-## The three usage scenarios
 
-Detect which one applies from the user's opening:
+## AIP Specification
 
-### Scenario 1 — No schema specified (most common)
+### Directory Structure
 
-User has a doc (or describes one). They don't know or care about
-JSON Schema; that's your job.
+AIP extends the directory structure of [Agent Skills](https://agentskills.io/specification.md):
 
-Bias to schema reuse over drafting new ones. When no bundled
-candidate fits, draft a *permissive* schema (required-minimum core,
-freeform-text leaves where structure isn't earning) rather than a
-heavily-typed one — see [Selective typing](#selective-typing).
-**Scope the schema to the category of work, not the specific skill.**
-If the skill is "search-first before writing code," the schema is
-`runbook` — not `search-first`. The category is what future skills
-reuse.
+**Agent Skill**
+```shell
+skill-name/
+├── SKILL.md                       # Required: metadata + YAML-compliant instructions
+├── scripts/                       # Optional: executable code
+├── assets/                        # Optional: templates, resources
+├── references/                    # Optional: documentation
+└── ...                            # Any additional files or directories
+```
+**AIP Skill**
+```shell
+skill-name/
+├── SKILL.md                       # Required: metadata + YAML-compliant instructions
+├── source/                        # Required: AIP schema & canonical human-readable source
+│   ├── skill-type.schema.json     # Required: the schema this skill validates against. Bundled locally even when reusing a shared schema, so the skill is self-contained.
+│   └── ...                        # Any additional files or directories sourced to create this AIP skill
+├── scripts/                       # Optional: executable code
+├── assets/                        # Optional: templates, resources
+├── references/                    # Optional: documentation
+└── ...                            # Any additional files or directories
+```
 
-When you draft a new schema mid-Scenario-1, you've entered Scenario 3
-for that artifact — run `validate_schema.py` on it *before* compiling
-the body (see [Validation scripts](#validation-scripts)).
+The `schema.json` follows the [json-schema.org](https://json-schema.org/) with some required fields. You can find out more below if required.
 
-### Scenario 2 — Schema specified
+The `schema.json` is not unique to a skill but rather skill types/categories
+- runbooks 
+- rulebooks
+- doc-templates
+- ...
 
-User provides both source material and a schema reference.
+### `SKILL.md` Format
 
-Differences from Scenario 1:
+An AIP skill uses the `SKILL.md` file with Markdown format and file type. 
 
-1. Run `uv run scripts/validate_schema.py <schema>` first to confirm
-   AIP compliance.
-2. Skip schema discovery.
-3. Brief semantic fit-check: does the schema actually fit the user's
-   content? Flag obvious mismatches.
-4. Checkpoint #1 becomes: *"I'll use the schema you gave me; here's
-   why it fits / a concern with the fit. OK?"*
+An AIP `SKILL.md` has two components
+1. Frontmatter
+2. Body
 
-### Scenario 3 — Author or iterate on a schema (rare, advanced)
+#### Frontmatter
 
-Conversational — no fixed step sequence. See
-[Scenario 3 details](#scenario-3-details).
+YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
-## The walkthrough (Scenarios 1 and 2)
+| Field                   | Required | Notes                                                                                              |
+|-------------------------|----------|----------------------------------------------------------------------------------------------------|
+| `name`                  | Yes      | 1–64 chars; lowercase `a–z`, `0–9`, `-`. Must match the parent directory name.                     |
+| `description`           | Yes      | 1–1024 chars. Describes *what* the skill encodes and *when* to use it; include specific keywords that help agents identify relevant tasks. |
+| `metadata.aip.spec`     | Yes      | URL to the AIP spec version this skill conforms to. *AIP-specific.*                                |
+| `metadata.aip.schemaId` | Yes      | URI matching the `$id` of the schema this skill validates against. The schema file is bundled in `source/` so the skill is self-contained, even when the `$id` points to a shared canonical URL. *AIP-specific.* |
+| `license`               | No       | License name or reference to a bundled license file.                                               |
+| `compatibility`         | No       | 1–500 chars. Environment requirements (intended product, system packages, network, runtime).       |
+| Other `metadata.*` keys | No       | Arbitrary string→string mapping for team-specific metadata. Use unique key names.                  |
+| `allowed-tools`         | No       | Space-separated string of pre-approved tools. Experimental — support varies.                       |
 
-### Entry sequence
+##### `name`
 
-1. **Capture intent.** Harvest from the conversation already in
-   progress *first* — the doc the user's been working on, the
-   workflow they just walked you through, corrections they made.
-   The user often expects you to have noticed. Confirm what you
-   extracted; only ask about pieces that aren't visible. *"You want
-   to turn `decision-notes.md` into a deliberation Instruction —
-   correct?"* — don't ask the user to restate what they just told you.
+- 1–64 characters
+- Lowercase Unicode alphanumeric (`a–z`, `0–9`) and hyphens only
+- Must not start or end with a hyphen
+- Must not contain consecutive hyphens (`--`)
+- Must match the parent directory name
 
-2. **Ask depth.** Single question, three options:
-   - **Quick** (~2 min) — you make most decisions, show the result
-     for review
-   - **Balanced** (~5–10 min) — you ask about the 3–5 most important
-     structural choices
-   - **Thorough** (~20+ min) — field-by-field collaboration
+**Valid:** `pdf-processing`, `data-analysis`, `code-review`
+**Invalid:** `PDF-Processing` (uppercase), `-pdf` (leading hyphen), `pdf--processing` (consecutive hyphens)
 
-3. **Determine source materials.** Three valid starts: inline paste
-   → use what they wrote; existing markdown file → read it; verbal
-   description with no file → **draft `source/README.md` first** as
-   the canonical source, get approval, then compile. Only ask when
-   the answer isn't obvious from context.
+##### `description`
 
-### Depth-adapted middle
+- 1–1024 characters
+- Describes both *what* the skill does and *when* to use it
+- Include specific keywords that help agents identify relevant tasks
 
-- **Quick:** pick the most likely schema match, draft the body,
-  present. Ask only the always-confirm checkpoints.
-- **Balanced:** surface 3–5 key structural choices for user input:
-  - "Schema A vs schema B?"
-  - "One Instruction or two?"
-  - "Primary axis of organization — chronological, by topic, by
-    decision-point?"
-  - "For each significant section: freeform text or queryable
-    structure?" (see [Selective typing](#selective-typing))
-- **Thorough:** walk through each significant field with the user
-  before validating and presenting.
+**Good:** `Extracts text and tables from PDF files, fills PDF forms, and merges multiple PDFs. Use when working with PDF documents or when the user mentions PDFs, forms, or document extraction.`
 
-### Validation failures — tiered recovery
+**Poor:** `Helps with PDFs.`
 
-On `validate.py` / `validate_schema.py` failure: if **trivial**
-(typo, missing required field, formatting drift), silently retry.
-If **substantive** (semantic mismatch, schema doesn't fit, structural
-conflict), surface the error in plain language with your proposed
-fix and ask for confirmation. Rule: if the user's judgment would
-change the fix, surface it.
+##### `metadata.aip.spec` *(AIP-specific)*
 
-### Always-confirm checkpoints
+URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.2`
 
-Four points to **always** confirm, regardless of depth.
+##### `metadata.aip.schemaId` *(AIP-specific)*
 
-1. **Chosen schema before compiling.** *"I'll use the deliberation
-   schema — it fits because [reason]. OK?"* If sections could go
-   either typed or freeform, fold in: *"Typed for `<list>`, freeform
-   text for `<list>` — sound right?"* Offer (don't auto-show) the
-   schema's structure: *"Want me to show the schema, or just go on
-   the description?"* Most users will say go on.
+URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-2. **`description` field text.** Show before finalizing — this is
-   the only signal the host agent reads at session startup to decide
-   whether to activate the Instruction. Two rules:
-   - **What + when, slightly pushy.** Skills under-trigger by
-     default; descriptions need to actively recruit. Name the
-     contexts an agent should reach for it in, including phrasings
-     the user might not use.
-   - **Mention the schema's domain** (e.g., "Deliberation for…")
-     so AIP-aware discovery recognizes it as a candidate.
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json`
 
-3. **Final preview before install.** Show a clean structured summary
-   (what it does, the body's top-level fields, the schema's role).
-   Offer to dump the full rendered `SKILL.md` if the user wants —
-   default to the summary; most won't.
+##### `license`
 
-4. **Install location.** Ask user-global (the host agent's
-   user-wide skills directory — e.g., `~/.claude/skills/` for
-   Claude Code) vs project-local (`./.claude/skills/` or equivalent
-   for the host agent). Default: project-local if CWD is in a git
-   repo, user-global otherwise.
+License name or short reference to a bundled license file. Keep it short.
 
-## Schema discovery
+**Example:** `Apache-2.0` or `Proprietary. LICENSE.txt has complete terms`
 
-Used in Scenario 1. Search three sources (bundled examples,
-project-local schemas, installed Instructions), rank candidates
-against the user's intent, prefer reuse. If nothing fits, offer to
-draft a custom schema (Scenario 3).
+##### `compatibility`
 
-Read **[references/schema-discovery.md](references/schema-discovery.md)**
-for the source table, filters, dedup precedence, and rationale.
+- 1–500 characters
+- Use only when the skill has specific environment requirements (intended product, system packages, network access, runtime versions)
+- Most skills don't need this field
 
-## Selective typing
+**Examples:**
+- `Designed for Claude Code (or similar products)`
+- `Requires git, docker, jq, and access to the internet`
+- `Requires Python 3.14+ and uv`
 
-The highest-leverage authoring decision is the *shape* of each
-section. Get it right and an Instruction compresses below its
-markdown source while staying agent-queryable. Type everything and
-the Instruction can compile *larger* than its source while being
-harder to read.
+##### `metadata`
 
-Two independent questions for any section:
+- Map of string keys to string values for arbitrary team-specific properties
+- AIP reserves the `metadata.aip.*` namespace for its own fields (see above)
+- Use unique key names to avoid conflicts with future spec additions
 
-1. **Is the field plural?** Plural-named fields default to lists,
-   not single `|`-blocks. The label of each item stays queryable.
-2. **Should each item's body be typed?** Heuristic: would the agent
-   ever `for` over the items and filter / look up by a sub-field?
-   If yes, type. If no, prose.
+**Example:**
 
-Combining those gives four shapes:
+```yaml
+metadata:
+  aip:
+    spec: https://github.com/zach-blumenfeld/aip/tree/v0.2
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json
+  author: example-org
+  version: "1.0"
+```
 
-- **Full typed records** — `steps` (`[{id, do, parallel?, one_of?}]`),
-  `decisions` (`[{when, then}]`), `examples` (`[{need, found, action}]`).
-  Iterated by sub-field.
-- **Thin `{label, body}` envelopes** — `modes`
-  (`[{name: quick, body: |...}, {name: full, body: |...}]`),
-  `search_shortcuts` (`[{category, body}]`). Plural with natural
-  labels; bodies stay as prose. Label is queryable without
-  re-encoding the body.
-- **List of strings** — `integrations`, `triggers`, `anti_patterns`.
-  Plural with one-line items. Don't envelope unnecessarily.
-- **Single `|`-block** — singular content (`scope`, `context`) or
-  plural content with no useful label or sub-field structure.
+##### `allowed-tools`
 
-Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding
-per item. Negligible for 2–10 items; consider flat strings or
-splitting the skill at 50+.
+- Space-separated string of pre-approved tools the skill may use
+- Experimental — support varies between agent implementations
 
-**Don't fight tight source.** Markdown tables and ASCII workflow
-diagrams in the source are already structured. Drop them into
-`|`-block strings; don't re-encode every row as a typed record.
+**Example:** `Bash(git:*) Bash(jq:*) Read`
 
-## Body drafting style
+#### Body
+
+The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the schema referenced by `metadata.aip.schemaId`.
+
+Example:
+
+````markdown
+```yaml
+purpose: >
+  Research existing tools before writing custom code; recommend reuse or
+  extension wherever an existing solution fits.
+
+trigger_when:
+  - Starting a new feature that likely has existing solutions.
+  - Adding a dependency or integration.
+  - User asks "add X functionality" and you're about to write code.
+
+steps:
+  - name: need-analysis
+    description: Define what functionality is needed; identify language and framework constraints.
+  - name: parallel-search
+    description: Search npm/PyPI, MCP servers, available skills, and GitHub in parallel.
+    parallel: true
+  - name: evaluate
+    description: Score candidates on functionality, maintenance, community, docs, license, and dependencies.
+  - name: decide
+    description: Choose Adopt as-is, Extend/Wrap, Compose, or Build Custom.
+    one_of:
+      - Adopt as-is
+      - Extend / Wrap
+      - Compose
+      - Build Custom
+
+decisions:
+  - signal: Exact match, well-maintained, permissive license.
+    action: Adopt — recommend the package and request approval before install.
+  - signal: Partial match with good foundation.
+    action: Extend — recommend the package plus a thin wrapper.
+  - signal: Nothing suitable found.
+    action: Build — explain why custom code is warranted.
+
+anti_patterns:
+  - Jumping to code without checking if a tool exists.
+  - Ignoring MCP servers that already provide the capability.
+  - Wrapping a library so heavily it loses its benefits.
+```
+````
+
+### Optional directories
+
+#### `scripts/`
+
+Contains executable code that agents can run. Scripts should:
+
+* Be self-contained or clearly document dependencies
+* Include helpful error messages
+* Handle edge cases gracefully
+
+Supported languages depend on the agent implementation. Common options include Python, Bash, and JavaScript.
+
+#### `references/`
+
+Contains additional documentation that agents can read when needed:
+
+* `REFERENCE.md` - Detailed technical reference
+* `FORMS.md` - Form templates or structured data formats
+* Domain-specific files (`finance.md`, `legal.md`, etc.)
+
+Keep individual [reference files](#file-references) focused. Agents load these on demand, so smaller files mean less use of context.
+
+#### `assets/`
+
+Contains static resources:
+
+* Templates (document templates, configuration templates)
+* Images (diagrams, examples)
+* Data files (lookup tables, schemas)
+
+### Progressive disclosure
+
+Agents load skills in three tiers, pulling more detail only as needed:
+
+1. **Metadata (~100 tokens).** `name` and `description` load at startup for *every* installed skill. `description` is the only signal an agent has before deciding to activate the skill — make it specific and keyword-rich.
+2. **Body (target <5000 tokens, ~500 lines).** The full `SKILL.md` body loads once the skill activates.
+3. **Resources (on demand).** Files under `scripts/`, `references/`, and `assets/` load only when the skill body references them. Tell the agent *when* to load each (e.g., "Read `references/api-errors.md` if the API returns a non-200 status").
+
+If the body would exceed the budget, push detail into `references/` rather than letting `SKILL.md` bloat. Body tokens cost every invocation; reference tokens cost only when loaded.
+
+### File references
+
+When referencing other files in your skill, use relative paths from the skill root:
+
+```markdown SKILL.md theme={null}
+See [the reference guide](references/REFERENCE.md) for details.
+
+Run the extraction script:
+scripts/extract.py
+```
+
+## Best Practices
+
+### Selective Typing
+
+The highest-leverage authoring decision is the *shape* of each field in the body. Over-type and the body grows larger AND harder to read; under-type and the body stops being queryable.
+
+**Rule: type a field only when an agent or a governance query would iterate or filter by a sub-field of it.** Otherwise leave it as prose.
+
+Two independent questions per field:
+
+1. **Is the content plural?** If yes, it's a list. The label of each item stays queryable even when the body is prose.
+2. **Would something loop over items and look up a sub-field?** If yes, type the items as records. If no, keep items as prose.
+
+Four shapes fall out:
+
+- **Full typed records** — `steps` (`[{name, description, depends_on?, parallel?, one_of?}]`), `decisions` (`[{signal, action}]`), `scenarios` (`[{need, action, ...}]`). Iterated by sub-field.
+- **Thin `{label, body}` envelopes** — `modes` (`[{name, body: |...}]`), `search_shortcuts` (`[{category, body: |...}]`), `integrations` (`[{partner, body: |...}]`). Label is queryable; body stays as prose.
+- **List of strings** — `trigger_when`, `anti_patterns`. Plural with one-line items. Don't envelope.
+- **Single `|`-block** — singular freeform content (`purpose`, `scope_and_approval`). Nothing iterates; nothing filters.
+
+Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding per item. Negligible for 2–10 items; consider flat strings or splitting the skill at 50+.
+
+**Default to less typing.** If a field doesn't pass the "would something filter by a sub-field?" test, it's prose. Don't re-encode every bullet as a record or every table row as a sub-field. Over-typing is the failure mode — bigger body, harder to read, no queryability gain.
+
+### Body Drafting Style
 
 - **Imperative form.** "Search npm before writing a utility" beats
   "the user should consider searching npm."
@@ -237,200 +308,102 @@ diagrams in the source are already structured. Drop them into
   keeps breaking, fall back to a list of strings with the label as
   a prefix.
 
-## Validation scripts
+## Procedures
+### Authoring an Agent Skill
 
-Two Python scripts under `scripts/`, run via `uv run` (PEP 723
-inline deps — no install, no virtualenv):
+Checklist. Follow sequentially.
 
+1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same spirit here in addition to above AIP spec and best practices.
+2. Identify source materials for domain-specific context
+3. Establish the type of skill the user wants to author and the schema to use:
+    - Bias to schema reuse over drafting new ones.
+    - Find existing schemas in [aip-schemas](assets/aip-schemas) 
+    - If you must draft a new schema see [references/author-schema.md](references/author-schema.md)
+4. Lock the skill name
+    - Ask the user what to call the skill. The name is short and slightly descriptive — it becomes the folder name. Lowercase kebab-case, <65 chars, no leading/trailing/consecutive hyphens.
+    - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the rules above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
+5. Scaffold skill directory 
+    write first to a temporary location
+    ```shell
+    skill-name/
+    ├── SKILL.md                       # Required: metadata + YAML-compliant instructions
+    ├── source/                        # Required: AIP schema & canonical human-readable source
+    ├── scripts/                       # Optional: executable code
+    ├── assets/                        # Optional: templates, resources
+    ├── references/                    # Optional: documentation
+    └── ...                            # Any additional files or directories
+    ```
+    fill in the /source materials with
+    - The schema used above
+    - reference docs you will use to create the skill (domain-specific context).  including
+      - a source SKILL.md a user provided for transition to AIP format
+      - a README.md outlining you logic from above and intent of the skill
+      - Any other documentation or reference you will use to create the AIP skill
+    Also populate the following at the temp folder root if the skill needs them:
+    - `scripts/` — executable code the skill invokes (e.g., validators, processors).
+    - `assets/` — templates, output formats, or other resources the skill references.
+    - `references/` — supporting documentation the skill loads on demand (progressive disclosure).
+6. Create and validate the AIP `SKILL.md`
+   1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
+         - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
+         - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema.
+   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs.
+      - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
+      - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
+   3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         
+      - **Mapped** — captured faithfully in the body. 
+      - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile. 
+      - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
+      - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
+   4. Iterate until the body validates AND every source item is classified.
+7. Install
+   1. Ask the user what to do next:
+      - **Install now** — proceed below.
+      - **Iterate further** — keep editing in the temp folder.
+      - **Leave it as-is** — they'll handle placement manually. Tell them the temp path and stop.
+   2. If installing, confirm the location with the user. Standard Agent Skills locations:
+      - **Project-local** — the host agent's project skills directory (e.g., `./.claude/skills/<name>/` for Claude Code). Default if CWD is in a git repo.
+      - **User-global** — the host agent's user-wide skills directory (e.g., `~/.claude/skills/<name>/` for Claude Code). Default otherwise.
+   3. If a folder already exists at the destination, ask before overwriting. For prior AIP Instructions, preserve top-level `scripts/`, `assets/`, `references/` and overwrite only `SKILL.md` and `source/`.
+   4. Move `<temp-folder>/` → `<install-location>/<name>/` (folder name must equal `name` in frontmatter).
+   5. Tell the user the install path. Project-local installs may need a fresh agent session to activate.
+
+### Creating an AIP Schema
+Follow the directions in [`author-schema.md`](references/author-schema.md)
+
+### Validating an AIP Skill or Schema
+
+Two scripts cover validation.
+
+**Validate an AIP skill:**
 ```bash
-uv run scripts/validate.py path/to/instruction/   # Instruction
-uv run scripts/validate_schema.py path/to/schema.json   # Schema
+uv run scripts/validate.py <path/to/skill-folder>
 ```
+Checks: full frontmatter validation — required fields (`name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId`), Agent Skills format rules on `name` (length, charset, hyphen rules, folder-name match), length caps on `description` and `compatibility`, type rules on `license`/`allowed-tools`/non-AIP `metadata` values, URL form on `metadata.aip.spec`. Required folder structure (`source/` present with a bundled `*.schema.json`). AIP-compliance of the bundled schema (delegates to `validate_schema.py`). Body is exactly one fenced YAML block. Body validates against the schema referenced by `metadata.aip.schemaId`.
 
-When to invoke — keyed on the write, not the scenario:
-
-**Run a validator after any write to a schema or Instruction.**
-Initial compile, schema authoring, post-install edits, renaming a
-field across two files — all of them.
-
-- Wrote/edited a schema file → `validate_schema.py <file>`
-- Wrote/edited a `SKILL.md` or an Instruction folder →
-  `validate.py <folder>`
-- Both changed in the same turn → run both
-- Scenario-1 reuse failed and you drafted a new schema → you've
-  entered Scenario 3 for that artifact. Run `validate_schema.py` on
-  the new schema *before* compiling the body against it. `validate.py`
-  on the Instruction does not catch schema-side AIP-compliance bugs;
-  the body can fit a non-compliant schema silently.
-
-Don't substitute manual review. The validators take ~1 second; an
-eyeball check is not equivalent and routinely misses AIP-namespace
-and required-metadata bugs.
-
-Apply [tiered recovery](#validation-failures--tiered-recovery) on
-failure.
-
-## Format essentials
-
-Enough format detail to draft a valid Instruction without guessing.
-The validators catch the rest.
-
-### Instruction folder layout
-
+**Validate an AIP schema:**
+```bash
+uv run scripts/validate_schema.py <path/to/schema.json>
 ```
-<instruction-name>/
-├── SKILL.md                       # frontmatter + fenced YAML body
-├── schema/
-│   ├── <schema-name>.schema.json  # AIP-compliant JSON Schema
-│   └── README.md                  # optional schema docs
-├── source/
-│   ├── README.md                  # canonical human source
-│   └── ...                        # additional source files
-├── scripts/                       # optional
-├── assets/                        # optional
-├── references/                    # optional
-└── ...                            # any additional dirs
-```
+Checks: required root metadata (`$schema`, `$id`, `title`, `description` — all non-empty strings); `$id` is a URI; required `aip:` namespace with `aip.version`; universal floor properties (`purpose`, `trigger_when`); strict-core (every object subschema declares `additionalProperties: false`); `$defs` naming. Plus soft warnings on JSON Schema reserved-keyword collisions.
 
-`<instruction-name>` must equal the `name` in SKILL.md frontmatter
-(Agent Skills spec requirement).
+**Output contract** (both scripts):
+- Exit 0 on success, 1 on any error.
+- stdout: single-line human summary.
+- stderr: JSON Lines, one record per error or warning. Stream-parse to classify.
 
-### SKILL.md frontmatter — required fields
+**On failure, apply tiered recovery:**
+- **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
+- **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
 
-| Field                   | Source       | Notes                                                                                       |
-|-------------------------|--------------|---------------------------------------------------------------------------------------------|
-| `name`                  | Agent Skills | 1–64 chars; lowercase `a–z`/`0–9`/`-`; matches parent directory                             |
-| `description`           | Agent Skills | 1–1024 chars; what + when; see Checkpoint #2                                                |
-| `metadata.aip.spec`     | AIP          | `https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md` (current placeholder)  |
-| `metadata.aip.schemaId` | AIP          | UUID URN matching the `$id` of the schema in `schema/`                                      |
+**When to run:** after every edit to a schema or skill. Eyeball checks routinely miss AIP-namespace and required-metadata bugs.
 
-Optional: `license`, `compatibility`, `metadata.*` (free-form),
-`allowed-tools`.
+## Anti-Patterns
 
-### SKILL.md body — rules
+1. Unnecessarily drafting a new schema when a sufficient schema already exists for the skill type
+2. Drafting schemas that are specific to individual skills rather than the category / type / family of the skill
+3. Dropping content from original SKILL.md to over compress a SKILL.md
+4. Dumping JSON Schemas or YAML bodies into chat without asking. Default to a natural-language summary; offer the raw artifact if the user wants it.
+5. Skipping the bundled validators under user scope restrictions. `scripts/validate.py` and `scripts/validate_schema.py` are part of this skill's contract, not third-party resources — run them anyway and surface that you're doing so.
+6. Inventing AIP frontmatter keywords at the root. All AIP-specific fields go under `metadata.aip.*` (e.g., `metadata.aip.spec`, `metadata.aip.schemaId`). No bare-root `aip_spec:`, `aip_schema:`, etc.
 
-Exactly one fenced YAML code block (tag `yaml` or `yml`), no
-surrounding prose, no second code block. The body validates against
-the schema referenced by `metadata.aip.schemaId`. The body does
-*not* repeat `schemaId` — frontmatter is the single source of truth.
-
-````markdown
----
-name: my-instruction
-description: ...
-metadata:
-  aip:
-    spec: https://raw.githubusercontent.com/zach-blumenfeld/aip/main/spec.md
-    schemaId: urn:uuid:...
----
-
-```yaml
-# body fields per schema...
-```
-````
-
-### Body size — keep it lean
-
-Target `SKILL.md` under ~500 lines / ~5000 tokens. Skills load in
-three levels: metadata (name + description) is always in context;
-the body loads when the skill triggers; `references/`, `scripts/`,
-`assets/` load on demand. Body bloat costs tokens on every
-invocation. If the body would overflow, split into multiple smaller
-Instructions before pushing content into `references/`.
-
-Schema-authoring details (required root metadata, structural rules,
-reserved names) live in
-[references/scenario-3-schema-authoring.md](references/scenario-3-schema-authoring.md)
-— relevant only when drafting a new schema (Scenario 3).
-
-## Draft and install
-
-Always draft into a temp folder first — never write directly into
-the host agent's live skills directory (e.g., `.claude/skills/`)
-until the user has confirmed both the artifact and the destination.
-
-1. **Create temp draft** at a tempdir like `/tmp/aip-draft-<name>/`.
-2. **Write contents:** `SKILL.md`, `schema/<schema-name>.schema.json`,
-   `source/README.md`.
-3. **Run `uv run scripts/validate.py /tmp/aip-draft-<name>/`** as
-   the smoke check. Apply tiered recovery on failure.
-4. **Preview to the user** (Checkpoint #3) — summary first, full
-   artifact on request.
-5. **Confirm install location** (Checkpoint #4). Don't move anything
-   until the user has chosen.
-6. **Move `/tmp/aip-draft-<name>/` → `<location>/<name>/`** (folder
-   name must equal `name` in frontmatter).
-7. **Tell the user where it landed.** For project-local installs,
-   a fresh agent session in this directory may be needed for the
-   skill to activate.
-
-If the user declines to install or wants to revise, leave the temp
-folder in place and iterate there.
-
-### Existing folders and source content
-
-If a folder already exists at the install location: for hand-authored
-skills (no `metadata.aip.spec`), ask before overwriting. For
-previously-compiled Instructions, preserve `scripts/`, `assets/`,
-and other top-level files; overwrite only `SKILL.md`, `schema/`, and
-`source/`. When updating, check the existing `metadata.aip.spec` URL
-— it may target an earlier spec version.
-
-`source/README.md` is the canonical human-readable source. If the
-user provided a doc, copy it (lightly cleaned, preserving voice).
-If you drafted from a verbal description, the draft *is* the source
-going forward — get explicit approval before writing. Include enough
-that a future reader understands why the Instruction exists; the
-source explains, the body executes. Additional source files (drafts,
-prior logs, diagrams) go alongside `README.md` in `source/`.
-
-## Scenario 3 details
-
-Schema authoring is conversational — no fixed step sequence. Scope
-new schemas to the **category of work** (runbook, document-template,
-reference, post-mortem), not to the specific skill instance.
-
-Read **[references/scenario-3-schema-authoring.md](references/scenario-3-schema-authoring.md)**
-for the full procedure, depth-selector phrasing, scoping guidance,
-and the required-root-metadata reference.
-
-## After install
-
-Installed Instructions are regular Agent Skills with extra structure
-— compatible with Anthropic's `skill-creator` for iterative
-refinement. Run the Instruction through skill-creator's eval loop
-to measure and tune; AIP's structural guarantees and skill-creator's
-iteration loop are complementary, not overlapping.
-
-## Anti-patterns
-
-- **Don't make the user pick JSON Schemas by hand.** That's your job.
-- **Don't skip always-confirm checkpoints**, even in Quick mode —
-  `description` and install location are hard to fix later.
-- **Don't invent metadata keywords.** AIP-specific frontmatter and
-  schema metadata go under the `aip:` namespace, not bare at the root.
-- **Don't write source from scratch when the user gave you a doc.**
-  Preserve their content; the compiled body is derivative.
-- **Don't compile and install in one breath.** Draft in temp,
-  preview, confirm location, then move. The user has to catch issues
-  *before* the folder lands in a live skill path.
-- **Don't dump JSON Schemas or YAML bodies into chat without asking.**
-  Default to a natural-language summary; offer the raw artifact.
-  Most users will pass.
-- **Don't over-decompose tight source.** Freeform-reference sections
-  default to `|`-block strings. Type only what the agent would iterate
-  or filter by — see [Selective typing](#selective-typing).
-- **Don't quote the 40–60% compression range to authors of tight,
-  already-structured source.** That figure assumes prose-heavy
-  material where selective typing has room to eliminate redundancy.
-  For tight source (markdown tables, terse bulleted lists, ASCII
-  diagrams), realistic compression is **5–15%**. If a compile looks
-  like a much bigger win, first check for silently dropped content
-  before celebrating.
-- **Don't treat the bundled validators as out-of-scope under user
-  scope restrictions.** When the user says "do it without X" or
-  restricts external resources, the validators in this skill's
-  `scripts/` are part of the skill's contract — not third-party
-  resources. Run them anyway, and surface that you're doing so.
-- **Don't pile on all-caps MUSTs.** Explain why once; LLMs reason
-  from intent.
