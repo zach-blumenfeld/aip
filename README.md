@@ -38,27 +38,23 @@ AIP ships as an Agent Skill for co-authoring AIP artifacts (skills & schemas). I
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**Install AIP, latest** (Claude Code, user-global, tracks `main`):
+**Install AIP, latest** (Claude Code, project-local, tracks `main`):
 
 ```bash
-mkdir -p ~/.claude/skills/aip && \
-  curl -sSL https://github.com/zach-blumenfeld/aip/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=1 -C ~/.claude/skills/aip
+git clone --depth 1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-**Install AIP, fixed version** (Claude Code, user-global, pinned to `v0.2`):
+**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.2a0`):
 
 ```bash
-mkdir -p ~/.claude/skills/aip && \
-  curl -sSL https://github.com/zach-blumenfeld/aip/archive/refs/tags/v0.2.tar.gz \
-  | tar -xz --strip-components=1 -C ~/.claude/skills/aip
+git clone --depth 1 --branch v0.2a0 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-Replace `v0.2` with whichever release you want — see [releases](https://github.com/zach-blumenfeld/aip/releases) for the list.
+Replace `v0.2a0` with whichever release you want — see [releases](https://github.com/zach-blumenfeld/aip/releases) for the list.
 
-For **other agents** or **project-local installs**, change the target directory:
+For **user-global install** or **other agents**, change the target directory:
 
-- **Claude Code, project-local:** `./.claude/skills/aip`
+- **Claude Code, user-global:** `~/.claude/skills/aip`
 - **Other Agent-Skills–compatible runtimes:** check the runtime's docs for where it loads skills from.
 
 Once installed, ask your agent something like *"author an AIP runbook skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation.
