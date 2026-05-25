@@ -411,6 +411,25 @@ def check_schema_validity(schema: dict, path: str) -> Iterable[Error]:
         )
 
 
+def run_all_checks(schema: dict, path_str: str) -> list[Error]:
+    """Run every AIP-compliance check against a parsed schema dict.
+
+    Returns the combined error/warning records list. Used by
+    validate_schema_file for standalone CLI use, and by scripts/validate.py
+    to validate the bundled schema during Skill validation.
+    """
+    records: list[Error] = []
+    records.extend(check_required_metadata(schema, path_str))
+    records.extend(check_id_form(schema, path_str))
+    records.extend(check_aip_namespace(schema, path_str))
+    records.extend(check_base_floor(schema, path_str))
+    records.extend(check_strict_core(schema, path_str))
+    records.extend(check_defs_naming(schema, path_str))
+    records.extend(check_schema_validity(schema, path_str))
+    records.extend(check_json_schema_keyword_collisions(schema, path_str))
+    return records
+
+
 def validate_schema_file(schema_path: Path) -> tuple[int, int, str | None]:
     """Run all checks. Returns (error_count, warning_count, title_if_valid)."""
     path_str = str(schema_path)
@@ -444,15 +463,7 @@ def validate_schema_file(schema_path: Path) -> tuple[int, int, str | None]:
         ])
         return err, warn, None
 
-    records: list[Error] = []
-    records.extend(check_required_metadata(schema, path_str))
-    records.extend(check_id_form(schema, path_str))
-    records.extend(check_aip_namespace(schema, path_str))
-    records.extend(check_base_floor(schema, path_str))
-    records.extend(check_strict_core(schema, path_str))
-    records.extend(check_defs_naming(schema, path_str))
-    records.extend(check_schema_validity(schema, path_str))
-    records.extend(check_json_schema_keyword_collisions(schema, path_str))
+    records = run_all_checks(schema, path_str)
 
     err_count, warn_count = emit_records(records)
     title = schema.get("title") if isinstance(schema.get("title"), str) else None

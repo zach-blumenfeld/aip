@@ -269,12 +269,9 @@ scripts/extract.py
 
 AIP Skills have the following 
 
+## Best Practices
 
-## Authoring an Agent Skill
-
-### Best Practices
-
-#### Selective Typing
+### Selective Typing
 
 The highest-leverage authoring decision is the *shape* of each field in the body. Over-type and the body grows larger AND harder to read; under-type and the body stops being queryable.
 
@@ -296,7 +293,7 @@ Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding per item. 
 
 **Default to less typing.** If a field doesn't pass the "would something filter by a sub-field?" test, it's prose. Don't re-encode every bullet as a record or every table row as a sub-field. Over-typing is the failure mode — bigger body, harder to read, no queryability gain.
 
-#### Body Drafting Style
+### Body Drafting Style
 
 - **Imperative form.** "Search npm before writing a utility" beats
   "the user should consider searching npm."
@@ -312,9 +309,10 @@ Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding per item. 
   keeps breaking, fall back to a list of strings with the label as
   a prefix.
 
-### Checklist.  
+## Procedures
+### Authoring an Agent Skill
 
-Follow sequentially.
+Checklist. Follow sequentially.
 
 1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same spirit here in addition to above AIP spec and best practices.
 2. Identify source materials for domain-specific context
@@ -349,9 +347,8 @@ Follow sequentially.
 6. Create and validate the AIP `SKILL.md`
    1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
          - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
-         - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema. 
-   **#TODO:** Instead of the below have validate.py check for schema and run validate_schema itself
-   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs. If editing schemas, also run `uv run scripts/validate_schema.py <schema file>`. On failure, apply tiered recovery:                                          
+         - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema.
+   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs.
       - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
       - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
    3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         
@@ -372,11 +369,35 @@ Follow sequentially.
    4. Move `<temp-folder>/` → `<install-location>/<name>/` (folder name must equal `name` in frontmatter).
    5. Tell the user the install path. Project-local installs may need a fresh agent session to activate.
 
-## Creating an AIP Schema
+### Creating an AIP Schema
 Follow the directions in [`author-schema.md`](references/author-schema.md)
 
-## Validating an AIP Skill or Schema
-For an AIP Skill 
+### Validating an AIP Skill or Schema
+
+Two scripts cover validation.
+
+**Validate an AIP skill:**
+```bash
+uv run scripts/validate.py <path/to/skill-folder>
+```
+Checks: full frontmatter validation — required fields (`name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId`), Agent Skills format rules on `name` (length, charset, hyphen rules, folder-name match), length caps on `description` and `compatibility`, type rules on `license`/`allowed-tools`/non-AIP `metadata` values, URL form on `metadata.aip.spec`. Required folder structure (`source/` present with a bundled `*.schema.json`). AIP-compliance of the bundled schema (delegates to `validate_schema.py`). Body is exactly one fenced YAML block. Body validates against the schema referenced by `metadata.aip.schemaId`.
+
+**Validate an AIP schema:**
+```bash
+uv run scripts/validate_schema.py <path/to/schema.json>
+```
+Checks: required root metadata (`$schema`, `$id`, `title`, `description` — all non-empty strings); `$id` is a URI; required `aip:` namespace with `aip.version`; universal floor properties (`purpose`, `trigger_when`); strict-core (every object subschema declares `additionalProperties: false`); `$defs` naming. Plus soft warnings on JSON Schema reserved-keyword collisions.
+
+**Output contract** (both scripts):
+- Exit 0 on success, 1 on any error.
+- stdout: single-line human summary.
+- stderr: JSON Lines, one record per error or warning. Stream-parse to classify.
+
+**On failure, apply tiered recovery:**
+- **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
+- **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
+
+**When to run:** after every edit to a schema or skill. Eyeball checks routinely miss AIP-namespace and required-metadata bugs.
 
 ## Anti-Patterns
 
