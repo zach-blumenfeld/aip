@@ -5,114 +5,118 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>Compile Skills for Autonomous Agents to engineer and govern reliable AI workflows like code.</em></p>
+      <p><em>Structured Skills for Performance & Governance</em></p>
     </td>
   </tr>
 </table>
 
-Your team's skills, prompts, deliberations, and runbooks are the
-documents that drive your AI workflows. Today they live as ad-hoc
-markdown — they drift between revisions, they fail silently when an
-agent reads them, and the corpus can't be queried to see what's
-actually happening. As those workflows become autonomous, that gap
-between "human-readable" and "agent-executable" stops being a quality
-issue and becomes a production-reliability one.
+## What Is AIP?
 
-AIP closes the gap. A JSON Schema per document type declares the
-shape; a small toolchain validates, compiles, ingests, and reads
-back. Human prose stays canonical; the agent-readable companion is
-a build artifact. The closest analogy is a compiler — source
-language, target language, type system, multi-target backends,
-preserved source. The case-gating is the same as any compile step:
-**you compile for production; you validate for autonomy.**
+AIP is an extension to the [Agent Skills Spec](https://agentskills.io/home). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/).
 
-AIP positions upstream of agent runtime / execution-graph
-protocols (LangGraph, ADK, AgentOps). It's the protocol for the
-*inputs* that drive agent behavior, not the runtime that executes
-them.
+## Why Use AIP?
 
+AIP provides improved performance and stronger governance for autonomous agent skills.
 
+**Performance**
+- **Early A/B evidence.** Early research (pre-print TBD) shows AIP-structured skills score higher than freeform-markdown equivalents on behavior rubrics, and the gap is largest with smaller models — enabling smaller models to perform more complex tasks autonomously.
+- **Tuning surface.** Schemas give a structured place to iterate when a skill underperforms — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
+- **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
 
-## Benefits
+**Governance**
+- **Validated against a standard.** Every skill conforms to its schema; every schema to the AIP base. Quality gate before any consumer sees the skill.
+- **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
+- **Database-ingestable.** Schema-validated YAML projects into a graph database for governed distribution, audit, and analytics.
 
-1. **Reliability for autonomous workflows.** Schema validation catches
-   structural drift at write time. Silent bugs in skills and prompts
-   stop being silent. Evalautions can be associated to specific parts of structured skill and adrferssed in a targeted matter 
-2. **Lower cost per AI interaction.** Compressed structured documents
-   cut token usage 40–60% versus their human-prose sources. Savings
-   compound across every long-running session and every sub-agent
-   fan-out.
-3. **Insights at corpus scale.** Once N documents share a structured
-   shape, cross-doc queries become single-line operations. "Every
-   option rejected for speculative reasons across all our
-   deliberations" — one query, not a doc-trawling expedition.
-4. **Vendor-neutral by design.** Schemas declare data shape only — no
-   database-specific keywords. Per-database connectors let any storage
-   system plug in. No lock-in.
-5. **Continuous improvement.** A schema-validated corpus is
-   high-quality structured training data for fine-tuning agents that
-   mirror your team's reasoning patterns.
-6. **Audit and governance.** Every agent decision lives in a queryable
-   graph with provenance back to its source document. AI-driven
-   workflows become inspectable, not opaque.
-7. **Zero-friction entry point for skill authoring.** If you've never
-   written a Claude Code skill before, using AIP is how you get your
-   first one. The agent walks you through it conversationally and
-   compiles the output into a correctly-structured skill folder you can
-   inspect and learn from. No prior knowledge of the Skills spec
-   required — the process teaches you the format by producing a working
-   example of it.
+## Quickstart
 
----
+AIP ships as an Agent Skill for co-authoring AIP artifacts (skills & schemas). Install it into your agent's skills directory; the skill activates the next time you talk to your agent about authoring or validating an AIP artifact.
 
-## Get started
-
-Install the AIP skill into your Claude Code personal skills directory:
+**Requirements:** [uv](https://docs.astral.sh/uv/) — used to run the bundled Python validators. Install with
 
 ```bash
-git clone https://github.com/zach-blumenfeld/aip ~/.claude/skills/aip
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-That's it. Claude Code picks up the skill automatically at the next
-session. Your agent will know how to compile, validate, and iterate
-on AIP-compliant skills and documents.
+**Install AIP, latest** (Claude Code, user-global, tracks `main`):
 
-**Requirements:** [uv](https://docs.astral.sh/uv/) for the bundled
-validation scripts (`uv run scripts/validate.py`,
-`uv run scripts/validate_schema.py`).
+```bash
+mkdir -p ~/.claude/skills/aip && \
+  curl -sSL https://github.com/zach-blumenfeld/aip/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=1 -C ~/.claude/skills/aip
+```
 
-**Cross-platform:** The AIP skill follows the open
-[Agent Skills](https://agentskills.io) standard and works anywhere
-that standard is supported — Claude Code, Cursor, and others.
+**Install AIP, fixed version** (Claude Code, user-global, pinned to `v0.2`):
 
-**Discoverable via community registries:**
-[ClaudSkills](https://claudskills.com/) |
-[SkillsMP](https://skillsmp.com/) |
-[Skills.sh](https://skills.sh)
+```bash
+mkdir -p ~/.claude/skills/aip && \
+  curl -sSL https://github.com/zach-blumenfeld/aip/archive/refs/tags/v0.2.tar.gz \
+  | tar -xz --strip-components=1 -C ~/.claude/skills/aip
+```
 
----
+Replace `v0.2` with whichever release you want — see [releases](https://github.com/zach-blumenfeld/aip/releases) for the list.
 
-See [`spec.md`](spec.md) for the technical specification.
+For **other agents** or **project-local installs**, change the target directory:
 
+- **Claude Code, project-local:** `./.claude/skills/aip`
+- **Other Agent-Skills–compatible runtimes:** check the runtime's docs for where it loads skills from.
 
-# TO ADD
-The idea is to improve skill Performsnce & Governance. 
+Once installed, ask your agent something like *"author an AIP runbook skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation.
 
-The Protocol is simple.  Instead of free-form markdown write skills as YAML that comply with a json schema
+### Model Recommendation for Co-Authoring
 
-Still human readable- but validatablile to schema.  
+Use the **largest frontier model available** when using the AIP skill. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
 
-So Why 
+For *consuming* the resulting skill, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
 
-Performance
-- They do better than free form markdown by default
-- They provide a concrete method for tuning skills to perform better for specific models and run time (adjust the schema)
+## Procedures
 
-Governance
-- skill compy with standard
-- they are vlaidated
-- they are easier to track and maintain in a database 
+The AIP skill exposes three top-level procedures:
 
-## Why is the AIP SKILL.MD not Written in AIP?
+1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into a YAML body validated against a schema. Details in [`SKILL.md` § Authoring an Agent Skill](SKILL.md#authoring-an-agent-skill).
+2. **Author or refine an AIP schema** — the agent walks through schema design, applying the permissive-by-default rule. Details in [`references/author-schema.md`](references/author-schema.md).
+3. **Validate an AIP skill or schema** — run the bundled scripts directly, or let the agent run them as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill or Schema](SKILL.md#validating-an-aip-skill-or-schema).
 
-For the same reason that AI requires humans to build it.  Something had to exist before.  Eventually the AIP skill will be written in AIP, just as agents may eventually build agents, we just aren't there yet. 
+## AIP Skill Spec
+
+The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It extends the Agent Skills directory layout with a `source/` directory holding the bundled schema, requires a fenced YAML body, and adds two AIP-namespaced frontmatter fields (`metadata.aip.spec`, `metadata.aip.schemaId`).
+
+## AIP Schema Spec
+
+The conventions every AIP schema must follow live in [`references/author-schema.md`](references/author-schema.md). Hard requirements (validated by `validate_schema.py`) cover JSON Schema conformance, AIP namespace metadata, strict `additionalProperties: false`, the universal `purpose` + `trigger_when` floor, and JSON Schema reserved-keyword avoidance. Best practices cover category scoping, permissive defaults, and file naming.
+
+## Validation Scripts
+
+Two Python scripts under `scripts/`, run via `uv run` — no install step, no virtualenv:
+
+```bash
+uv run scripts/validate.py <path/to/skill-folder>
+uv run scripts/validate_schema.py <path/to/schema.json>
+```
+
+`validate.py` validates an AIP skill end-to-end: frontmatter (including Agent Skills format rules and AIP-namespace fields), folder structure (`source/` with a bundled `*.schema.json`), AIP-compliance of the bundled schema, body fence shape, body-against-schema. `validate_schema.py` validates a JSON Schema against AIP conventions in isolation.
+
+Both emit JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error; warnings are advisory.
+
+## Development & Contributing
+
+### Bumping the AIP protocol version
+
+The AIP protocol version (currently `v0.2`) is referenced in **multiple places** that must stay in sync. When bumping (e.g., `v0.2` → `v0.3`):
+
+1. **`SKILL.md` frontmatter** — `metadata.aip.version`.
+2. **`SKILL.md` body** — the "Current AIP version" anchor under `## AIP Specification`, the "Currently:" URL under `##### metadata.aip.spec`, and every example URL (frontmatter examples, YAML examples, worked examples).
+3. **`assets/base.schema.json`** — the literal `aip.spec` URL.
+4. **`README.md`** — install commands and any version references.
+5. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.
+6. **Git tag** — create the `v<X>` tag after the version-bump commit lands.
+
+Drift between any of these is caught automatically: `validate.py` and `validate_schema.py` read the AIP version from `SKILL.md`'s frontmatter and require each artifact's `aip.spec` to match. Mismatches surface as `aip_spec_mismatch`.
+
+### Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md). The format follows [Keep a Changelog](https://keepachangelog.com/). Add notable changes under `[Unreleased]` as you make them; promote to a versioned section when you tag the release.
+
+## Why is the AIP SKILL.md not written in AIP?
+
+For the same reason that AI requires humans to build it: something has to exist before. Eventually the AIP skill itself may be authored in AIP form, just as agents may eventually build agents — but we're not there yet.
