@@ -3,6 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "jsonschema>=4.21",
+#     "pyyaml>=6.0",
 # ]
 # ///
 """Unit tests for scripts/validate_schema.py.
@@ -20,13 +21,21 @@ import validate_schema as vs
 
 
 def valid_schema() -> dict:
-    """Fresh, minimal valid AIP schema matching the base.schema.json floor."""
+    """Fresh, minimal valid AIP schema matching the base.schema.json floor.
+
+    `aip.spec` is read from the validator's expected URL helper so the
+    fixture stays in sync with the consuming aip skill's version. If
+    the helper returns None (running outside the aip skill folder),
+    fall back to a literal placeholder.
+    """
+    spec_url = vs.expected_aip_spec_url() or "https://example.com/spec"
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://example.com/test.schema.json",
         "title": "Test schema",
         "description": "Schema for unit tests.",
         "aip": {
+            "spec": spec_url,
             "version": "0.1",
             "tag": "test",
         },
@@ -163,6 +172,55 @@ class TestAipNamespace(unittest.TestCase):
         errors = errors_of(vs.check_aip_namespace, schema)
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].kind, "invalid_aip_field")
+
+
+class TestAipSpec(unittest.TestCase):
+    def test_valid(self):
+        self.assertEqual(errors_of(vs.check_aip_spec, valid_schema()), [])
+
+    def test_missing_spec(self):
+        schema = valid_schema()
+        del schema["aip"]["spec"]
+        errors = errors_of(vs.check_aip_spec, schema)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].kind, "missing_aip_field")
+
+    def test_spec_not_string(self):
+        schema = valid_schema()
+        schema["aip"]["spec"] = 123
+        errors = errors_of(vs.check_aip_spec, schema)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].kind, "invalid_aip_field")
+
+    def test_spec_not_uri(self):
+        schema = valid_schema()
+        schema["aip"]["spec"] = "no-colon-here"
+        errors = errors_of(vs.check_aip_spec, schema)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].kind, "invalid_aip_field")
+
+    def test_spec_mismatch(self):
+        """A different-version URL must trigger aip_spec_mismatch."""
+        # Only runs if the helper can find SKILL.md; otherwise the
+        # URL-match check is skipped and this assertion would not hold.
+        if vs.expected_aip_spec_url() is None:
+            self.skipTest("SKILL.md not discoverable from validator")
+        schema = valid_schema()
+        schema["aip"]["spec"] = "https://github.com/zach-blumenfeld/aip/tree/v999.0"
+        errors = errors_of(vs.check_aip_spec, schema)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].kind, "aip_spec_mismatch")
+
+
+class TestExpectedAipSpecUrl(unittest.TestCase):
+    def test_reads_skill_md_version(self):
+        url = vs.expected_aip_spec_url()
+        # The aip skill's SKILL.md declares metadata.aip.version: "0.2"
+        # at the time these tests were written. The assertion focuses on
+        # the URL shape rather than the literal version to avoid coupling
+        # the test to a moving version.
+        self.assertIsNotNone(url)
+        self.assertTrue(url.startswith(vs.AIP_SPEC_URL_PREFIX))
 
 
 class TestBaseFloor(unittest.TestCase):

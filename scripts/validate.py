@@ -411,6 +411,20 @@ def check_frontmatter_fields(
             ),
             location="$.metadata.aip.spec",
         ))
+    else:
+        expected = _vs.expected_aip_spec_url()
+        if expected is not None and spec_url != expected:
+            errors.append(Error(
+                path=path_str,
+                kind="aip_spec_mismatch",
+                message=(
+                    f"`metadata.aip.spec` (`{spec_url}`) does not match the "
+                    f"AIP version this validator targets (`{expected}`). "
+                    f"Update the skill's `metadata.aip.spec` to the current "
+                    f"URL, or upgrade/downgrade the aip skill."
+                ),
+                location="$.metadata.aip.spec",
+            ))
 
     schema_id = aip_meta.get("schemaId")
     if not schema_id:

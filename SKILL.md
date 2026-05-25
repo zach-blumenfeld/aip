@@ -1,6 +1,9 @@
 ---
 name: aip
 description: Create skills as governance-ready AIP Instructions — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems), and drafting/refining the JSON Schemas skills validate against. Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
+metadata:
+  aip:
+    version: "0.2"
 ---
 
 # AIP — Agent Instruction Protocol
@@ -117,15 +120,13 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ##### `metadata.aip.spec` *(AIP-specific)*
 
-URL to the AIP spec version this skill conforms to. Makes the skill self-describing — an AIP-unaware agent encountering the file can fetch the URL to learn the AIP format.
-
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/main/README.md`
+URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.2`
 
 ##### `metadata.aip.schemaId` *(AIP-specific)*
 
 URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-**Example:** `https://github.com/zach-blumenfeld/aip/assets/aip-schemas/runbook.schema.json`
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/runbook.schema.json`
 
 ##### `license`
 
@@ -155,8 +156,8 @@ License name or short reference to a bundled license file. Keep it short.
 ```yaml
 metadata:
   aip:
-    spec: https://raw.githubusercontent.com/zach-blumenfeld/aip/main/README.md
-    schemaId: https://github.com/zach-blumenfeld/aip/assets/aip-schemas/runbook.schema.json
+    spec: https://github.com/zach-blumenfeld/aip/tree/v0.2
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/runbook.schema.json
   author: example-org
   version: "1.0"
 ```
@@ -266,8 +267,6 @@ See [the reference guide](references/REFERENCE.md) for details.
 Run the extraction script:
 scripts/extract.py
 ```
-
-AIP Skills have the following 
 
 ## Best Practices
 
@@ -404,4 +403,7 @@ Checks: required root metadata (`$schema`, `$id`, `title`, `description` — all
 1. Unnecessarily drafting a new schema when a sufficient schema already exists for the skill type
 2. Drafting schemas that are specific to individual skills rather than the category / type / family of the skill
 3. Dropping content from original SKILL.md to over compress a SKILL.md
+4. Dumping JSON Schemas or YAML bodies into chat without asking. Default to a natural-language summary; offer the raw artifact if the user wants it.
+5. Skipping the bundled validators under user scope restrictions. `scripts/validate.py` and `scripts/validate_schema.py` are part of this skill's contract, not third-party resources — run them anyway and surface that you're doing so.
+6. Inventing AIP frontmatter keywords at the root. All AIP-specific fields go under `metadata.aip.*` (e.g., `metadata.aip.spec`, `metadata.aip.schemaId`). No bare-root `aip_spec:`, `aip_schema:`, etc.
 

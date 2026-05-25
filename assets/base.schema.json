@@ -1,10 +1,10 @@
 {
-  "$comment": "AIP base schema template. The author copies this file's contents into each new AIP schema. Fields with <chevron-placeholders> must be replaced with schema-family-specific values; everything else (type, additionalProperties, required, properties) is the universal floor and must be copied LITERALLY. Do not use $ref to point at this file — each AIP schema must travel standalone. validate_schema.py enforces that every AIP schema declares the floor with the correct shape.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://<your-namespace>/<schema-family-name>.schema.json",
   "title": "<Category of skill (e.g., Runbook, Rulebook, Doc Template). short and slightly descriptive, optimized for human display and understanding. less than 65 chars>",
   "description": "<One-or-two-sentence description of what skill family this schema represents>",
   "aip": {
+    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.2",
     "version": "<0.1 for new schemas, otherwise iterate version from previous schema>",
     "tag": "<optional — schema-family-tag-for-discovery; omit this line if not used>"
   },

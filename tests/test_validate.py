@@ -30,13 +30,18 @@ import validate as v  # noqa: E402
 
 
 def valid_frontmatter() -> dict:
-    """Fresh, minimal valid frontmatter dict."""
+    """Fresh, minimal valid frontmatter dict.
+
+    `metadata.aip.spec` uses the validator's expected URL helper so the
+    fixture stays in sync with the consuming aip skill's version.
+    """
+    spec_url = v._vs.expected_aip_spec_url() or "https://example.com/spec"
     return {
         "name": "test-skill",
         "description": "A test skill for validation.",
         "metadata": {
             "aip": {
-                "spec": "https://example.com/spec.md",
+                "spec": spec_url,
                 "schemaId": "https://example.com/runbook.schema.json",
             },
         },
@@ -45,12 +50,13 @@ def valid_frontmatter() -> dict:
 
 def valid_schema_json() -> dict:
     """Fresh, minimal valid AIP schema matching the test skill's schemaId."""
+    spec_url = v._vs.expected_aip_spec_url() or "https://example.com/spec"
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://example.com/runbook.schema.json",
         "title": "Test schema",
         "description": "Test schema for unit tests.",
-        "aip": {"version": "0.1"},
+        "aip": {"spec": spec_url, "version": "0.1"},
         "type": "object",
         "additionalProperties": False,
         "required": ["purpose", "trigger_when"],
@@ -71,13 +77,14 @@ def valid_schema_json() -> dict:
 
 def valid_skill_md_content() -> str:
     """Full valid SKILL.md file content (frontmatter + body)."""
+    spec_url = v._vs.expected_aip_spec_url() or "https://example.com/spec"
     return (
         "---\n"
         "name: test-skill\n"
         "description: A test skill for validation.\n"
         "metadata:\n"
         "  aip:\n"
-        "    spec: https://example.com/spec.md\n"
+        f"    spec: {spec_url}\n"
         "    schemaId: https://example.com/runbook.schema.json\n"
         "---\n"
         "\n"
@@ -450,10 +457,22 @@ class TestCheckFrontmatterFields(unittest.TestCase):
         self.assertIn("invalid_aip_spec", self._kinds(errors))
 
     def test_aip_spec_urn_ok(self):
+        """A URN-form spec passes the URI form check, but will fail the
+        URL-match check if the helper can find SKILL.md. Verify only the
+        URI-form check here."""
         fm = valid_frontmatter()
         fm["metadata"]["aip"]["spec"] = "urn:something:spec"
         _, errors = self._check(fm)
         self.assertNotIn("invalid_aip_spec", self._kinds(errors))
+
+    def test_aip_spec_mismatch(self):
+        """A different-version URL must trigger aip_spec_mismatch."""
+        if v._vs.expected_aip_spec_url() is None:
+            self.skipTest("SKILL.md not discoverable from validator")
+        fm = valid_frontmatter()
+        fm["metadata"]["aip"]["spec"] = "https://github.com/zach-blumenfeld/aip/tree/v999.0"
+        _, errors = self._check(fm)
+        self.assertIn("aip_spec_mismatch", self._kinds(errors))
 
     # --- aip.schemaId
     def test_missing_aip_schema_id(self):

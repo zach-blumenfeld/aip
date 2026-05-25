@@ -3,6 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "jsonschema>=4.21",
+#     "pyyaml>=6.0",
 # ]
 # ///
 """Validate a JSON Schema against AIP conventions.
@@ -16,6 +17,10 @@ Checks performed:
 - Top-level `aip:` object present with required `aip.version`
   (non-empty string). `aip.tag` is optional but must be a string when
   present.
+- `aip.spec` is a required non-empty string (URL). When the consuming
+  aip skill's SKILL.md is readable, `aip.spec` must equal the
+  validator's expected URL (`AIP_SPEC_URL_PREFIX + metadata.aip.version`
+  from that SKILL.md); mismatches are flagged.
 - Universal floor from assets/base.schema.json is present:
   - `purpose` (string) declared in properties and listed in `required`.
   - `trigger_when` (array of strings, minItems >= 1) declared in
@@ -46,11 +51,13 @@ Output contract:
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+import yaml
 from jsonschema.validators import validator_for
 
 
@@ -61,6 +68,13 @@ from jsonschema.validators import validator_for
 JSON_SCHEMA_RESERVED_KEYWORDS = frozenset({
     "examples", "enum", "required", "format", "const", "default",
 })
+
+# URL template for `aip.spec`. The version segment is read from the
+# consuming aip skill's SKILL.md `metadata.aip.version` field.
+AIP_SPEC_URL_PREFIX = "https://github.com/zach-blumenfeld/aip/tree/v"
+
+# Regex matching just the frontmatter half of the aip skill's SKILL.md.
+_SKILL_MD_FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
 
 @dataclass
@@ -113,6 +127,38 @@ def check_required_metadata(schema: dict, path: str) -> Iterable[Error]:
                 message=f"`{key}` must be a non-empty string",
                 location=f"$.{key}",
             )
+
+
+def expected_aip_spec_url() -> str | None:
+    """Return the expected `aip.spec` URL for this validator's AIP version.
+
+    Reads the consuming aip skill's SKILL.md (sibling-of-`scripts/`) and
+    builds `AIP_SPEC_URL_PREFIX + metadata.aip.version`. Returns None
+    when the SKILL.md can't be read or doesn't carry a version (e.g.,
+    validator invoked outside the aip skill folder) — in that case the
+    URL-match check downstream gracefully skips.
+    """
+    skill_md = Path(__file__).resolve().parent.parent / "SKILL.md"
+    try:
+        content = skill_md.read_text()
+    except OSError:
+        return None
+    match = _SKILL_MD_FRONTMATTER_PATTERN.match(content)
+    if not match:
+        return None
+    try:
+        frontmatter = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(frontmatter, dict):
+        return None
+    aip = frontmatter.get("metadata", {}).get("aip", {}) if isinstance(frontmatter.get("metadata"), dict) else {}
+    if not isinstance(aip, dict):
+        return None
+    version = aip.get("version")
+    if not isinstance(version, str) or not version.strip():
+        return None
+    return AIP_SPEC_URL_PREFIX + version.strip()
 
 
 def check_id_form(schema: dict, path: str) -> Iterable[Error]:
@@ -177,6 +223,58 @@ def check_aip_namespace(schema: dict, path: str) -> Iterable[Error]:
             kind="invalid_aip_field",
             message="`aip.tag` must be a string when present",
             location="$.aip.tag",
+        )
+
+
+def check_aip_spec(schema: dict, path: str) -> Iterable[Error]:
+    """Verify `aip.spec` is present, is a URI, and matches the expected
+    AIP-protocol-version URL when this validator can discover it.
+    """
+    aip = schema.get("aip")
+    if not isinstance(aip, dict):
+        return  # already flagged by check_aip_namespace
+    spec_url = aip.get("spec")
+    if not spec_url:
+        yield Error(
+            path=path,
+            kind="missing_aip_field",
+            message=(
+                "missing required `aip.spec` "
+                "(URL to AIP spec version this schema targets)"
+            ),
+            location="$.aip.spec",
+        )
+        return
+    if not isinstance(spec_url, str):
+        yield Error(
+            path=path,
+            kind="invalid_aip_field",
+            message="`aip.spec` must be a string (URL)",
+            location="$.aip.spec",
+        )
+        return
+    if ":" not in spec_url:
+        yield Error(
+            path=path,
+            kind="invalid_aip_field",
+            message=(
+                f"`aip.spec` must be a URL (contain a scheme); got `{spec_url}`"
+            ),
+            location="$.aip.spec",
+        )
+        return
+    expected = expected_aip_spec_url()
+    if expected is not None and spec_url != expected:
+        yield Error(
+            path=path,
+            kind="aip_spec_mismatch",
+            message=(
+                f"`aip.spec` (`{spec_url}`) does not match the AIP version "
+                f"this validator targets (`{expected}`). Update the schema's "
+                f"`aip.spec` to the current URL, or upgrade/downgrade the "
+                f"aip skill."
+            ),
+            location="$.aip.spec",
         )
 
 
@@ -422,6 +520,7 @@ def run_all_checks(schema: dict, path_str: str) -> list[Error]:
     records.extend(check_required_metadata(schema, path_str))
     records.extend(check_id_form(schema, path_str))
     records.extend(check_aip_namespace(schema, path_str))
+    records.extend(check_aip_spec(schema, path_str))
     records.extend(check_base_floor(schema, path_str))
     records.extend(check_strict_core(schema, path_str))
     records.extend(check_defs_naming(schema, path_str))

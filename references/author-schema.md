@@ -12,7 +12,9 @@ Hard requirements validated by the [`validate_schema.py`](../scripts/validate_sc
 
 - AIP schemas follow [the JSON Schema spec](https://json-schema.org/draft/2020-12/json-schema-core). 
 - Required root metadata (all must be non-empty strings): `$schema`, `$id` (URI form), `title`, `description`.
-- Additional required metadata and floor properties are declared in [`assets/base.schema.json`](../assets/base.schema.json) — copy it into each new schema; do not `$ref` it.
+- Additional required metadata and floor properties are declared in [`assets/base.schema.json`](../assets/base.schema.json) — copy it into each new schema; do not `$ref` it. The base has two zones:
+  - **Chevron-placeholder fields** (`$id`, `title`, `description`, `aip.version`, `aip.tag`) — replace with schema-family-specific values.
+  - **Literal copy** (`$schema`, `type`, `additionalProperties`, `required`, `properties` floor, and `aip.spec`) — copy verbatim, do not modify. `aip.spec` is the URL pointing at the AIP spec version the base was bumped to; modifying it breaks the conformance contract.
 
 Beyond the base schema, every AIP schema must also satisfy:
 - Strict schemas only: every object subschema (root,
@@ -36,6 +38,7 @@ Beyond the base schema, every AIP schema must also satisfy:
   - Bad names: `search-first`, `friday-deploy-check` — those are skills *built on* a schema, not schemas themselves.
   - If the user's content fits an existing schema, prefer
   reuse. If it's genuinely a new category, scope the new schema as broadly as that category warrants — one schema should support many related skills.
+- **Default to permissive** — required-minimum core, freeform-text leaves. Type a field only when an agent or a governance query would iterate or filter by a sub-field. See [SKILL.md § Selective Typing](../SKILL.md#selective-typing) for the rule and the four field shapes. Over-typing the first draft is the most common authoring failure.
 - AIP schema files should be named with the convention: `<lowercase kebab-case of title field>.schema.json`
 - New AIP schemas  should be distinct from existing schemas in [`assets/aip-schemas`](../assets/aip-schemas)
 
@@ -54,9 +57,9 @@ Follow these steps sequentially
       - Other AIP schemas exist in the project → reuse their namespace pattern with the new filename.
       - Git remote available → derive from it (e.g., `https://github.com/<owner>/<repo>/schemas/<kebab-title>.schema.json`).
       - None of the above → propose a placeholder based on the user's stated org/handle.
-   - `aip.version`: propose `0.1` for new schemas; bump from the previous version when refining.
+   - `aip.version`: propose `0.1` for new schemas; bump from the previous version when refining. This is the *schema's own* version — not the AIP protocol version, which is declared by `aip.spec` (the URL to AIP spec version this schema targets).
    - `aip.tag`: propose omitting; include only when a discovery hint clearly helps.
-5. Identify the core structure: main fields, required vs optional, etc.
+5. Identify the core structure: main fields, required vs optional, etc. Apply [SKILL.md's Selective Typing rule](../SKILL.md#selective-typing) to keep the floor permissive — type only what an agent or query would iterate by; leave the rest as prose.
 6. Write schema file to a temporary location. `<lowercase kebab-case of title field>.schema.json`
 7. Validate:
    1. Run `uv run scripts/validate_schema.py <draft>` 
