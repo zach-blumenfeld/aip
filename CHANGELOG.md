@@ -8,9 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Track changes here as you make them. On release, rename this section to the new version (e.g., `[0.3] — YYYY-MM-DD`) and start a new `[Unreleased]` at the top.
 
-## [0.2] — YYYY-MM-DD
-
-> _Replace YYYY-MM-DD with the actual tag date when `v0.2` is cut._
+## [0.2] — 2026-05-25
 
 ### Added
 - `metadata.aip.version` field on the AIP skill's own `SKILL.md` frontmatter — declares which AIP protocol version the skill encodes.
@@ -33,9 +31,7 @@ Track changes here as you make them. On release, rename this section to the new 
 - UUID-URN form requirement on `$id`; restored as a general URI form check (must contain a colon).
 - Most legacy walkthrough UX in `SKILL.md` (depth selector, four always-confirm checkpoints, three-scenario explicit framing).
 
-## [0.1] — YYYY-MM-DD
-
-> _Initial AIP draft. Replace YYYY-MM-DD with the actual tag date when `v0.1` is retroactively cut, or remove this section entirely if you'd rather start the changelog at v0.2._
+## [0.1] — 2026-05-17
 
 ### Added
 - AIP protocol draft.
