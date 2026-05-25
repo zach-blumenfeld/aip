@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/zach-blumenfeld/aip-schemas/procedure.schema.json",
+  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json",
   "title": "Procedure",
   "description": "AIP schema for procedure-style Instructions: any structured procedure, workflow, or execution graph — runbooks, recipes, pipelines, decision procedures, multi-step playbooks. Captures trigger conditions, applicability contexts, steps (linear, parallel, branching, or DAG-shaped), signal-to-action decisions, integrations, and worked scenarios. Scope is the category of work (any procedure), not a specific skill.",
   "aip": {

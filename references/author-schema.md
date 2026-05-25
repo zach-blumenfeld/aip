@@ -33,8 +33,7 @@ Beyond the base schema, every AIP schema must also satisfy:
 
 ### AIP Schema Best Practices
 - AIP schemas should be scoped to the **category of work** a family of skills enable, not to a specific skill instance. 
-  - Good names:`runbook`, `document-template`, `reference`, `post-mortem`,
-  `deliberation`. 
+  - Good names:`runbook`, `document-template`, `reference`, `post-mortem`, `deliberation`. 
   - Bad names: `search-first`, `friday-deploy-check` — those are skills *built on* a schema, not schemas themselves.
   - If the user's content fits an existing schema, prefer
   reuse. If it's genuinely a new category, scope the new schema as broadly as that category warrants — one schema should support many related skills.

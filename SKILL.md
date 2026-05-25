@@ -126,7 +126,7 @@ URL to the AIP spec version this skill conforms to. Currently: `https://github.c
 
 URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/runbook.schema.json`
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json`
 
 ##### `license`
 
@@ -157,7 +157,7 @@ License name or short reference to a bundled license file. Keep it short.
 metadata:
   aip:
     spec: https://github.com/zach-blumenfeld/aip/tree/v0.2
-    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/runbook.schema.json
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json
   author: example-org
   version: "1.0"
 ```
@@ -283,7 +283,7 @@ Two independent questions per field:
 
 Four shapes fall out:
 
-- **Full typed records** — `steps` (`[{name, description, parallel?, one_of?}]`), `decisions` (`[{signal, action}]`), `examples` (`[{need, found, action, ...}]`). Iterated by sub-field.
+- **Full typed records** — `steps` (`[{name, description, depends_on?, parallel?, one_of?}]`), `decisions` (`[{signal, action}]`), `scenarios` (`[{need, action, ...}]`). Iterated by sub-field.
 - **Thin `{label, body}` envelopes** — `modes` (`[{name, body: |...}]`), `search_shortcuts` (`[{category, body: |...}]`), `integrations` (`[{partner, body: |...}]`). Label is queryable; body stays as prose.
 - **List of strings** — `trigger_when`, `anti_patterns`. Plural with one-line items. Don't envelope.
 - **Single `|`-block** — singular freeform content (`purpose`, `scope_and_approval`). Nothing iterates; nothing filters.

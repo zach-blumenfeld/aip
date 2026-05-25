@@ -44,20 +44,20 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone --depth 1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.2a0`):
+**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.2`):
 
 ```bash
-git clone --depth 1 --branch v0.2a0 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
+git clone --depth 1 --branch v0.2 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-Replace `v0.2a0` with whichever release you want — see [releases](https://github.com/zach-blumenfeld/aip/releases) for the list.
+Replace `v0.2` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
 
 For **user-global install** or **other agents**, change the target directory:
 
 - **Claude Code, user-global:** `~/.claude/skills/aip`
 - **Other Agent-Skills–compatible runtimes:** check the runtime's docs for where it loads skills from.
 
-Once installed, ask your agent something like *"author an AIP runbook skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation.
+Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation.
 
 ### Model Recommendation for Co-Authoring
 
