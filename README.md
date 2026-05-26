@@ -19,8 +19,8 @@ AIP is an extension to the [Agent Skills Spec](https://agentskills.io/home). The
 AIP provides improved performance and stronger governance for autonomous agent skills.
 
 **Performance**
-- **Early A/B evidence.** Early research (pre-print TBD) shows AIP-structured skills score higher than freeform-markdown equivalents on behavior rubrics, and the gap is largest with smaller models — enabling smaller models to perform more complex tasks autonomously.
-- **Tuning surface.** Schemas give a structured place to iterate when a skill underperforms — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
+- **Structured skills outperform freeform** and AIP enforced this authoring discipline. AIP requires schema-validated commitments to structured YAML with triggers, steps, decisions, tools, and anti-patterns. Early A/B evidence in [`zach-blumenfeld/aip-test`](https://github.com/zach-blumenfeld/aip-test) suggests the lift is biggest on under-structured markdown skills (tables and ASCII diagrams parsed into typed YAML).
+- **Concrete tuning surface.** Schemas give a structured place to iterate when running evals — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
 - **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
 
 **Governance**
