@@ -348,8 +348,7 @@ Checklist. Follow sequentially.
 4. Lock the skill name
     - Ask the user what to call the skill. The name is short and slightly descriptive — it becomes the folder name. Lowercase kebab-case, <65 chars, no leading/trailing/consecutive hyphens.
     - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the rules above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
-5. Scaffold skill directory 
-    write first to a temporary location
+5. Scaffold skill directory at `./<skill-name>/` in the current working directory (not `/tmp`)
     ```shell
     skill-name/
     ├── SKILL.md                       # Required: metadata + YAML-compliant instructions
@@ -365,15 +364,15 @@ Checklist. Follow sequentially.
       - a source SKILL.md a user provided for transition to AIP format
       - a README.md outlining you logic from above and intent of the skill
       - Any other documentation or reference you will use to create the AIP skill
-    Also populate the following at the temp folder root if the skill needs them:
+    Also populate the following at the skill folder root if the skill needs them:
     - `scripts/` — executable code the skill invokes (e.g., validators, processors).
     - `assets/` — templates, output formats, or other resources the skill references.
     - `references/` — supporting documentation the skill loads on demand (progressive disclosure).
 6. Create and validate the AIP `SKILL.md`
-   1. Draft `SKILL.md` at the temp folder root using the source materials and the schema from `/source`. 
+   1. Draft `SKILL.md` at the skill folder root using the source materials and the schema from `/source`. 
          - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
          - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema.
-   2. Run `uv run scripts/validate.py <temp-folder>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs.
+   2. Run `uv run scripts/validate.py ./<skill-name>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs.
       - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
       - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
    3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         
@@ -381,7 +380,7 @@ Checklist. Follow sequentially.
       - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile. 
       - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
       - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
-   4. Functional test the skill (if subprocesses are available). Spawn 2–3 fresh host-agent sessions against the temp skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response. Evaluate against:
+   4. Functional test the skill (if subprocesses are available). Spawn 2–3 fresh host-agent sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response. Evaluate against:
       - **Script errors** — non-zero exits, stderr noise, exceptions
       - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
       - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
@@ -392,13 +391,13 @@ Checklist. Follow sequentially.
 7. Install
    1. Ask the user what to do next:
       - **Install now** — proceed below.
-      - **Iterate further** — keep editing in the temp folder.
-      - **Leave it as-is** — they'll handle placement manually. Tell them the temp path and stop.
+      - **Iterate further** — keep editing the skill folder in place.
+      - **Leave it as-is** — the skill folder stays in the current working directory. Tell them the path and stop.
    2. If installing, confirm the location with the user. Standard Agent Skills locations:
       - **Project-local** — the host agent's project skills directory (e.g., `./.claude/skills/<name>/` for Claude Code). Default if CWD is in a git repo.
       - **User-global** — the host agent's user-wide skills directory (e.g., `~/.claude/skills/<name>/` for Claude Code). Default otherwise.
    3. If a folder already exists at the destination, ask before overwriting. For prior AIP Instructions, preserve top-level `scripts/`, `assets/`, `references/` and overwrite only `SKILL.md` and `source/`.
-   4. Move `<temp-folder>/` → `<install-location>/<name>/` (folder name must equal `name` in frontmatter).
+   4. Move `./<skill-name>/` → `<install-location>/<skill-name>/` (folder name must equal `name` in frontmatter).
    5. Tell the user the install path. Project-local installs may need a fresh agent session to activate.
 
 ### Creating an AIP Schema
