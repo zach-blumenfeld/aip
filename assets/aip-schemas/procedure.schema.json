@@ -1,15 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json",
+  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a0/assets/aip-schemas/procedure.schema.json",
   "title": "Procedure",
-  "description": "AIP schema for procedure-style Instructions: any structured procedure, workflow, or execution graph — runbooks, recipes, pipelines, decision procedures, multi-step playbooks. Captures trigger conditions, applicability contexts, steps (linear, parallel, branching, or DAG-shaped), signal-to-action decisions, integrations, and worked scenarios. Scope is the category of work (any procedure), not a specific skill.",
+  "description": "AIP schema for procedure-style Instructions: any structured procedure, workflow, or execution graph — runbooks, recipes, pipelines, multi-step playbooks. A procedure is a graph of script-backed nodes (steps) connected by inputs and outputs; conditional logic lives in `scripts/`, not in typed schema fields. Captures trigger conditions, applicability contexts, steps (linear, parallel, branching, or DAG-shaped), execution modes, integrations, and worked scenarios. Scope is the category of work (any procedure), not a specific skill.",
   "aip": {
-    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.2",
-    "version": "0.1"
+    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.3a0",
+    "version": "0.3a0"
   },
   "type": "object",
   "additionalProperties": false,
   "required": ["purpose", "trigger_when", "steps"],
+  "$defs": {
+    "io_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Identifier for this input or output. Downstream steps reference an upstream output by this name via their `inputs`." },
+        "type": { "type": "string", "description": "Short type label from the AIP vocabulary: `string`, `integer`, `float`, `boolean`, `object`, or `list[*]` (collection of any of the above). See `SKILL.md` § Use Simple Type Vocabulary. Not machine-enforced; detailed checks belong in the backing script." },
+        "nullable": { "type": "boolean", "description": "Optional. When true, the value may be absent. Defaults to false." },
+        "description": { "type": "string", "description": "One-line summary of what this input/output represents. Optional but recommended — makes the graph readable without opening the backing script." }
+      }
+    }
+  },
   "properties": {
     "purpose": {
       "type": "string",
@@ -32,15 +45,15 @@
     },
     "steps": {
       "type": "array",
-      "description": "Steps the agent executes. Default ordering is by list position; use `depends_on` to express explicit graph dependencies (DAGs), `parallel` for fan-out within a step, and `one_of` for mutually-exclusive branches.",
+      "description": "Steps the agent executes — the nodes of the procedure's execution graph. Default ordering is by list position; use `depends_on` for explicit graph dependencies, `parallel` for fan-out within a step, `one_of` for mutually-exclusive alternatives, and `script` to back the node with code (preferred whenever the node's logic can be expressed programmatically).",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["name", "description"],
         "properties": {
-          "name": { "type": "string", "description": "Short kebab-case identifier, unique within this procedure. Other steps reference it via `depends_on`." },
-          "description": { "type": "string", "description": "What the step does." },
+          "name": { "type": "string", "description": "Short kebab-case identifier, unique within this procedure. Other steps reference it via `depends_on`, `inputs`, and `outputs`." },
+          "description": { "type": "string", "description": "What the step does. When the node is script-backed, keep this to a one-line summary — the script is the source of truth for the logic." },
           "depends_on": {
             "type": "array",
             "items": { "type": "string" },
@@ -51,26 +64,27 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Optional. Mutually exclusive sub-step alternatives; the agent picks exactly one."
+          },
+          "script": {
+            "type": "string",
+            "description": "Optional. Relative path under `scripts/` to the script that executes this node. When present, the script is the source of truth for the node's logic; the description is a one-line summary, not instructions. Conditional logic (decisions, branching) belongs here, not in typed schema fields."
+          },
+          "inputs": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/io_item" },
+            "description": "Optional. Inputs this node consumes — references to outputs of upstream nodes or to externally supplied values. Forms the incoming edges of the execution graph. Each item declares a `name`, optional `type` (Python annotation — see `SKILL.md` § Type Annotations), and optional one-line `description`."
+          },
+          "outputs": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/io_item" },
+            "description": "Optional. Outputs this node produces. Downstream nodes reference these by `name` via their `inputs`. Forms the outgoing edges of the execution graph. Each item declares a `name`, optional `type`, and optional one-line `description`."
           }
-        }
-      }
-    },
-    "decisions": {
-      "type": "array",
-      "description": "Optional. Signal-to-action decision table for situations the agent encounters during execution.",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["signal", "action"],
-        "properties": {
-          "signal": { "type": "string", "description": "The condition or situation observed." },
-          "action": { "type": "string", "description": "What the agent should do in response." }
         }
       }
     },
     "modes": {
       "type": "array",
-      "description": "Optional. Execution modes (e.g., quick inline vs full subagent, dry-run vs apply). Each item is a named mode with a freeform body.",
+      "description": "Optional. Execution modes (e.g., quick inline vs full subagent, dry-run vs apply). Each item is a named mode with a freeform body. Prefer expressing mode-specific *logic* in scripts (gated on a mode flag); use this field for the human-readable description of each variant.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -109,7 +123,7 @@
     },
     "scenarios": {
       "type": "array",
-      "description": "Optional. Worked scenarios showing the procedure applied to concrete cases. Renamed from `examples` to avoid the JSON Schema reserved keyword.",
+      "description": "Optional. Worked illustrative examples showing the procedure applied to concrete cases. Documentation, not a runtime decision table — the agent does not iterate `scenarios` to pick an action. Renamed from `examples` to avoid the JSON Schema reserved keyword.",
       "items": {
         "type": "object",
         "additionalProperties": false,

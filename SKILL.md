@@ -3,7 +3,7 @@ name: aip
 description: Create skills as governance-ready AIP Instructions — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems), and drafting/refining the JSON Schemas skills validate against. Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
 metadata:
   aip:
-    version: "0.2"
+    version: "0.3a0"
 ---
 
 # AIP — Agent Instruction Protocol
@@ -189,26 +189,41 @@ trigger_when:
 steps:
   - name: need-analysis
     description: Define what functionality is needed; identify language and framework constraints.
+    outputs:
+      - name: need-spec
+        type: object
   - name: parallel-search
     description: Search npm/PyPI, MCP servers, available skills, and GitHub in parallel.
     parallel: true
+    inputs:
+      - name: need-spec
+        type: object
+    outputs:
+      - name: candidates
+        type: list[object]
   - name: evaluate
     description: Score candidates on functionality, maintenance, community, docs, license, and dependencies.
+    script: scripts/evaluate.py
+    inputs:
+      - name: candidates
+        type: list[object]
+    outputs:
+      - name: scored-candidates
+        type: list[object]
   - name: decide
-    description: Choose Adopt as-is, Extend/Wrap, Compose, or Build Custom.
+    description: Pick Adopt / Extend / Compose / Build from the top scored candidate.
+    script: scripts/decide.py
+    inputs:
+      - name: scored-candidates
+        type: list[object]
+    outputs:
+      - name: recommendation
+        type: object
     one_of:
       - Adopt as-is
       - Extend / Wrap
       - Compose
       - Build Custom
-
-decisions:
-  - signal: Exact match, well-maintained, permissive license.
-    action: Adopt — recommend the package and request approval before install.
-  - signal: Partial match with good foundation.
-    action: Extend — recommend the package plus a thin wrapper.
-  - signal: Nothing suitable found.
-    action: Build — explain why custom code is warranted.
 
 anti_patterns:
   - Jumping to code without checking if a tool exists.
@@ -264,33 +279,34 @@ When referencing other files in your skill, use relative paths from the skill ro
 ```markdown SKILL.md theme={null}
 See [the reference guide](references/REFERENCE.md) for details.
 
-Run the extraction script:
-scripts/extract.py
+script:scripts/extract.py
 ```
 
 ## Best Practices
 
-### Selective Typing
+### Prioritize `scripts/`
+Prioritize the use of scripts for handling logic wherever possible.  This ensures consistency and quality.
+Treat the `SKILL.md` more as an execution graph with scripts as nodes, receiving input and outputs over edges. 
+Use `scripts/` for
+- domain-specific logic
+- validating results
+- conditional logic if/then/else
 
-The highest-leverage authoring decision is the *shape* of each field in the body. Over-type and the body grows larger AND harder to read; under-type and the body stops being queryable.
+Favor fewer script files for simplicity.  Only create separate scripts files for truly independent self-contained logic.
+Only place workflow and instructional logic in text on nodes where it is not possible to express programmatically in a script.
 
-**Rule: type a field only when an agent or a governance query would iterate or filter by a sub-field of it.** Otherwise leave it as prose.
 
-Two independent questions per field:
+### Use Simple Type Vocabulary
 
-1. **Is the content plural?** If yes, it's a list. The label of each item stays queryable even when the body is prose.
-2. **Would something loop over items and look up a sub-field?** If yes, type the items as records. If no, keep items as prose.
+Use a small, simple, vocabulary for script input/output data types.  Only expand where absolutely necessary. 
 
-Four shapes fall out:
+- `string`
+- `integer`
+- `float`
+- `boolean`
+- `object` — JSON-like key/value map
+- `list[*]` — collection of any of above
 
-- **Full typed records** — `steps` (`[{name, description, depends_on?, parallel?, one_of?}]`), `decisions` (`[{signal, action}]`), `scenarios` (`[{need, action, ...}]`). Iterated by sub-field.
-- **Thin `{label, body}` envelopes** — `modes` (`[{name, body: |...}]`), `search_shortcuts` (`[{category, body: |...}]`), `integrations` (`[{partner, body: |...}]`). Label is queryable; body stays as prose.
-- **List of strings** — `trigger_when`, `anti_patterns`. Plural with one-line items. Don't envelope.
-- **Single `|`-block** — singular freeform content (`purpose`, `scope_and_approval`). Nothing iterates; nothing filters.
-
-Each `{label, body}` envelope adds ~8–12 tokens of YAML scaffolding per item. Negligible for 2–10 items; consider flat strings or splitting the skill at 50+.
-
-**Default to less typing.** If a field doesn't pass the "would something filter by a sub-field?" test, it's prose. Don't re-encode every bullet as a record or every table row as a sub-field. Over-typing is the failure mode — bigger body, harder to read, no queryability gain.
 
 ### Body Drafting Style
 
