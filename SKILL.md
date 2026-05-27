@@ -173,7 +173,7 @@ metadata:
 
 The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the schema referenced by `metadata.aip.schemaId`.
 
-Example:
+Example (pared down for illustration — real skills typically carry more steps and richer detail):
 
 ````markdown
 ```yaml
@@ -211,8 +211,9 @@ steps:
       - name: scored-candidates
         type: list[object]
   - name: decide
-    description: Pick Adopt / Extend / Compose / Build from the top scored candidate.
-    script: scripts/decide.py
+    description: >
+      Pick Adopt / Extend / Compose / Build. Weigh score, license, maintenance
+      signals, and how heavily the candidate would need wrapping to fit the need.
     inputs:
       - name: scored-candidates
         type: list[object]
@@ -224,6 +225,15 @@ steps:
       - Extend / Wrap
       - Compose
       - Build Custom
+  - name: record-recommendation
+    description: Append the recommendation and rationale to docs/decisions/ as a dated ADR entry.
+    script: scripts/record_recommendation.py
+    inputs:
+      - name: recommendation
+        type: object
+    outputs:
+      - name: record-path
+        type: string
 
 anti_patterns:
   - Jumping to code without checking if a tool exists.
@@ -286,14 +296,14 @@ script:scripts/extract.py
 
 ### Prioritize `scripts/`
 Prioritize the use of scripts for handling logic wherever possible.  This ensures consistency and quality.
-Treat the `SKILL.md` more as an execution graph with scripts as nodes, receiving input and outputs over edges. 
+Treat the `SKILL.md` more as an execution graph with scripts or step descriptions as nodes, receiving input and outputs over edges. 
 Use `scripts/` for
 - domain-specific logic
 - validating results
 - conditional logic if/then/else
 
 Favor fewer script files for simplicity.  Only create separate scripts files for truly independent self-contained logic.
-Only place workflow and instructional logic in text on nodes where it is not possible to express programmatically in a script.
+Only place workflow and instructional logic in steps as text where a script would overly-restrict logic & reasoning. 
 
 
 ### Use Simple Type Vocabulary
