@@ -3,7 +3,7 @@ name: aip
 description: Create skills as governance-ready AIP Instructions — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems), and drafting/refining the JSON Schemas skills validate against. Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
 metadata:
   aip:
-    version: "0.3a1"
+    version: "0.3a2"
 ---
 
 # AIP — Agent Instruction Protocol
@@ -120,13 +120,13 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ##### `metadata.aip.spec` *(AIP-specific)*
 
-URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.3a1`
+URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.3a2`
 
 ##### `metadata.aip.schemaId` *(AIP-specific)*
 
 URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a1/assets/aip-schemas/procedure.schema.json`
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a2/assets/aip-schemas/procedure.schema.json`
 
 ##### `license`
 
@@ -156,8 +156,8 @@ License name or short reference to a bundled license file. Keep it short.
 ```yaml
 metadata:
   aip:
-    spec: https://github.com/zach-blumenfeld/aip/tree/v0.3a1
-    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a1/assets/aip-schemas/procedure.schema.json
+    spec: https://github.com/zach-blumenfeld/aip/tree/v0.3a2
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a2/assets/aip-schemas/procedure.schema.json
   author: example-org
   version: "1.0"
 ```
@@ -385,14 +385,14 @@ Checklist. Follow sequentially.
       - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile. 
       - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
       - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
-   4. Functional test the skill (if subprocesses are available). Spawn 2–3 fresh host-agent sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response. Evaluate against:
+   4. Functional test the skill. Spawn a fresh agent if possible, i.e. Agent/Task tool if present, `claude -p` via bash, or whatever the runtime exposes. Spawn 2–3 fresh sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response. Evaluate against:
       - **Script errors** — non-zero exits, stderr noise, exceptions
       - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
       - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
       - **Over-restriction** — compare against what agent reasoning would produce unaided. If a script-backed step stripped reasoning, nuance, or form that mattered, revise or convert back to a prose step.
 
-      If the runtime cannot spawn subprocesses, skip this step and tell user: *"Functional testing skipped — runtime does not support subprocess agent invocation"*
-   5. Iterate until the body validates, every source item is classified, AND (if subprocesses are available) the skill passes functional test.
+      If the runtime truly cannot spawn fresh agents, test functionally yourself and tell user: *"Functional testing not conducted with fresh agents — runtime does not support fresh agent invocation"*
+   5. Iterate until the body validates, every source item is classified, AND the skill passes functional test.
 7. Install
    1. Ask the user what to do next:
       - **Install now** — proceed below.

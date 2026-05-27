@@ -44,13 +44,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone --depth 1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.3a1`):
+**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.3a2`):
 
 ```bash
-git clone --depth 1 --branch v0.3a1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
+git clone --depth 1 --branch v0.3a2 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-Replace `v0.3a1` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
+Replace `v0.3a2` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
 
 For **user-global install** or **other agents**, change the target directory:
 
@@ -98,7 +98,7 @@ Both emit JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, 
 
 ### Bumping the AIP protocol version
 
-The AIP protocol version (currently `v0.3a1`) is referenced in **multiple places** that must stay in sync. When bumping (e.g., `v0.3a1` → `v0.3`):
+The AIP protocol version (currently `v0.3a2`) is referenced in **multiple places** that must stay in sync. When bumping (e.g., `v0.3a2` → `v0.3`):
 
 1. **`SKILL.md` frontmatter** — `metadata.aip.version`.
 2. **`SKILL.md` body** — the "Currently:" URL under `##### metadata.aip.spec`, and every example URL (frontmatter examples, YAML examples, worked examples).

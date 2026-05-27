@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Track changes here as you make them. On release, rename this section to the new version (e.g., `[0.3] — YYYY-MM-DD`) and start a new `[Unreleased]` at the top.
 
+## [0.3a2] — 2026-05-27
+
+### Changed
+- `SKILL.md` checklist step 6.4 (functional test) tightened in response to dogfood evidence (agent skipped the step when phrased as a capability check). Named concrete mechanisms — Agent/Task tool, `claude -p` via bash, whatever the runtime exposes — converting the gate from a fuzzy capability question to a tool check. Removed the conditional "if subprocesses are available"; testing is now mandatory. Fallback when no fresh-agent mechanism exists: self-test instead of skip, with a user-facing message that clarifies fresh-agent verification did not run.
+- AIP protocol version bumped `v0.3a1` → `v0.3a2`. All live references updated.
+
 ## [0.3a1] — 2026-05-27
 
 ### Added
