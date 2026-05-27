@@ -8,17 +8,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Track changes here as you make them. On release, rename this section to the new version (e.g., `[0.3] — YYYY-MM-DD`) and start a new `[Unreleased]` at the top.
 
+## [0.3a0] — 2026-05-27
+
 ### Added
 - Execution-graph fields on `steps[]` items in `procedure.schema.json`: `script` (relative path under `scripts/` backing the node), `inputs` and `outputs` (named edges between nodes). A procedure body can now declare a graph of script-backed nodes connected by I/O.
 - `$defs.io_item` in `procedure.schema.json` — shared shape for `inputs` and `outputs` items: `name` (required), `type` (short label, optional), `nullable` (boolean, optional, defaults to false), `description` (optional one-line summary).
 - `SKILL.md` § Use Simple Type Vocabulary (under Best Practices) — small AIP type vocabulary (`string`, `integer`, `float`, `boolean`, `object`, `list[*]`) for AIP fields that declare types, starting with step inputs and outputs. Not machine-enforced; detailed type checks belong in the backing script.
 - `references/author-schema.md` "Design for execution graphs" Best Practice — type the graph shape (nodes, edges, script refs); leave prose freeform on nodes where code can't carry it; push logic (decisions, branching) into `scripts/`, not typed fields. Includes a pointer to the type vocabulary.
+- `SKILL.md` checklist step 6.4: optional functional test of the authored skill. Spawn 2–3 fresh host-agent sessions against the temp skill folder; evaluate against script errors, response quality, intent capture, and over-restriction. Soft step — when the runtime cannot spawn subprocesses, surface that to the user with an explicit note that structural validation and completeness check did run.
 
 ### Changed
-- `SKILL.md` Best Practices: replaced "Selective Typing" with "Prioritize `scripts/`". Skills are framed as execution graphs of script-backed nodes; conditional logic belongs in `scripts/`, not in typed schema fields.
-- `SKILL.md` worked YAML example reworked to demonstrate `script` / `inputs` / `outputs` on steps and to drop the now-removed `decisions:` block.
+- `SKILL.md` Best Practices: replaced "Selective Typing" with "Prioritize `scripts/`". Skills are framed as execution graphs of script-backed nodes; conditional logic belongs in `scripts/`, not in typed schema fields. Prose nodes are first-class alongside script-backed nodes — the rule is "use prose where a script would overly-restrict logic & reasoning."
+- `SKILL.md` worked YAML example reworked end-to-end: demonstrates `script` / `inputs` / `outputs` on steps, drops the now-removed `decisions:` block, and runs a 3-prose / 2-script mix (`evaluate` and `record-recommendation` are script-backed; `need-analysis`, `parallel-search`, and `decide` carry reasoning in prose).
 - `procedure.schema.json` top-level description and `steps` / `modes` / `scenarios` field descriptions reframed around the execution-graph model.
-- `procedure.schema.json` `aip.version` bumped `0.1` → `0.3` (the schema's own version, not the AIP protocol version).
+- `procedure.schema.json` `aip.version` bumped `0.1` → `0.3a0` (the schema's own version, kept aligned with the AIP protocol version).
+- AIP protocol version bumped `v0.2` → `v0.3a0`. All live references updated across `SKILL.md`, `README.md`, `assets/base.schema.json`, `assets/aip-schemas/procedure.schema.json`, and a stale test comment.
+- `README.md` content sweep: field list updated (`decisions`/`tools` dropped, script-backed nodes and I/O edges added); schema procedure description references execution-graph framing instead of "permissive-by-default"; Best Practices summary lists "designing for execution graphs"; bumping checklist dropped the stale "Current AIP version anchor" reference.
 
 ### Removed
 - `decisions` field from `procedure.schema.json`. Conditional `{signal, action}` tables are runtime branching logic and now belong in `scripts/`. **Breaking:** skills validating against the procedure schema that use `decisions:` will fail validation until reworked.

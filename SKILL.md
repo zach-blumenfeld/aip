@@ -120,13 +120,13 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ##### `metadata.aip.spec` *(AIP-specific)*
 
-URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.2`
+URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.3a0`
 
 ##### `metadata.aip.schemaId` *(AIP-specific)*
 
 URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json`
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a0/assets/aip-schemas/procedure.schema.json`
 
 ##### `license`
 
@@ -156,8 +156,8 @@ License name or short reference to a bundled license file. Keep it short.
 ```yaml
 metadata:
   aip:
-    spec: https://github.com/zach-blumenfeld/aip/tree/v0.2
-    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.2/assets/aip-schemas/procedure.schema.json
+    spec: https://github.com/zach-blumenfeld/aip/tree/v0.3a0
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a0/assets/aip-schemas/procedure.schema.json
   author: example-org
   version: "1.0"
 ```
@@ -381,7 +381,14 @@ Checklist. Follow sequentially.
       - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile. 
       - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
       - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
-   4. Iterate until the body validates AND every source item is classified.
+   4. Functional test the skill (if subprocesses are available). Spawn 2–3 fresh host-agent sessions against the temp skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response. Evaluate against:
+      - **Script errors** — non-zero exits, stderr noise, exceptions
+      - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
+      - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
+      - **Over-restriction** — compare against what agent reasoning would produce unaided. If a script-backed step stripped reasoning, nuance, or form that mattered, revise or convert back to a prose step.
+
+      If the runtime cannot spawn subprocesses, skip this step and tell user: *"Functional testing skipped — runtime does not support subprocess agent invocation"*
+   5. Iterate until the body validates, every source item is classified, AND (if subprocesses are available) the skill passes functional test.
 7. Install
    1. Ask the user what to do next:
       - **Install now** — proceed below.
