@@ -3,7 +3,7 @@ name: aip
 description: Create skills as governance-ready AIP Instructions — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems), and drafting/refining the JSON Schemas skills validate against. Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
 metadata:
   aip:
-    version: "0.3a0"
+    version: "0.3a1"
 ---
 
 # AIP — Agent Instruction Protocol
@@ -120,13 +120,13 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ##### `metadata.aip.spec` *(AIP-specific)*
 
-URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.3a0`
+URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.3a1`
 
 ##### `metadata.aip.schemaId` *(AIP-specific)*
 
 URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a0/assets/aip-schemas/procedure.schema.json`
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a1/assets/aip-schemas/procedure.schema.json`
 
 ##### `license`
 
@@ -156,8 +156,8 @@ License name or short reference to a bundled license file. Keep it short.
 ```yaml
 metadata:
   aip:
-    spec: https://github.com/zach-blumenfeld/aip/tree/v0.3a0
-    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a0/assets/aip-schemas/procedure.schema.json
+    spec: https://github.com/zach-blumenfeld/aip/tree/v0.3a1
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a1/assets/aip-schemas/procedure.schema.json
   author: example-org
   version: "1.0"
 ```
@@ -295,15 +295,20 @@ script:scripts/extract.py
 ## Best Practices
 
 ### Prioritize `scripts/`
-Prioritize the use of scripts for handling logic wherever possible.  This ensures consistency and quality.
-Treat the `SKILL.md` more as an execution graph with scripts or step descriptions as nodes, receiving input and outputs over edges. 
-Use `scripts/` for
+Use `scripts/` whenever a step contains ANY of:
 - domain-specific logic
-- validating results
-- conditional logic if/then/else
+- if/then/else, when/unless, or "only if" rules
+- lookup tables
+- numeric calculations, thresholds, or caps
+- validation against fixed set of rules
+
+This ensures consistency and quality.
+Treat the `SKILL.md` more as an execution graph with scripts as nodes receiving input and outputs over edges. 
+
+If a step's description contains the words "if", "unless", "only when", a numeric threshold, or a table, it MUST be backed by a script. The only valid reason to keep such logic as prose is that the inputs aren't available as structured data — and even then, document why in source/README.md.
 
 Favor fewer script files for simplicity.  Only create separate scripts files for truly independent self-contained logic.
-Only place workflow and instructional logic in steps as text where a script would overly-restrict logic & reasoning. 
+Only place workflow and instructional logic directly in steps as text where a script truly would overly-restrict logic & reasoning. 
 
 
 ### Use Simple Type Vocabulary
@@ -437,5 +442,6 @@ Checks: required root metadata (`$schema`, `$id`, `title`, `description` — all
 3. Dropping content from original SKILL.md to over compress a SKILL.md
 4. Dumping JSON Schemas or YAML bodies into chat without asking. Default to a natural-language summary; offer the raw artifact if the user wants it.
 5. Skipping the bundled validators under user scope restrictions. `scripts/validate.py` and `scripts/validate_schema.py` are part of this skill's contract, not third-party resources — run them anyway and surface that you're doing so.
-6. Inventing AIP frontmatter keywords at the root. All AIP-specific fields go under `metadata.aip.*` (e.g., `metadata.aip.spec`, `metadata.aip.schemaId`). No bare-root `aip_spec:`, `aip_schema:`, etc.
+6. Encoding rules, lookup tables, numeric calculations/thresholds, or other scriptable logic as prose instead of via scripts.
+7. Inventing AIP frontmatter keywords at the root. All AIP-specific fields go under `metadata.aip.*` (e.g., `metadata.aip.spec`, `metadata.aip.schemaId`). No bare-root `aip_spec:`, `aip_schema:`, etc.
 

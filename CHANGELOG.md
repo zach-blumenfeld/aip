@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Track changes here as you make them. On release, rename this section to the new version (e.g., `[0.3] — YYYY-MM-DD`) and start a new `[Unreleased]` at the top.
 
+## [0.3a1] — 2026-05-27
+
+### Added
+- Anti-pattern: encoding rules, lookup tables, numeric calculations/thresholds, or other scriptable logic as prose instead of via scripts.
+
+### Changed
+- `SKILL.md` checklist: author skills in the current working directory (`./<skill-name>/`) instead of `/tmp`. Host agents often cannot spawn subprocesses under `/tmp` (blocking the functional-test step), and CWD is also where users expect the folder if they choose not to install. All references in steps 5–7 updated; the "Leave it as-is" branch now requires no move.
+- `SKILL.md` "Prioritize `scripts/`" Best Practice tightened in response to dogfood evidence (agents under-using scripts). Concrete trigger list (domain-specific logic, if/then/else, lookup tables, numeric calculations/thresholds, validation against fixed rules); MUST clause when a step's description contains "if", "unless", "only when", a numeric threshold, or a table; narrow escape hatch (inputs unavailable as structured data, documented in `source/README.md`).
+- AIP protocol version bumped `v0.3a0` → `v0.3a1`. All live references updated.
+
 ## [0.3a0] — 2026-05-27
 
 ### Added
