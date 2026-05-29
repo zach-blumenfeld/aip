@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a2/assets/aip-schemas/procedure.schema.json",
+  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a3/assets/aip-schemas/procedure.schema.json",
   "title": "Procedure",
   "description": "AIP schema for procedure-style Instructions: any structured procedure, workflow, or execution graph — runbooks, recipes, pipelines, multi-step playbooks. A procedure is a graph of script-backed nodes (steps) connected by inputs and outputs; conditional logic lives in `scripts/`, not in typed schema fields. Captures trigger conditions, applicability contexts, steps (linear, parallel, branching, or DAG-shaped), execution modes, integrations, and worked scenarios. Scope is the category of work (any procedure), not a specific skill.",
   "aip": {
-    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.3a2",
-    "version": "0.3a2"
+    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.3a3",
+    "version": "0.3a3"
   },
   "type": "object",
   "additionalProperties": false,

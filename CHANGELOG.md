@@ -8,6 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Track changes here as you make them. On release, rename this section to the new version (e.g., `[0.3] — YYYY-MM-DD`) and start a new `[Unreleased]` at the top.
 
+## [0.3a3] — 2026-05-28
+
+Addresses [#6](https://github.com/zach-blumenfeld/aip/issues/6) — benchmarking surfaced regressions caused by authored scripts (not the AIP format).
+
+### Changed
+- `SKILL.md` "Prioritize `scripts/`" Best Practice: softened the absolute "MUST be backed by a script" rule. Scripting is now scoped to **deterministic/mechanical** logic over structured inputs; conditionals that hinge on interpreting or judging input data should stay **prose steps**. Added a "How to Choose Between Script and Prose Steps" subsection (Script if / Do not script if) and a "When Writing Scripts" note on leanness and runtime budget (prefer a maintained library over re-implementing a heavy solver; slow scripts risk timing out).
+- `SKILL.md` functional-test step 6.4: added a **Correctness** check — run each script against the task's actual example inputs and expected outputs, not just "no errors"; logic bugs (e.g. a wrong key mapping in a conditional) only surface against real fixtures.
+- AIP protocol version bumped `v0.3a2` → `v0.3a3`. All live references updated.
+
 ## [0.3a2] — 2026-05-27
 
 ### Changed

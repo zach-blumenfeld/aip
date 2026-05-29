@@ -215,7 +215,7 @@ class TestAipSpec(unittest.TestCase):
 class TestExpectedAipSpecUrl(unittest.TestCase):
     def test_reads_skill_md_version(self):
         url = vs.expected_aip_spec_url()
-        # The aip skill's SKILL.md declares metadata.aip.version: "0.3a2"
+        # The aip skill's SKILL.md declares metadata.aip.version: "0.3a3"
         # at the time these tests were written. The assertion focuses on
         # the URL shape rather than the literal version to avoid coupling
         # the test to a moving version.
