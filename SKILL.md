@@ -296,7 +296,7 @@ script:scripts/extract.py
 
 ### Prioritize `scripts/`
 Treat the `SKILL.md` more as an execution graph with steps as nodes receiving input and outputs over edges. 
-Each step can be script or free pros. 
+Each step can be script or free prose. 
 
 Strongly consider `scripts/` when a step contains ANY of:
 - domain-specific logic
@@ -307,7 +307,7 @@ Strongly consider `scripts/` when a step contains ANY of:
 
 This ensures consistency and quality.
 
-#### How to Choose Between Script and Pros Steps
+#### How to Choose Between Script and Prose Steps
 **Script the deterministic/mechanical parts; leave data-dependent conditional/branching logic as prose steps**
 - **Script if:** A step's logic contains fixed if/then/else over structured inputs, a numeric threshold or cap, or a lookup table
 - **Do not script if:** a conditional hinges on **interpreting or judging the input** (deciding which case applies, resolving ambiguity, or mapping loosely-specified data onto a rule), prefer a **prose step** the agent reasons through.
