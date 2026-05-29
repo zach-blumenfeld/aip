@@ -295,20 +295,32 @@ script:scripts/extract.py
 ## Best Practices
 
 ### Prioritize `scripts/`
-Use `scripts/` whenever a step contains ANY of:
+Treat the `SKILL.md` more as an execution graph with steps as nodes receiving input and outputs over edges. 
+Each step can be script or free pros. 
+
+Strongly consider `scripts/` when a step contains ANY of:
 - domain-specific logic
-- if/then/else, when/unless, or "only if" rules
+- **deterministic** if/then/else, when/unless, or "only if" rules over structured inputs
 - lookup tables
 - numeric calculations, thresholds, or caps
 - validation against fixed set of rules
 
 This ensures consistency and quality.
-Treat the `SKILL.md` more as an execution graph with scripts as nodes receiving input and outputs over edges. 
 
-If a step's description contains the words "if", "unless", "only when", a numeric threshold, or a table, it MUST be backed by a script. The only valid reason to keep such logic as prose is that the inputs aren't available as structured data — and even then, document why in source/README.md.
+#### How to Choose Between Script and Pros Steps
+**Script the deterministic/mechanical parts; leave data-dependent conditional/branching logic as prose steps**
+- **Script if:** A step's logic contains fixed if/then/else over structured inputs, a numeric threshold or cap, or a lookup table
+- **Do not script if:** a conditional hinges on **interpreting or judging the input** (deciding which case applies, resolving ambiguity, or mapping loosely-specified data onto a rule), prefer a **prose step** the agent reasons through.
+
+note choices and why in source/README.md.
+
+While scripting is critical, scripting the wrong things results in brittle errors and over-restriction. 
+
+#### When Writing Scripts
+**Be lean and fast — prefer a maintained library over re-implementing a heavy algorithm (e.g. an optimization solver). You don't know the consumer's runtime budget - default to efficient; slow scripts risk timing out.**
 
 Favor fewer script files for simplicity.  Only create separate scripts files for truly independent self-contained logic.
-Only place workflow and instructional logic directly in steps as text where a script truly would overly-restrict logic & reasoning. 
+
 
 
 ### Use Simple Type Vocabulary
@@ -390,6 +402,7 @@ Checklist. Follow sequentially.
       - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
       - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
       - **Over-restriction** — compare against what agent reasoning would produce unaided. If a script-backed step stripped reasoning, nuance, or form that mattered, revise or convert back to a prose step.
+      - **Correctness** — run each script against the task's actual example inputs and expected outputs, not just "no errors". Verify it produces the right result on known cases; logic bugs (e.g. a wrong key mapping in a conditional) only surface against real fixtures.
 
       If the runtime truly cannot spawn fresh agents, test functionally yourself and tell user: *"Functional testing not conducted with fresh agents — runtime does not support fresh agent invocation"*
    5. Iterate until the body validates, every source item is classified, AND the skill passes functional test.
