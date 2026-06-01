@@ -1,14 +1,8 @@
-<table>
-  <tr>
-    <td width="200" align="center" valign="middle">
-      <img src="img/aip-logo.png" alt="aip logo" width="200" />
-    </td>
-    <td valign="middle">
-      <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>Structured Skills for Performance &amp; Governance</em></p>
-    </td>
-  </tr>
-</table>
+<img src="img/aip-logo.png" alt="aip logo" width="200" align="left" hspace="25" />
+<br /><br />
+<h3>AIP — Agent Instruction Protocol</h3>
+<em>Structured Skills for Performance &amp; Governance</em>
+<br clear="left" />
 
 ## What Is AIP?
 
