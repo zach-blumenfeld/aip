@@ -1,7 +1,7 @@
 <table>
   <tr>
-    <td width="140" align="center" valign="middle">
-      <img src="img/aip-logo.png" alt="aip logo" width="120" />
+    <td width="200" align="center" valign="middle">
+      <img src="img/aip-logo.png" alt="aip logo" width="200" />
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
