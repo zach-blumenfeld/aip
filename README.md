@@ -1,7 +1,7 @@
 <table>
   <tr>
-    <td width="140" align="center" valign="middle">
-      <img src="img/aip.png" alt="aip logo" width="120" />
+    <td width="200" align="center" valign="middle">
+      <img src="img/aip-logo.png" alt="aip logo" width="200" />
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
@@ -12,14 +12,14 @@
 
 ## What Is AIP?
 
-AIP is an extension to the [Agent Skills Spec](https://agentskills.io/home). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/).
+AIP is an extension to the [Agent Skills Spec](https://agentskills.io/home). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/). It models skills as an execution graph. 
 
 ## Why Use AIP?
 
 AIP provides improved performance and stronger governance for autonomous agent skills.
 
 **Performance**
-- **Structured skills outperform freeform** and AIP enforced this authoring discipline. AIP requires schema-validated commitments to structured YAML with triggers, steps, decisions, tools, and anti-patterns. Early A/B evidence in [`zach-blumenfeld/aip-test`](https://github.com/zach-blumenfeld/aip-test) suggests the lift is biggest on under-structured markdown skills (tables and ASCII diagrams parsed into typed YAML).
+- **Structured skills outperform freeform** and AIP enforced this authoring discipline. AIP requires schema-validated commitments to structured YAML with triggers, steps with script-backed nodes and I/O edges, scenarios, integrations, and anti-patterns. Early A/B evidence in [`zach-blumenfeld/aip-test`](https://github.com/zach-blumenfeld/aip-test) suggests the lift is biggest on under-structured markdown skills (tables and ASCII diagrams parsed into typed YAML).
 - **Concrete tuning surface.** Schemas give a structured place to iterate when running evals — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
 - **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
 
@@ -44,13 +44,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone --depth 1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.2`):
+**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.3a3`):
 
 ```bash
-git clone --depth 1 --branch v0.2 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
+git clone --depth 1 --branch v0.3a3 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-Replace `v0.2` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
+Replace `v0.3a3` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
 
 For **user-global install** or **other agents**, change the target directory:
 
@@ -70,7 +70,7 @@ For *consuming* the resulting skill, the opposite holds: AIP's structure is what
 The AIP skill exposes three top-level procedures:
 
 1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into a YAML body validated against a schema. Details in [`SKILL.md` § Authoring an Agent Skill](SKILL.md#authoring-an-agent-skill).
-2. **Author or refine an AIP schema** — the agent walks through schema design, applying the permissive-by-default rule. Details in [`references/author-schema.md`](references/author-schema.md).
+2. **Author or refine an AIP schema** — the agent walks through schema design, applying execution-graph framing and permissive-on-prose defaults. Details in [`references/author-schema.md`](references/author-schema.md).
 3. **Validate an AIP skill or schema** — run the bundled scripts directly, or let the agent run them as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill or Schema](SKILL.md#validating-an-aip-skill-or-schema).
 
 ## AIP Skill Spec
@@ -79,7 +79,7 @@ The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL
 
 ## AIP Schema Spec
 
-The conventions every AIP schema must follow live in [`references/author-schema.md`](references/author-schema.md). Hard requirements (validated by `validate_schema.py`) cover JSON Schema conformance, AIP namespace metadata, strict `additionalProperties: false`, the universal `purpose` + `trigger_when` floor, and JSON Schema reserved-keyword avoidance. Best practices cover category scoping, permissive defaults, and file naming.
+The conventions every AIP schema must follow live in [`references/author-schema.md`](references/author-schema.md). Hard requirements (validated by `validate_schema.py`) cover JSON Schema conformance, AIP namespace metadata, strict `additionalProperties: false`, the universal `purpose` + `trigger_when` floor, and JSON Schema reserved-keyword avoidance. Best practices cover category scoping, designing for execution graphs, permissive-on-prose defaults, and file naming.
 
 ## Validation Scripts
 
@@ -98,10 +98,10 @@ Both emit JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, 
 
 ### Bumping the AIP protocol version
 
-The AIP protocol version (currently `v0.2`) is referenced in **multiple places** that must stay in sync. When bumping (e.g., `v0.2` → `v0.3`):
+The AIP protocol version (currently `v0.3a3`) is referenced in **multiple places** that must stay in sync. When bumping (e.g., `v0.3a3` → `v0.3`):
 
 1. **`SKILL.md` frontmatter** — `metadata.aip.version`.
-2. **`SKILL.md` body** — the "Current AIP version" anchor under `## AIP Specification`, the "Currently:" URL under `##### metadata.aip.spec`, and every example URL (frontmatter examples, YAML examples, worked examples).
+2. **`SKILL.md` body** — the "Currently:" URL under `##### metadata.aip.spec`, and every example URL (frontmatter examples, YAML examples, worked examples).
 3. **`assets/base.schema.json`** — the literal `aip.spec` URL.
 4. **`README.md`** — install commands and any version references.
 5. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.

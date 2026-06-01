@@ -37,7 +37,12 @@ Beyond the base schema, every AIP schema must also satisfy:
   - Bad names: `search-first`, `friday-deploy-check` — those are skills *built on* a schema, not schemas themselves.
   - If the user's content fits an existing schema, prefer
   reuse. If it's genuinely a new category, scope the new schema as broadly as that category warrants — one schema should support many related skills.
-- **Default to permissive** — required-minimum core, freeform-text leaves. Type a field only when an agent or a governance query would iterate or filter by a sub-field. See [SKILL.md § Selective Typing](../SKILL.md#selective-typing) for the rule and the four field shapes. Over-typing the first draft is the most common authoring failure.
+- **Design for execution graphs.** Per [SKILL.md § Prioritize `scripts/`](../SKILL.md#prioritize-scripts), a skill is a graph of script-backed nodes connected by inputs and outputs. Schemas should encode that graph shape:
+  - **Type the structure** — nodes (steps), edges (dependencies, inputs/outputs), and script references. This is the typed surface scripts and governance queries iterate over.
+  - **Leave prose freeform** — only on nodes where the instruction cannot be expressed as a script.
+  - **Don't type logic** — decision tables, scenario branches, and conditional `{signal, action}` records belong in `scripts/`, not as typed schema fields. If an agent would iterate a field at runtime to pick a branch, that's a script.
+  - **Use the AIP type vocabulary for edge types.** When a schema declares a `type` field on an input or output (or anywhere else a type string is needed), follow the small vocabulary in [SKILL.md § Use Simple Type Vocabulary](../SKILL.md#use-simple-type-vocabulary). Not machine-enforced; detailed type checking belongs in the backing script.
+- **Default to permissive on prose, opinionated on graph shape.** Required-minimum core, freeform-text leaves. The most common authoring failure is over-typing the first draft — re-encoding prose as records that no script will ever read.
 - AIP schema files should be named with the convention: `<lowercase kebab-case of title field>.schema.json`
 - New AIP schemas  should be distinct from existing schemas in [`assets/aip-schemas`](../assets/aip-schemas)
 
@@ -58,7 +63,7 @@ Follow these steps sequentially
       - None of the above → propose a placeholder based on the user's stated org/handle.
    - `aip.version`: propose `0.1` for new schemas; bump from the previous version when refining. This is the *schema's own* version — not the AIP protocol version, which is declared by `aip.spec` (the URL to AIP spec version this schema targets).
    - `aip.tag`: propose omitting; include only when a discovery hint clearly helps.
-5. Identify the core structure: main fields, required vs optional, etc. Apply [SKILL.md's Selective Typing rule](../SKILL.md#selective-typing) to keep the floor permissive — type only what an agent or query would iterate by; leave the rest as prose.
+5. Identify the graph structure the schema must encode: what are the nodes (steps), what scripts back them, what inputs/outputs flow between them. Type those. Keep prose-on-nodes freeform. Push logic (decisions, scenarios, branching) into `scripts/` rather than typed fields. See [AIP Schema Best Practices](#aip-schema-best-practices).
 6. Write schema file to a temporary location. `<lowercase kebab-case of title field>.schema.json`
 7. Validate:
    1. Run `uv run scripts/validate_schema.py <draft>` 
