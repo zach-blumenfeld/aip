@@ -173,7 +173,7 @@ metadata:
 
 The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the schema referenced by `metadata.aip.schemaId`.
 
-Example, the bundled `examples/billing-support` skill. Every step declares its `kind`; the first step is the start; edges are `inputs_to` by name; the router branches server-side on the value the client chose:
+Example (pared down for illustration — real skills typically carry more steps and richer detail), from the bundled `examples/billing-support` skill. The first step is the start; the router branches server-side on the value the client chose:
 
 ````markdown
 ```yaml
@@ -345,7 +345,7 @@ Favor fewer script files for simplicity.  Only create separate scripts files for
 
 ### Use Simple Type Vocabulary
 
-Use a small, simple vocabulary for step input types. The server compiles each step's `inputs` to a JSON Schema and validates the client's input against it at runtime, so these are enforced, not advisory.
+Use a small, simple vocabulary for step input types.  Only expand where absolutely necessary. The server compiles each step's `inputs` to a JSON Schema and validates the client's input against it at runtime, so these are enforced, not advisory.
 
 - `string`
 - `integer`
