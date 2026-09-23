@@ -19,6 +19,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, TypeAlias
 import copy
+import json
+import subprocess
+import sys
 
 from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
 
@@ -80,19 +83,14 @@ class Meta:
 
 class Resource(ABC):
     """
-    A markdown file that belongs to an AIP package, addressed relative to the package root
-    as `<aip_id>/<asset|reference>/<name>.md`. Bodies are read from disk by ResourceLoader.
+    A file that belongs to an AIP package, addressed relative to the package root as
+    `<aip_id>/<asset|reference>/<name>`. Bodies are read from disk by ResourceLoader.
     """
     uri: Path
     description: str
 
     def __init__(self, aip_id: str, name: str, description: str):
-        path = Path(name)
-        if not path.suffix:
-            path = path.with_suffix(".md")
-        if path.suffix.lower() != ".md":
-            raise ValueError(f"{type(self).__name__} {name!r} must be a markdown (.md) file")
-        self.uri = Path(aip_id, self._get_type(), path)
+        self.uri = Path(aip_id, self._get_type(), name)
         self.description = description
 
     @property
@@ -120,9 +118,15 @@ class Reference(Resource):
         return "reference"
 
 
+class Script(Resource):
+    """An executable python script in the package, run by an Execution step."""
+    def _get_type(self) -> str:
+        return "script"
+
+
 class ResourceLoader:
     """
-    Reads resource markdown files from disk, relative to a package root, and caches them.
+    Reads resource files from disk, relative to a package root, and caches them.
     The single place to add size limits or non-file backends later.
 
     Assets are loaded eagerly by steps at render time. References are loaded on demand
@@ -139,20 +143,21 @@ class ResourceLoader:
             raise ValueError(f"Resource uri {uri!s} escapes package root {self.root}")
         return path
 
-    def load_uri(self, uri: Path | str) -> str:
+    def load_uri(self, uri: Path | str, fresh: bool = False) -> str:
+        """Read a resource body. `fresh=True` bypasses the cache and re-reads from disk."""
         uri = Path(uri)
-        if uri not in self._cache:
+        if fresh or uri not in self._cache:
             path = self.path(uri)
             if not path.is_file():
                 raise FileNotFoundError(f"Resource {uri!s} not found at {path}")
             self._cache[uri] = path.read_text(encoding="utf-8")
         return self._cache[uri]
 
-    def load(self, resource: Resource) -> str:
-        return self.load_uri(resource.uri)
+    def load(self, resource: Resource, fresh: bool = False) -> str:
+        return self.load_uri(resource.uri, fresh=fresh)
 
-    def load_all(self, resources: List[Resource]) -> Dict[str, str]:
-        return {r.name: self.load(r) for r in resources}
+    def load_all(self, resources: List[Resource], fresh: bool = False) -> Dict[str, str]:
+        return {r.name: self.load(r, fresh=fresh) for r in resources}
 
 
 # ---------------------------------------------------------------------------- steps
@@ -199,33 +204,23 @@ class Decision(BaseStep):
     """
     Runs a SystemOne (TypeSafe / Jev) decision and hands the typed result to the next step.
 
-    Framing lives in each question's `instructions`, per TypeSafe guidance: state is the
-    content being evaluated, questions carry the criteria. Refer to injected assets by
-    key, e.g. "Using assets.refund_policy, is this request eligible?".
+    State is the content being evaluated; the criteria live in each question's
+    `instructions`, written by the task author. No assets and no framing are injected.
 
     inputsTo: the step that receives this step's output
-    tasks: questions keyed by name; answers come back under the same names
-    assets: eager resources injected into the payload under `assets`
+    questions: questions keyed by name; answers come back under the same names
     client: optional injected TypeSafe client (tests, connection reuse); otherwise one
             is opened per invoke using TYPESAFE_API_KEY from the environment
-    include_framing: off by default. TypeSafe advises keeping instructions out of state;
-            when on, Meta.framing() is added under a `context` key.
     """
     inputsTo: BaseStep | EndStep | None = None
-    tasks: Dict[str, DecisionQuestion] = field(default_factory=dict)
-    assets: List[Asset] = field(default_factory=list)
+    questions: Dict[str, DecisionQuestion] = field(default_factory=dict)
     client: TypeSafeClient | None = None
 
     def render(self) -> Dict[str, Any]:
-        """Pure projection of state + assets into the JSON `state` sent to Jev."""
-        payload: Dict[str, Any] = {}
-        if framing := self.framing():
-            payload["context"] = framing
-        payload["currentState"] = self.state.currentState
+        """Pure projection of state into the JSON `state` sent to Jev."""
+        payload: Dict[str, Any] = {"currentState": self.state.currentState}
         if self.state.history:
             payload["history"] = self.state.history
-        if self.assets:
-            payload["assets"] = self._require_loader().load_all(self.assets)
         return payload
 
     def _invoke(self) -> Dict[str, Any]:
@@ -236,14 +231,14 @@ class Decision(BaseStep):
              "answers": {name: {"type": "noul"|"choice"|"score", ...}}}
         Thresholding on confidence is the client's job, per the protocol.
         """
-        if not self.tasks:
-            raise ValueError("Decision step has no tasks to ask")
+        if not self.questions:
+            raise ValueError("Decision step has no questions to ask")
         payload = self.render()
         if self.client is not None:
-            result: SystemOneResponse = self.client.system_one(state=payload, questions=self.tasks)
+            result: SystemOneResponse = self.client.system_one(state=payload, questions=self.questions)
         else:
             with TypeSafeClient() as client:
-                result = client.system_one(state=payload, questions=self.tasks)
+                result = client.system_one(state=payload, questions=self.questions)
         return result.model_dump(mode="json")
 
 
@@ -296,18 +291,62 @@ class ClientTask(BaseStep):
 class Execution(BaseStep):
     """
     Executes an action rather than making a decision. Analogous to a tool call. For now
-    a python script path; MCP and endpoints can be added later.
+    a python script in the package; MCP and endpoints can be added later.
+
+    Script contract:
+      stdin   one JSON object: {"currentState": {...}, "assets": {name: content}}
+      stdout  one JSON object, which becomes the next step's currentState
+              (empty stdout is treated as {})
+      stderr  diagnostics; surfaced in the error when the exit code is non-zero
+    The script runs with the project's interpreter, cwd set to the script's directory.
 
     inputsTo: the step that receives this step's output
-    assets: constant inputs the script always receives
-    script: path to the python script to execute
+    script: the Script resource to run
+    assets: constant inputs the script always receives, e.g. a JSON config. Re-read from
+            disk on every invoke so edits are picked up.
+    timeout: seconds before the script is killed; None waits forever
     """
     inputsTo: BaseStep | EndStep | None = None
+    script: Script
     assets: List[Asset] = field(default_factory=list)
-    script: str
+    timeout: float | None = 60.0
+
+    def render(self) -> Dict[str, Any]:
+        """Pure projection of state + assets into the script's stdin payload."""
+        payload: Dict[str, Any] = {"currentState": self.state.currentState}
+        if self.assets:
+            payload["assets"] = self._require_loader().load_all(self.assets, fresh=True)
+        return payload
 
     def _invoke(self) -> Dict[str, Any]:
-        raise NotImplementedError("Execution invocation is not implemented yet")
+        loader = self._require_loader()
+        path = loader.path(self.script.uri)
+        if not path.is_file():
+            raise FileNotFoundError(f"Script {self.script.uri!s} not found at {path}")
+
+        proc = subprocess.run(
+            [sys.executable, str(path)],
+            input=json.dumps(self.render()),
+            capture_output=True,
+            text=True,
+            cwd=path.parent,
+            timeout=self.timeout,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Script {self.script.uri!s} exited with {proc.returncode}:\n{proc.stderr.strip()}"
+            )
+
+        out = proc.stdout.strip()
+        if not out:
+            return {}
+        try:
+            result = json.loads(out)
+        except json.JSONDecodeError as err:
+            raise RuntimeError(f"Script {self.script.uri!s} did not write JSON to stdout: {err}\n{out[:500]}") from err
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Script {self.script.uri!s} must write a JSON object, got {type(result).__name__}")
+        return result
 
 
 @dataclass(kw_only=True)
