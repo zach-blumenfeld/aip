@@ -1,11 +1,23 @@
 [project]
 name = "aip"
 version = "0.1.0"
-description = "Add your description here"
+description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
     "jsonschema>=4.26.0",
+    "pydantic>=2.11",
     "pyyaml>=6.0.3",
     "typesafe-sdk>=0.7.1",
 ]
+
+[project.scripts]
+aip = "aip.client.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aip"]

@@ -45,13 +45,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone --depth 1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.3a3`):
+**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.4a0`):
 
 ```bash
-git clone --depth 1 --branch v0.3a3 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
+git clone --depth 1 --branch v0.4a0 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-Replace `v0.3a3` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
+Replace `v0.4a0` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
 
 For **user-global install** or **other agents**, change the target directory:
 
@@ -76,39 +76,38 @@ The AIP skill exposes three top-level procedures:
 
 ## AIP Skill Spec
 
-The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It extends the Agent Skills directory layout with a `source/` directory holding the bundled schema, requires a fenced YAML body, and adds two AIP-namespaced frontmatter fields (`metadata.aip.spec`, `metadata.aip.schemaId`).
+The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is an optional prose preamble followed by exactly one fenced YAML block, and adds one frontmatter key, `metadata.aip-version`.
 
-## AIP Schema Spec
+## The Procedure Format
 
-The conventions every AIP schema must follow live in [`references/author-schema.md`](references/author-schema.md). Hard requirements (validated by `validate_schema.py`) cover JSON Schema conformance, AIP namespace metadata, strict `additionalProperties: false`, the universal `purpose` + `trigger_when` floor, and JSON Schema reserved-keyword avoidance. Best practices cover category scoping, designing for execution graphs, permissive-on-prose defaults, and file naming.
+There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `uv run aip schema --write assets/procedure.schema.json`; a test fails if it drifts. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
 
-## Validation Scripts
-
-Two Python scripts under `scripts/`, run via `uv run` — no install step, no virtualenv:
+## Validation
 
 ```bash
-uv run scripts/validate.py <path/to/skill-folder>
-uv run scripts/validate_schema.py <path/to/schema.json>
+uv run scripts/validate.py <path/to/skill-folder>   # from a plain git clone, no install
+uv run aip validate <path/to/skill-folder>           # with the package installed
 ```
 
-`validate.py` validates an AIP skill end-to-end: frontmatter (including Agent Skills format rules and AIP-namespace fields), folder structure (`source/` with a bundled `*.schema.json`), AIP-compliance of the bundled schema, body fence shape, body-against-schema. `validate_schema.py` validates a JSON Schema against AIP conventions in isolation.
+Both run the same checks: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, and every referenced asset, reference, and script present on disk.
 
-Both emit JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error; warnings are advisory.
+Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
 
 ## Development & Contributing
 
 ### Bumping the AIP protocol version
 
-The AIP protocol version (currently `v0.3a3`) is referenced in **multiple places** that must stay in sync. When bumping (e.g., `v0.3a3` → `v0.3`):
+The AIP format version (currently `0.4a0`) is referenced in **multiple places** that must stay in sync. When bumping:
 
-1. **`SKILL.md` frontmatter** — `metadata.aip.version`.
-2. **`SKILL.md` body** — the "Currently:" URL under `##### metadata.aip.spec`, and every example URL (frontmatter examples, YAML examples, worked examples).
-3. **`assets/base.schema.json`** — the literal `aip.spec` URL.
-4. **`README.md`** — install commands and any version references.
-5. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.
-6. **Git tag** — create the `v<X>` tag after the version-bump commit lands.
+1. **`src/aip/spec/models.py`** — `FORMAT_VERSION`. The validator rejects skills whose `metadata.aip-version` differs from it.
+2. **`assets/procedure.schema.json`** — regenerate with `uv run aip schema --write assets/procedure.schema.json`.
+3. **`SKILL.md`** — the frontmatter version and every example that shows `metadata.aip-version`.
+4. **`examples/`** — each example skill's `metadata.aip-version`.
+5. **`README.md`** — install commands and any version references.
+6. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.
+7. **Git tag** — create the `v<X>` tag after the version-bump commit lands.
 
-Drift between any of these is caught automatically: `validate.py` and `validate_schema.py` read the AIP version from `SKILL.md`'s frontmatter and require each artifact's `aip.spec` to match. Mismatches surface as `aip_spec_mismatch`.
+Drift is caught automatically: the schema-sync test fails if the committed schema is stale, and validation of the bundled example fails on an `aip_version_mismatch`.
 
 ### Changelog
 

@@ -1,0 +1,625 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.4a0/assets/procedure.schema.json",
+  "title": "Procedure",
+  "description": "An execution graph of typed steps run by an AIP server with the client in the loop. Step kinds are `decision` (SystemOne questions answered by a structured decision model), `execution` (a script under scripts/), `client_task` (templated work the client performs itself), `router` (server-side branching on a value the client chose), and `end` (the shape of the final state). The first step in `steps` is the start. Edges are `inputs_to` by step name. Every runnable step declares the input shape it accepts; the server validates the client's input against it before running the step.",
+  "aip": {
+    "spec": "https://github.com/zach-blumenfeld/aip/tree/v0.4a0",
+    "version": "0.4a0"
+  },
+  "$defs": {
+    "ChoiceQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "choice",
+          "description": "Pick one label from a set.",
+          "title": "Type",
+          "type": "string"
+        },
+        "instructions": {
+          "description": "What to pick between and how to judge. The answer is the most likely label plus the full probability distribution; it collapses to the label under the question name.",
+          "title": "Instructions",
+          "type": "string"
+        },
+        "criteria": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "Label to description. Null when the label is self-explanatory. Router branches keyed on this question use these labels.",
+          "minProperties": 2,
+          "title": "Criteria",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "instructions",
+        "criteria"
+      ],
+      "title": "ChoiceQuestion",
+      "type": "object"
+    },
+    "ClientTaskStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "client_task",
+          "description": "The client performs the work itself: generation, synthesis, reasoning.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "description": "What the client is asked to do. One line; the template carries the detail.",
+          "title": "Description",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "The input shape this step accepts from the client. Every listed name is required in the posted input; extra keys pass through untouched so upstream state can travel down the graph.",
+          "items": {
+            "$ref": "#/$defs/IOItem"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "template": {
+          "description": "The task template, rendered with `{key}` placeholders from the input, `{assets[name]}` for injected assets, and `{meta.name}` for the skill name. The client performs the task and posts structured JSON matching the next step's inputs.",
+          "pattern": "^assets/.+",
+          "title": "Template",
+          "type": "string"
+        },
+        "assets": {
+          "description": "Extra assets available to the template as `{assets[name]}`, where name is the file stem.",
+          "items": {
+            "description": "Path under `assets/`, relative to the skill folder. Assets are eager: their content is injected on every invoke.",
+            "pattern": "^assets/.+",
+            "type": "string"
+          },
+          "title": "Assets",
+          "type": "array"
+        },
+        "references": {
+          "description": "Documents the client may load on demand while doing the task.",
+          "items": {
+            "$ref": "#/$defs/Reference"
+          },
+          "title": "References",
+          "type": "array"
+        },
+        "framing": {
+          "default": true,
+          "description": "Prepend the AIP system framing (which workflow this is, how to read the state) to the rendered task.",
+          "title": "Framing",
+          "type": "boolean"
+        },
+        "inputs_to": {
+          "description": "The step that receives this step's output.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Inputs To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "description",
+        "inputs",
+        "template",
+        "inputs_to"
+      ],
+      "title": "ClientTaskStep",
+      "type": "object"
+    },
+    "DataType": {
+      "description": "AIP type vocabulary. Machine-enforced at runtime: the server compiles each step's\n`inputs` to a JSON Schema and validates the client's input against it.",
+      "enum": [
+        "string",
+        "integer",
+        "float",
+        "boolean",
+        "object",
+        "list[*]"
+      ],
+      "title": "DataType",
+      "type": "string"
+    },
+    "DecisionStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "decision",
+          "description": "A structured decision model answers typed questions about the input.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "description": "What this decision settles. One line.",
+          "title": "Description",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "The input shape this step accepts from the client. Every listed name is required in the posted input; extra keys pass through untouched so upstream state can travel down the graph.",
+          "items": {
+            "$ref": "#/$defs/IOItem"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "questions": {
+          "description": "Questions keyed by name. Answers come back under the same names and, once collapsed, become keys in the suggested input for the next step.",
+          "minProperties": 1,
+          "patternProperties": {
+            "^[A-Za-z_][A-Za-z0-9_]*$": {
+              "description": "One SystemOne question. `instructions` carry the evaluation criteria; the step's input is the content being evaluated. Passed through to the decision model as-is.",
+              "discriminator": {
+                "mapping": {
+                  "choice": "#/$defs/ChoiceQuestion",
+                  "noul": "#/$defs/NoulQuestion",
+                  "score": "#/$defs/ScoreQuestion"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/NoulQuestion"
+                },
+                {
+                  "$ref": "#/$defs/ChoiceQuestion"
+                },
+                {
+                  "$ref": "#/$defs/ScoreQuestion"
+                }
+              ]
+            }
+          },
+          "title": "Questions",
+          "type": "object"
+        },
+        "thresholds": {
+          "additionalProperties": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "description": "Per-question review thresholds, keyed by question name. For `noul`: flag when the probability is within this margin of 0.5. For `choice` and `score`: flag when the model's confidence is below this value. The client may override per call; it makes the final call on flagged answers.",
+          "title": "Thresholds",
+          "type": "object"
+        },
+        "inputs_to": {
+          "description": "The step that receives this step's output.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Inputs To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "description",
+        "inputs",
+        "questions",
+        "inputs_to"
+      ],
+      "title": "DecisionStep",
+      "type": "object"
+    },
+    "EndStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "end",
+          "description": "Terminal node.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the final state represents. One line.",
+          "title": "Description"
+        },
+        "inputs": {
+          "description": "The shape of the final state the client receives when the procedure completes.",
+          "items": {
+            "$ref": "#/$defs/IOItem"
+          },
+          "title": "Inputs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "inputs"
+      ],
+      "title": "EndStep",
+      "type": "object"
+    },
+    "ExecutionStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "execution",
+          "description": "A script runs. Analogous to a tool call.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "description": "What the script does. One line; the script is the source of truth.",
+          "title": "Description",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "The input shape this step accepts from the client. Every listed name is required in the posted input; extra keys pass through untouched so upstream state can travel down the graph.",
+          "items": {
+            "$ref": "#/$defs/IOItem"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "script": {
+          "description": "Path under `scripts/`, relative to the skill folder. Receives one JSON object on stdin ({currentState, assets, expects}) and writes one JSON object to stdout, which becomes the result.",
+          "pattern": "^scripts/.+",
+          "title": "Script",
+          "type": "string"
+        },
+        "assets": {
+          "description": "Constant inputs the script always receives, such as a config file. Re-read from disk on every invoke.",
+          "items": {
+            "description": "Path under `assets/`, relative to the skill folder. Assets are eager: their content is injected on every invoke.",
+            "pattern": "^assets/.+",
+            "type": "string"
+          },
+          "title": "Assets",
+          "type": "array"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds before the script is killed. Defaults to the server's setting when omitted.",
+          "title": "Timeout"
+        },
+        "inputs_to": {
+          "description": "The step that receives this step's output.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Inputs To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "description",
+        "inputs",
+        "script",
+        "inputs_to"
+      ],
+      "title": "ExecutionStep",
+      "type": "object"
+    },
+    "IOItem": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Key in the input object the client posts to this step. Decision answers land under their question name, so a downstream step that consumes an answer declares an input of the same name.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/DataType",
+          "description": "Type from the AIP vocabulary. Enforced when the client posts to this step."
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line summary of what this value is. Optional but recommended: it makes the graph readable without opening the backing script or template.",
+          "title": "Description"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "IOItem",
+      "type": "object"
+    },
+    "NoulCriteria": {
+      "additionalProperties": false,
+      "properties": {
+        "true": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What counts as a yes answer.",
+          "title": "True"
+        },
+        "false": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What counts as a no answer.",
+          "title": "False"
+        }
+      },
+      "title": "NoulCriteria",
+      "type": "object"
+    },
+    "NoulQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "noul",
+          "description": "A yes/no question.",
+          "title": "Type",
+          "type": "string"
+        },
+        "instructions": {
+          "description": "A yes/no question or statement about the input. The answer is a probability of yes/true; it collapses to a boolean under the question name.",
+          "title": "Instructions",
+          "type": "string"
+        },
+        "criteria": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoulCriteria"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional sharpening of what counts as yes and no."
+        }
+      },
+      "required": [
+        "type",
+        "instructions"
+      ],
+      "title": "NoulQuestion",
+      "type": "object"
+    },
+    "Reference": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Path under `references/`, relative to the skill folder. References are lazy: the client receives the path and description and fetches the body only if it decides it needs it.",
+          "pattern": "^references/.+",
+          "title": "Path",
+          "type": "string"
+        },
+        "description": {
+          "description": "What the reference contains and when to pull it. This is all the client sees before deciding to load it.",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "description"
+      ],
+      "title": "Reference",
+      "type": "object"
+    },
+    "RouterStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "router",
+          "description": "Server-side branch on a value the client chose. Calls no model, has no endpoint.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "description": "What the branch decides. One line.",
+          "title": "Description",
+          "type": "string"
+        },
+        "branch_on": {
+          "description": "Key in the client's posted input whose value selects the branch. Typically a decision question name or an input produced by an execution or client task.",
+          "minLength": 1,
+          "title": "Branch On",
+          "type": "string"
+        },
+        "branches": {
+          "additionalProperties": {
+            "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "description": "Value to step name. The server resolves this after the client posts; the client never traverses. A value with no branch is a validation error.",
+          "minProperties": 2,
+          "title": "Branches",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "description",
+        "branch_on",
+        "branches"
+      ],
+      "title": "RouterStep",
+      "type": "object"
+    },
+    "ScoreQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "score",
+          "description": "Rate the input on an ordered rubric.",
+          "title": "Type",
+          "type": "string"
+        },
+        "instructions": {
+          "description": "What is being rated. The answer is a probability-weighted position on the rubric; it collapses to the most likely integer level under the question name.",
+          "title": "Instructions",
+          "type": "string"
+        },
+        "criteria": {
+          "description": "Ordered rubric, lowest level first. Level numbers are the list positions starting at 0.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Criteria",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "instructions",
+        "criteria"
+      ],
+      "title": "ScoreQuestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "purpose": {
+      "description": "What the procedure encapsulates as a coherent unit of work: the scope it covers and what it adds beyond general agent knowledge. One short paragraph.",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "trigger_when": {
+      "description": "Conditions under which the agent should consider this skill. Mixed granularity expected: immediate invocation triggers alongside broader applicability contexts belong in the same list.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Trigger When",
+      "type": "array"
+    },
+    "do_not_use_when": {
+      "description": "Conditions under which the agent should NOT use this skill: explicit non-purposes that pair with trigger_when to sharpen activation.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Do Not Use When",
+      "type": "array"
+    },
+    "steps": {
+      "description": "The nodes of the execution graph. The first step is the start and must be runnable (decision, execution, or client_task). Exactly one step has kind `end`. Every runnable step names the node that receives its output via `inputs_to`; routers name theirs via `branches`. The validator checks that names are unique, every reference resolves, every step is reachable from the start, every step can reach the end, and every referenced asset, reference, and script exists on disk.",
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "client_task": "#/$defs/ClientTaskStep",
+            "decision": "#/$defs/DecisionStep",
+            "end": "#/$defs/EndStep",
+            "execution": "#/$defs/ExecutionStep",
+            "router": "#/$defs/RouterStep"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/DecisionStep"
+          },
+          {
+            "$ref": "#/$defs/ExecutionStep"
+          },
+          {
+            "$ref": "#/$defs/ClientTaskStep"
+          },
+          {
+            "$ref": "#/$defs/RouterStep"
+          },
+          {
+            "$ref": "#/$defs/EndStep"
+          }
+        ]
+      },
+      "minItems": 2,
+      "title": "Steps",
+      "type": "array"
+    },
+    "anti_patterns": {
+      "description": "Common mistakes the procedure steers the agent away from. Concrete corrections to errors the agent would otherwise make.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Anti Patterns",
+      "type": "array"
+    }
+  },
+  "required": [
+    "purpose",
+    "trigger_when",
+    "steps"
+  ],
+  "type": "object"
+}

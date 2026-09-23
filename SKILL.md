@@ -3,7 +3,7 @@ name: aip
 description: Create skills as governance-ready AIP Instructions — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems), and drafting/refining the JSON Schemas skills validate against. Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
 metadata:
   aip:
-    version: "0.3a3"
+    version: "0.4a0"
 ---
 
 # AIP — Agent Instruction Protocol
@@ -120,13 +120,13 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ##### `metadata.aip.spec` *(AIP-specific)*
 
-URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.3a3`
+URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.4a0`
 
 ##### `metadata.aip.schemaId` *(AIP-specific)*
 
 URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
 
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a3/assets/aip-schemas/procedure.schema.json`
+**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.4a0/assets/aip-schemas/procedure.schema.json`
 
 ##### `license`
 
@@ -156,8 +156,8 @@ License name or short reference to a bundled license file. Keep it short.
 ```yaml
 metadata:
   aip:
-    spec: https://github.com/zach-blumenfeld/aip/tree/v0.3a3
-    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.3a3/assets/aip-schemas/procedure.schema.json
+    spec: https://github.com/zach-blumenfeld/aip/tree/v0.4a0
+    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.4a0/assets/aip-schemas/procedure.schema.json
   author: example-org
   version: "1.0"
 ```
@@ -173,72 +173,92 @@ metadata:
 
 The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the schema referenced by `metadata.aip.schemaId`.
 
-Example (pared down for illustration — real skills typically carry more steps and richer detail):
+Example, the bundled `examples/billing-support` skill. Every step declares its `kind`; the first step is the start; edges are `inputs_to` by name; the router branches server-side on the value the client chose:
 
 ````markdown
 ```yaml
 purpose: >
-  Research existing tools before writing custom code; recommend reuse or
-  extension wherever an existing solution fits.
+  Turn an inbound billing message into either a tier-2 ticket or a drafted reply.
+  A structured decision model classifies the message; the client confirms low-confidence
+  calls; a script opens the ticket; the client drafts the reply against the refund policy.
 
 trigger_when:
-  - Starting a new feature that likely has existing solutions.
-  - Adding a dependency or integration.
-  - User asks "add X functionality" and you're about to write code.
+  - A customer message about a charge, invoice, refund, or subscription arrives.
+  - Support asks to triage a billing complaint.
+
+do_not_use_when:
+  - The message is about product bugs or feature requests rather than billing.
 
 steps:
-  - name: need-analysis
-    description: Define what functionality is needed; identify language and framework constraints.
-    outputs:
-      - name: need-spec
-        type: object
-  - name: parallel-search
-    description: Search npm/PyPI, MCP servers, available skills, and GitHub in parallel.
-    parallel: true
+  - name: triage
+    kind: decision
+    description: Classify whether the message is about billing and how upset the customer is.
     inputs:
-      - name: need-spec
-        type: object
-    outputs:
-      - name: candidates
-        type: list[object]
-  - name: evaluate
-    description: Score candidates on functionality, maintenance, community, docs, license, and dependencies.
-    script: scripts/evaluate.py
+      - name: message
+        type: string
+        description: The customer's message, verbatim.
+    questions:
+      billing:
+        type: noul
+        instructions: Is this message about a charge, invoice, refund, or subscription payment?
+      tone:
+        type: choice
+        instructions: How upset is the customer? Angry means explicit frustration, threats to cancel, or demands.
+        criteria:
+          angry: Frustrated, demanding, or threatening to leave.
+          calm: Neutral or polite, asking a question.
+    thresholds:
+      billing: 0.15
+      tone: 0.6
+    inputs_to: by-tone
+
+  - name: by-tone
+    kind: router
+    description: Angry customers go to a human queue; calm ones get a drafted reply.
+    branch_on: tone
+    branches:
+      angry: escalate
+      calm: reply
+
+  - name: escalate
+    kind: execution
+    description: Open a tier-2 ticket for the message.
     inputs:
-      - name: candidates
-        type: list[object]
-    outputs:
-      - name: scored-candidates
-        type: list[object]
-  - name: decide
-    description: >
-      Pick Adopt / Extend / Compose / Build. Weigh score, license, maintenance
-      signals, and how heavily the candidate would need wrapping to fit the need.
+      - name: message
+        type: string
+      - name: tone
+        type: string
+    script: scripts/escalate.py
+    assets:
+      - assets/config.json
+    inputs_to: end
+
+  - name: reply
+    kind: client_task
+    description: Draft a calm reply grounded in the refund policy.
     inputs:
-      - name: scored-candidates
-        type: list[object]
-    outputs:
-      - name: recommendation
-        type: object
-    one_of:
-      - Adopt as-is
-      - Extend / Wrap
-      - Compose
-      - Build Custom
-  - name: record-recommendation
-    description: Append the recommendation and rationale to docs/decisions/ as a dated ADR entry.
-    script: scripts/record_recommendation.py
+      - name: message
+        type: string
+      - name: tone
+        type: string
+    template: assets/reply.md
+    assets:
+      - assets/policy.md
+    references:
+      - path: references/help.md
+        description: Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days.
+    inputs_to: end
+
+  - name: end
+    kind: end
+    description: The original message plus either a ticket or a drafted reply.
     inputs:
-      - name: recommendation
-        type: object
-    outputs:
-      - name: record-path
+      - name: message
         type: string
 
 anti_patterns:
-  - Jumping to code without checking if a tool exists.
-  - Ignoring MCP servers that already provide the capability.
-  - Wrapping a library so heavily it loses its benefits.
+  - Replying to an angry customer with a templated answer instead of escalating.
+  - Promising a refund the policy does not cover.
 ```
 ````
 
@@ -325,7 +345,7 @@ Favor fewer script files for simplicity.  Only create separate scripts files for
 
 ### Use Simple Type Vocabulary
 
-Use a small, simple, vocabulary for script input/output data types.  Only expand where absolutely necessary. 
+Use a small, simple vocabulary for step input types. The server compiles each step's `inputs` to a JSON Schema and validates the client's input against it at runtime, so these are enforced, not advisory.
 
 - `string`
 - `integer`

@@ -1,22 +1,7 @@
-"""
-AIP server-side step model.
-
-Design:
-- The server is stateless. Every call carries the client's accepted input and the full
-  history; the server validates the input against the receiving step, runs it, appends a
-  history entry, and returns the result plus a description of what comes next.
-- The client makes decisions (thresholds, overrides, doing ClientTasks); the server
-  implements them, including routing: after a client posts its input, the server walks
-  through any routers and runs the first real node.
-- Framing (how to read a payload) is owned by each step type, not by state.
-- Model / script inputs are pure projections (`render()`), sent and discarded.
-- Assets are eager (content injected every invoke). References are lazy (uri and
-  description only; the client pulls the body on demand).
-"""
+"""Step model: state, meta, nodes, and the accept flow."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, TypeAlias
 import copy
@@ -24,14 +9,12 @@ import json
 import subprocess
 import sys
 
-from jsonschema import Draft202012Validator
-from typesafe_sdk import (
-    Choice, ChoiceAnswer, Noul, NoulAnswer, Score, ScoreAnswer,
-    SystemOneResponse, TypeSafeClient,
-)
+from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
+
+from aip.model.resources import Asset, Reference, ResourceLoader, Script
+from aip.model.types import JSON, InputValidationError, Inputs, describe_inputs, validate_input
 
 DecisionQuestion: TypeAlias = Noul | Choice | Score
-JSON: TypeAlias = Dict[str, Any]
 
 SYSTEM_FRAMING = """\
 You are executing a single step in a graph shaped workflow pertaining to "{skill_context}".
@@ -44,65 +27,6 @@ Assets, if present, are fixed reference material for this step.
 # Choice / Score: flag when the model's confidence < min_confidence.
 DEFAULT_NOUL_MARGIN = 0.15
 DEFAULT_MIN_CONFIDENCE = 0.6
-
-
-# ------------------------------------------------------------------- types & schema
-
-
-class DataType(str, Enum):
-    STRING = "string"
-    INTEGER = "integer"
-    FLOAT = "float"
-    BOOLEAN = "boolean"
-    OBJECT = "object"  # JSON-like key/value map
-    LIST = "list[*]"   # collection of any of the above
-
-
-_JSON_SCHEMA_TYPES = {
-    DataType.STRING: "string",
-    DataType.INTEGER: "integer",
-    DataType.FLOAT: "number",
-    DataType.BOOLEAN: "boolean",
-    DataType.OBJECT: "object",
-    DataType.LIST: "array",
-}
-
-Inputs: TypeAlias = Dict[str, DataType]
-
-
-def to_json_schema(inputs: Inputs, strict: bool = False) -> JSON:
-    """Compile a DataType map into a JSON Schema. All declared keys are required."""
-    return {
-        "type": "object",
-        "properties": {name: {"type": _JSON_SCHEMA_TYPES[DataType(t)]} for name, t in inputs.items()},
-        "required": list(inputs),
-        "additionalProperties": not strict,
-    }
-
-
-def describe_inputs(inputs: Inputs) -> Dict[str, str]:
-    """Client-facing form of an inputs map: {name: "string" | "integer" | ...}."""
-    return {name: DataType(t).value for name, t in inputs.items()}
-
-
-class InputValidationError(ValueError):
-    def __init__(self, step: str, errors: List[str]):
-        self.step = step
-        self.errors = errors
-        super().__init__(f"Input to step {step!r} is invalid: " + "; ".join(errors))
-
-
-def validate_input(step: str, inputs: Inputs, payload: Any, strict: bool = False) -> None:
-    validator = Draft202012Validator(to_json_schema(inputs, strict))
-    errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
-    if errors:
-        raise InputValidationError(step, [
-            (f"{'.'.join(str(p) for p in e.path)}: " if e.path else "") + e.message for e in errors
-        ])
-
-
-# --------------------------------------------------------------------------- state
-
 
 @dataclass
 class State:
@@ -132,92 +56,6 @@ class Meta:
 
     def framing(self) -> str:
         return self.system_framing.format(skill_context=self.description or self.name)
-
-
-# ----------------------------------------------------------------------- resources
-
-
-class Resource(ABC):
-    """
-    A file that belongs to an AIP package, addressed relative to the package root as
-    `<aip_id>/<assets|references|scripts>/<name>` (plural folders, per Agent Skills).
-    Bodies are read from disk by ResourceLoader.
-    """
-    uri: Path
-    description: str
-
-    def __init__(self, aip_id: str, name: str, description: str = ""):
-        self.uri = Path(aip_id, self._folder(), name)
-        self.description = description
-
-    @property
-    def name(self) -> str:
-        return self.uri.stem
-
-    @abstractmethod
-    def _folder(self) -> str:
-        pass
-
-    def summary(self) -> Dict[str, str]:
-        """Lazy form: enough for a client to decide whether to fetch the body."""
-        return {"uri": str(self.uri), "description": self.description}
-
-
-class Asset(Resource):
-    """Fixed templates and resources injected into every invoke."""
-    def _folder(self) -> str:
-        return "assets"
-
-
-class Reference(Resource):
-    """Documents the client loads on demand (progressive disclosure)."""
-    def _folder(self) -> str:
-        return "references"
-
-
-class Script(Resource):
-    """An executable python script in the package, run by an Execution step."""
-    def _folder(self) -> str:
-        return "scripts"
-
-
-class ResourceLoader:
-    """
-    Reads resource files from disk, relative to a package root, and caches them.
-    The single place to add size limits or non-file backends later.
-
-    Assets are loaded eagerly by steps at render time. References are loaded on demand
-    when the client asks for one by uri (`load_uri`).
-    """
-    def __init__(self, root: Path | str):
-        self.root = Path(root).resolve()
-        self._cache: Dict[Path, str] = {}
-
-    def path(self, uri: Path | str) -> Path:
-        """Resolve a package-relative uri to an absolute path inside the root."""
-        path = (self.root / uri).resolve()
-        if self.root not in path.parents:
-            raise ValueError(f"Resource uri {uri!s} escapes package root {self.root}")
-        return path
-
-    def load_uri(self, uri: Path | str, fresh: bool = False) -> str:
-        """Read a resource body. `fresh=True` bypasses the cache and re-reads from disk."""
-        uri = Path(uri)
-        if fresh or uri not in self._cache:
-            path = self.path(uri)
-            if not path.is_file():
-                raise FileNotFoundError(f"Resource {uri!s} not found at {path}")
-            self._cache[uri] = path.read_text(encoding="utf-8")
-        return self._cache[uri]
-
-    def load(self, resource: Resource, fresh: bool = False) -> str:
-        return self.load_uri(resource.uri, fresh=fresh)
-
-    def load_all(self, resources: List[Resource], fresh: bool = False) -> Dict[str, str]:
-        return {r.name: self.load(r, fresh=fresh) for r in resources}
-
-
-# ---------------------------------------------------------------------- responses
 
 
 @dataclass
@@ -250,9 +88,6 @@ class StepResponse:
         }
 
 
-# ---------------------------------------------------------------------------- nodes
-
-
 @dataclass(kw_only=True)
 class EndStep:
     """Terminal node. `inputs` is the shape of the final state the client receives."""
@@ -264,29 +99,25 @@ class EndStep:
 @dataclass(kw_only=True)
 class Router:
     """
-    Dumb router: maps the value the client posted under `choice` to the next node.
+    Dumb router: maps the value the client posted under `branch_on` to the next node.
     Calls no model, has no endpoint. The server walks routers internally after the
     client's input arrives; the client only sees the branches for schema purposes.
 
-    choice: key in the posted input whose value selects the branch
+    branch_on: key in the posted input whose value selects the branch
     branches: branch value -> node; needs two or more
     """
     kind: ClassVar[str] = "router"
     name: str
-    choice: str
+    branch_on: str
     branches: Dict[str, "Node"]
 
-    def __post_init__(self) -> None:
-        if len(self.branches) < 2:
-            raise ValueError(f"Router {self.name!r} needs at least two branches")
-
     def route(self, payload: JSON) -> "Node":
-        if self.choice not in payload:
-            raise InputValidationError(self.name, [f"missing routing key {self.choice!r}"])
-        value = payload[self.choice]
+        if self.branch_on not in payload:
+            raise InputValidationError(self.name, [f"missing routing key {self.branch_on!r}"])
+        value = payload[self.branch_on]
         if value not in self.branches:
             raise InputValidationError(
-                self.name, [f"{self.choice}={value!r} has no branch; options: {list(self.branches)}"])
+                self.name, [f"{self.branch_on}={value!r} has no branch; options: {list(self.branches)}"])
         return self.branches[value]
 
 
@@ -361,7 +192,7 @@ def describe_next(node: Node | None) -> JSON | None:
         return None
     if isinstance(node, Router):
         return {
-            "step": node.name, "kind": node.kind, "on": node.choice,
+            "step": node.name, "kind": node.kind, "branch_on": node.branch_on,
             "branches": {value: describe_next(target) for value, target in node.branches.items()},
         }
     return {"step": node.name, "kind": node.kind, "inputs": describe_inputs(node.inputs)}
@@ -555,91 +386,3 @@ class Execution(BaseStep):
         if not isinstance(result, dict):
             raise RuntimeError(f"Script {self.script.uri!s} must write a JSON object, got {type(result).__name__}")
         return result
-
-
-# ------------------------------------------------------------------------ procedure
-
-
-@dataclass(kw_only=True)
-class Procedure:
-    """
-    The whole graph. Binds meta, loader, and interpreter to every reachable node and
-    exposes the single server operation, `run`.
-
-    python: interpreter for Execution steps (built from Meta.environment on `server create`)
-    """
-    meta: Meta
-    start: BaseStep
-    loader: ResourceLoader | None = None
-    python: Path | None = None
-    nodes: Dict[str, Node] = field(default_factory=dict, init=False)
-
-    def __post_init__(self) -> None:
-        self._walk(self.start)
-
-    def _walk(self, node: Node | None) -> None:
-        if node is None:
-            return
-        if node.name in self.nodes:
-            if self.nodes[node.name] is not node:
-                raise ValueError(f"Duplicate step name {node.name!r}")
-            return
-        self.nodes[node.name] = node
-        if isinstance(node, BaseStep):
-            if node.meta is None:
-                node.meta = self.meta
-            if node.loader is None:
-                node.loader = self.loader
-            if isinstance(node, Execution) and node.python is None:
-                node.python = self.python
-            self._walk(node.inputsTo)
-        elif isinstance(node, Router):
-            for target in node.branches.values():
-                self._walk(target)
-
-    @property
-    def end(self) -> EndStep | None:
-        return next((n for n in self.nodes.values() if isinstance(n, EndStep)), None)
-
-    def describe(self) -> JSON:
-        """For `aip info`: meta plus the start and end shapes."""
-        return {
-            "meta": {"name": self.meta.name, "description": self.meta.description, "version": self.meta.version},
-            "start": describe_next(self.start),
-            "end": describe_next(self.end),
-            "steps": {name: node.kind for name, node in self.nodes.items()},
-        }
-
-    def run(self, after: str | None, payload: JSON, history: List[JSON] | None = None,
-            thresholds: Dict[str, float] | None = None) -> StepResponse:
-        """
-        The single server operation.
-
-        after:   name of the step the client just completed, or None to start
-        payload: the client's accepted input for whatever comes next
-        history: the history the client carried in
-        """
-        history = list(history or [])
-        if after is None:
-            node: Node | None = self.start
-        else:
-            prev = self.nodes.get(after)
-            if not isinstance(prev, BaseStep):
-                raise KeyError(f"No runnable step named {after!r}")
-            node = prev.inputsTo
-
-        # Server-side traversal: walk routers on the client's accepted input.
-        while isinstance(node, Router):
-            target = node.route(payload)
-            history.append({"step": node.name, "kind": node.kind,
-                            "input": {node.choice: payload[node.choice]}, "result": {"to": target.name}})
-            node = target
-
-        if node is None or isinstance(node, EndStep):
-            end = node or EndStep()
-            validate_input(end.name, end.inputs, payload)
-            history.append({"step": end.name, "kind": end.kind, "input": payload, "result": payload})
-            return StepResponse(ran=end.name, kind=end.kind, result=payload, suggested=payload,
-                                review=[], next=None, history=history)
-
-        return node.accept(payload, history, thresholds=thresholds)
