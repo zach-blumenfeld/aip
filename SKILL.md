@@ -21,7 +21,7 @@ metadata:
 
 ## What AIP Is
 
-AIP is a thin extension to the [Agent Skills Spec](https://agentskills.io/specification.md). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/).
+AIP is an extension to the [Agent Skills Spec](https://agentskills.io/specification.md) that enables a structured graph workflow. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/) representing a graph workflow of the underlying procedural logic.  This specification can then be used to configure an AIP server that together with the AIP client offers traversal protocol over this graph for fast structured workflow execution. 
 
 ## Why Use AIP
 
@@ -57,22 +57,16 @@ skill-name/
 ```shell
 skill-name/
 ├── SKILL.md                       # Required: metadata + YAML-compliant instructions
-├── source/                        # Required: AIP schema & canonical human-readable source
-│   ├── skill-type.schema.json     # Required: the schema this skill validates against. Bundled locally even when reusing a shared schema, so the skill is self-contained.
-│   └── ...                        # Any additional files or directories sourced to create this AIP skill
+├── source/                        # Required: the canonical human-readable material this skill was compiled from
+│   ├── README.md                  # Recommended: provenance and the log of what was deliberately dropped, with rationale
+│   └── ...                        # Runbooks, specs, decision logs, or other material sourced to create this AIP skill
 ├── scripts/                       # Optional: executable code
 ├── assets/                        # Optional: templates, resources
 ├── references/                    # Optional: documentation
 └── ...                            # Any additional files or directories
 ```
 
-The `schema.json` follows the [json-schema.org](https://json-schema.org/) with some required fields. You can find out more below if required.
-
-The `schema.json` is not unique to a skill but rather skill types/categories
-- runbooks 
-- rulebooks
-- doc-templates
-- ...
+The YAML body of SKILL.md validates against the AIP procedure schema at assets/procedure.schema.json.
 
 ### `SKILL.md` Format
 
@@ -88,90 +82,32 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 | Field                   | Required | Notes                                                                                              |
 |-------------------------|----------|----------------------------------------------------------------------------------------------------|
-| `name`                  | Yes      | 1–64 chars; lowercase `a–z`, `0–9`, `-`. Must match the parent directory name.                     |
+| `name`                  | Yes      | 1–64 chars; lowercase `a–z`, `0–9`, hyphens; no leading, trailing, or consecutive hyphens. Must match the parent directory name. |
 | `description`           | Yes      | 1–1024 chars. Describes *what* the skill encodes and *when* to use it; include specific keywords that help agents identify relevant tasks. |
-| `metadata.aip.spec`     | Yes      | URL to the AIP spec version this skill conforms to. *AIP-specific.*                                |
-| `metadata.aip.schemaId` | Yes      | URI matching the `$id` of the schema this skill validates against. The schema file is bundled in `source/` so the skill is self-contained, even when the `$id` points to a shared canonical URL. *AIP-specific.* |
-| `license`               | No       | License name or reference to a bundled license file.                                               |
-| `compatibility`         | No       | 1–500 chars. Environment requirements (intended product, system packages, network, runtime).       |
-| Other `metadata.*` keys | No       | Arbitrary string→string mapping for team-specific metadata. Use unique key names.                  |
-| `allowed-tools`         | No       | Space-separated string of pre-approved tools. Experimental — support varies.                       |
-
-##### `name`
-
-- 1–64 characters
-- Lowercase Unicode alphanumeric (`a–z`, `0–9`) and hyphens only
-- Must not start or end with a hyphen
-- Must not contain consecutive hyphens (`--`)
-- Must match the parent directory name
-
-**Valid:** `pdf-processing`, `data-analysis`, `code-review`
-**Invalid:** `PDF-Processing` (uppercase), `-pdf` (leading hyphen), `pdf--processing` (consecutive hyphens)
-
-##### `description`
-
-- 1–1024 characters
-- Describes both *what* the skill does and *when* to use it
-- Include specific keywords that help agents identify relevant tasks
-
-**Good:** `Extracts text and tables from PDF files, fills PDF forms, and merges multiple PDFs. Use when working with PDF documents or when the user mentions PDFs, forms, or document extraction.`
-
-**Poor:** `Helps with PDFs.`
-
-##### `metadata.aip.spec` *(AIP-specific)*
-
-URL to the AIP spec version this skill conforms to. Currently: `https://github.com/zach-blumenfeld/aip/tree/v0.4a0`
-
-##### `metadata.aip.schemaId` *(AIP-specific)*
-
-URI matching the `$id` of the schema this skill's YAML body validates against. Frontmatter is the single source of truth — the body does *not* repeat this.
-
-**Example:** `https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.4a0/assets/aip-schemas/procedure.schema.json`
-
-##### `license`
-
-License name or short reference to a bundled license file. Keep it short.
-
-**Example:** `Apache-2.0` or `Proprietary. LICENSE.txt has complete terms`
-
-##### `compatibility`
-
-- 1–500 characters
-- Use only when the skill has specific environment requirements (intended product, system packages, network access, runtime versions)
-- Most skills don't need this field
-
-**Examples:**
-- `Designed for Claude Code (or similar products)`
-- `Requires git, docker, jq, and access to the internet`
-- `Requires Python 3.14+ and uv`
+| `metadata.aip-version`  | Yes      | AIP format version this skill is written in. Currently `"0.4a0"`. *AIP-specific.*                  |
+| `license`               | No       | License name or reference to a bundled license file, e.g. `Apache-2.0`.                            |
+| `compatibility`         | No       | 1–500 chars. Only when the skill has specific environment requirements (intended product, system packages, network access, runtime versions); most skills don't need it. |
+| Other `metadata.*` keys | No       | Arbitrary string→string mapping for properties not defined by the Agent Skills spec, e.g. `author`, `version` (the skill's own version, distinct from `aip-version`). Use unique key names. |
+| `allowed-tools`         | No       | Space-separated string of pre-approved tools, e.g. `Bash(git:*) Read`. Experimental — support varies. |
 
 ##### `metadata`
 
-- Map of string keys to string values for arbitrary team-specific properties
-- AIP reserves the `metadata.aip.*` namespace for its own fields (see above)
+- Map of string keys to string values for properties not defined by the Agent Skills spec, e.g. `author`, `version` (the skill's own version, distinct from `aip-version`)
+- AIP reserves `metadata.aip-*` keys for its own fields (see above)
 - Use unique key names to avoid conflicts with future spec additions
 
 **Example:**
 
 ```yaml
 metadata:
-  aip:
-    spec: https://github.com/zach-blumenfeld/aip/tree/v0.4a0
-    schemaId: https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.4a0/assets/aip-schemas/procedure.schema.json
+  aip-version: "0.4a0"
   author: example-org
   version: "1.0"
 ```
 
-##### `allowed-tools`
-
-- Space-separated string of pre-approved tools the skill may use
-- Experimental — support varies between agent implementations
-
-**Example:** `Bash(git:*) Bash(jq:*) Read`
-
 #### Body
 
-The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the schema referenced by `metadata.aip.schemaId`.
+The body — everything after the closing `---` of the frontmatter — must be **exactly one fenced YAML code block** with optional whitespace before and after. No surrounding prose or code blocks. The YAML inside the fence is the instructions the agent follows once the skill activates; it validates against the AIP procedure schema.
 
 Example (pared down for illustration — real skills typically carry more steps and richer detail), from the bundled `examples/billing-support` skill. The first step is the start; the router branches server-side on the value the client chose:
 
@@ -306,7 +242,7 @@ If the body would exceed the budget, push detail into `references/` rather than 
 
 When referencing other files in your skill, use relative paths from the skill root:
 
-```markdown SKILL.md theme={null}
+```markdown SKILL.md
 See [the reference guide](references/REFERENCE.md) for details.
 
 script:scripts/extract.py

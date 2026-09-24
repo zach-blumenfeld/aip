@@ -178,15 +178,19 @@ class SkillFolder(unittest.TestCase):
         loaded, issues = validate_skill(EXAMPLE)
         self.assertEqual(issues, [])
         self.assertEqual(loaded.frontmatter["name"], "billing-support")
-        self.assertTrue(loaded.preamble.startswith("This is an AIP procedure."))
 
-    def test_preamble_allowed_but_nothing_after_the_block(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            skill = copy_example(tmp)
-            (skill / "SKILL.md").write_text((skill / "SKILL.md").read_text() + "\ntrailing prose\n")
-            loaded, issues = validate_skill(skill)
-            self.assertIsNone(loaded)
-            self.assertEqual(kinds(issues), ["trailing_body_content"])
+    def test_no_prose_around_the_block(self):
+        for label, mutate in {
+            "after": lambda t: t + "\ntrailing prose\n",
+            "before": lambda t: t.replace("---\n\n```yaml", "---\n\nSome intro.\n\n```yaml"),
+        }.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                skill = copy_example(tmp)
+                md = skill / "SKILL.md"
+                md.write_text(mutate(md.read_text()))
+                loaded, issues = validate_skill(skill)
+                self.assertIsNone(loaded)
+                self.assertEqual(kinds(issues), ["invalid_body_format"])
 
     def test_frontmatter_rules(self):
         cases = {

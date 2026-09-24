@@ -76,7 +76,7 @@ The AIP skill exposes three top-level procedures:
 
 ## AIP Skill Spec
 
-The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is an optional prose preamble followed by exactly one fenced YAML block, and adds one frontmatter key, `metadata.aip-version`.
+The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is exactly one fenced YAML block with no surrounding prose, and adds one frontmatter key, `metadata.aip-version`.
 
 ## The Procedure Format
 

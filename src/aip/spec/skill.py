@@ -2,8 +2,8 @@
 
 A skill folder is an Agent Skill: `SKILL.md` with frontmatter, plus `scripts/`,
 `assets/`, `references/`, and the AIP-required `source/` holding the human-readable
-material the skill was compiled from. The SKILL.md body is an optional prose preamble
-followed by exactly one fenced YAML block, which is the procedure.
+material the skill was compiled from. The SKILL.md body is exactly one fenced YAML
+block, the procedure, with nothing but whitespace around it.
 
 Validation issues follow one contract everywhere (CLI, wrapper script, server):
 records with `path`, `kind`, `message`, optional `location`, and `severity`.
@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from aip.spec.models import FORMAT_VERSION, RUNNABLE_KINDS, ProcedureSpec
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
-FENCE_PATTERN = re.compile(r"```(?:yaml|yml)[ \t]*\n(.*?)\n```", re.DOTALL)
+FENCE_PATTERN = re.compile(r"^```(?:yaml|yml)[ \t]*\n(.*?)\n```\s*$", re.DOTALL)
 # Agent Skills `name` rule: lowercase a-z/0-9, hyphen-separated groups.
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 VERSION_KEY = "aip-version"
@@ -45,7 +45,6 @@ class Issue:
 class SkillDoc:
     """A parsed SKILL.md."""
     frontmatter: dict
-    preamble: str
     yaml_text: str
 
 
@@ -68,18 +67,14 @@ def parse_skill_md(skill_md: Path) -> tuple[SkillDoc | None, list[Issue]]:
     if not isinstance(frontmatter, dict):
         return None, [Issue(path, "invalid_frontmatter", f"frontmatter must be a mapping, got {type(frontmatter).__name__}")]
 
-    body = match.group(2)
-    fences = list(FENCE_PATTERN.finditer(body))
-    if not fences:
-        return None, [Issue(path, "missing_body_yaml",
-                            "SKILL.md body must contain exactly one fenced YAML code block (language tag `yaml` or `yml`)")]
-    if len(fences) > 1:
-        return None, [Issue(path, "multiple_body_yaml", f"SKILL.md body must contain exactly one fenced YAML block; found {len(fences)}")]
-    fence = fences[0]
-    if body[fence.end():].strip():
-        return None, [Issue(path, "trailing_body_content",
-                            "nothing may follow the fenced YAML block; put prose before it as a preamble")]
-    return SkillDoc(frontmatter=frontmatter, preamble=body[:fence.start()].strip(), yaml_text=fence.group(1)), []
+    body = match.group(2).strip()
+    if not body:
+        return None, [Issue(path, "empty_body", "SKILL.md body is empty; expected one fenced YAML code block")]
+    fence = FENCE_PATTERN.match(body)
+    if not fence:
+        return None, [Issue(path, "invalid_body_format",
+                            "SKILL.md body must be exactly one fenced YAML code block (language tag `yaml` or `yml`) with no surrounding prose")]
+    return SkillDoc(frontmatter=frontmatter, yaml_text=fence.group(1)), []
 
 
 # ---------------------------------------------------------------- frontmatter rules
@@ -260,7 +255,6 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
 class LoadedSkill:
     skill_dir: Path
     frontmatter: dict
-    preamble: str
     spec: ProcedureSpec
 
 
@@ -290,7 +284,7 @@ def validate_skill(skill_dir: Path) -> tuple[LoadedSkill | None, list[Issue]]:
 
     if any(i.severity == "error" for i in issues) or spec is None:
         return None, issues
-    return LoadedSkill(skill_dir=skill_dir, frontmatter=doc.frontmatter, preamble=doc.preamble, spec=spec), issues
+    return LoadedSkill(skill_dir=skill_dir, frontmatter=doc.frontmatter, spec=spec), issues
 
 
 def load_skill(skill_dir: Path) -> LoadedSkill:

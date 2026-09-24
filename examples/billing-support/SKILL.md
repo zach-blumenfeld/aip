@@ -5,8 +5,6 @@ metadata:
   aip-version: "0.4a0"
 ---
 
-This is an AIP procedure. With the `aip` CLI, run it with `aip run .` and answer when it pauses. Without it, follow the graph below yourself: answer each decision's questions by your own judgment, run scripts with one JSON object on stdin and read one from stdout, do client tasks from their templates, follow routers on the value you chose, and stop at `end`.
-
 ```yaml
 purpose: >
   Turn an inbound billing message into either a tier-2 ticket or a drafted reply.
