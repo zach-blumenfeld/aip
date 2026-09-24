@@ -40,6 +40,13 @@ AIP provides improved performance and stronger governance for autonomous agent s
 
 ## AIP Specification
 
+### Terminology
+
+- **Client**: whoever drives the run: posts each step's input, reviews uncertain decisions, performs client tasks, and makes the final call at every step. With an AIP server, that is the agent or person on the other end. As a plain Agent Skill, it is the agent that activated the skill.
+- **Server**: runs each step and validates its input against the step's `inputs`. Without one, the activating agent does this itself: runs scripts, answers decision questions by its own judgment, and follows routers.
+- **State**: the JSON object a step receives. Each step declares its required keys as `inputs`; extra keys pass through.
+- **Step kinds**: `execution` runs a script, `decision` asks typed questions about the state, `client_task` hands work to the client, `router` branches on a value in the state, `end` declares the final state's shape.
+
 ### Directory Structure
 
 AIP extends the directory structure of [Agent Skills](https://agentskills.io/specification.md):
@@ -250,32 +257,64 @@ script:scripts/extract.py
 
 ## Best Practices
 
-### Prioritize `scripts/`
-Treat the `SKILL.md` more as an execution graph with steps as nodes receiving input and outputs over edges. 
-Each step can be script or free prose. 
+### Choose the Step Kind
 
-Strongly consider `scripts/` when a step contains ANY of:
-- domain-specific logic
-- **deterministic** if/then/else, when/unless, or "only if" rules over structured inputs
-- lookup tables
-- numeric calculations, thresholds, or caps
-- validation against fixed set of rules
+Treat `SKILL.md` as an execution graph: steps are nodes, inputs flow over edges. Pick each step's kind in this order; note choices and why in `source/README.md`.
 
-This ensures consistency and quality.
+1. **Script (`execution`)** when the logic can be written as code over the declared inputs:
+   - domain-specific logic
+   - **deterministic** if/then/else, when/unless, or "only if" rules over structured inputs
+   - lookup tables
+   - numeric calculations, thresholds, or caps
+   - validation against a fixed set of rules
+2. **Decision (`decision`)** when the step must judge the input — which case applies, whether a condition holds, how severe something is — and the answer space can be written down before seeing the input: yes/no, one of a fixed set, or a position on a described scale. The answer becomes a typed value in the state: a `router` can branch on it, a script can take it as input, or the procedure can end on it. Uncertain answers go to the client for review via `thresholds`, so a decision is never less safe than asking the client.
+3. **Client task (`client_task`)** only when the output must be generated: text, code, a plan, a synthesis. If a judgment seems to need information the state lacks, add an upstream script that puts it in the state instead of falling back to a client task.
 
-#### How to Choose Between Script and Prose Steps
-**Script the deterministic/mechanical parts; leave data-dependent conditional/branching logic as prose steps**
-- **Script if:** A step's logic contains fixed if/then/else over structured inputs, a numeric threshold or cap, or a lookup table
-- **Do not script if:** a conditional hinges on **interpreting or judging the input** (deciding which case applies, resolving ambiguity, or mapping loosely-specified data onto a rule), prefer a **prose step** the agent reasons through.
-
-note choices and why in source/README.md.
-
-While scripting is critical, scripting the wrong things results in brittle errors and over-restriction. 
+While scripting is critical, scripting the wrong things results in brittle errors and over-restriction. Asking the client for what a script or decision can do also costs speed, consistency, and calibration.
 
 #### When Writing Scripts
 **Be lean and fast — prefer a maintained library over re-implementing a heavy algorithm (e.g. an optimization solver). You don't know the consumer's runtime budget - default to efficient; slow scripts risk timing out.**
 
 Favor fewer script files for simplicity.  Only create separate scripts files for truly independent self-contained logic.
+
+#### When Writing Decisions
+
+There are three types:
+1. **Noul** for one yes/no question. Phrase it so a high value means yes; make the boundary unambiguous; add `criteria` with `true` and `false` when the boundary needs spelling out. [Docs](https://docs.typesafe.ai/primitives/noul)
+   ```yaml
+   has_personal_data:
+     type: noul
+     instructions: Does the message contain personal data?
+     criteria:
+       true: Names, emails, phone numbers, addresses, or account identifiers appear.
+       false: No identifying details beyond what is needed to answer the sender.
+   ```
+2. **Choice** for a decision over a fixed set of labels. Descriptions must separate the options from each other; include an `other` option when inputs may fall outside the list. [Docs](https://docs.typesafe.ai/primitives/choice)
+   ```yaml
+   team:
+     type: choice
+     instructions: Which team should handle this ticket?
+     criteria:
+       billing: Charges, invoices, refunds, subscription payments.
+       technical: Errors, outages, or a feature not working.
+       other: Fits neither.
+   ```
+3. **Score** for a position on an ordered scale, lowest level first. Describe situations, not degrees; one dimension per question — split a multifaceted judgment into separate scores. [Docs](https://docs.typesafe.ai/primitives/score)
+   ```yaml
+   severity:
+     type: score
+     instructions: How severe is the reported bug?
+     criteria:
+       - Cosmetic; everything still works.
+       - A feature is degraded but a workaround exists.
+       - A core feature is unusable for the reporter.
+   ```
+
+Further advice ([System One concepts](https://docs.typesafe.ai/concepts/system-one)):
+- Put every question about the same input in one decision step; one call answers them all.
+- The step's `inputs` are the content being judged. Criteria go in `instructions`, not in the inputs.
+- A question's name is the key downstream steps declare in `inputs` and a router names in `branch_on`. Branch keys are the choice labels, `true`/`false` for a noul, or level numbers for a score.
+- Set `thresholds` per question: raise when a false positive is costly, lower when a false negative is.
 
 
 

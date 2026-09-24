@@ -110,6 +110,25 @@ class SpecModels(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ProcedureSpec.model_validate(body)
 
+    def test_noul_criteria_accepts_bare_yaml_booleans(self):
+        step = yaml.safe_load("""
+name: t
+kind: decision
+description: d
+inputs: []
+questions:
+  has_pii:
+    type: noul
+    instructions: Does the message contain personal data?
+    criteria:
+      true: Identifiers appear.
+      false: None appear.
+inputs_to: end
+""")
+        parsed = DecisionStep.model_validate(step)
+        self.assertEqual(parsed.questions["has_pii"].criteria.true, "Identifiers appear.")
+        self.assertEqual(parsed.questions["has_pii"].criteria.false, "None appear.")
+
     def test_router_needs_two_branches(self):
         body = example_yaml()
         body["steps"][1]["branches"] = {"angry": "escalate"}

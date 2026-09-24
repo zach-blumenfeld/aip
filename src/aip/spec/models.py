@@ -9,7 +9,7 @@ is self-explanatory to an authoring agent.
 from enum import Enum
 from typing import Annotated, Dict, List, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 FORMAT_VERSION = "0.4a0"
 SPEC_URL = f"https://github.com/zach-blumenfeld/aip/tree/v{FORMAT_VERSION}"
@@ -74,6 +74,14 @@ class Reference(Strict):
 class NoulCriteria(Strict):
     true: str | None = Field(default=None, description="What counts as a yes answer.")
     false: str | None = Field(default=None, description="What counts as a no answer.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_yaml_booleans(cls, data):
+        """YAML parses bare `true:` / `false:` keys as booleans; map them to the field names."""
+        if isinstance(data, dict):
+            return {("true" if k is True else "false" if k is False else k): v for k, v in data.items()}
+        return data
 
 
 class NoulQuestion(Strict):
