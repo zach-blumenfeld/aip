@@ -340,11 +340,10 @@ Use a small, simple vocabulary for step input types.  Only expand where absolute
   tokens on every invocation.
 - **No surprises.** Body contents should match what `description`
   promises.
-- **Block scalars inside a sequence are indentation-sensitive.** A
-  top-level `|`-block is easy; `[{name, body: |...}]` items with
-  code fences or already-indented content are tricky. If an envelope
-  keeps breaking, fall back to a list of strings with the label as
-  a prefix.
+- **Quote YAML booleans used as labels.** `yes`, `no`, `on`, `off`,
+  `true`, and `false` parse as booleans, not strings. As choice labels
+  or router branch keys, write them quoted (`"yes": ...`) or pick
+  another label.
 
 ## Procedures
 ### Authoring an Agent Skill
