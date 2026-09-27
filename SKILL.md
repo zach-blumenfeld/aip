@@ -399,11 +399,13 @@ Checklist. Follow sequentially.
    2. Run `uv run scripts/validate.py ./<skill-name>`. Re-run after every edit to `SKILL.md` or to the skill's files — eyeball checks routinely miss required-field and broken-reference bugs.
       - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
       - **Substantive** (format doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
-   3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.
-      - **Mapped** — captured faithfully in the body.
-      - **Format gap** — no step kind or field carries it. Move it into a template, a reference, or a script; if none fits, treat it as a deliberate drop and note in `source/README.md` that the format could not carry it.
-      - **Body drop** — the format has capacity, the body missed it. Re-author the body.
-      - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
+   3. Once validation passes, run a thorough completeness check where you check for dropped logic or key context that was left out from the source. Walk the source line by line. For each distinct piece of source content:
+      1. Find it in the body: a field, a step description, a question, a template, a reference, or a script. Note where. If it is there, move on.
+      2. If it is not there, it was dropped. Decide which, and act:
+         - **Erroneous drop** — the format can and should carry it. Re-author the body to include it. Expect this case.
+         - **Deliberate drop** — not actionable (background, history, rationale) or redundant. Record it in `source/README.md` with rationale.
+
+      The check passes when every source item has been found in the body or recorded as a deliberate drop. Rules, conditions, thresholds, lookups, branching, and the context needed to apply them are never deliberate drops.
    4. Functional test the skill.
       1. Run it: `uv run aip run ./<skill-name> --input <start.json>` with realistic start inputs. With `TYPESAFE_API_KEY` set, decisions run against the model; without it, answer the questions yourself when it pauses. Resume through every pause to `"done": true`. Use enough inputs to reach every router branch at least once.
       2. Spawn a fresh agent if possible, i.e. Agent/Task tool if present, `claude -p` via bash, or whatever the runtime exposes. Spawn 2–3 fresh sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response.
