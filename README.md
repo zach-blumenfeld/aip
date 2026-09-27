@@ -68,11 +68,10 @@ For *consuming* the resulting skill, the opposite holds: AIP's structure is what
 
 ## Procedures
 
-The AIP skill exposes three top-level procedures:
+The AIP skill exposes two top-level procedures:
 
-1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into a YAML body validated against a schema. Details in [`SKILL.md` § Authoring an Agent Skill](SKILL.md#authoring-an-agent-skill).
-2. **Author or refine an AIP schema** — the agent walks through schema design, applying execution-graph framing and permissive-on-prose defaults. Details in [`references/author-schema.md`](references/author-schema.md).
-3. **Validate an AIP skill or schema** — run the bundled scripts directly, or let the agent run them as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill or Schema](SKILL.md#validating-an-aip-skill-or-schema).
+1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into an execution graph validated against the AIP procedure schema, runs it, and tests it. Details in [`SKILL.md` § Authoring an Agent Skill](SKILL.md#authoring-an-agent-skill).
+2. **Validate an AIP skill** — run the bundled validator directly, or let the agent run it as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill](SKILL.md#validating-an-aip-skill).
 
 ## AIP Skill Spec
 

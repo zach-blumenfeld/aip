@@ -370,25 +370,20 @@ Checklist. Follow sequentially.
 
 1. First read the [skill creation best practices guide](references/skill-creation-best-practices.md) and follow that same spirit here in addition to above AIP spec and best practices.
 2. Identify source materials for domain-specific context
-3. Establish the type of skill the user wants to author and the schema to use:
-    - Bias to schema reuse over drafting new ones.
-    - Find existing schemas in [aip-schemas](assets/aip-schemas) 
-    - If you must draft a new schema see [references/author-schema.md](references/author-schema.md)
-4. Lock the skill name
+3. Lock the skill name
     - Ask the user what to call the skill. The name is short and slightly descriptive — it becomes the folder name. Lowercase kebab-case, <65 chars, no leading/trailing/consecutive hyphens.
     - Offer a multiple-choice list of recommendations plus a free-text option. If they type their own, validate against the rules above; on failure, state why and offer fresh suggestions plus free-text. Repeat until valid.
-5. Scaffold skill directory at `./<skill-name>/` in the current working directory (not `/tmp`)
+4. Scaffold skill directory at `./<skill-name>/` in the current working directory (not `/tmp`)
     ```shell
     skill-name/
     ├── SKILL.md                       # Required: metadata + YAML-compliant instructions
-    ├── source/                        # Required: AIP schema & canonical human-readable source
+    ├── source/                        # Required: the canonical human-readable material this skill was compiled from
     ├── scripts/                       # Optional: executable code
     ├── assets/                        # Optional: templates, resources
     ├── references/                    # Optional: documentation
     └── ...                            # Any additional files or directories
     ```
     fill in the /source materials with
-    - The schema used above
     - reference docs you will use to create the skill (domain-specific context).  including
       - a source SKILL.md a user provided for transition to AIP format
       - a README.md outlining you logic from above and intent of the skill
@@ -397,28 +392,32 @@ Checklist. Follow sequentially.
     - `scripts/` — executable code the skill invokes (e.g., validators, processors).
     - `assets/` — templates, output formats, or other resources the skill references.
     - `references/` — supporting documentation the skill loads on demand (progressive disclosure).
-6. Create and validate the AIP `SKILL.md`
-   1. Draft `SKILL.md` at the skill folder root using the source materials and the schema from `/source`. 
-         - Frontmatter: `name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId` (matches the schema's `$id`).  
-         - Body: exactly one fenced YAML block. No surrounding prose, no second code block. The body validates against the schema.
-   2. Run `uv run scripts/validate.py ./<skill-name>`. Re-run after every edit to `SKILL.md` or the schema — eyeball checks routinely miss AIP-namespace and required-metadata bugs.
+5. Create and validate the AIP `SKILL.md`
+   1. Draft `SKILL.md` at the skill folder root using the source materials. Choose each step's kind per Best Practices.
+         - Frontmatter: `name`, `description`, `metadata.aip-version`.
+         - Body: the AIP runtime block, verbatim (copy it from the example under Body), then exactly one fenced YAML block. No other prose, no second code block. The YAML validates against the AIP procedure schema (`assets/procedure.schema.json`).
+   2. Run `uv run scripts/validate.py ./<skill-name>`. Re-run after every edit to `SKILL.md` or to the skill's files — eyeball checks routinely miss required-field and broken-reference bugs.
       - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
-      - **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
-   3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.                                                                         
-      - **Mapped** — captured faithfully in the body. 
-      - **Schema gap** — schema lacks a field for it. Fix the schema, re-point `schemaId`, re-compile. 
-      - **Body drop** — schema has capacity, the body missed it. Re-author the body.                        
+      - **Substantive** (format doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
+   3. Once validation passes, run a completeness check: walk the source domain-specific context line-by-line against the compiled body and classify every distinct piece of source content.
+      - **Mapped** — captured faithfully in the body.
+      - **Format gap** — no step kind or field carries it. Move it into a template, a reference, or a script; if none fits, treat it as a deliberate drop and note in `source/README.md` that the format could not carry it.
+      - **Body drop** — the format has capacity, the body missed it. Re-author the body.
       - **Deliberate drop** — redundant or genuinely doesn't belong. Record it in `source/README.md` with rationale.
-   4. Functional test the skill. Spawn a fresh agent if possible, i.e. Agent/Task tool if present, `claude -p` via bash, or whatever the runtime exposes. Spawn 2–3 fresh sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response. Evaluate against:
-      - **Script errors** — non-zero exits, stderr noise, exceptions
-      - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
-      - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
-      - **Over-restriction** — compare against what agent reasoning would produce unaided. If a script-backed step stripped reasoning, nuance, or form that mattered, revise or convert back to a prose step.
-      - **Correctness** — run each script against the task's actual example inputs and expected outputs, not just "no errors". Verify it produces the right result on known cases; logic bugs (e.g. a wrong key mapping in a conditional) only surface against real fixtures.
+   4. Functional test the skill.
+      1. Run it: `uv run aip run ./<skill-name> --input <start.json>` with realistic start inputs. With `TYPESAFE_API_KEY` set, decisions run against the model; without it, answer the questions yourself when it pauses. Resume through every pause to `"done": true`. Use enough inputs to reach every router branch at least once.
+      2. Spawn a fresh agent if possible, i.e. Agent/Task tool if present, `claude -p` via bash, or whatever the runtime exposes. Spawn 2–3 fresh sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response.
+      3. Evaluate against:
+         - **Script errors** — non-zero exits, stderr noise, exceptions
+         - **Decision quality** — answers and confidences on the test inputs make sense; thresholds flag the genuinely ambiguous ones and no others.
+         - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
+         - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
+         - **Over-restriction** — compare against what agent reasoning would produce unaided. If a script or decision stripped reasoning, nuance, or form that mattered, revise it or convert the step to a decision or client task.
+         - **Correctness** — run each script against the task's actual example inputs and expected outputs, not just "no errors". Verify it produces the right result on known cases; logic bugs (e.g. a wrong key mapping in a conditional) only surface against real fixtures.
 
       If the runtime truly cannot spawn fresh agents, test functionally yourself and tell user: *"Functional testing not conducted with fresh agents — runtime does not support fresh agent invocation"*
    5. Iterate until the body validates, every source item is classified, AND the skill passes functional test.
-7. Install
+6. Install
    1. Ask the user what to do next:
       - **Install now** — proceed below.
       - **Iterate further** — keep editing the skill folder in place.
@@ -430,43 +429,28 @@ Checklist. Follow sequentially.
    4. Move `./<skill-name>/` → `<install-location>/<skill-name>/` (folder name must equal `name` in frontmatter).
    5. Tell the user the install path. Project-local installs may need a fresh agent session to activate.
 
-### Creating an AIP Schema
-Follow the directions in [`author-schema.md`](references/author-schema.md)
+### Validating an AIP Skill
 
-### Validating an AIP Skill or Schema
-
-Two scripts cover validation.
-
-**Validate an AIP skill:**
 ```bash
 uv run scripts/validate.py <path/to/skill-folder>
 ```
-Checks: full frontmatter validation — required fields (`name`, `description`, `metadata.aip.spec`, `metadata.aip.schemaId`), Agent Skills format rules on `name` (length, charset, hyphen rules, folder-name match), length caps on `description` and `compatibility`, type rules on `license`/`allowed-tools`/non-AIP `metadata` values, URL form on `metadata.aip.spec`. Required folder structure (`source/` present with a bundled `*.schema.json`). AIP-compliance of the bundled schema (delegates to `validate_schema.py`). Body is exactly one fenced YAML block. Body validates against the schema referenced by `metadata.aip.schemaId`.
+Checks: frontmatter — required fields (`name`, `description`, `metadata.aip-version`), Agent Skills format rules on `name` (length, charset, hyphen rules, folder-name match), length caps on `description` and `compatibility`, type rules on `license`/`allowed-tools`/`metadata` values, `metadata.aip-version` matches the validator's format version. Required folder structure (`source/` present). Body is the AIP runtime block, verbatim, then exactly one fenced YAML block. The YAML validates against the AIP procedure schema. Graph rules: unique step names, a runnable start, exactly one `end`, every `inputs_to` and router branch resolves, every step reachable from the start and able to reach the end, unique input names, thresholds name real questions, every referenced asset, reference, and script exists on disk.
 
-**Validate an AIP schema:**
-```bash
-uv run scripts/validate_schema.py <path/to/schema.json>
-```
-Checks: required root metadata (`$schema`, `$id`, `title`, `description` — all non-empty strings); `$id` is a URI; required `aip:` namespace with `aip.version`; universal floor properties (`purpose`, `trigger_when`); strict-core (every object subschema declares `additionalProperties: false`); `$defs` naming. Plus soft warnings on JSON Schema reserved-keyword collisions.
-
-**Output contract** (both scripts):
+**Output contract:**
 - Exit 0 on success, 1 on any error.
 - stdout: single-line human summary.
 - stderr: JSON Lines, one record per error or warning. Stream-parse to classify.
 
 **On failure, apply tiered recovery:**
 - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
-- **Substantive** (schema doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
+- **Substantive** (format doesn't fit, semantic mismatch, structural conflict): surface the error in plain language with your proposed fix; confirm before retrying.
 
-**When to run:** after every edit to a schema or skill. Eyeball checks routinely miss AIP-namespace and required-metadata bugs.
+**When to run:** after every edit to a skill. Eyeball checks routinely miss required-field and broken-reference bugs.
 
 ## Anti-Patterns
 
-1. Unnecessarily drafting a new schema when a sufficient schema already exists for the skill type
-2. Drafting schemas that are specific to individual skills rather than the category / type / family of the skill
-3. Dropping content from original SKILL.md to over compress a SKILL.md
-4. Dumping JSON Schemas or YAML bodies into chat without asking. Default to a natural-language summary; offer the raw artifact if the user wants it.
-5. Skipping the bundled validators under user scope restrictions. `scripts/validate.py` and `scripts/validate_schema.py` are part of this skill's contract, not third-party resources — run them anyway and surface that you're doing so.
-6. Encoding rules, lookup tables, numeric calculations/thresholds, or other scriptable logic as prose instead of via scripts.
-7. Inventing AIP frontmatter keywords at the root. All AIP-specific fields go under `metadata.aip.*` (e.g., `metadata.aip.spec`, `metadata.aip.schemaId`). No bare-root `aip_spec:`, `aip_schema:`, etc.
-
+1. Dropping content from original SKILL.md to over compress a SKILL.md
+2. Dumping YAML bodies into chat without asking. Default to a natural-language summary; offer the raw artifact if the user wants it.
+3. Skipping the bundled validator under user scope restrictions. `scripts/validate.py` is part of this skill's contract, not a third-party resource — run it anyway and surface that you're doing so.
+4. Encoding rules, lookup tables, numeric calculations/thresholds, or other scriptable logic as prose instead of via scripts; or asking the client for a judgment a decision step can make.
+5. Inventing AIP frontmatter keywords at the root. The only AIP-specific field is `metadata.aip-version`. No bare-root `aip_version:`, `aip:`, etc.
