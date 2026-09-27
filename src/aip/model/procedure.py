@@ -63,6 +63,27 @@ class Procedure:
             "steps": {name: node.kind for name, node in self.nodes.items()},
         }
 
+    def resolve(self, after: str | None, payload: JSON) -> tuple[Node | None, List[JSON]]:
+        """
+        The node that receives `payload` after step `after`, walking routers on the
+        payload. Returns the node and the router history entries the walk produced.
+        """
+        if after is None:
+            node: Node | None = self.start
+        else:
+            prev = self.nodes.get(after)
+            if not isinstance(prev, BaseStep):
+                raise KeyError(f"No runnable step named {after!r}")
+            node = prev.inputsTo
+
+        entries: List[JSON] = []
+        while isinstance(node, Router):
+            target = node.route(payload)
+            entries.append({"step": node.name, "kind": node.kind,
+                            "input": {node.branch_on: payload[node.branch_on]}, "result": {"to": target.name}})
+            node = target
+        return node, entries
+
     def run(self, after: str | None, payload: JSON, history: List[JSON] | None = None,
             thresholds: Dict[str, float] | None = None) -> StepResponse:
         """
@@ -72,21 +93,8 @@ class Procedure:
         payload: the client's accepted input for whatever comes next
         history: the history the client carried in
         """
-        history = list(history or [])
-        if after is None:
-            node: Node | None = self.start
-        else:
-            prev = self.nodes.get(after)
-            if not isinstance(prev, BaseStep):
-                raise KeyError(f"No runnable step named {after!r}")
-            node = prev.inputsTo
-
-        # Server-side traversal: walk routers on the client's accepted input.
-        while isinstance(node, Router):
-            target = node.route(payload)
-            history.append({"step": node.name, "kind": node.kind,
-                            "input": {node.branch_on: payload[node.branch_on]}, "result": {"to": target.name}})
-            node = target
+        node, entries = self.resolve(after, payload)
+        history = [*(history or []), *entries]
 
         if node is None or isinstance(node, EndStep):
             end = node or EndStep()

@@ -76,11 +76,11 @@ The AIP skill exposes three top-level procedures:
 
 ## AIP Skill Spec
 
-The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is exactly one fenced YAML block with no surrounding prose, and adds one frontmatter key, `metadata.aip-version`.
+The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is the fixed AIP runtime block followed by exactly one fenced YAML block, so every skill carries its own execution semantics and any agent can run it with no aip tooling present, and adds one frontmatter key, `metadata.aip-version`.
 
 ## The Procedure Format
 
-There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `uv run aip schema --write assets/procedure.schema.json`; a test fails if it drifts. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
+There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `uv run aip schema --write assets/procedure.schema.json`; a test fails if it drifts. The runtime block every authored skill carries at the top of its body lives in the package too (`uv run aip runtime` prints it); the validator rejects a skill whose block is missing or edited. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
 
 ## Validation
 
@@ -92,6 +92,16 @@ uv run aip validate <path/to/skill-folder>           # with the package installe
 Both run the same checks: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, and every referenced asset, reference, and script present on disk.
 
 Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
+
+## Running a Skill
+
+```bash
+uv run aip run <path/to/skill-folder> --input start.json     # runs until the client must decide
+uv run aip resume <run-file> --input answer.json             # continues a paused run
+uv run aip run <path/to/skill-folder> --interactive           # prompts on the terminal instead
+```
+
+`aip run` drives the procedure locally with the same engine the server will use. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
 
 ## Development & Contributing
 

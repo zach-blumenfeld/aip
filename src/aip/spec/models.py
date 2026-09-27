@@ -248,3 +248,13 @@ def json_schema() -> dict:
         "aip": {"spec": SPEC_URL, "version": FORMAT_VERSION},
         **generated,
     }
+
+
+def runtime_text() -> str:
+    """The runtime block every authored skill carries verbatim at the top of its body.
+
+    Shipped inside the package so the validator can check a skill's copy is current.
+    """
+    from importlib.resources import files
+
+    return files("aip.spec").joinpath("runtime.md").read_text(encoding="utf-8")

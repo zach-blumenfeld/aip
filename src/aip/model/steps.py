@@ -195,7 +195,10 @@ def describe_next(node: Node | None) -> JSON | None:
             "step": node.name, "kind": node.kind, "branch_on": node.branch_on,
             "branches": {value: describe_next(target) for value, target in node.branches.items()},
         }
-    return {"step": node.name, "kind": node.kind, "inputs": describe_inputs(node.inputs)}
+    described: JSON = {"step": node.name, "kind": node.kind, "inputs": describe_inputs(node.inputs)}
+    if isinstance(node, Decision):
+        described["questions"] = {name: q.model_dump(exclude_none=True) for name, q in node.questions.items()}
+    return described
 
 
 @dataclass(kw_only=True)
@@ -241,6 +244,24 @@ class Decision(BaseStep):
             with TypeSafeClient() as client:
                 result = client.system_one(state=payload, questions=self.questions)
         return result.model_dump(mode="json")
+
+    def accept_manual(self, payload: JSON, history: List[JSON], answers: JSON) -> StepResponse:
+        """
+        The client answers the questions itself (no decision model available). `answers`
+        holds one collapsed value per question: bool for noul, label for choice, int level
+        for score. Recorded in history as a manual decision.
+        """
+        validate_input(self.name, self.inputs, payload)
+        missing = [q for q in self.questions if q not in answers]
+        if missing:
+            raise InputValidationError(self.name, [f"missing manual answers for {missing}"])
+        result = {"answers": {name: {"type": self.questions[name].type, "manual": answers[name]} for name in self.questions}}
+        entry = {"step": self.name, "kind": self.kind, "input": payload, "result": result, "manual": True}
+        return StepResponse(
+            ran=self.name, kind=self.kind, result=result,
+            suggested={**payload, **{name: answers[name] for name in self.questions}},
+            review=[], next=describe_next(self.inputsTo), history=[*history, entry],
+        )
 
     @staticmethod
     def collapse(answer: JSON) -> Any:

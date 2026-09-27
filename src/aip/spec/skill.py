@@ -2,8 +2,10 @@
 
 A skill folder is an Agent Skill: `SKILL.md` with frontmatter, plus `scripts/`,
 `assets/`, `references/`, and the AIP-required `source/` holding the human-readable
-material the skill was compiled from. The SKILL.md body is exactly one fenced YAML
-block, the procedure, with nothing but whitespace around it.
+material the skill was compiled from. The SKILL.md body is the AIP runtime block,
+verbatim (see `runtime_text()`), followed by exactly one fenced YAML block, the
+procedure, with nothing else. The block carries the execution semantics so any agent
+that activates the skill can run it with no aip tooling present.
 
 Validation issues follow one contract everywhere (CLI, wrapper script, server):
 records with `path`, `kind`, `message`, optional `location`, and `severity`.
@@ -17,7 +19,7 @@ from typing import Any, Iterable
 import yaml
 from pydantic import ValidationError
 
-from aip.spec.models import FORMAT_VERSION, RUNNABLE_KINDS, ProcedureSpec
+from aip.spec.models import FORMAT_VERSION, RUNNABLE_KINDS, ProcedureSpec, runtime_text
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
 FENCE_PATTERN = re.compile(r"^```(?:yaml|yml)[ \t]*\n(.*?)\n```\s*$", re.DOTALL)
@@ -69,11 +71,18 @@ def parse_skill_md(skill_md: Path) -> tuple[SkillDoc | None, list[Issue]]:
 
     body = match.group(2).strip()
     if not body:
-        return None, [Issue(path, "empty_body", "SKILL.md body is empty; expected one fenced YAML code block")]
-    fence = FENCE_PATTERN.match(body)
+        return None, [Issue(path, "empty_body", "SKILL.md body is empty; expected the AIP runtime block and one fenced YAML code block")]
+    block = runtime_text().strip()
+    if not body.startswith(block):
+        return None, [Issue(path, "missing_runtime_block",
+                            f"SKILL.md body must begin with the {FORMAT_VERSION} AIP runtime block, verbatim "
+                            f"(copy it from the aip skill, or `aip runtime`)")]
+    rest = body[len(block):].strip()
+    fence = FENCE_PATTERN.match(rest)
     if not fence:
         return None, [Issue(path, "invalid_body_format",
-                            "SKILL.md body must be exactly one fenced YAML code block (language tag `yaml` or `yml`) with no surrounding prose")]
+                            "after the runtime block, SKILL.md body must be exactly one fenced YAML code block "
+                            "(language tag `yaml` or `yml`) with no other prose")]
     return SkillDoc(frontmatter=frontmatter, yaml_text=fence.group(1)), []
 
 

@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from typesafe_sdk import SystemOneResponse
 
 from aip.client.cli import validate_command
-from aip.spec import FORMAT_VERSION, ProcedureSpec, check_graph, json_schema, parse_skill_md, validate_skill
+from aip.spec import FORMAT_VERSION, ProcedureSpec, check_graph, json_schema, parse_skill_md, runtime_text, validate_skill
 from aip.spec.loader import load_procedure
 from aip.spec.models import DecisionStep, ProcedureSpec as Spec, Strict
 
@@ -83,6 +83,17 @@ class GeneratedSchema(unittest.TestCase):
         for name, definition in schema["$defs"].items():
             if definition.get("type") == "object" or "properties" in definition:
                 self.assertIs(definition.get("additionalProperties"), False, name)
+
+
+class RuntimeBlock(unittest.TestCase):
+    def test_runtime_carries_the_format_version(self):
+        self.assertIn(FORMAT_VERSION, runtime_text().splitlines()[0])
+
+    def test_runtime_block_appears_verbatim_in_skill_md(self):
+        """The block an authoring agent copies from the aip SKILL.md must be exactly what the validator enforces."""
+        skill_md = (REPO / "SKILL.md").read_text()
+        self.assertIn(runtime_text().strip(), skill_md,
+                      "the runtime block in SKILL.md and src/aip/spec/runtime.md have drifted")
 
 
 class SpecModels(unittest.TestCase):
@@ -198,18 +209,25 @@ class SkillFolder(unittest.TestCase):
         self.assertEqual(issues, [])
         self.assertEqual(loaded.frontmatter["name"], "billing-support")
 
-    def test_no_prose_around_the_block(self):
-        for label, mutate in {
-            "after": lambda t: t + "\ntrailing prose\n",
-            "before": lambda t: t.replace("---\n\n```yaml", "---\n\nSome intro.\n\n```yaml"),
-        }.items():
+    def test_body_is_runtime_block_then_one_yaml_block(self):
+        block = runtime_text().strip()
+        cases = {
+            "prose after": (lambda t: t + "\ntrailing prose\n", "invalid_body_format"),
+            "prose between": (lambda t: t.replace(block + "\n\n```yaml", block + "\n\nSome intro.\n\n```yaml"), "invalid_body_format"),
+            "block missing": (lambda t: t.replace(block + "\n\n", ""), "missing_runtime_block"),
+            "block edited": (lambda t: t.replace("Critical terminology:", "Terminology:"), "missing_runtime_block"),
+        }
+        for label, (mutate, expected) in cases.items():
             with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
                 skill = copy_example(tmp)
                 md = skill / "SKILL.md"
-                md.write_text(mutate(md.read_text()))
+                text = md.read_text()
+                mutated = mutate(text)
+                self.assertNotEqual(mutated, text, label)
+                md.write_text(mutated)
                 loaded, issues = validate_skill(skill)
                 self.assertIsNone(loaded)
-                self.assertEqual(kinds(issues), ["invalid_body_format"])
+                self.assertEqual(kinds(issues), [expected])
 
     def test_frontmatter_rules(self):
         cases = {

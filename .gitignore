@@ -5,3 +5,5 @@ notes.md
 .idea/
 .claude
 __pycache__/
+.aip/
+.obsidian/
