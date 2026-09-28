@@ -298,9 +298,10 @@ MATCH (s:Skill)
 OPTIONAL MATCH (s)-[:HAS_FILE]->(f)
 WITH s, count(f) AS files
 OPTIONAL MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(st)
+WITH s, files, count(st) AS steps
 RETURN s.name AS name, s.revision AS revision, s.aip_version AS aip_version,
-       toString(s.loaded_at) AS loaded_at, files, count(st) AS steps, s.description AS description
-ORDER BY s.name, s.loaded_at DESC
+       toString(s.loaded_at) AS loaded_at, files, steps, s.description AS description
+ORDER BY name, s.loaded_at DESC
 """
 
 
@@ -346,7 +347,8 @@ class Connection:
             from neo4j import GraphDatabase
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("the Neo4j driver is not installed; install with `uv sync --extra neo4j`") from exc
-        return GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+        # notifications off: an empty database otherwise logs a warning per unknown label on every read
+        return GraphDatabase.driver(self.uri, auth=(self.user, self.password), notifications_min_severity="OFF")
 
 
 def ensure_schema(driver, database: str) -> None:

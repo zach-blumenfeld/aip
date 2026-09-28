@@ -135,7 +135,8 @@ class Neo4jIntegration(unittest.TestCase):
             records, _, _ = driver.execute_query(
                 "MATCH (s:Skill {id: $id})-[:HAS_PROCEDURE]->(p)-[:HAS_STEP]->(st) "
                 "OPTIONAL MATCH (st)-[u:USES]->(f:File) "
-                "RETURN st.name AS step, st.kind AS kind, collect(f.path) AS files ORDER BY st.order",
+                "WITH st, collect(f.path) AS files ORDER BY st.order "
+                "RETURN st.name AS step, st.kind AS kind, files",
                 id=skill_id, database_=conn.database)
             rows = {r["step"]: (r["kind"], sorted(r["files"])) for r in records}
         self.assertEqual(rows["escalate"], ("execution", ["assets/config.json", "scripts/escalate.py"]))
