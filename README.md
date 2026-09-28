@@ -19,9 +19,9 @@ AIP is an extension to the [Agent Skills Spec](https://agentskills.io/home). The
 AIP provides improved performance and stronger governance for autonomous agent skills.
 
 **Performance**
-- **Structured skills outperform freeform** and AIP enforced this authoring discipline. AIP requires schema-validated commitments to structured YAML with triggers, steps with script-backed nodes and I/O edges, scenarios, integrations, and anti-patterns. Early A/B evidence in our pre-print paper: [AIP: A Graph Representation for Learning and Governing Agent
+- **Structured skills outperform freeform** and AIP enforces this authoring discipline. AIP requires schema-validated commitments to structured YAML with a purpose, triggers and non-triggers, steps with script-backed nodes and I/O edges, and anti-patterns. Early A/B evidence in our pre-print paper: [AIP: A Graph Representation for Learning and Governing Agent
 Skills](https://arxiv.org/pdf/2606.04781) demonstrates lift for Claude Sonnet across a wide variety of SkillsBench tasks.
-- **Concrete tuning surface.** Schemas give a structured place to iterate when running evals — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
+- **Concrete tuning surface.** The schema gives a structured place to iterate when running evals — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
 - **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
 
 **Governance**
@@ -77,17 +77,6 @@ The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL
 
 There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `aip schema --write assets/procedure.schema.json`; a test fails if it drifts. The runtime block every authored skill carries at the top of its body lives in the package too (`aip runtime` prints it); the validator rejects a skill whose block is missing or edited. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
 
-## Validation
-
-```bash
-aip validate <path/to/skill-folder>                  # with the CLI installed
-uv run scripts/validate.py <path/to/skill-folder>   # from a plain git clone, no install
-```
-
-Both run the same checks: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, and every referenced asset, reference, and script present on disk.
-
-Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
-
 ## Installing the `aip` CLI
 
 ```bash
@@ -96,6 +85,17 @@ uv tool uninstall aip               # to remove
 ```
 
 Inside the repo, `uv run aip ...` works without installing. Every command below assumes `aip` is on PATH.
+
+## Validation
+
+```bash
+aip validate <path/to/skill-folder>                  # with the CLI installed
+uv run scripts/validate.py <path/to/skill-folder>   # from a plain git clone, no install
+```
+
+Both run the same checks: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, unique input names, thresholds naming real questions, and every referenced asset, reference, and script present on disk.
+
+Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
 
 ## Running a Skill
 
