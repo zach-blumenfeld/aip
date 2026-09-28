@@ -197,6 +197,22 @@ class GraphChecks(unittest.TestCase):
         self.step("triage")["thresholds"]["mood"] = 0.5
         self.assertIn("unknown_threshold_question", kinds(check_graph(self.spec(), "x")))
 
+    def test_router_branch_keys_must_match_the_question(self):
+        self.step("by-tone")["branches"] = {"angry": "escalate", "furious": "reply"}
+        issues = check_graph(self.spec(), "x")
+        self.assertIn("unknown_branch_value", kinds(issues))
+        self.assertIn("furious", next(i for i in issues if i.kind == "unknown_branch_value").message)
+
+    def test_router_on_score_expects_level_numbers_as_strings(self):
+        triage = self.step("triage")
+        triage["questions"]["severity"] = {"type": "score", "instructions": "How bad?",
+                                           "criteria": ["cosmetic", "degraded", "unusable"]}
+        self.step("by-tone")["branch_on"] = "severity"
+        self.step("by-tone")["branches"] = {"0": "reply", "1": "reply", "2": "escalate"}
+        self.assertEqual([i.kind for i in check_graph(self.spec(), "x")], [])
+        self.step("by-tone")["branches"] = {"low": "reply", "high": "escalate"}
+        self.assertEqual(kinds(check_graph(self.spec(), "x")), ["unknown_branch_value", "unknown_branch_value"])
+
     def test_missing_resource_only_with_skill_dir(self):
         self.step("escalate")["assets"] = ["assets/nope.json"]
         self.assertEqual(check_graph(self.spec(), "x"), [])

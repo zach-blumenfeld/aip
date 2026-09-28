@@ -96,6 +96,14 @@ class EndStep:
     inputs: Inputs = field(default_factory=dict)
 
 
+def branch_key(value: Any) -> str:
+    """Branch keys are YAML strings; collapsed answers are typed. `true`/`false` for a
+    noul, the label for a choice, the level number for a score."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 @dataclass(kw_only=True)
 class Router:
     """
@@ -115,10 +123,11 @@ class Router:
         if self.branch_on not in payload:
             raise InputValidationError(self.name, [f"missing routing key {self.branch_on!r}"])
         value = payload[self.branch_on]
-        if value not in self.branches:
+        key = branch_key(value)
+        if key not in self.branches:
             raise InputValidationError(
                 self.name, [f"{self.branch_on}={value!r} has no branch; options: {list(self.branches)}"])
-        return self.branches[value]
+        return self.branches[key]
 
 
 @dataclass(kw_only=True)

@@ -173,6 +173,33 @@ class ProcedureRunTest(unittest.TestCase):
                 step.accept({}, [])
 
 
+class RouterKeyTest(unittest.TestCase):
+    """Collapsed answers are typed; branch keys are YAML strings. Routing must bridge them."""
+
+    def make(self, branches):
+        end = EndStep(inputs={})
+        targets = {k: Execution(name=f"t-{k}", script=Script("x", "s.py"), inputsTo=end) for k in branches}
+        return Router(name="r", branch_on="v", branches=targets), targets
+
+    def test_noul_boolean_routes_on_true_false(self):
+        router, targets = self.make(["true", "false"])
+        self.assertIs(router.route({"v": True}), targets["true"])
+        self.assertIs(router.route({"v": False}), targets["false"])
+
+    def test_score_level_routes_on_string_number(self):
+        router, targets = self.make(["0", "1", "2"])
+        self.assertIs(router.route({"v": 2}), targets["2"])
+
+    def test_choice_label_routes_as_is(self):
+        router, targets = self.make(["angry", "calm"])
+        self.assertIs(router.route({"v": "calm"}), targets["calm"])
+
+    def test_unknown_value_still_errors(self):
+        router, _ = self.make(["0", "1"])
+        with self.assertRaises(InputValidationError):
+            router.route({"v": 2})
+
+
 class TypesTest(unittest.TestCase):
     def test_json_schema_compilation(self):
         schema = to_json_schema({"n": DataType.INTEGER, "xs": DataType.LIST, "f": DataType.FLOAT}, strict=True)

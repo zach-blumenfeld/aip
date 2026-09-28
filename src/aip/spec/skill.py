@@ -236,6 +236,28 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
             if step.kind != "end" and end_names[0] not in reachable(step.name):
                 issues.append(Issue(path, "no_path_to_end", f"step `{step.name}` has no path to the end step `{end_names[0]}`", f"body:$.steps[{i}]"))
 
+    # Routers fed directly by a decision: branch keys must be answers that question can give.
+    for i, step in enumerate(steps):
+        if step.kind != "router":
+            continue
+        feeders = [s for s in steps if getattr(s, "inputs_to", None) == step.name and s.kind == "decision"]
+        for feeder in feeders:
+            question = feeder.questions.get(step.branch_on)
+            if question is None:
+                continue
+            if question.type == "noul":
+                allowed = {"true", "false"}
+            elif question.type == "choice":
+                allowed = set(question.criteria)
+            else:
+                allowed = {str(n) for n in range(len(question.criteria))}
+            for key in step.branches:
+                if key not in allowed:
+                    issues.append(Issue(path, "unknown_branch_value",
+                                        f"router `{step.name}` branches on `{step.branch_on}`, a {question.type} question in "
+                                        f"`{feeder.name}`, but `{key}` is not one of its possible answers {sorted(allowed)}",
+                                        f"body:$.steps[{i}].branches.{key}"))
+
     for i, step in enumerate(steps):
         seen_inputs: set[str] = set()
         for j, item in enumerate(getattr(step, "inputs", []) or []):

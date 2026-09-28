@@ -333,6 +333,7 @@ Further advice ([System One concepts](https://docs.typesafe.ai/concepts/system-o
 - The step's `inputs` are the content being judged. Criteria go in `instructions`, not in the inputs.
 - A question's name is the key downstream steps declare in `inputs` and a router names in `branch_on`. Branch keys are the choice labels, `true`/`false` for a noul, or level numbers for a score.
 - Set `thresholds` per question: raise when a false positive is costly, lower when a false negative is.
+- If a question only applies to some inputs (severity only matters for bugs), say what the answer is for the others in its `instructions` ("non-bugs are level 0"), or ask it in a separate decision after a router. Otherwise the model hedges on every input it does not apply to and flags them all for review.
 
 
 
