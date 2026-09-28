@@ -113,6 +113,18 @@ aip run <path/to/skill-folder> --interactive           # prompts on the terminal
 
 `aip run` drives the procedure locally with the same engine the server will use. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
 
+## Loading Skills into Neo4j
+
+```bash
+uv sync --extra neo4j                                  # the driver is an optional dependency
+export NEO4J_URI=neo4j://localhost:7687 NEO4J_USERNAME=neo4j NEO4J_PASSWORD=...
+aip db load <path/to/skill-folder>                     # validates, then writes one revision
+aip db list                                            # every skill and revision in the database
+aip db export <name> --out ./restored                  # rebuilds <name>/ byte for byte and verifies hashes
+```
+
+Each load is lossless: every file under the skill folder is stored as a `File` node with its exact bytes, mode, and sha256, so `export` reproduces a folder that validates and runs identically. Alongside the files, the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Input`, and `Question` nodes with `INPUTS_TO`, `BRANCH`, `DECLARES_INPUT`, `ASKS`, and `USES` edges, the last pointing at the `File` nodes a step runs, renders, or may load. Skills are keyed `name@revision`, where the revision is a hash of the files: reloading unchanged content is a no-op, changed content adds a revision, and many skills coexist in one database.
+
 ## Development & Contributing
 
 ### Bumping the AIP protocol version

@@ -206,6 +206,58 @@ def resume_command(argv: list[str]) -> int:
     return runner.resume(run, _read_input(args.input)).code
 
 
+def db_command(argv: list[str]) -> int:
+    """`aip db load|list|export`: the Neo4j projection. Connection from NEO4J_* env or flags."""
+    from aip.db.neo4j import Connection, export, list_skills, load
+
+    connection = argparse.ArgumentParser(add_help=False)
+    connection.add_argument("--uri", default=None, help="Neo4j URI; default $NEO4J_URI or neo4j://localhost:7687")
+    connection.add_argument("--user", default=None, help="default $NEO4J_USERNAME or neo4j")
+    connection.add_argument("--password", default=None, help="default $NEO4J_PASSWORD")
+    connection.add_argument("--database", default=None, help="default $NEO4J_DATABASE or neo4j")
+
+    parser = argparse.ArgumentParser(prog="aip db", description="Load skills into Neo4j losslessly, list them, export them back.")
+    sub = parser.add_subparsers(dest="op", required=True)
+    p_load = sub.add_parser("load", parents=[connection], help="validate a skill folder and write it to the database")
+    p_load.add_argument("skill_dir", type=Path)
+    sub.add_parser("list", parents=[connection], help="skills in the database, newest revision first")
+    p_export = sub.add_parser("export", parents=[connection], help="rebuild a skill folder from the database, byte for byte")
+    p_export.add_argument("name")
+    p_export.add_argument("--revision", default=None, help="a specific revision; default is the latest")
+    p_export.add_argument("--out", type=Path, default=Path("."), help="parent folder; the skill lands at <out>/<name>")
+    args = parser.parse_args(argv)
+
+    conn = Connection()
+    for attr, value in (("uri", args.uri), ("user", args.user), ("password", args.password), ("database", args.database)):
+        if value is not None:
+            setattr(conn, attr, value)
+
+    if args.op == "load":
+        try:
+            skill_id = load(args.skill_dir, conn)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"loaded {skill_id}")
+        return 0
+    if args.op == "list":
+        rows = list_skills(conn)
+        if not rows:
+            print("no skills loaded")
+            return 0
+        width = max(len(r["name"]) for r in rows)
+        for r in rows:
+            print(f"{r['name'].ljust(width)}  {r['revision']}  aip {r['aip_version']}  {r['steps']} steps  {r['files']} files  {r['loaded_at']}")
+        return 0
+    try:
+        target = export(args.name, args.out, revision=args.revision, conn=conn)
+    except KeyError as exc:
+        print(f"aip: {exc}", file=sys.stderr)
+        return 1
+    print(f"exported {target}")
+    return 0
+
+
 COMMANDS = {
     "validate": validate_command,
     "schema": schema_command,
@@ -213,6 +265,7 @@ COMMANDS = {
     "info": info_command,
     "run": run_command,
     "resume": resume_command,
+    "db": db_command,
 }
 PLANNED = ["config", "publish", "list", "remove", "get", "server"]
 

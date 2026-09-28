@@ -12,6 +12,9 @@ dependencies = [
     "typesafe-sdk>=0.7.1",
 ]
 
+[project.optional-dependencies]
+neo4j = ["neo4j>=6.0"]
+
 [project.scripts]
 aip = "aip.client.cli:main"
 
