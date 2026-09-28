@@ -20,38 +20,34 @@ AIP provides improved performance and stronger governance for autonomous agent s
 
 **Performance**
 - **Structured skills outperform freeform** and AIP enforced this authoring discipline. AIP requires schema-validated commitments to structured YAML with triggers, steps with script-backed nodes and I/O edges, scenarios, integrations, and anti-patterns. Early A/B evidence in our pre-print paper: [AIP: A Graph Representation for Learning and Governing Agent
-Skills](https://arxiv.org/pdf/2606.04781) demonstrates lift for Claude Sonnet across a wide variety of SKillsBench tasks.
+Skills](https://arxiv.org/pdf/2606.04781) demonstrates lift for Claude Sonnet across a wide variety of SkillsBench tasks.
 - **Concrete tuning surface.** Schemas give a structured place to iterate when running evals — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
 - **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
 
 **Governance**
-- **Validated against a standard.** Every skill conforms to its schema; every schema to the AIP base. Quality gate before any consumer sees the skill.
+- **Validated against a standard.** Every skill validates against the one AIP procedure schema and its graph rules. Quality gate before any consumer sees the skill.
 - **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
 - **Database-ingestable.** Schema-validated YAML projects into a graph database for governed distribution, audit, and analytics.
 
 ## Quickstart
 
-AIP ships as an Agent Skill for co-authoring AIP artifacts (skills & schemas). Install it into your agent's skills directory; the skill activates the next time you talk to your agent about authoring or validating an AIP artifact.
+AIP ships as an Agent Skill for co-authoring AIP skills. Install it into your agent's skills directory; the skill activates the next time you talk to your agent about authoring or validating an AIP artifact.
 
-**Requirements:** [uv](https://docs.astral.sh/uv/) — used to run the bundled Python validators. Install with
+**Requirements:** [uv](https://docs.astral.sh/uv/) — used to run the bundled Python validator. Install with
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**Install AIP, latest** (Claude Code, project-local, tracks `main`):
+AIP `0.4a0` is in active development on the `aip-s1` branch and is not tagged yet. Install from the branch.
+
+**Install AIP** (Claude Code, project-local, tracks `aip-s1`):
 
 ```bash
-git clone --depth 1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
+git clone --depth 1 --branch aip-s1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
 ```
 
-**Install AIP, fixed version** (Claude Code, project-local, pinned to `v0.4a0`):
-
-```bash
-git clone --depth 1 --branch v0.4a0 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
-```
-
-Replace `v0.4a0` with whichever release you want — see [tags](https://github.com/zach-blumenfeld/aip/tags) for the list.
+The released [tags](https://github.com/zach-blumenfeld/aip/tags) (`v0.3a3` and earlier) predate the 0.4a0 format and do not work with the current tooling. Once 0.4a0 is tagged and merged to `main`, pin a release with `--branch v0.4a0` instead.
 
 For **user-global install** or **other agents**, change the target directory:
 
