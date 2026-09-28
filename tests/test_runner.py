@@ -143,6 +143,32 @@ class Interactive(unittest.TestCase):
 
 
 class Cli(unittest.TestCase):
+    def test_info_is_readable_and_example_input_is_runnable(self):
+        from aip.client.cli import main
+
+        out = io.StringIO()
+        with mock.patch("sys.stdout", new=out):
+            self.assertEqual(main(["info", str(EXAMPLE)]), EXIT_DONE)
+        text = out.getvalue()
+        for needle in ("START INPUT", "message  string", '{"message": "<string>"}', "by-tone  [router on `tone`]",
+                       "? tone [choice]  (threshold 0.6)", "script: scripts/escalate.py", "RESULT"):
+            self.assertIn(needle, text, needle)
+
+        out = io.StringIO()
+        with mock.patch("sys.stdout", new=out):
+            self.assertEqual(main(["info", str(EXAMPLE), "--example-input"]), EXIT_DONE)
+        example = json.loads(out.getvalue())
+        self.assertEqual(example, {"message": "<string>"})
+        # the example input is accepted by the start step as-is
+        with tempfile.TemporaryDirectory() as tmp:
+            runner, _ = make_runner(FakeJev(0.9, 0.9), tmp)
+            self.assertEqual(runner.start(example).code, EXIT_DONE)
+
+        out = io.StringIO()
+        with mock.patch("sys.stdout", new=out):
+            self.assertEqual(main(["info", str(EXAMPLE), "--json"]), EXIT_DONE)
+        self.assertEqual(json.loads(out.getvalue())["start"]["step"], "triage")
+
     def test_run_and_resume_via_cli(self):
         from aip.client.cli import main
 

@@ -18,6 +18,7 @@ Track changes here as you make them. On release, rename this section to the new 
 
 ### Added
 - `src/aip`: the runtime package. `aip.spec` (format models, skill validation, loader), `aip.model` (stateless `Procedure.run`, input validation, server-side routing, decision collapse and review, script execution), and the `aip` CLI with `validate`, `schema`, and `info`.
+- `aip info`: a readable summary of a skill (purpose, triggers, the start input with types and descriptions, an example start JSON, every step with its questions, script, template, and references, and the end shape); `--example-input` prints just the start JSON, `--json` the machine form.
 - `aip run` and `aip resume`: a local runner over the same engine the server will use. Follows suggested inputs, pauses to a run file (exit code 3) for client tasks, low-confidence decisions, or, without a decision model, for the client to answer questions itself; `--interactive` prompts instead. Decisions answered by the client are recorded in history as manual.
 - `examples/billing-support`: a complete procedure skill exercising every step kind. It is the validator fixture and runs end to end through the loader and runtime in tests.
 

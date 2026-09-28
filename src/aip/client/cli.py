@@ -70,18 +70,83 @@ def runtime_command(argv: list[str]) -> int:
     return 0
 
 
-def info_command(argv: list[str]) -> int:
-    from aip.spec.loader import load_procedure
+_PLACEHOLDER = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "object": {}, "list[*]": []}
 
-    parser = argparse.ArgumentParser(prog="aip info", description="Show a skill's meta, start and end shapes, and steps.")
+
+def _example_input(items) -> dict:
+    return {item.name: _PLACEHOLDER[item.type.value] for item in items}
+
+
+def _inputs_table(items) -> str:
+    if not items:
+        return "  (none)\n"
+    width = max(len(i.name) for i in items)
+    return "".join(f"  {i.name.ljust(width)}  {i.type.value:8}  {i.description or ''}".rstrip() + "\n" for i in items)
+
+
+def describe_skill(loaded) -> str:
+    """Human-readable summary of a skill: what it does, what to give it, how it flows."""
+    fm, spec = loaded.frontmatter, loaded.spec
+    start = spec.start
+    lines = [f"{fm['name']}  (AIP {fm.get('metadata', {}).get('aip-version', '?')})", "", fm.get("description", ""), ""]
+    lines += ["PURPOSE", "  " + " ".join(spec.purpose.split()), ""]
+    lines += ["TRIGGER WHEN"] + [f"  - {t}" for t in spec.trigger_when]
+    if spec.do_not_use_when:
+        lines += ["DO NOT USE WHEN"] + [f"  - {t}" for t in spec.do_not_use_when]
+    lines += ["", f"START INPUT  (step `{start.name}`, {start.kind})", _inputs_table(start.inputs).rstrip(), "",
+              "  example start.json:", "  " + json.dumps(_example_input(start.inputs)), "",
+              f"  run:  aip run {loaded.skill_dir} --input start.json", ""]
+    lines += ["STEPS"]
+    for step in spec.steps:
+        if step.kind == "router":
+            branches = ", ".join(f"{v} -> {t}" for v, t in step.branches.items())
+            lines.append(f"  {step.name}  [router on `{step.branch_on}`]  {branches}")
+        elif step.kind == "end":
+            lines.append(f"  {step.name}  [end]")
+        else:
+            lines.append(f"  {step.name}  [{step.kind}]  -> {step.inputs_to}")
+        if getattr(step, "description", None):
+            lines.append(f"      {step.description}")
+        if step.kind == "decision":
+            for name, q in step.questions.items():
+                threshold = step.thresholds.get(name)
+                suffix = f"  (threshold {threshold})" if threshold is not None else ""
+                lines.append(f"      ? {name} [{q.type}]{suffix}: {q.instructions}")
+        if step.kind == "execution":
+            lines.append(f"      script: {step.script}" + (f"  assets: {', '.join(step.assets)}" if step.assets else ""))
+        if step.kind == "client_task":
+            lines.append(f"      template: {step.template}" + (f"  assets: {', '.join(step.assets)}" if step.assets else ""))
+            for ref in step.references:
+                lines.append(f"      reference: {ref.path}  ({ref.description})")
+    end = next((s for s in spec.steps if s.kind == "end"), None)
+    if end is not None:
+        lines += ["", "RESULT  (end state)", _inputs_table(end.inputs).rstrip()]
+    if spec.anti_patterns:
+        lines += ["", "ANTI-PATTERNS"] + [f"  - {a}" for a in spec.anti_patterns]
+    return "\n".join(lines) + "\n"
+
+
+def info_command(argv: list[str]) -> int:
+    from aip.spec import load_skill
+
+    parser = argparse.ArgumentParser(prog="aip info", description="Describe a skill: what it does, the input it expects, and how it flows.")
     parser.add_argument("skill_dir", type=Path)
+    parser.add_argument("--json", action="store_true", help="machine-readable description instead of the summary")
+    parser.add_argument("--example-input", action="store_true", help="print only an example start input as JSON")
     args = parser.parse_args(argv)
     try:
-        procedure = load_procedure(args.skill_dir)
+        loaded = load_skill(args.skill_dir)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1
-    print(json.dumps(procedure.describe(), indent=2))
+    if args.example_input:
+        print(json.dumps(_example_input(loaded.spec.start.inputs), indent=2))
+        return 0
+    if args.json:
+        from aip.spec.loader import build_procedure
+        print(json.dumps(build_procedure(loaded).describe(), indent=2))
+        return 0
+    sys.stdout.write(describe_skill(loaded))
     return 0
 
 

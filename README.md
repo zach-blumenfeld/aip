@@ -79,25 +79,36 @@ The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL
 
 ## The Procedure Format
 
-There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `uv run aip schema --write assets/procedure.schema.json`; a test fails if it drifts. The runtime block every authored skill carries at the top of its body lives in the package too (`uv run aip runtime` prints it); the validator rejects a skill whose block is missing or edited. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
+There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `aip schema --write assets/procedure.schema.json`; a test fails if it drifts. The runtime block every authored skill carries at the top of its body lives in the package too (`aip runtime` prints it); the validator rejects a skill whose block is missing or edited. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
 
 ## Validation
 
 ```bash
+aip validate <path/to/skill-folder>                  # with the CLI installed
 uv run scripts/validate.py <path/to/skill-folder>   # from a plain git clone, no install
-uv run aip validate <path/to/skill-folder>           # with the package installed
 ```
 
 Both run the same checks: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, and every referenced asset, reference, and script present on disk.
 
 Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
 
+## Installing the `aip` CLI
+
+```bash
+uv tool install --editable .        # from the repo root; puts `aip` on PATH, tracks your edits
+uv tool uninstall aip               # to remove
+```
+
+Inside the repo, `uv run aip ...` works without installing. Every command below assumes `aip` is on PATH.
+
 ## Running a Skill
 
 ```bash
-uv run aip run <path/to/skill-folder> --input start.json     # runs until the client must decide
-uv run aip resume <run-file> --input answer.json             # continues a paused run
-uv run aip run <path/to/skill-folder> --interactive           # prompts on the terminal instead
+aip info <path/to/skill-folder>                       # what it does, the input it expects, how it flows
+aip info <path/to/skill-folder> --example-input > start.json   # a start input to edit
+aip run <path/to/skill-folder> --input start.json     # runs until the client must decide
+aip resume <run-file> --input answer.json             # continues a paused run
+aip run <path/to/skill-folder> --interactive           # prompts on the terminal instead
 ```
 
 `aip run` drives the procedure locally with the same engine the server will use. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
@@ -109,7 +120,7 @@ uv run aip run <path/to/skill-folder> --interactive           # prompts on the t
 The AIP format version (currently `0.4a0`) is referenced in **multiple places** that must stay in sync. When bumping:
 
 1. **`src/aip/spec/models.py`** — `FORMAT_VERSION`. The validator rejects skills whose `metadata.aip-version` differs from it.
-2. **`assets/procedure.schema.json`** — regenerate with `uv run aip schema --write assets/procedure.schema.json`.
+2. **`assets/procedure.schema.json`** — regenerate with `aip schema --write assets/procedure.schema.json`.
 3. **`SKILL.md`** — the frontmatter version and every example that shows `metadata.aip-version`.
 4. **`examples/`** — each example skill's `metadata.aip-version`.
 5. **`README.md`** — install commands and any version references.
