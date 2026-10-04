@@ -16,6 +16,7 @@ import pytest
 from aip.server.backend import CatalogBackend, NotFound, RunBackend
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import materialize, snapshot
+from aip.spec import load_skill
 
 EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "billing-support"
 
@@ -78,7 +79,7 @@ def tree(root: Path) -> dict:
     out = {}
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root).as_posix()
-        if path.name in {".DS_Store", ".aip-manifest.json"} or "__pycache__" in path.parts:
+        if path.name == ".DS_Store" or "__pycache__" in path.parts:
             continue
         out[rel] = None if path.is_dir() else (hashlib.sha256(path.read_bytes()).hexdigest(),
                                                 path.stat().st_mode & 0o777)
@@ -173,10 +174,13 @@ def test_binary_files_survive(catalog, tmp_path):
 
 def test_folder_is_a_loadable_copy(catalog, example, tmp_path):
     """Both backends hand the server an on-disk folder to execute from (the filesystem copy in
-    place, the Neo4j cache); it is the published tree byte for byte."""
+    place, the Neo4j cache); it is the published tree byte for byte, named after the skill
+    so the loader accepts it, and holds nothing else."""
     rev = catalog.publish(example)
     folder = catalog.folder("billing-support", rev)
+    assert folder.name == "billing-support"
     assert tree(folder) == tree(EXAMPLE)
+    assert load_skill(folder).frontmatter["name"] == "billing-support"
     assert catalog.folder("billing-support", rev) == folder            # stable across calls
     with pytest.raises(NotFound):
         catalog.folder("billing-support", "0000000000000000")
@@ -371,7 +375,8 @@ class TestNeo4j:
     def test_cache_is_rebuilt_when_a_file_is_tampered(self, neo4j, example):
         rev = neo4j.catalog.publish(example)
         folder = neo4j.catalog.folder("billing-support", rev)
-        assert folder == neo4j.catalog.cache_dir / example.id
+        assert folder == neo4j.catalog.cache_dir / example.id / "billing-support"
+        assert (neo4j.catalog.cache_dir / example.id / ".aip-manifest.json").exists()
         (folder / "assets" / "policy.md").write_text("tampered\n")
         assert neo4j.catalog.folder("billing-support", rev) == folder
         assert tree(folder) == tree(EXAMPLE)

@@ -28,8 +28,10 @@ and `Procedure.triggers` (the `trigger_when` list joined). Hits are summed per r
 filtered to what each name resolves to, and an exact name match is boosted on top.
 
 Materialisation: `folder(name, revision)` rebuilds the skill under
-`<cache>/<name>@<revision>/` (default `~/.cache/aip`, `AIP_CACHE_DIR` overrides) from the
-`File` nodes, and reuses the copy only while every file still matches its manifest hash.
+`<cache>/<name>@<revision>/<name>/` (default `~/.cache/aip`, `AIP_CACHE_DIR` overrides)
+from the `File` nodes, with the manifest beside the skill folder at
+`<cache>/<name>@<revision>/.aip-manifest.json`, and reuses the copy only while every
+file still matches its manifest hash.
 """
 
 from __future__ import annotations
@@ -507,24 +509,25 @@ class Neo4jCatalog:
     # ---------------------------------------------------------- materialisation
 
     def folder(self, name: str, revision: str) -> Path:
-        """An on-disk copy of a revision under the cache, rebuilt unless every file still matches its hash."""
+        """The skill folder of a revision on disk, under the cache; rebuilt unless every file still matches its hash."""
         sid = self._require(name, revision)
         target = self.cache_dir / sid
+        skill_dir = target / name
         manifest_path = target / MANIFEST
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text())
-                if all((target / f["path"]).is_file()
-                       and hashlib.sha256((target / f["path"]).read_bytes()).hexdigest() == f["sha256"]
+                if all((skill_dir / f["path"]).is_file()
+                       and hashlib.sha256((skill_dir / f["path"]).read_bytes()).hexdigest() == f["sha256"]
                        for f in manifest["files"]):
-                    return target
+                    return skill_dir
             except (OSError, ValueError, KeyError):
                 pass
         record = self.get(name, revision)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{sid}.", dir=self.cache_dir))
         try:
-            write_files(record.files, record.directories, staging)
+            write_files(record.files, record.directories, staging / name)
             (staging / MANIFEST).write_text(json.dumps(record.to_json(with_content=False), indent=2) + "\n")
             if target.exists():
                 shutil.rmtree(target)
@@ -532,7 +535,7 @@ class Neo4jCatalog:
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
-        return target
+        return skill_dir
 
 
 # ------------------------------------------------------------------------------- runs

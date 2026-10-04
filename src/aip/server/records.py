@@ -30,7 +30,7 @@ JSON = Dict[str, Any]
 MANIFEST = ".aip-manifest.json"
 
 IGNORE_DIRS = {".git", "__pycache__", ".aip"}
-IGNORE_FILES = {".DS_Store", MANIFEST}
+IGNORE_FILES = {".DS_Store"}
 IGNORE_SUFFIXES = {".pyc"}
 
 

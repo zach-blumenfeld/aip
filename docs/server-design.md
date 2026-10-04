@@ -182,7 +182,7 @@ it. A backend may also expose `project(skill)` for analytics; the server never c
 it.
 
 Materialisation: to execute a procedure the server needs the skill on disk. The
-server keeps a cache directory, `<cache>/<name>@<revision>/`, rebuilt from
+server keeps a cache directory, `<cache>/<name>@<revision>/<name>/`, rebuilt from
 `files()` on first use and verified by hash (the `export` path that exists today).
 `load_procedure` then runs unchanged against that folder. The filesystem backend
 needs no cache: its published folder is already on disk and is used in place.
@@ -215,8 +215,10 @@ sidecar next to a trial container, or Aura. The backend only needs a bolt URI.
   ```
   <root>/
   ├── catalog.json                 names → {pinned, revisions: [{revision, published_at, retired}]}
-  ├── skills/<name>/<revision>/    the skill folder exactly as published (this is the materialised copy too)
-  │   └── .aip-manifest.json       file manifest: path, size, sha256, mode
+  ├── skills/<name>/<revision>/    one revision
+  │   ├── .aip-manifest.json       file manifest: path, size, sha256, mode
+  │   └── <name>/                  the skill folder exactly as published (this is the materialised copy too;
+  │                                the loader requires the folder to be named after the skill)
   └── runs/<run_id>.jsonl          one JSON line per history entry, first line is the run header
   ```
 

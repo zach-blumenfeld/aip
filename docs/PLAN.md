@@ -112,7 +112,7 @@ uv run pytest -q                                 # old suite still green
 
 ## - [x] M2 — Neo4j backend on the existing projection
 
-Done 2026-10-03, commit faa3339: Neo4j backend, `aip db` shim, and the Neo4j contract parametrisation landed; server suite 38 passed against Docker Neo4j (host port 17687, since 7687 was held by a stale gvproxy mapping), full suite 92 passed with `NEO4J_URI` and 74 passed / 18 skipped without; `aip db load` twice gave the same id and `db list` showed one revision. For M3: `load_skill` rejects a folder whose name differs from the skill name, which both backends' executable copies will trip.
+Done 2026-10-03, commit faa3339: Neo4j backend, `aip db` shim, and the Neo4j contract parametrisation landed; server suite 38 passed against Docker Neo4j (host port 17687, since 7687 was held by a stale gvproxy mapping), full suite 92 passed with `NEO4J_URI` and 74 passed / 18 skipped without; `aip db load` twice gave the same id and `db list` showed one revision. Follow-up: both executable copies now sit in a folder named after the skill (`skills/<name>/<rev>/<name>/`, `<cache>/<name>@<rev>/<name>/`) with the manifest beside it, so the loader's folder-name check holds and the published tree carries nothing extra.
 
 Scope: the default backend, built from the Cypher that exists today.
 

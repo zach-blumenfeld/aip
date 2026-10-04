@@ -3,12 +3,14 @@
     <root>/
     ├── catalog.json                 names -> {pinned, revisions: [{revision, published_at, retired}]}
     ├── catalog.lock                 flock target; catalog.json is the only file ever rewritten
-    ├── skills/<name>/<revision>/    the skill folder exactly as published (also the executable copy)
-    │   └── .aip-manifest.json       the record minus file bytes: manifest (path, size, sha256, mode)
-    │                                plus the projection rows, so `get` never re-parses the skill
+    ├── skills/<name>/<revision>/    one revision
+    │   ├── .aip-manifest.json       the record minus file bytes: manifest (path, size, sha256, mode)
+    │   │                            plus the projection rows, so `get` never re-parses the skill
+    │   └── <name>/                  the skill folder exactly as published, nothing else in it;
+    │                                also the executable copy (the loader checks the folder name)
     └── runs/<run_id>.jsonl          first line the run header, one JSON line per history entry
 
-Writes are atomic per file (temp name, then rename); a skill folder is materialised
+Writes are atomic per file (temp name, then rename); a revision directory is built
 beside its final name and renamed into place. Search is weighted term overlap over an
 in-memory index of every name's resolved revision, rebuilt on publish, pin, and retire.
 """
@@ -128,15 +130,18 @@ class FilesystemCatalog:
 
     # ------------------------------------------------------------------ folders
 
-    def folder(self, name: str, revision: str) -> Path:
-        """Where a revision lives on disk: the executable copy for `load_procedure`."""
+    def _revision_dir(self, name: str, revision: str) -> Path:
         path = self.skills_dir / name / revision
         if not (path / MANIFEST).exists():
             raise NotFound(f"no revision {revision!r} of {name!r}")
         return path
 
+    def folder(self, name: str, revision: str) -> Path:
+        """The skill folder of a revision on disk: the executable copy for `load_procedure`."""
+        return self._revision_dir(name, revision) / name
+
     def _manifest(self, name: str, revision: str) -> JSON:
-        return json.loads((self.folder(name, revision) / MANIFEST).read_text())
+        return json.loads((self._revision_dir(name, revision) / MANIFEST).read_text())
 
     # --------------------------------------------------------- CatalogBackend
 
@@ -146,7 +151,7 @@ class FilesystemCatalog:
             final.parent.mkdir(parents=True, exist_ok=True)
             staging = Path(tempfile.mkdtemp(prefix=f".{skill.revision}.", dir=final.parent))
             try:
-                materialize(skill, staging)
+                materialize(skill, staging / skill.name)
                 record = replace(skill, published_at=_now(), retired=False)
                 _write_atomic(staging / MANIFEST, json.dumps(record.to_json(with_content=False), indent=2) + "\n")
                 try:
