@@ -1,1 +1,1 @@
-"""HTTP server over Procedure.run: create, list, remove, get, info, run."""
+"""The AIP server: records, the backend contract, its implementations, and (M3) the HTTP app."""

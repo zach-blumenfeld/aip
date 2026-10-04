@@ -1,6 +1,6 @@
 """Load AIP skills into Neo4j losslessly, and export them back to disk.
 
-Two layers per skill:
+Two layers per skill, as defined by the records in `aip.server.records`:
 
 - **Artifact** (lossless): every file under the skill folder as a `File` node holding
   its exact bytes (text as UTF-8, anything else base64), size, sha256, and mode, plus
@@ -14,175 +14,29 @@ Identity: `Skill.id = "<name>@<revision>"`, where `revision` is a sha256 over ev
 file's path and bytes. Reloading identical content is a no-op; changed content becomes
 a new revision alongside the old one. `Skill.name` groups revisions; the latest is the
 newest `loaded_at`.
+
+The record types and the folder <-> record conversions live in `aip.server.records`;
+`Bundle` is kept here as an alias of `SkillRecord` for callers of the 0.4 API.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
-import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from aip.server.records import (IGNORE_DIRS, IGNORE_FILES, IGNORE_SUFFIXES, FileRecord, SkillRecord,  # noqa: F401
+                                materialize, snapshot, write_files)
+
 JSON = Dict[str, Any]
 
-IGNORE_DIRS = {".git", "__pycache__", ".aip"}
-IGNORE_FILES = {".DS_Store"}
-IGNORE_SUFFIXES = {".pyc"}
+Bundle = SkillRecord
 
 STEP_LABELS = {"decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
                "router": "Router", "end": "End"}
-
-
-# --------------------------------------------------------------------------- bundle
-
-
-@dataclass
-class Bundle:
-    """Everything the database holds for one skill revision. Pure data; JSON-safe."""
-    skill: JSON
-    files: List[JSON]
-    directories: List[str]
-    procedure: JSON
-    steps: List[JSON]
-    edges: List[JSON]        # {"from", "to"}
-    branches: List[JSON]     # {"router", "value", "to"}
-    inputs: List[JSON]       # {"step", "order", "name", "type", "description"}
-    questions: List[JSON]    # {"step", "order", "name", "type", "instructions", "criteria", "threshold"}
-    resources: List[JSON]    # {"step", "path", "role", "description"}
-
-    @property
-    def id(self) -> str:
-        return self.skill["id"]
-
-
-def _read_file(root: Path, path: Path) -> JSON:
-    data = path.read_bytes()
-    rel = path.relative_to(root).as_posix()
-    try:
-        text = data.decode("utf-8")
-        if "\x00" in text:
-            raise UnicodeDecodeError("utf-8", b"", 0, 1, "binary")
-        encoding, content = "utf-8", text
-    except UnicodeDecodeError:
-        encoding, content = "base64", base64.b64encode(data).decode("ascii")
-    return {
-        "path": rel,
-        "size": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "mode": stat.S_IMODE(path.stat().st_mode),
-        "encoding": encoding,
-        "content": content,
-    }
-
-
-def _walk(root: Path) -> tuple[List[JSON], List[str]]:
-    files: List[JSON] = []
-    directories: List[str] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in IGNORE_DIRS)
-        here = Path(dirpath)
-        if here != root:
-            directories.append(here.relative_to(root).as_posix())
-        for name in sorted(filenames):
-            if name in IGNORE_FILES or Path(name).suffix in IGNORE_SUFFIXES:
-                continue
-            path = here / name
-            if path.is_symlink():
-                continue
-            files.append(_read_file(root, path))
-    return files, sorted(directories)
-
-
-def _revision(files: List[JSON]) -> str:
-    h = hashlib.sha256()
-    for f in sorted(files, key=lambda x: x["path"]):
-        h.update(f["path"].encode()); h.update(b"\0"); h.update(f["sha256"].encode()); h.update(b"\0")
-    return h.hexdigest()[:16]
-
-
-def snapshot(skill_dir: Path) -> Bundle:
-    """Validate the skill and capture it: files for the artifact, the spec for the projection."""
-    from aip.spec import load_skill
-
-    skill_dir = Path(skill_dir).resolve()
-    loaded = load_skill(skill_dir)
-    fm, spec = loaded.frontmatter, loaded.spec
-    files, directories = _walk(skill_dir)
-    revision = _revision(files)
-    skill_id = f"{fm['name']}@{revision}"
-
-    steps, edges, branches, inputs, questions, resources = [], [], [], [], [], []
-    for order, step in enumerate(spec.steps):
-        record: JSON = {"name": step.name, "kind": step.kind, "order": order,
-                        "description": getattr(step, "description", None)}
-        if step.kind == "router":
-            record["branch_on"] = step.branch_on
-            for value, target in step.branches.items():
-                branches.append({"router": step.name, "value": value, "to": target})
-        else:
-            if step.kind != "end":
-                edges.append({"from": step.name, "to": step.inputs_to})
-            for i, item in enumerate(step.inputs):
-                inputs.append({"step": step.name, "order": i, "name": item.name, "type": item.type.value,
-                               "description": item.description})
-        if step.kind == "decision":
-            for i, (qname, q) in enumerate(step.questions.items()):
-                criteria = q.criteria.model_dump(exclude_none=True) if hasattr(q.criteria, "model_dump") else q.criteria
-                questions.append({"step": step.name, "order": i, "name": qname, "type": q.type,
-                                  "instructions": q.instructions,
-                                  "criteria": json.dumps(criteria) if criteria is not None else None,
-                                  "threshold": step.thresholds.get(qname)})
-        if step.kind == "execution":
-            record["script"] = step.script
-            record["timeout"] = step.timeout
-            resources.append({"step": step.name, "path": step.script, "role": "script", "description": None})
-            resources += [{"step": step.name, "path": a, "role": "asset", "description": None} for a in step.assets]
-        if step.kind == "client_task":
-            record["template"] = step.template
-            record["framing"] = step.framing
-            resources.append({"step": step.name, "path": step.template, "role": "template", "description": None})
-            resources += [{"step": step.name, "path": a, "role": "asset", "description": None} for a in step.assets]
-            resources += [{"step": step.name, "path": r.path, "role": "reference", "description": r.description}
-                          for r in step.references]
-        steps.append(record)
-
-    return Bundle(
-        skill={
-            "id": skill_id, "name": fm["name"], "revision": revision,
-            "description": fm.get("description", ""),
-            "aip_version": fm.get("metadata", {}).get("aip-version"),
-            "frontmatter": json.dumps(fm, sort_keys=True),
-            "root_name": skill_dir.name,
-        },
-        files=files, directories=directories,
-        procedure={"purpose": spec.purpose, "trigger_when": list(spec.trigger_when),
-                   "do_not_use_when": list(spec.do_not_use_when), "anti_patterns": list(spec.anti_patterns),
-                   "start": spec.start.name, "end": next(s.name for s in spec.steps if s.kind == "end")},
-        steps=steps, edges=edges, branches=branches, inputs=inputs, questions=questions, resources=resources,
-    )
-
-
-def materialize(files: List[JSON], directories: List[str], out_dir: Path) -> Path:
-    """Write the artifact layer to disk and verify every file's hash. Returns out_dir."""
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for d in directories:
-        (out_dir / d).mkdir(parents=True, exist_ok=True)
-    for f in files:
-        data = f["content"].encode("utf-8") if f["encoding"] == "utf-8" else base64.b64decode(f["content"])
-        digest = hashlib.sha256(data).hexdigest()
-        if digest != f["sha256"]:
-            raise ValueError(f"{f['path']}: content hash {digest} does not match stored {f['sha256']}")
-        target = out_dir / f["path"]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        os.chmod(target, int(f["mode"]))
-    return out_dir
 
 
 # --------------------------------------------------------------------------- cypher
@@ -314,10 +168,13 @@ def _step_props(step: JSON) -> JSON:
 def write_bundle(tx, bundle: Bundle) -> None:
     """Write one skill revision inside an open write transaction. Replaces an existing copy of the same id."""
     sid = bundle.id
+    skill = {"id": sid, "name": bundle.name, "revision": bundle.revision, "description": bundle.description,
+             "aip_version": bundle.aip_version, "frontmatter": json.dumps(bundle.frontmatter, sort_keys=True),
+             "root_name": bundle.root_name}
     tx.run(DELETE_REVISION, id=sid)
-    tx.run(CREATE_SKILL, skill=bundle.skill, directories=bundle.directories,
+    tx.run(CREATE_SKILL, skill=skill, directories=bundle.directories,
            loaded_at=datetime.now(timezone.utc).isoformat())
-    tx.run(CREATE_FILES, id=sid, files=bundle.files)
+    tx.run(CREATE_FILES, id=sid, files=[f.to_json() for f in bundle.files])
     tx.run(CREATE_PROCEDURE, id=sid, p=bundle.procedure)
     for kind, query in CREATE_STEPS.items():
         rows = [{"name": s["name"], "kind": s["kind"], "order": s["order"], "description": s["description"],
@@ -385,7 +242,7 @@ def export(name: str, out_dir: Path, revision: str | None = None, conn: Connecti
     if record is None:
         raise KeyError(f"no skill named {name!r}" + (f" at revision {revision}" if revision else ""))
     target = Path(out_dir) / record["name"]
-    materialize(record["files"], record["directories"] or [], target)
+    write_files([FileRecord.from_json(f) for f in record["files"]], record["directories"] or [], target)
     return target
 
 

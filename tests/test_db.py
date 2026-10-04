@@ -11,9 +11,10 @@ import os
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
-from aip.db.neo4j import Bundle, materialize, snapshot
+from aip.db.neo4j import materialize, snapshot
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "billing-support"
 
@@ -35,14 +36,14 @@ def tree(root: Path) -> dict:
 class BundleTest(unittest.TestCase):
     def test_snapshot_captures_files_and_graph(self):
         b = snapshot(EXAMPLE)
-        self.assertEqual(b.skill["name"], "billing-support")
+        self.assertEqual(b.name, "billing-support")
         self.assertRegex(b.id, r"^billing-support@[0-9a-f]{16}$")
-        self.assertEqual(b.skill["aip_version"], "0.4a0")
-        paths = {f["path"] for f in b.files}
+        self.assertEqual(b.aip_version, "0.4a0")
+        paths = {f.path for f in b.files}
         self.assertIn("SKILL.md", paths)
         self.assertIn("scripts/escalate.py", paths)
         self.assertIn("source/README.md", paths)
-        self.assertTrue(all(f["encoding"] == "utf-8" for f in b.files))
+        self.assertTrue(all(f.encoding == "utf-8" for f in b.files))
         self.assertEqual({d for d in b.directories}, {"assets", "references", "scripts", "source"})
 
         self.assertEqual([s["name"] for s in b.steps], ["triage", "by-tone", "escalate", "reply", "end"])
@@ -64,23 +65,23 @@ class BundleTest(unittest.TestCase):
 
     def test_bundle_is_json_safe(self):
         b = snapshot(EXAMPLE)
-        json.dumps(b.__dict__)
+        json.dumps(b.to_json())
 
     def test_revision_is_content_addressed(self):
         with tempfile.TemporaryDirectory() as tmp:
             copy = Path(tmp) / "billing-support"
             shutil.copytree(EXAMPLE, copy)
-            self.assertEqual(snapshot(copy).skill["revision"], snapshot(EXAMPLE).skill["revision"])
+            self.assertEqual(snapshot(copy).revision, snapshot(EXAMPLE).revision)
             (copy / "assets" / "policy.md").write_text("changed\n")
-            self.assertNotEqual(snapshot(copy).skill["revision"], snapshot(EXAMPLE).skill["revision"])
+            self.assertNotEqual(snapshot(copy).revision, snapshot(EXAMPLE).revision)
 
     def test_materialize_round_trip_is_byte_identical(self):
         b = snapshot(EXAMPLE)
         with tempfile.TemporaryDirectory() as tmp:
-            out = materialize(b.files, b.directories, Path(tmp) / "billing-support")
+            out = materialize(b, Path(tmp) / "billing-support")
             self.assertEqual(tree(out), tree(EXAMPLE))
             # and the rebuilt folder is a valid, loadable skill with the same revision
-            self.assertEqual(snapshot(out).skill["revision"], b.skill["revision"])
+            self.assertEqual(snapshot(out).revision, b.revision)
 
     def test_binary_files_survive(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,17 +91,17 @@ class BundleTest(unittest.TestCase):
             (copy / "assets" / "logo.bin").write_bytes(blob)
             os.chmod(copy / "scripts" / "escalate.py", 0o755)
             b = snapshot(copy)
-            f = next(x for x in b.files if x["path"] == "assets/logo.bin")
-            self.assertEqual(f["encoding"], "base64")
-            out = materialize(b.files, b.directories, Path(tmp) / "rebuilt")
+            f = next(x for x in b.files if x.path == "assets/logo.bin")
+            self.assertEqual(f.encoding, "base64")
+            out = materialize(b, Path(tmp) / "rebuilt")
             self.assertEqual((out / "assets" / "logo.bin").read_bytes(), blob)
             self.assertEqual((out / "scripts" / "escalate.py").stat().st_mode & 0o777, 0o755)
 
     def test_materialize_rejects_tampered_content(self):
         b = snapshot(EXAMPLE)
-        b.files[0]["content"] += "x"
+        b.files[0] = replace(b.files[0], content=b.files[0].content + "x")
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
-            materialize(b.files, b.directories, Path(tmp) / "out")
+            materialize(b, Path(tmp) / "out")
 
 
 @unittest.skipUnless(os.environ.get("NEO4J_URI"), "NEO4J_URI not set")
