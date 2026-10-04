@@ -263,3 +263,12 @@ def runtime_text(version: str = FORMAT_VERSION) -> str:
 
     name = "runtime.md" if version == FORMAT_VERSION else f"runtime-{version}.md"
     return files("aip.spec").joinpath(name).read_text(encoding="utf-8")
+
+
+def runtime_skill_text() -> str:
+    """The `aip-runtime` meta-skill: the one page an agent reads to run published procedures
+    through the client (`aip runtime --skill`). A plain Agent Skill, versioned with the format;
+    the repo copy is `skills/aip-runtime/SKILL.md` and a test keeps the two identical."""
+    from importlib.resources import files
+
+    return files("aip.spec").joinpath("aip-runtime", "SKILL.md").read_text(encoding="utf-8")

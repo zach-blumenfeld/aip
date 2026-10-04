@@ -1,6 +1,7 @@
 """The `aip` command line entry point.
 
-Local: validate, schema, runtime, info, run, resume, db, server. Against a configured
+Local: validate, schema, runtime (the block, or `--skill` for the `aip-runtime` meta-skill),
+info, run, resume, db, server. Against a configured
 server (`aip config`, or `AIP_SERVER`): search, list, publish, get, pin, retire, and
 `info`/`run` by name. A folder path always bypasses the server.
 """
@@ -57,16 +58,24 @@ def schema_command(argv: list[str]) -> int:
 
 
 def runtime_command(argv: list[str]) -> int:
-    from aip.spec import runtime_text
+    from aip.spec import runtime_skill_text, runtime_text
 
-    parser = argparse.ArgumentParser(prog="aip runtime", description="Print the AIP runtime block every authored skill carries at the top of its body.")
+    parser = argparse.ArgumentParser(prog="aip runtime", description="Print the AIP runtime block every authored skill carries "
+                                     "at the top of its body; with --skill, the `aip-runtime` Agent Skill that tells an agent "
+                                     "how to run published procedures through this client.")
+    parser.add_argument("--skill", action="store_true", help="the `aip-runtime` meta-skill instead of the runtime block")
+    parser.add_argument("--out", type=Path, default=None, metavar="DIR",
+                        help="with --skill: write it as DIR/aip-runtime/SKILL.md (a skills directory)")
     parser.add_argument("--write", type=Path, default=None, help="write to this path instead of stdout")
     args = parser.parse_args(argv)
-    text = runtime_text()
-    if args.write:
-        args.write.parent.mkdir(parents=True, exist_ok=True)
-        args.write.write_text(text)
-        print(f"wrote {args.write}")
+    if args.out is not None and not args.skill:
+        parser.error("--out goes with --skill; use --write for the runtime block")
+    text = runtime_skill_text() if args.skill else runtime_text()
+    target = args.out / "aip-runtime" / "SKILL.md" if args.out is not None else args.write
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        print(f"wrote {target}")
     else:
         sys.stdout.write(text)
     return 0
