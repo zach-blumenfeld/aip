@@ -1,7 +1,8 @@
 # Plan: rebuild toward the server design
 
-Milestones to get from the 0.4a0 code on `aip-s1` (tag `v0.4a0`) to the architecture in
-[`server-design.md`](server-design.md). Each milestone says what it keeps, replaces, or
+Milestones to get from the 0.4a0 code (tag `v0.4a0`) to format 0.5a0, the client-server
+architecture in [`server-design.md`](server-design.md). This is a new line, not a patch
+on 0.4: the work happens on branch `aip-0.5a0`, and 0.4a0 stays what it is. Each milestone says what it keeps, replaces, or
 deletes, and ends with a command or test that proves it works. Milestones are ordered;
 each is independently mergeable and leaves `aip run <folder>` working.
 
@@ -13,8 +14,9 @@ Baseline today (`uv run --with pytest --with neo4j pytest -q`): 60 passed, 1 ski
 For an agent told "implement the next unchecked milestone, run the tests, tick it
 off, commit":
 
-- Work on branch `aip-s1` in this repo. Do not touch `main` and do not merge; `main`
-  is still the 0.3a3 line and is merged by hand later. Do not push unless asked.
+- Work on branch `aip-0.5a0` in this repo. Do not touch `main` or `aip-s1` and do
+  not merge; `main` is still the 0.3a3 line and is merged by hand later. Do not push
+  unless asked.
 - The design is [`server-design.md`](server-design.md); read the sections a
   milestone cites before coding. Where this plan and the design disagree, the
   design wins; note the disagreement in the commit message.
@@ -41,7 +43,7 @@ off, commit":
 
 | Path | Verdict | Why |
 |---|---|---|
-| `src/aip/spec/` (models, skill, loader, runtime.md) | keep | the format; only the runtime block text changes (M4) |
+| `src/aip/spec/` (models, skill, loader, runtime.md) | keep | the format; the runtime block text and version change (M4) |
 | `src/aip/model/` (procedure, steps, resources, types) | keep | `Procedure.run` is the server's engine as-is |
 | `src/aip/client/backend.py` | keep, extend | `Backend` protocol stays; `HttpBackend` is added beside `LocalBackend` |
 | `src/aip/client/runner.py` | keep, extend | `RunFile` gains server fields; the loop does not change |
@@ -157,7 +159,7 @@ curl -s localhost:8000/catalog | jq .                    # []
 kill %1
 ```
 
-## - [ ] M4 — Client over HTTP, catalog commands, runtime block, format 0.4a1
+## - [ ] M4 — Client over HTTP, catalog commands, runtime block, format 0.5a0
 
 Scope: §4.1 and §8 of the design. After this milestone an agent needs only the
 client and the server URL.
@@ -171,8 +173,10 @@ client and the server URL.
   (`~/.config/aip/config.json`, `AIP_SERVER` overrides); folder paths bypass the
   server as today.
 - `src/aip/spec/runtime.md`: one added sentence for the server case; `FORMAT_VERSION`
-  → `0.4a1`; the validator accepts the 0.4a0 text for one minor version
-  (`runtime_block_outdated` as a warning, not an error). `SKILL.md`, `docs/running.md`,
+  → `0.5a0` (also `metadata.aip-version` in the example, the schema `$id`, the
+  CHANGELOG section); the validator accepts the 0.4a0 text and
+  `metadata.aip-version: "0.4a0"` with a `runtime_block_outdated` warning, not an
+  error, throughout the 0.5a line. `SKILL.md`, `docs/running.md`,
   `examples/billing-support/SKILL.md`, and the `aip-skillbench` packs re-validate.
 - `tests/test_runner.py`: the existing runner tests re-run against `HttpBackend` via
   the test client (same assertions, backend parametrised).

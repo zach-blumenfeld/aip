@@ -1,6 +1,6 @@
 # AIP server design
 
-Status: proposal, targets the format after 0.4a0. Companion to `running.md`, which
+Status: proposal for format 0.5a0, the client-server line. 0.4a0 is the last folder-only format. Companion to `running.md`, which
 describes the step protocol and the local runner this design extends.
 
 ## 1. Goal
@@ -145,9 +145,10 @@ and may carry the full history, so a client that never persists works unchanged.
 The runtime block that every skill carries verbatim says to run
 `aip run <this skill's folder> --input <start.json>`. It gains one sentence: when a
 server is configured, `aip run <name>` works the same and `aip search` finds
-procedures. Because the block is validator-enforced verbatim, this is a format bump
-(`0.4a1`); skills carrying the 0.4a0 text remain valid under a one-line
-compatibility rule (the validator accepts either text for one minor version).
+procedures. Because the block is validator-enforced verbatim, this is part of the
+format bump to `0.5a0`; skills carrying the 0.4a0 text remain valid under a one-line
+compatibility rule (the validator accepts the 0.4a0 text with a warning throughout
+the 0.5a line).
 
 ## 5. The backend interface
 
@@ -355,7 +356,7 @@ with the aip skill), user accounts beyond a shared token, multi-server views.
 2. **HTTP server** (`aip server --backend filesystem|neo4j`), catalog and execution
    endpoints, materialisation cache. `HttpBackend` in the client; `aip search`,
    `list`, `info <name>`, `run <name>`, `resume`, `publish`, `config`. Runtime
-   block sentence and format bump to `0.4a1`. The `aip-runtime` meta-skill.
+   block sentence and format bump to `0.5a0`. The `aip-runtime` meta-skill.
 3. **Neo4j backend** on the existing projection plus names and runs; full-text
    search; the governance queries as named Cypher in the package.
 4. **Runs API and inspector** views 1 to 4.
