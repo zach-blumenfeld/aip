@@ -214,7 +214,9 @@ Also: `uv run aip validate examples/billing-support` passes with the new runtime
 block, and validating a copy that still carries the 0.4a0 text yields the
 `runtime_block_outdated` warning and exit 0.
 
-## - [ ] M5 — The `aip-runtime` meta-skill
+## - [x] M5 — The `aip-runtime` meta-skill
+
+Done 2026-10-03, commit df4d854: `skills/aip-runtime/SKILL.md` (102 lines, versioned with the format) with its package copy, `runtime_skill_text()`, and `aip runtime --skill [--out DIR]`; `tests/test_runtime_skill.py` 9 passed, full suite 109 passed / 20 skipped without `NEO4J_URI`; the proof wrote `<out>/aip-runtime/SKILL.md` and `head -5` showed the frontmatter. Fresh-agent check done with `claude -p` from an empty directory (`--setting-sources project` so only this skill loaded, `AIP_SERVER` at a filesystem server on port 8765): it invoked the skill, ran `config` + `search` → `info` → `run` (paused on `decision`, exit 3) → `resume` to `"done": true` with `ticket_id`, 7 turns, and never fetched the procedure's SKILL.md (the one `/files/SKILL.md` request in the server log is `aip info` rendering its summary); transcript at `docs/examples/aip-runtime-session.md`, and `/runs` showed the run as `done`.
 
 Scope: §9 of the design; the one page of directions, shipped with the package.
 
