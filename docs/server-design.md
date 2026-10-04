@@ -198,7 +198,8 @@ sidecar next to a trial container, or Aura. The backend only needs a bolt URI.
   `Run {id, name, revision, status, started_at}` with `StepRun {order, step, kind,
   input, result, manual, review}` nodes linked `NEXT` in order and `OF_STEP` to the
   `Step` node they executed.
-- `search`: a full-text index over `Skill.description`, `Procedure.purpose`, and
+- `search`: a full-text index (Lucene `english` analyzer, so the query and the text are
+  stemmed) over `Skill.description`, `Procedure.purpose`, and
   the `trigger_when` list; optionally a vector index over the same text when an
   embedding provider is configured. Graph signals (which procedures declare an input
   with a given name, which end in a given output) are available to the inspector as

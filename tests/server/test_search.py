@@ -108,18 +108,6 @@ def variant(tmp: Path, name: str, description: str):
     return snapshot(folder)
 
 
-def test_filesystem_search_stems(tmp_path):
-    catalog = FilesystemBackend(tmp_path / "root").catalog
-    catalog.publish(snapshot(EXAMPLE))
-    catalog.publish(variant(tmp_path, "aaa-other", "Route an invoice question to the right team."))
-    for query in ("charged twice", "refunds", "duplicate charges", "angry customers"):
-        hits = catalog.search(query)
-        assert hits and hits[0].name == "billing-support", query
-    assert [h.name for h in catalog.search("invoices")] == ["aaa-other", "billing-support"]
-    assert catalog.search("billing-support")[0].name == "billing-support"
-    assert catalog.search("billing-support")[0].score > 100          # the exact-name boost
-
-
 def test_filesystem_search_follows_retire(tmp_path):
     catalog = FilesystemBackend(tmp_path / "root").catalog
     revision = catalog.publish(snapshot(EXAMPLE))

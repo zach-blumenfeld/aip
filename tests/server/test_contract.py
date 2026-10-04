@@ -218,6 +218,16 @@ def test_search_ranks_the_described_skill_first(catalog, example, tmp_path):
     assert len(catalog.search("refund", limit=1)) == 1
 
 
+def test_search_stems_the_query_and_the_text(catalog, example, tmp_path):
+    """Both backends stem: BM25 over Porter stems on the filesystem, Lucene's `english` analyzer in Neo4j."""
+    catalog.publish(example)
+    catalog.publish(variant(tmp_path, "aaa-other", description="Route an invoice question to the right team."))
+    for query in ("charged twice", "refunds", "duplicate charges", "angry customers"):
+        hits = catalog.search(query)
+        assert hits and hits[0].name == "billing-support", query
+    assert [h.name for h in catalog.search("invoices")] == ["aaa-other", "billing-support"]
+
+
 def test_search_by_exact_name_wins(catalog, example, tmp_path):
     catalog.publish(example)
     catalog.publish(variant(tmp_path, "billing-support-v2", description="billing support, billing support, billing."))
@@ -329,6 +339,23 @@ class TestNeo4j:
         backend = neo4j_backend(tmp_path)
         yield backend
         backend.close()
+
+    def test_fulltext_index_is_recreated_with_the_english_analyzer(self, neo4j, example):
+        from aip.server.backends.neo4j import (DROP_FULLTEXT, FULLTEXT_ANALYZER, FULLTEXT_INDEX, ensure_schema,
+                                               fulltext_analyzer)
+
+        driver, database = neo4j.driver, neo4j.conn.database
+        assert fulltext_analyzer(driver, database) == FULLTEXT_ANALYZER
+        # an index from before the analyzer was set (the default, which does not stem)
+        driver.execute_query(DROP_FULLTEXT, database_=database)
+        driver.execute_query(f"CREATE FULLTEXT INDEX {FULLTEXT_INDEX} FOR (n:Skill|Procedure) "
+                             "ON EACH [n.name, n.description, n.purpose, n.triggers]", database_=database)
+        driver.execute_query("CALL db.awaitIndexes(60)", database_=database)
+        assert fulltext_analyzer(driver, database) != FULLTEXT_ANALYZER
+        ensure_schema(driver, database)
+        assert fulltext_analyzer(driver, database) == FULLTEXT_ANALYZER
+        neo4j.catalog.publish(example)
+        assert neo4j.catalog.search("charged twice")[0].name == "billing-support"
 
     def test_db_shim_round_trips(self, neo4j, example, tmp_path):
         from aip.db.neo4j import export, fetch, list_skills, load

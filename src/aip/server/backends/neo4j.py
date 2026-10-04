@@ -100,9 +100,19 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT aip_run_id IF NOT EXISTS FOR (r:Run) REQUIRE r.id IS UNIQUE",
     "CREATE INDEX aip_skill_name IF NOT EXISTS FOR (s:Skill) ON (s.name)",
     "CREATE INDEX aip_run_name IF NOT EXISTS FOR (r:Run) ON (r.name)",
-    f"CREATE FULLTEXT INDEX {FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Skill|Procedure) "
-    "ON EACH [n.name, n.description, n.purpose, n.triggers]",
 ]
+
+# The full-text index stems and drops stop words (Lucene's `english` analyzer), so "charged"
+# finds "charge" as it does in the filesystem backend. Analyzer options are fixed at creation,
+# so `ensure_schema` recreates an index that exists with any other analyzer.
+FULLTEXT_ANALYZER = "english"
+CREATE_FULLTEXT = (
+    f"CREATE FULLTEXT INDEX {FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Skill|Procedure) "
+    "ON EACH [n.name, n.description, n.purpose, n.triggers] "
+    "OPTIONS {indexConfig: {`fulltext.analyzer`: $analyzer}}"
+)
+SHOW_FULLTEXT = f"SHOW FULLTEXT INDEXES YIELD name, options WHERE name = '{FULLTEXT_INDEX}' RETURN options"
+DROP_FULLTEXT = f"DROP INDEX {FULLTEXT_INDEX} IF EXISTS"
 
 SKILL_EXISTS = "MATCH (s:Skill {id: $id}) RETURN s.retired AS retired"
 
@@ -302,7 +312,18 @@ CLEAR = "MATCH (n) WHERE " + " OR ".join(f"n:{label}" for label in AIP_LABELS) +
 def ensure_schema(driver, database: str) -> None:
     for statement in CONSTRAINTS:
         driver.execute_query(statement, database_=database)
+    if fulltext_analyzer(driver, database) not in (None, FULLTEXT_ANALYZER):
+        driver.execute_query(DROP_FULLTEXT, database_=database)
+    driver.execute_query(CREATE_FULLTEXT, analyzer=FULLTEXT_ANALYZER, database_=database)
     driver.execute_query("CALL db.awaitIndexes(60)", database_=database)
+
+
+def fulltext_analyzer(driver, database: str) -> str | None:
+    """The analyzer the search index was created with, or None when there is no index."""
+    rows = driver.execute_query(SHOW_FULLTEXT, database_=database).records
+    if not rows:
+        return None
+    return (rows[0]["options"].get("indexConfig") or {}).get("fulltext.analyzer")
 
 
 def _step_props(step: JSON) -> JSON:
