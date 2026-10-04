@@ -110,7 +110,9 @@ uv run pytest -q tests/server/test_contract.py -k filesystem
 uv run pytest -q                                 # old suite still green
 ```
 
-## - [ ] M2 — Neo4j backend on the existing projection
+## - [x] M2 — Neo4j backend on the existing projection
+
+Done 2026-10-03, commit faa3339: Neo4j backend, `aip db` shim, and the Neo4j contract parametrisation landed; server suite 38 passed against Docker Neo4j (host port 17687, since 7687 was held by a stale gvproxy mapping), full suite 92 passed with `NEO4J_URI` and 74 passed / 18 skipped without; `aip db load` twice gave the same id and `db list` showed one revision. For M3: `load_skill` rejects a folder whose name differs from the skill name, which both backends' executable copies will trip.
 
 Scope: the default backend, built from the Cypher that exists today.
 
