@@ -167,7 +167,9 @@ curl -s localhost:8000/catalog | jq .                    # []
 kill %1
 ```
 
-## - [ ] M4 — Client over HTTP, catalog commands, runtime block, format 0.5a0
+## - [x] M4 — Client over HTTP, catalog commands, runtime block, format 0.5a0
+
+Done 2026-10-03, commit 4914cbb: `HttpBackend`, server-aware run files and `resume`, the seven catalog commands, `info`/`run` by name, and format 0.5a0 with the 0.4a0 block and version accepted under one `runtime_block_outdated` warning; full suite 100 passed / 20 skipped without `NEO4J_URI`, and the proof against a live filesystem server printed `billing-support@124d4a7b6208abed` from publish, ranked it first for "refund", paused `aip run billing-support` on `decision` (exit 3), resumed to `"done": true` with `ticket_id`, showed `"done"` from `/runs`, and `aip get` + `aip validate` passed. `httpx` became a core dependency; the `aip-skillbench` packs (other repo) were not touched and will validate with the warning.
 
 Scope: §4.1 and §8 of the design. After this milestone an agent needs only the
 client and the server URL.
