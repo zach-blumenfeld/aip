@@ -64,7 +64,7 @@ off, commit":
 
 ## - [x] M0 — Test tooling and housekeeping
 
-Done 2026-10-03, commit 39a636e: dev group and README link landed, 60 passed / 1 skipped; the `rm` of the gitignored `notes.md` and `.claude/skills/search-first/` was blocked in the agent sandbox and is left for Zach.
+Done 2026-10-03, commit 39a636e: dev group and README link landed, dead files removed, 60 passed / 1 skipped.
 
 Scope: make the tests runnable without ad-hoc `--with`; clear the dead experiments.
 
