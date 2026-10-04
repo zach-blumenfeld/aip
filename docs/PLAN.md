@@ -240,7 +240,9 @@ uv run pytest -q tests/test_runtime_skill.py
 uv run aip runtime --skill --out /tmp/skills && head -5 /tmp/skills/aip-runtime/SKILL.md
 ```
 
-## - [ ] M6 — Governance
+## - [x] M6 — Governance
+
+Done 2026-10-03, commit a023722: `GET|POST /catalog/{name}/thresholds` with the overrides merged over the author's defaults and under the request's, `GET /governance` and `/governance/{query}` over a new `GovernanceBackend` with `aip.server.governance` holding the shared scan helpers and `aip.server.backends.neo4j.queries` the Cypher; the filesystem backend answers three by scanning run files and declines `untaken-branches` with 501, Neo4j answers all four over `Answer` nodes it now projects at append time. Failures are now recorded against the step that raised (with `step_kind`, a run created when needed, `run_id` in the error). `pytest -q tests/server -k governance` 8 passed / 5 skipped without `NEO4J_URI`, 13 passed with Docker Neo4j (port 17687); full suite 126 passed / 28 skipped, 153 passed / 1 skipped with Neo4j. The proof printed `[]` from `/governance/overridden-decisions`, `/governance` listed the four queries, and a thresholds POST/GET round-tripped `{"tone": 0.5}`.
 
 Scope: §7 and §10.5 of the design on the server side.
 
