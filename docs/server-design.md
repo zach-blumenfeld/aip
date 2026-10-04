@@ -223,9 +223,10 @@ sidecar next to a trial container, or Aura. The backend only needs a bolt URI.
   ```
 
 - `search` loads every pinned revision's description, purpose, and `trigger_when`
-  into memory at startup (and on publish) and scores a query by weighted term
-  overlap (name match highest, then description, then purpose, then triggers).
-  Deterministic, no index files, adequate for catalogs of hundreds of procedures.
+  into memory at startup (and on publish) and scores a query by weighted BM25 over
+  Porter-stemmed terms (name field highest, then description, then purpose, then
+  triggers; an exact name match wins outright). Pure Python, deterministic, no index
+  files, adequate for catalogs of hundreds of procedures.
 - Writes are atomic per file (write to a temp name, rename); `catalog.json` is the
   only file rewritten, under a lock.
 - Zero external services; this is what a trial container or a laptop runs with no

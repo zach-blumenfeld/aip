@@ -11,8 +11,9 @@
     └── runs/<run_id>.jsonl          first line the run header, one JSON line per history entry
 
 Writes are atomic per file (temp name, then rename); a revision directory is built
-beside its final name and renamed into place. Search is weighted term overlap over an
-in-memory index of every name's resolved revision, rebuilt on publish, pin, and retire.
+beside its final name and renamed into place. Search is weighted BM25 with Porter stemming
+(`aip.server.search`) over an in-memory index of every name's resolved revision, rebuilt
+on publish, pin, and retire.
 """
 
 from __future__ import annotations
@@ -31,13 +32,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 from aip.server.backend import NotFound, split_ref
+from aip.server.search import BM25Index
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, materialize)
 
 JSON = Dict[str, Any]
 
 SEARCH_WEIGHTS = {"name": 10.0, "description": 3.0, "purpose": 2.0, "triggers": 1.0}
-_WORD = re.compile(r"[a-z0-9]+")
+NAME_BOOST = 100.0                       # a query that is exactly a published name wins outright
 
 
 def _now() -> str:
@@ -58,10 +60,6 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
-def _tokens(text: str) -> set[str]:
-    return set(_WORD.findall(text.lower()))
-
-
 # --------------------------------------------------------------------------- catalog
 
 
@@ -75,7 +73,7 @@ class FilesystemCatalog:
         self.lock_path = self.root / "catalog.lock"
         self.root.mkdir(parents=True, exist_ok=True)
         self.skills_dir.mkdir(exist_ok=True)
-        self._index: Dict[str, Dict[str, Any]] = {}
+        self._index = BM25Index(SEARCH_WEIGHTS)
         self._reindex()
 
     # ------------------------------------------------------------- catalog.json
@@ -221,19 +219,10 @@ class FilesystemCatalog:
         return [{**row, "pinned": entry.get("pinned") == row["revision"]} for row in reversed(entry["revisions"])]
 
     def search(self, query: str, limit: int = 10) -> List[SearchHit]:
-        terms = _tokens(query)
-        if not terms:
-            return []
-        hits = []
-        for name, doc in self._index.items():
-            score = 0.0
-            if query.strip().lower() == name.lower():
-                score += SEARCH_WEIGHTS["name"] * 2
-            for field_name, weight in SEARCH_WEIGHTS.items():
-                score += weight * len(terms & doc[field_name])
-            if score > 0:
-                hits.append(SearchHit(name=name, revision=doc["revision"], description=doc["text_description"],
-                                      score=score))
+        exact = query.strip().lower()
+        hits = [SearchHit(name=name, revision=doc["revision"], description=doc["description"],
+                          score=score + (NAME_BOOST if name.lower() == exact else 0.0))
+                for name, doc, score in self._index.search(query, limit=len(self._index) or 1)]
         hits.sort(key=lambda h: (-h.score, h.name))
         return hits[:limit]
 
@@ -263,7 +252,7 @@ class FilesystemCatalog:
     # ------------------------------------------------------------------ search
 
     def _reindex(self) -> None:
-        index: Dict[str, Dict[str, Any]] = {}
+        index = BM25Index(SEARCH_WEIGHTS)
         catalog = self._read_catalog()
         for name in catalog:
             try:
@@ -272,14 +261,10 @@ class FilesystemCatalog:
                 continue
             m = self._manifest(name, revision)
             proc = m.get("procedure", {})
-            index[name] = {
-                "revision": revision,
-                "text_description": m.get("description", ""),
-                "name": _tokens(name),
-                "description": _tokens(m.get("description", "")),
-                "purpose": _tokens(proc.get("purpose", "") or ""),
-                "triggers": _tokens(" ".join(proc.get("trigger_when", []) or [])),
-            }
+            index.add(name, {"name": name, "description": m.get("description", ""),
+                             "purpose": proc.get("purpose", "") or "",
+                             "triggers": " ".join(proc.get("trigger_when", []) or [])},
+                      payload={"revision": revision, "description": m.get("description", "")})
         self._index = index
 
 
