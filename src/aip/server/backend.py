@@ -12,6 +12,7 @@ revision if any, else the newest live one), `name@<revision>`, and `name@latest`
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Protocol, runtime_checkable
 
 from aip.server.records import FileRecord, NameSummary, RunRecord, RunSummary, SearchHit, SkillRecord
@@ -51,6 +52,9 @@ class CatalogBackend(Protocol):
     def list(self) -> List[NameSummary]:
         """Every name in the catalog, sorted by name."""
 
+    def revisions(self, name: str) -> List[JSON]:
+        """Every revision of a name, newest first: rows with at least `revision`, `published_at`, `retired`."""
+
     def search(self, query: str, limit: int = 10) -> List[SearchHit]:
         """Ranked hits over the resolved revision of every name; empty when nothing matches."""
 
@@ -62,6 +66,10 @@ class CatalogBackend(Protocol):
 
     def resolve(self, ref: str) -> tuple[str, str]:
         """(name, revision) for a ref; raises NotFound when nothing live matches."""
+
+    def folder(self, name: str, revision: str) -> Path:
+        """The revision's skill folder on disk, named after the skill: what the server loads and executes.
+        The filesystem backend hands out its published copy; others materialise into a hash-checked cache."""
 
 
 @runtime_checkable

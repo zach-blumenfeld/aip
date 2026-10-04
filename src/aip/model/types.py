@@ -36,6 +36,14 @@ def describe_inputs(inputs: Inputs) -> Dict[str, str]:
     return {name: DataType(t).value for name, t in inputs.items()}
 
 
+EXAMPLE_VALUES = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "object": {}, "list[*]": []}
+
+
+def example_input(inputs: Dict[str, str]) -> JSON:
+    """A placeholder start input for a described inputs map ({name: type name}); accepted as-is by the step."""
+    return {name: EXAMPLE_VALUES[dtype] for name, dtype in inputs.items()}
+
+
 class InputValidationError(ValueError):
     def __init__(self, step: str, errors: List[str]):
         self.step = step

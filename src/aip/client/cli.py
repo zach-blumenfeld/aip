@@ -1,7 +1,7 @@
 """The `aip` command line entry point.
 
-Implemented: validate, schema, runtime, info, run, resume. Planned: config, publish, list,
-remove, get, and the `server` group.
+Implemented: validate, schema, runtime, info, run, resume, db, server. Planned: config,
+publish, list, remove, get.
 """
 
 import argparse
@@ -70,11 +70,10 @@ def runtime_command(argv: list[str]) -> int:
     return 0
 
 
-_PLACEHOLDER = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "object": {}, "list[*]": []}
-
-
 def _example_input(items) -> dict:
-    return {item.name: _PLACEHOLDER[item.type.value] for item in items}
+    from aip.model.types import example_input
+
+    return example_input({item.name: item.type.value for item in items})
 
 
 def _inputs_table(items) -> str:
@@ -260,6 +259,65 @@ def db_command(argv: list[str]) -> int:
     return 0
 
 
+def server_command(argv: list[str]) -> int:
+    """`aip server`: the HTTP API over the filesystem or Neo4j backend. Scripts run in this process."""
+    parser = argparse.ArgumentParser(prog="aip server", description="Serve the AIP catalog and execution API.",
+                                     epilog="Publishing is code execution on this server: scripts run here with its "
+                                            "privileges. Without --token the server is open; keep --host on localhost.")
+    parser.add_argument("--backend", choices=["filesystem", "neo4j"], default="filesystem")
+    parser.add_argument("--root", type=Path, default=None, help="filesystem backend: the root directory (default ./aip-root)")
+    parser.add_argument("--uri", default=None, help="neo4j backend: bolt URI; default $NEO4J_URI or neo4j://localhost:7687")
+    parser.add_argument("--user", default=None, help="neo4j: default $NEO4J_USERNAME or neo4j")
+    parser.add_argument("--password", default=None, help="neo4j: default $NEO4J_PASSWORD")
+    parser.add_argument("--database", default=None, help="neo4j: default $NEO4J_DATABASE or neo4j")
+    parser.add_argument("--cache-dir", type=Path, default=None, help="neo4j: where revisions are materialised (default ~/.cache/aip)")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--token", default=None, help="bearer token granting the read and publish scopes")
+    parser.add_argument("--read-token", default=None, help="bearer token granting the read scope only")
+    parser.add_argument("--no-localhost", action="store_true", help="require a token from loopback clients too")
+    parser.add_argument("--log-level", default="info")
+    args = parser.parse_args(argv)
+
+    try:
+        import uvicorn
+        from aip.server.app import create_app
+    except ImportError:
+        print("aip server needs the server extra: `uv sync --extra server` (or `pip install 'aip[server]'`)", file=sys.stderr)
+        return 1
+
+    if args.backend == "filesystem":
+        from aip.server.backends.filesystem import FilesystemBackend
+        root = args.root or Path("aip-root")
+        backend = FilesystemBackend(root)
+        where = f"filesystem backend at {root.resolve()}"
+    else:
+        from aip.server.backends.neo4j import Connection, Neo4jBackend
+        conn = Connection()
+        for attr, value in (("uri", args.uri), ("user", args.user), ("password", args.password), ("database", args.database)):
+            if value is not None:
+                setattr(conn, attr, value)
+        backend = Neo4jBackend(conn, cache_dir=args.cache_dir)
+        where = f"neo4j backend at {conn.uri}"
+
+    tokens = {}
+    if args.token:
+        tokens[args.token] = {"read", "publish"}
+    if args.read_token:
+        tokens[args.read_token] = {"read"}
+    if not tokens and args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"aip server: warning: listening on {args.host} with no --token; anyone who can reach it can publish "
+              "and execute code here", file=sys.stderr)
+    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost)
+    print(f"aip server: {where}; http://{args.host}:{args.port}", file=sys.stderr)
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    finally:
+        if hasattr(backend, "close"):
+            backend.close()
+    return 0
+
+
 COMMANDS = {
     "validate": validate_command,
     "schema": schema_command,
@@ -268,8 +326,9 @@ COMMANDS = {
     "run": run_command,
     "resume": resume_command,
     "db": db_command,
+    "server": server_command,
 }
-PLANNED = ["config", "publish", "list", "remove", "get", "server"]
+PLANNED = ["config", "publish", "list", "remove", "get"]
 
 
 def main(argv: list[str] | None = None) -> int:

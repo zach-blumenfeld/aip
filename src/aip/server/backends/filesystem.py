@@ -216,6 +216,10 @@ class FilesystemCatalog:
                                    published_at=published_at))
         return out
 
+    def revisions(self, name: str) -> List[JSON]:
+        entry = self._entry(self._read_catalog(), name)
+        return [{**row, "pinned": entry.get("pinned") == row["revision"]} for row in reversed(entry["revisions"])]
+
     def search(self, query: str, limit: int = 10) -> List[SearchHit]:
         terms = _tokens(query)
         if not terms:

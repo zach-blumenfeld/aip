@@ -135,6 +135,20 @@ def test_list_summarises_names(catalog, example, tmp_path):
     assert bs.description == example.description
 
 
+def test_revisions_lists_every_revision_newest_first(catalog, example, tmp_path):
+    v1 = catalog.publish(example)
+    v2 = catalog.publish(variant(tmp_path, "billing-support", **{"assets/policy.md": "revised policy\n"}))
+    rows = catalog.revisions("billing-support")
+    assert [r["revision"] for r in rows] == [v2, v1]
+    assert all(r["published_at"] and r["retired"] is False and r["pinned"] is False for r in rows)
+    catalog.pin("billing-support", v1)
+    catalog.retire("billing-support", v2)
+    rows = {r["revision"]: r for r in catalog.revisions("billing-support")}
+    assert rows[v1]["pinned"] is True and rows[v2]["retired"] is True
+    with pytest.raises(NotFound):
+        catalog.revisions("nope")
+
+
 # -------------------------------------------------------------------------- files
 
 

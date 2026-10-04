@@ -228,7 +228,8 @@ WITH n, s, count(f) AS files
 OPTIONAL MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(st)
 WITH n, s, files, count(st) AS steps
 RETURN s.name AS name, s.revision AS revision, s.aip_version AS aip_version,
-       toString(s.published_at) AS published_at, s.retired AS retired, n.pinned = s.revision AS pinned,
+       toString(s.published_at) AS published_at, coalesce(s.retired, false) AS retired,
+       coalesce(n.pinned = s.revision, false) AS pinned,
        files, steps, s.description AS description
 ORDER BY name, s.published_at DESC
 """
@@ -469,7 +470,10 @@ class Neo4jCatalog:
     def revisions(self, name: str | None = None) -> List[JSON]:
         """Every revision as a flat row (name, revision, aip_version, published_at, retired, pinned,
         files, steps, description), newest first per name. What `aip db list` prints."""
-        return self._read(LIST_REVISIONS, name=name)
+        rows = self._read(LIST_REVISIONS, name=name)
+        if name is not None and not rows:
+            self._entry(name)          # raises NotFound
+        return rows
 
     def search(self, query: str, limit: int = 10) -> List[SearchHit]:
         terms = _WORD.findall(query.lower())
