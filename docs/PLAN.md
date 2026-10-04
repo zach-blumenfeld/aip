@@ -79,7 +79,9 @@ uv sync --group dev && uv run pytest -q        # 60 passed, 1 skipped
 ls .claude/skills notes.md 2>&1 | grep -c "No such"   # 2
 ```
 
-## - [ ] M1 — Records and the backend interface, filesystem backend
+## - [x] M1 — Records and the backend interface, filesystem backend
+
+Done 2026-10-03, commit 19ea0d8: records, protocols, and filesystem backend landed; contract suite 13 passed, full suite 73 passed / 1 skipped, `aip db` round trip verified against Neo4j.
 
 Scope: the storage contract from §5 of the design, with one implementation that
 needs nothing but a directory.
