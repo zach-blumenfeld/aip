@@ -115,7 +115,7 @@ def test_publish_search_info_and_listing(api, example):
     for ref in ("billing-support", f"billing-support@{example.revision}", "billing-support@latest"):
         info = api.get(f"/catalog/{ref}").json()
         assert info["name"] == "billing-support" and info["revision"] == example.revision
-    assert info["id"] == example.id and info["aip_version"] == "0.4a0" and info["retired"] is False
+    assert info["id"] == example.id and info["aip_version"] == "0.5a0" and info["retired"] is False
     assert info["meta"]["name"] == "billing-support"
     assert info["start"]["step"] == "triage" and info["start"]["inputs"] == {"message": "string"}
     assert set(info["start"]["questions"]) == {"billing", "tone"}
@@ -455,3 +455,88 @@ def test_runs_answer_501_without_a_run_backend(backend, no_key):
                  json={"after": None, "payload": {"message": "hi"}, "history": [],
                        "answers": {"billing": False, "tone": "calm"}})
     assert r.status_code == 200 and r.json()["run_id"] is None                 # the step still runs
+
+
+# ---------------------------------------------------------------------- the client
+
+
+def test_get_after_publish_reproduces_the_folder(api, example, tmp_path):
+    """Design §8: `aip get` then `aip publish` yields the same revision. The download restores
+    modes from the manifest, hashes every file, refuses to overwrite, and names a tampered file."""
+    import dataclasses
+
+    from aip.client.server import Server, ServerError
+    from aip.server.app import tar_of
+
+    server = Server("http://testserver", session=api)
+    assert server.publish(EXAMPLE)["revision"] == example.revision
+    target = server.download("billing-support", tmp_path / "out")
+    assert target == tmp_path / "out" / "billing-support"
+    assert tree(target) == tree(EXAMPLE)
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["billing-support"]   # no manifest, no temp dir
+    assert snapshot(target).revision == example.revision
+    assert server.publish(target)["revision"] == example.revision
+    assert server.download(f"billing-support@{example.revision}", tmp_path / "exact") == tmp_path / "exact" / "billing-support"
+
+    with pytest.raises(ServerError) as exc:
+        server.download("billing-support", tmp_path / "out")
+    assert exc.value.kind == "exists"
+    with pytest.raises(ServerError) as exc:
+        server.download("nope", tmp_path / "out2")
+    assert (exc.value.status, exc.value.kind) == (404, "not_found")
+    assert not (tmp_path / "out2").exists() or list((tmp_path / "out2").iterdir()) == []
+
+    # a byte changed in transit: the manifest still carries the published hash
+    files = [dataclasses.replace(f, content=f.content + "# tampered\n") if f.path == "scripts/escalate.py" else f
+             for f in example.files]
+    tampered = tar_of(dataclasses.replace(example, files=files))
+    with mock.patch.object(server, "bytes", return_value=tampered), pytest.raises(ServerError) as exc:
+        server.download("billing-support", tmp_path / "bad")
+    assert exc.value.kind == "hash_mismatch" and exc.value.location == "scripts/escalate.py"
+    assert list((tmp_path / "bad").iterdir()) == []                                      # nothing left behind
+
+
+def test_cli_catalog_commands(api, example, tmp_path, capsys):
+    """`aip publish|search|list|get|pin|retire|info` against the in-process server."""
+    from aip.client.cli import main
+    from aip.client.server import Server
+
+    server = Server("http://testserver", session=api)
+    with mock.patch("aip.client.cli._server", return_value=server):
+        assert main(["publish", str(EXAMPLE)]) == 0
+        assert capsys.readouterr().out.strip() == f"billing-support@{example.revision}"
+        assert main(["search", "refund"]) == 0
+        assert capsys.readouterr().out.startswith(f"billing-support@{example.revision}  ")
+        assert main(["search", "zzz"]) == 0 and capsys.readouterr().out.strip() == "no matches"
+        assert main(["list"]) == 0
+        assert capsys.readouterr().out.startswith(f"billing-support  {example.revision}  1 revision(s)")
+        assert main(["info", "billing-support"]) == 0
+        assert "run:  aip run billing-support --input start.json" in capsys.readouterr().out
+        assert main(["info", "billing-support", "--example-input"]) == 0
+        assert json.loads(capsys.readouterr().out) == {"message": "<string>"}
+
+        assert main(["get", "billing-support", "--out", str(tmp_path)]) == 0
+        assert capsys.readouterr().out.strip() == f"wrote {tmp_path / 'billing-support'}"
+        assert main(["validate", str(tmp_path / "billing-support")]) == 0
+        assert main(["get", "billing-support", "--out", str(tmp_path)]) == 1                    # exists
+        assert "already exists" in capsys.readouterr().err
+
+        assert main(["pin", "billing-support", example.revision]) == 0
+        assert capsys.readouterr().out.strip() == f"billing-support -> {example.revision}"
+        assert api.get("/catalog").json()[0]["pinned"] == example.revision
+        assert main(["pin", "billing-support", "--clear"]) == 0
+        assert api.get("/catalog").json()[0]["pinned"] is None
+        assert main(["retire", f"billing-support@{example.revision}"]) == 0
+        assert api.get("/catalog/billing-support").status_code == 404
+        assert main(["retire", f"billing-support@{example.revision}"]) == 0                   # idempotent
+        assert capsys.readouterr().out.count("retired billing-support@") == 2
+        assert main(["search", "refund"]) == 0 and capsys.readouterr().out.strip() == "no matches"
+        assert main(["info", "billing-support"]) == 1
+        assert "not_found" in capsys.readouterr().err
+
+    with mock.patch("aip.client.cli._server", return_value=None):
+        with pytest.raises(SystemExit) as exc:
+            main(["info", "billing-support"])
+        assert "no server is configured" in str(exc.value)
+        with pytest.raises(SystemExit):
+            main(["search", "refund"])

@@ -36,7 +36,7 @@ def test_snapshot_captures_files_and_graph():
     b = snapshot(EXAMPLE)
     assert b.name == "billing-support"
     assert b.id == f"billing-support@{b.revision}" and len(b.revision) == 16
-    assert b.aip_version == "0.4a0"
+    assert b.aip_version == "0.5a0"
     paths = {f.path for f in b.files}
     assert {"SKILL.md", "scripts/escalate.py", "source/README.md"} <= paths
     assert all(f.encoding == "utf-8" for f in b.files)

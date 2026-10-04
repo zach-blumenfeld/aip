@@ -19,7 +19,7 @@ from typing import Any, Iterable
 import yaml
 from pydantic import ValidationError
 
-from aip.spec.models import FORMAT_VERSION, RUNNABLE_KINDS, ProcedureSpec, runtime_text
+from aip.spec.models import FORMAT_VERSION, LEGACY_VERSIONS, RUNNABLE_KINDS, ProcedureSpec, runtime_text
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
 FENCE_PATTERN = re.compile(r"^```(?:yaml|yml)[ \t]*\n(.*?)\n```\s*$", re.DOTALL)
@@ -72,18 +72,30 @@ def parse_skill_md(skill_md: Path) -> tuple[SkillDoc | None, list[Issue]]:
     body = match.group(2).strip()
     if not body:
         return None, [Issue(path, "empty_body", "SKILL.md body is empty; expected the AIP runtime block and one fenced YAML code block")]
-    block = runtime_text().strip()
+    block, issues = runtime_text().strip(), []
     if not body.startswith(block):
-        return None, [Issue(path, "missing_runtime_block",
-                            f"SKILL.md body must begin with the {FORMAT_VERSION} AIP runtime block, verbatim "
-                            f"(copy it from the aip skill, or `aip runtime`)")]
+        outdated = next((v for v in LEGACY_VERSIONS if body.startswith(runtime_text(v).strip())), None)
+        if outdated is None:
+            return None, [Issue(path, "missing_runtime_block",
+                                f"SKILL.md body must begin with the {FORMAT_VERSION} AIP runtime block, verbatim "
+                                f"(copy it from the aip skill, or `aip runtime`)")]
+        block = runtime_text(outdated).strip()
+        issues.append(_outdated(path, outdated))
     rest = body[len(block):].strip()
     fence = FENCE_PATTERN.match(rest)
     if not fence:
         return None, [Issue(path, "invalid_body_format",
                             "after the runtime block, SKILL.md body must be exactly one fenced YAML code block "
                             "(language tag `yaml` or `yml`) with no other prose")]
-    return SkillDoc(frontmatter=frontmatter, yaml_text=fence.group(1)), []
+    return SkillDoc(frontmatter=frontmatter, yaml_text=fence.group(1)), issues
+
+
+def _outdated(path: str, version: str) -> Issue:
+    """The one warning a still-accepted earlier format gets; see `LEGACY_VERSIONS`."""
+    return Issue(path, "runtime_block_outdated",
+                 f"this skill carries the {version} AIP runtime block; the current format is {FORMAT_VERSION} "
+                 f"(replace the block with `aip runtime` and set `metadata.{VERSION_KEY}` to \"{FORMAT_VERSION}\")",
+                 severity="warning")
 
 
 # ---------------------------------------------------------------- frontmatter rules
@@ -142,6 +154,8 @@ def check_frontmatter(frontmatter: dict, skill_dir: Path) -> Iterable[Issue]:
     if version is None:
         yield Issue(path, "missing_aip_version",
                     f"missing required `metadata.{VERSION_KEY}` (the AIP format version this skill is written in)", f"$.metadata.{VERSION_KEY}")
+    elif isinstance(version, str) and version in LEGACY_VERSIONS:
+        yield _outdated(path, version)
     elif isinstance(version, str) and version != FORMAT_VERSION:
         yield Issue(path, "aip_version_mismatch",
                     f"`metadata.{VERSION_KEY}` is `{version}` but this validator implements `{FORMAT_VERSION}`; "
@@ -313,6 +327,10 @@ def validate_skill(skill_dir: Path) -> tuple[LoadedSkill | None, list[Issue]]:
     if spec is not None:
         issues.extend(check_graph(spec, str(skill_dir / "SKILL.md"), skill_dir))
 
+    # an outdated block and an outdated version string are the same fact; say it once
+    outdated = [i for i in issues if i.kind == "runtime_block_outdated"]
+    if len(outdated) > 1:
+        issues = [i for i in issues if i.kind != "runtime_block_outdated" or i is outdated[0]]
     if any(i.severity == "error" for i in issues) or spec is None:
         return None, issues
     return LoadedSkill(skill_dir=skill_dir, frontmatter=doc.frontmatter, spec=spec), issues

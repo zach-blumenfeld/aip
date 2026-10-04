@@ -1,13 +1,15 @@
 """The `aip` command line entry point.
 
-Implemented: validate, schema, runtime, info, run, resume, db, server. Planned: config,
-publish, list, remove, get.
+Local: validate, schema, runtime, info, run, resume, db, server. Against a configured
+server (`aip config`, or `AIP_SERVER`): search, list, publish, get, pin, retire, and
+`info`/`run` by name. A folder path always bypasses the server.
 """
 
 import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _emit(issues) -> tuple[int, int]:
@@ -125,16 +127,67 @@ def describe_skill(loaded) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _server():
+    """The configured server, or None. One seam for tests to point at an in-process app."""
+    from aip.client.server import configured
+
+    return configured()
+
+
+def _target(arg: str) -> tuple[str, Any]:
+    """`("folder", Path)` when `arg` is a skill folder on disk, else `("name", Server)` when a
+    server is configured. A folder never goes through the server."""
+    path = Path(arg)
+    if path.is_dir() or path.exists():
+        return "folder", path
+    server = _server()
+    if server is None:
+        raise SystemExit(f"aip: {arg!r} is not a skill folder, and no server is configured to look it up by name "
+                         "(set AIP_SERVER or run `aip config --server URL`)")
+    if "/" in arg or "\\" in arg:
+        raise SystemExit(f"aip: no such folder {arg!r}")
+    return "name", server
+
+
+def _remote_skill(server, ref: str):
+    """A `LoadedSkill` built from the published SKILL.md, so `describe_skill` renders it as for a folder."""
+    from aip.spec.skill import LoadedSkill, parse_skill_md, parse_spec
+    import tempfile
+
+    text = server.file(ref, "SKILL.md").decode("utf-8")
+    with tempfile.TemporaryDirectory() as tmp:
+        md = Path(tmp) / "SKILL.md"
+        md.write_text(text)
+        doc, issues = parse_skill_md(md)
+    if doc is None:
+        raise SystemExit(f"aip: the server's SKILL.md for {ref} did not parse: " + "; ".join(i.message for i in issues))
+    spec, issues = parse_spec(doc.yaml_text, "SKILL.md")
+    if spec is None:
+        raise SystemExit(f"aip: the server's SKILL.md for {ref} did not parse: " + "; ".join(i.message for i in issues))
+    return LoadedSkill(skill_dir=Path(ref), frontmatter=doc.frontmatter, spec=spec)
+
+
 def info_command(argv: list[str]) -> int:
     from aip.spec import load_skill
 
     parser = argparse.ArgumentParser(prog="aip info", description="Describe a skill: what it does, the input it expects, and how it flows.")
-    parser.add_argument("skill_dir", type=Path)
+    parser.add_argument("skill", metavar="skill_dir|name", help="a skill folder, or a published name (`name`, `name@rev`, `name@latest`)")
     parser.add_argument("--json", action="store_true", help="machine-readable description instead of the summary")
     parser.add_argument("--example-input", action="store_true", help="print only an example start input as JSON")
     args = parser.parse_args(argv)
+    kind, where = _target(args.skill)
+    if kind == "name":
+        def remote() -> int:
+            if args.json:
+                print(json.dumps(where.info(args.skill), indent=2))
+            elif args.example_input:
+                print(json.dumps(where.info(args.skill)["example_input"], indent=2))
+            else:
+                sys.stdout.write(describe_skill(_remote_skill(where, args.skill)))
+            return 0
+        return _serving(remote)
     try:
-        loaded = load_skill(args.skill_dir)
+        loaded = load_skill(where)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -171,38 +224,227 @@ def _thresholds(pairs: list[str]) -> dict[str, float]:
 
 
 def run_command(argv: list[str]) -> int:
-    from aip.client.backend import LocalBackend
+    from aip.client.backend import HttpBackend, LocalBackend
     from aip.client.runner import Runner
 
-    parser = argparse.ArgumentParser(prog="aip run", description="Run a skill folder's procedure locally, pausing when the client must decide.")
-    parser.add_argument("skill_dir", type=Path)
+    parser = argparse.ArgumentParser(prog="aip run", description="Run a procedure, pausing when the client must decide: "
+                                     "a skill folder runs locally, a published name runs on the server.")
+    parser.add_argument("skill", metavar="skill_dir|name")
     parser.add_argument("--input", "-i", help="JSON object for the start step; `-` reads stdin")
     parser.add_argument("--interactive", action="store_true", help="prompt on the terminal instead of pausing to a run file")
     parser.add_argument("--run-file", type=Path, default=None, help="where to write the run file on pause")
     parser.add_argument("--threshold", action="append", default=[], metavar="NAME=VALUE", help="override a decision threshold")
     args = parser.parse_args(argv)
-    try:
-        backend = LocalBackend(args.skill_dir)
-    except ValueError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    runner = Runner(backend, args.skill_dir, run_file=args.run_file, interactive=args.interactive)
-    return runner.start(_read_input(args.input), _thresholds(args.threshold)).code
+    kind, where = _target(args.skill)
+    if kind == "name":
+        backend = HttpBackend(where, name=args.skill)
+    else:
+        try:
+            backend = LocalBackend(where)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+    runner = Runner(backend, Path(args.skill), run_file=args.run_file, interactive=args.interactive)
+    return _serving(lambda: runner.start(_read_input(args.input), _thresholds(args.threshold)).code)
 
 
 def resume_command(argv: list[str]) -> int:
-    from aip.client.backend import LocalBackend
-    from aip.client.runner import RunFile, Runner
+    from aip.client.runner import RunFile, Runner, backend_for
+    from aip.client.server import settings
 
-    parser = argparse.ArgumentParser(prog="aip resume", description="Continue a paused run.")
+    parser = argparse.ArgumentParser(prog="aip resume", description="Continue a paused run, locally or on the server the run file names.")
     parser.add_argument("run_file", type=Path)
     parser.add_argument("--input", "-i", help="JSON object answering the pause; `-` reads stdin")
     parser.add_argument("--interactive", action="store_true")
     args = parser.parse_args(argv)
     run = RunFile.load(args.run_file)
-    backend = LocalBackend(Path(run.skill_dir))
+    configured = settings()
+    token = configured["token"] if run.server and configured["server"] == run.server else None
+    backend = backend_for(run, token=token, session=_session_for(run.server))
     runner = Runner(backend, Path(run.skill_dir), run_file=args.run_file, interactive=args.interactive)
-    return runner.resume(run, _read_input(args.input)).code
+    return _serving(lambda: runner.resume(run, _read_input(args.input)).code)
+
+
+def _session_for(url: str | None):
+    """The configured server's session when the run file points at that server (tests inject one)."""
+    if url is None:
+        return None
+    server = _server()
+    return server._session if server is not None and server.url == url.rstrip("/") else None
+
+
+def _serving(call):
+    """Run a client action; a server error becomes one line on stderr and exit 1."""
+    from aip.client.server import ServerError
+
+    try:
+        return call()
+    except ServerError as exc:
+        print(f"aip: {exc}", file=sys.stderr)
+        return 1
+
+
+# ----------------------------------------------------------------------- catalog
+
+
+def _require_server():
+    server = _server()
+    if server is None:
+        raise SystemExit("aip: no server configured (set AIP_SERVER or run `aip config --server URL`)")
+    return server
+
+
+def search_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip search", description="Find published procedures by what they do; the ranking is the server's.")
+    parser.add_argument("query")
+    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    server = _require_server()
+
+    def go() -> int:
+        hits = server.search(args.query, args.limit)
+        if args.json:
+            print(json.dumps(hits, indent=2))
+            return 0
+        if not hits:
+            print("no matches")
+            return 0
+        for h in hits:
+            print(f"{h['name']}@{h['revision']}  {h['score']:.3f}  {h.get('description') or ''}".rstrip())
+        return 0
+    return _serving(go)
+
+
+def list_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip list", description="Every published name with the revision it resolves to.")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    server = _require_server()
+
+    def go() -> int:
+        rows = server.list()
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        if not rows:
+            print("no skills published")
+            return 0
+        width = max(len(r["name"]) for r in rows)
+        for r in rows:
+            live = [v for v in r["revisions"] if not v.get("retired")]
+            resolves = r.get("pinned") or r.get("latest") or (live[0]["revision"] if live else "-")
+            flag = "  pinned" if r.get("pinned") else ""
+            print(f"{r['name'].ljust(width)}  {resolves}  {len(r['revisions'])} revision(s){flag}  {r.get('description') or ''}".rstrip())
+        return 0
+    return _serving(go)
+
+
+def publish_command(argv: list[str]) -> int:
+    from aip.spec import validate_skill
+
+    parser = argparse.ArgumentParser(prog="aip publish", description="Validate a skill folder locally, upload it, and print `name@revision`.")
+    parser.add_argument("skill_dir", type=Path)
+    args = parser.parse_args(argv)
+    server = _require_server()
+    loaded, issues = validate_skill(args.skill_dir)
+    errors, _ = _emit(issues)
+    if errors or loaded is None:
+        print(f"INVALID: {errors} error(s) — not published", file=sys.stderr)
+        return 1
+
+    def go() -> int:
+        result = server.publish(args.skill_dir)
+        for w in result.get("warnings", []):
+            print(json.dumps(w), file=sys.stderr)
+        print(f"{result['name']}@{result['revision']}")
+        return 0
+    return _serving(go)
+
+
+def get_command(argv: list[str]) -> int:
+    from aip.spec import validate_skill
+
+    parser = argparse.ArgumentParser(prog="aip get", description="Download a published revision losslessly to <out>/<name>/, "
+                                     "verify every file against the manifest, and validate it.")
+    parser.add_argument("ref", help="`name`, `name@rev`, or `name@latest`")
+    parser.add_argument("--out", type=Path, default=Path("."), help="parent folder; the skill lands at <out>/<name>")
+    args = parser.parse_args(argv)
+    server = _require_server()
+
+    def go() -> int:
+        target = server.download(args.ref, args.out)
+        loaded, issues = validate_skill(target)
+        errors, _ = _emit(issues)
+        if errors or loaded is None:
+            print(f"wrote {target}, but it does not validate here ({errors} error(s))", file=sys.stderr)
+            return 1
+        print(f"wrote {target}")
+        return 0
+    return _serving(go)
+
+
+def pin_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip pin", description="Make a name resolve to one revision; --clear removes the pin.")
+    parser.add_argument("name")
+    parser.add_argument("revision", nargs="?", default=None)
+    parser.add_argument("--clear", action="store_true")
+    args = parser.parse_args(argv)
+    if (args.revision is None) == (not args.clear):
+        parser.error("give a revision, or --clear")
+    server = _require_server()
+
+    def go() -> int:
+        server.pin(args.name, None if args.clear else args.revision)
+        print(f"{args.name} pin cleared" if args.clear else f"{args.name} -> {args.revision}")
+        return 0
+    return _serving(go)
+
+
+def retire_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip retire", description="Stop a name resolving to a revision (kept for the runs that reference it).")
+    parser.add_argument("ref", help="`name@revision`")
+    args = parser.parse_args(argv)
+    name, sep, revision = args.ref.partition("@")
+    if not sep or not revision or revision == "latest":
+        parser.error("retire takes `name@revision`")
+    server = _require_server()
+
+    def go() -> int:
+        server.retire(name, revision)
+        print(f"retired {name}@{revision}")
+        return 0
+    return _serving(go)
+
+
+def config_command(argv: list[str]) -> int:
+    from aip.client.server import config_path, load_config, save_config, settings
+
+    parser = argparse.ArgumentParser(prog="aip config", description="Where the client points. With no flags, show it. "
+                                     "AIP_SERVER and AIP_TOKEN override the file.")
+    parser.add_argument("--server", default=None, help="the server URL")
+    parser.add_argument("--token", default=None, help="the bearer token")
+    parser.add_argument("--clear", action="store_true", help="forget the server and token")
+    args = parser.parse_args(argv)
+    if args.clear:
+        path = save_config({})
+        print(f"cleared {path}")
+        return 0
+    if args.server is not None or args.token is not None:
+        config = load_config()
+        if args.server is not None:
+            config["server"] = args.server.rstrip("/")
+        if args.token is not None:
+            config["token"] = args.token
+        path = save_config(config)
+        print(f"wrote {path}")
+    s = settings()
+    if s["server"] is None:
+        print(f"no server configured (local folders only); set AIP_SERVER or `aip config --server URL` ({config_path()})")
+        return 0
+    print(f"server: {s['server']}  (from {s['source']})")
+    print(f"token:  {'set' if s['token'] else 'none'}")
+    return 0
 
 
 def db_command(argv: list[str]) -> int:
@@ -325,24 +567,28 @@ COMMANDS = {
     "info": info_command,
     "run": run_command,
     "resume": resume_command,
+    "search": search_command,
+    "list": list_command,
+    "publish": publish_command,
+    "get": get_command,
+    "pin": pin_command,
+    "retire": retire_command,
+    "config": config_command,
     "db": db_command,
     "server": server_command,
 }
-PLANNED = ["config", "publish", "list", "remove", "get"]
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in ("-h", "--help"):
         print("usage: aip <command> [args]\n\ncommands:\n  " + "\n  ".join(COMMANDS)
-              + "\n\nplanned:\n  " + "\n  ".join(PLANNED))
+              + "\n\n`info` and `run` take a skill folder, or a published name when a server is configured "
+              "(`aip config`, or AIP_SERVER).")
         return 0
     command, rest = argv[0], argv[1:]
     if command in COMMANDS:
         return COMMANDS[command](rest)
-    if command in PLANNED:
-        print(f"aip {command}: not implemented yet", file=sys.stderr)
-        return 2
     print(f"aip: unknown command {command!r}", file=sys.stderr)
     return 2
 

@@ -107,7 +107,20 @@ aip resume <run-file> --input answer.json             # continues a paused run
 aip run <path/to/skill-folder> --interactive           # prompts on the terminal instead
 ```
 
-`aip run` drives the procedure locally with the same engine the server will use. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
+With a server (`aip server --backend filesystem|neo4j`, see [`docs/server-design.md`](docs/server-design.md)), the same commands take a published name, and the catalog has its own:
+
+```bash
+export AIP_SERVER=http://localhost:8000               # or: aip config --server URL [--token T]
+aip publish <path/to/skill-folder>                     # validate, upload, prints name@revision
+aip search "refund"                                    # ranked by the server
+aip list                                               # every name with the revision it resolves to
+aip info <name> --example-input > start.json
+aip run <name> --input start.json                      # runs on the server; same pause and resume
+aip get <name>[@revision] --out ./restored             # the folder back, hash-verified and validated
+aip pin <name> <revision>  /  aip retire <name>@<revision>
+```
+
+`aip run` drives the procedure locally with the same engine the server uses. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
 
 ## Loading Skills into Neo4j
 
@@ -134,15 +147,16 @@ The rebuild toward the client-server architecture is tracked milestone by milest
 
 ### Bumping the AIP protocol version
 
-The AIP format version (currently `0.4a0`) is referenced in **multiple places** that must stay in sync. When bumping:
+The AIP format version (currently `0.5a0`) is referenced in **multiple places** that must stay in sync. When bumping:
 
-1. **`src/aip/spec/models.py`** — `FORMAT_VERSION`. The validator rejects skills whose `metadata.aip-version` differs from it.
-2. **`assets/procedure.schema.json`** — regenerate with `aip schema --write assets/procedure.schema.json`.
-3. **`SKILL.md`** — the frontmatter version and every example that shows `metadata.aip-version`.
-4. **`examples/`** — each example skill's `metadata.aip-version`.
-5. **`README.md`** — install commands and any version references.
-6. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.
-7. **Git tag** — create the `v<X>` tag after the version-bump commit lands.
+1. **`src/aip/spec/models.py`** — `FORMAT_VERSION`. The validator rejects skills whose `metadata.aip-version` differs from it, except the versions in `LEGACY_VERSIONS`, which pass with a `runtime_block_outdated` warning.
+2. **`src/aip/spec/runtime.md`** — the block's heading carries the version; if the text changes, keep the previous text as `runtime-<old>.md` and add `<old>` to `LEGACY_VERSIONS`.
+3. **`assets/procedure.schema.json`** — regenerate with `aip schema --write assets/procedure.schema.json`.
+4. **`SKILL.md`** — the frontmatter version, the embedded runtime block, and every example that shows `metadata.aip-version`.
+5. **`examples/`** — each example skill's `metadata.aip-version`.
+6. **`README.md`** — install commands and any version references.
+7. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.
+8. **Git tag** — create the `v<X>` tag after the version-bump commit lands.
 
 Drift is caught automatically: the schema-sync test fails if the committed schema is stale, and validation of the bundled example fails on an `aip_version_mismatch`.
 

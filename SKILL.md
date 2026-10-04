@@ -2,7 +2,7 @@
 name: aip
 description: Create skills as Agent Instruction Protocol (AIP) — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, and compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems). Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
 metadata:
-  aip-version: "0.4a0"
+  aip-version: "0.5a0"
 ---
 
 # AIP — Agent Instruction Protocol
@@ -83,7 +83,7 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 |-------------------------|----------|----------------------------------------------------------------------------------------------------|
 | `name`                  | Yes      | 1–64 chars; lowercase `a–z`, `0–9`, hyphens; no leading, trailing, or consecutive hyphens. Must match the parent directory name. |
 | `description`           | Yes      | 1–1024 chars. Describes *what* the skill encodes and *when* to use it; include specific keywords that help agents identify relevant tasks. |
-| `metadata.aip-version`  | Yes      | AIP format version this skill is written in. Currently `"0.4a0"`. *AIP-specific.*                  |
+| `metadata.aip-version`  | Yes      | AIP format version this skill is written in. Currently `"0.5a0"`. *AIP-specific.*                  |
 | `license`               | No       | License name or reference to a bundled license file, e.g. `Apache-2.0`.                            |
 | `compatibility`         | No       | 1–500 chars. Only when the skill has specific environment requirements (intended product, system packages, network access, runtime versions); most skills don't need it. |
 | Other `metadata.*` keys | No       | Arbitrary string→string mapping for properties not defined by the Agent Skills spec, e.g. `author`, `version` (the skill's own version, distinct from `aip-version`). Use unique key names. |
@@ -99,7 +99,7 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ```yaml
 metadata:
-  aip-version: "0.4a0"
+  aip-version: "0.5a0"
   author: example-org
   version: "1.0"
 ```
@@ -111,13 +111,13 @@ The body — everything after the closing `---` of the frontmatter — must be t
 Example (pared down for illustration — real skills typically carry more steps and richer detail), from the bundled `examples/billing-support` skill. The first step is the start; the router branches server-side on the value the client chose:
 
 ````markdown
-# AIP runtime — format 0.4a0
+# AIP runtime — format 0.5a0
 
 You are executing an (Agent Instruction Protocol) AIP procedure: the fenced YAML block in this skill's `SKILL.md`. AIP is a protocol for cheaply, quickly, and accurately executing multi-step tasks using a graph-based workflow. AIP is portable, so while designed for execution with an AIP client and server, you, the agent can play both roles instead. 
 
 ## Running
 
-If the `aip` command is available (`aip --help` succeeds), use it: run `aip run <this skill's folder> --input <start.json>` with the start step's inputs as JSON. When the run needs you it prints a JSON pause and exits with code 3. `paused` says why: `decision` — answer the listed questions; `review` — confirm or override the flagged answers; `client_task` — do the task and produce the keys in `expects`. Put your answer in a JSON file and run the `resume` command the pause printed. Repeat until the output has `"done": true`; `state` is the result. If `aip` is not available, execute the procedure yourself, following the semantics below.
+If the `aip` command is available (`aip --help` succeeds), use it: run `aip run <this skill's folder> --input <start.json>` with the start step's inputs as JSON. When an AIP server is configured (`AIP_SERVER` or `aip config --server`), `aip run <this skill's name>` does the same against the published copy, and `aip search "<words>"` finds procedures by what they do. When the run needs you it prints a JSON pause and exits with code 3. `paused` says why: `decision` — answer the listed questions; `review` — confirm or override the flagged answers; `client_task` — do the task and produce the keys in `expects`. Put your answer in a JSON file and run the `resume` command the pause printed. Repeat until the output has `"done": true`; `state` is the result. If `aip` is not available, execute the procedure yourself, following the semantics below.
 
 Critical terminology:
 

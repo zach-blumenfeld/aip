@@ -37,6 +37,11 @@ class RunFile:
     pause: JSON                  # {"kind": "client_task"|"review"|"decision", ...details}
     thresholds: Dict[str, float] = field(default_factory=dict)
     created: float = field(default_factory=time.time)
+    # set when the run is on a server: `resume` rebuilds an HttpBackend from these
+    server: str | None = None
+    name: str | None = None
+    revision: str | None = None
+    run_id: str | None = None
 
     def save(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,6 +51,18 @@ class RunFile:
     @classmethod
     def load(cls, path: Path) -> "RunFile":
         return cls(**json.loads(Path(path).read_text()))
+
+
+def backend_for(run: RunFile, token: str | None = None, session: Any = None) -> Backend:
+    """The backend a run file was written against: the server it names, else the local folder."""
+    if run.server:
+        from aip.client.backend import HttpBackend
+
+        ref = f"{run.name}@{run.revision}" if run.revision else (run.name or run.skill_dir)
+        return HttpBackend(run.server, token, ref, run_id=run.run_id, session=session)
+    from aip.client.backend import LocalBackend
+
+    return LocalBackend(Path(run.skill_dir))
 
 
 @dataclass
@@ -109,7 +126,7 @@ class Runner:
                     answers = self._prompt_answers(node["questions"])
                     response = self.backend.answer_decision(after, payload, history, answers)
                 else:
-                    return self._pause(RunFile(str(self.skill_dir), after, payload, history, pause, thresholds))
+                    return self._pause(self._run_file(after, payload, history, pause, thresholds))
             else:
                 response = self.backend.run(after, payload, history, thresholds)
             outcome = self._continue(response, thresholds)
@@ -131,7 +148,7 @@ class Runner:
                 self.out.write("\n" + response["result"]["task"] + "\n\n")
                 payload = self._prompt_inputs(pause["expects"], response["suggested"])
                 return self._drive_from(response, payload, thresholds)
-            return self._pause(RunFile(str(self.skill_dir), response["ran"], response["suggested"], history, pause, thresholds))
+            return self._pause(self._run_file(response["ran"], response["suggested"], history, pause, thresholds))
 
         if response["review"]:
             pause = {"kind": "review", "step": response["ran"], "review": response["review"],
@@ -139,7 +156,7 @@ class Runner:
             if self.interactive:
                 payload = self._prompt_review(response["review"], response["suggested"])
                 return self._drive_from(response, payload, thresholds)
-            return self._pause(RunFile(str(self.skill_dir), response["ran"], response["suggested"], history, pause, thresholds))
+            return self._pause(self._run_file(response["ran"], response["suggested"], history, pause, thresholds))
         return None
 
     def _drive_from(self, response: JSON, payload: JSON, thresholds: Dict[str, float]) -> Outcome:
@@ -153,6 +170,11 @@ class Runner:
         return self._drive_from(response, response["suggested"], thresholds)
 
     # ---------------------------------------------------------------------- outcomes
+
+    def _run_file(self, after: str | None, suggested: JSON, history: List[JSON], pause: JSON,
+                  thresholds: Dict[str, float]) -> RunFile:
+        fields = getattr(self.backend, "run_file_fields", lambda: {})()
+        return RunFile(str(self.skill_dir), after, suggested, history, pause, thresholds, **fields)
 
     def _pause(self, run: RunFile) -> Outcome:
         path = run.save(self.run_file)

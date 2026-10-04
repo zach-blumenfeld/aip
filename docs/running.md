@@ -113,9 +113,15 @@ With a key set, decisions run against the model and only low-confidence answers 
     "expects": { "message": "string" }
   },
   "thresholds": {},
-  "created": 1790293854.39
+  "created": 1790293854.39,
+  "server": null,
+  "name": null,
+  "revision": null,
+  "run_id": null
 }
 ```
+
+The last four are set when the run is on a server (below): the URL, the exact `name` and `revision` the run is pinned to, and the server's `run_id` once a step has run. `aip resume` rebuilds the right backend from them, so a run file is self-contained either way.
 
 `.aip/` is gitignored. Nothing else is written: the skill folder is read-only to the runner, state travels in memory and in the run file, and scripts write only what they choose to.
 
@@ -244,6 +250,18 @@ message (string) ["I was charged twice!"]:
 
 Same loop, same engine; prompts replace the run file.
 
-## What the server adds
+## With a server
 
-Nothing to the protocol. `aip server` will expose `Procedure.run` over HTTP for a published skill, build a per-skill interpreter from the skill's environment file for scripts, and hold the decision-model key server-side. The runner gets an HTTP backend and a `--server` flag. Run files, pauses, and resume are unchanged.
+Nothing changes in the protocol. `aip server` exposes `Procedure.run` over HTTP for every published skill (`docs/server-design.md`), executes scripts with its own interpreter, holds the decision-model key, and records each run. The client points at it once:
+
+```
+$ export AIP_SERVER=http://localhost:8000            # or: aip config --server http://localhost:8000 [--token T]
+$ aip publish examples/billing-support               # validate locally, upload, server validates again
+billing-support@3f9c2a7d1e5b8c04
+$ aip search "refund"                                # ranked by the server
+billing-support@3f9c2a7d1e5b8c04  0.812  Triage an inbound billing message ...
+$ aip info billing-support --example-input > start.json
+$ aip run billing-support --input start.json         # same pause, same resume command
+```
+
+`aip run <name>` uses `HttpBackend`, which posts the same `after`, `payload`, `history`, and `thresholds` to `/procedures/<name>@<revision>/step` (and `/answer` for a manual decision) that `LocalBackend` passes to `Procedure.run`. The first call pins the name to one revision for the whole run. Pauses are identical; the run file additionally carries `server`, `name`, `revision`, and `run_id`, and `GET /runs/<run_id>` on the server shows the same history the client printed. A folder path (`aip run examples/billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.

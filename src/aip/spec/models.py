@@ -11,7 +11,9 @@ from typing import Annotated, Dict, List, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FORMAT_VERSION = "0.4a0"
+FORMAT_VERSION = "0.5a0"
+# Earlier formats whose skills this validator still accepts, with a `runtime_block_outdated` warning.
+LEGACY_VERSIONS = ("0.4a0",)
 SPEC_URL = f"https://github.com/zach-blumenfeld/aip/tree/v{FORMAT_VERSION}"
 SCHEMA_ID = f"https://raw.githubusercontent.com/zach-blumenfeld/aip/v{FORMAT_VERSION}/assets/procedure.schema.json"
 
@@ -250,11 +252,14 @@ def json_schema() -> dict:
     }
 
 
-def runtime_text() -> str:
+def runtime_text(version: str = FORMAT_VERSION) -> str:
     """The runtime block every authored skill carries verbatim at the top of its body.
 
-    Shipped inside the package so the validator can check a skill's copy is current.
+    Shipped inside the package so the validator can check a skill's copy is current. The
+    text of each version in `LEGACY_VERSIONS` ships too, so the validator can recognise an
+    outdated copy and warn instead of reject.
     """
     from importlib.resources import files
 
-    return files("aip.spec").joinpath("runtime.md").read_text(encoding="utf-8")
+    name = "runtime.md" if version == FORMAT_VERSION else f"runtime-{version}.md"
+    return files("aip.spec").joinpath(name).read_text(encoding="utf-8")

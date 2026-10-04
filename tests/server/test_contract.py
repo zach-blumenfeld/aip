@@ -117,7 +117,7 @@ def test_publish_is_idempotent_and_get_returns_the_record(catalog, example):
     got = catalog.get("billing-support")
     assert (got.name, got.revision, got.id) == ("billing-support", rev, f"billing-support@{rev}")
     assert got.description == example.description
-    assert got.aip_version == "0.4a0"
+    assert got.aip_version == "0.5a0"
     assert got.frontmatter == example.frontmatter
     assert got.procedure == example.procedure
     assert got.steps == example.steps and got.resources == example.resources

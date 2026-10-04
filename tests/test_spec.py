@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 from pydantic import ValidationError
@@ -250,9 +251,9 @@ class SkillFolder(unittest.TestCase):
             "name_mismatch": ("name: billing-support", "name: other-name"),
             "invalid_name": ("name: billing-support", "name: Billing--Support"),
             "missing_required_frontmatter": ("description: Triage", "descriptionx: Triage"),
-            "missing_aip_version": ('aip-version: "0.4a0"', 'other: "x"'),
-            "aip_version_mismatch": ('aip-version: "0.4a0"', 'aip-version: "0.3a3"'),
-            "invalid_metadata": ('aip-version: "0.4a0"', 'aip-version: "0.4a0"\n  nested:\n    a: b'),
+            "missing_aip_version": (f'aip-version: "{FORMAT_VERSION}"', 'other: "x"'),
+            "aip_version_mismatch": (f'aip-version: "{FORMAT_VERSION}"', 'aip-version: "0.3a3"'),
+            "invalid_metadata": (f'aip-version: "{FORMAT_VERSION}"', f'aip-version: "{FORMAT_VERSION}"\n  nested:\n    a: b'),
         }
         for expected, (old, new) in cases.items():
             with self.subTest(expected), tempfile.TemporaryDirectory() as tmp:
@@ -260,6 +261,32 @@ class SkillFolder(unittest.TestCase):
                 rewrite(skill, old, new)
                 _, issues = validate_skill(skill)
                 self.assertIn(expected, kinds(issues))
+
+    def test_previous_format_is_accepted_with_one_warning(self):
+        """A skill still carrying the 0.4a0 block and version validates, with `runtime_block_outdated`
+        as its only issue, said once; the CLI exits 0."""
+        from aip.client.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = copy_example(tmp)
+            rewrite(skill, runtime_text().strip(), runtime_text("0.4a0").strip())
+            rewrite(skill, f'aip-version: "{FORMAT_VERSION}"', 'aip-version: "0.4a0"')
+            loaded, issues = validate_skill(skill)
+            self.assertIsNotNone(loaded)
+            self.assertEqual([(i.kind, i.severity) for i in issues], [("runtime_block_outdated", "warning")])
+            self.assertIn("0.4a0", issues[0].message)
+            with mock.patch("sys.stdout", new=io.StringIO()) as out, mock.patch("sys.stderr", new=io.StringIO()):
+                self.assertEqual(main(["validate", str(skill)]), 0)
+            self.assertIn("1 warning(s)", out.getvalue())
+            # the block alone, or the version alone, is the same warning
+            rewrite(skill, 'aip-version: "0.4a0"', f'aip-version: "{FORMAT_VERSION}"')
+            self.assertEqual(kinds(validate_skill(skill)[1]), ["runtime_block_outdated"])
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = copy_example(tmp)
+            rewrite(skill, f'aip-version: "{FORMAT_VERSION}"', 'aip-version: "0.4a0"')
+            loaded, issues = validate_skill(skill)
+            self.assertIsNotNone(loaded)
+            self.assertEqual(kinds(issues), ["runtime_block_outdated"])
 
     def test_source_dir_required(self):
         with tempfile.TemporaryDirectory() as tmp:
