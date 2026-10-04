@@ -123,6 +123,13 @@ Each load is lossless: every file under the skill folder is stored as a `File` n
 
 ## Development & Contributing
 
+```bash
+uv sync --group dev                                    # pytest and the Neo4j driver
+uv run pytest -q                                       # the Neo4j test skips unless NEO4J_URI is set
+```
+
+The rebuild toward the client-server architecture is tracked milestone by milestone in [`docs/PLAN.md`](docs/PLAN.md); the design it implements is [`docs/server-design.md`](docs/server-design.md).
+
 ### Bumping the AIP protocol version
 
 The AIP format version (currently `0.4a0`) is referenced in **multiple places** that must stay in sync. When bumping:
