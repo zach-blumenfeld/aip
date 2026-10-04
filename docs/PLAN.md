@@ -62,7 +62,9 @@ off, commit":
 | `.claude/skills/search-first/` | delete | a 0.2-format experiment inside the repo; untracked, confuses the project-skill scan |
 | `scratch/` | leave | gitignored working notes; not part of the build |
 
-## - [ ] M0 — Test tooling and housekeeping
+## - [x] M0 — Test tooling and housekeeping
+
+Done 2026-10-03, commit 39a636e: dev group and README link landed, 60 passed / 1 skipped; the `rm` of the gitignored `notes.md` and `.claude/skills/search-first/` was blocked in the agent sandbox and is left for Zach.
 
 Scope: make the tests runnable without ad-hoc `--with`; clear the dead experiments.
 

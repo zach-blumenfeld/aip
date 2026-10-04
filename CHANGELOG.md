@@ -17,6 +17,7 @@ Track changes here as you make them. On release, rename this section to the new 
 - AIP format version bumped `0.3a3` → `0.4a0`.
 
 ### Added
+- `dev` dependency group (`pytest`, `neo4j`) so `uv sync --group dev && uv run pytest -q` runs the suite; `docs/PLAN.md` tracks the 0.5a0 client-server rebuild milestone by milestone and is linked from the README.
 - `src/aip`: the runtime package. `aip.spec` (format models, skill validation, loader), `aip.model` (stateless `Procedure.run`, input validation, server-side routing, decision collapse and review, script execution), and the `aip` CLI with `validate`, `schema`, and `info`.
 - Routers branch on collapsed answers of any type: `true`/`false` for a noul, the label for a choice, the level number for a score, matched against the YAML's string keys. Previously only choice labels routed. The validator now checks a router fed by a decision only branches on values that question can produce (`unknown_branch_value`).
 - `aip info`: a readable summary of a skill (purpose, triggers, the start input with types and descriptions, an example start JSON, every step with its questions, script, template, and references, and the end shape); `--example-input` prints just the start JSON, `--json` the machine form.
