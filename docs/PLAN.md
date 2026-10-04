@@ -137,7 +137,9 @@ NEO4J_URI=neo4j://localhost:7687 NEO4J_PASSWORD=password uv run aip db list     
 docker rm -f aip-neo4j
 ```
 
-## - [ ] M3 — HTTP server
+## - [x] M3 — HTTP server
+
+Done 2026-10-03, commit 90bf51a: FastAPI app over either backend with catalog, execution, and runs endpoints, the error envelope, bearer scopes, and `aip server`; `tests/server/test_http.py` 12 passed, full suite 87 passed / 19 skipped without `NEO4J_URI` and 106 passed with Docker Neo4j on port 17687; the proof printed `[]` from `/catalog`, and a curl traversal published `billing-support`, ran the angry branch's script server-side (`ticket_id` returned), and listed the run as `done` with 4 steps. Uploads are JSON only (no multipart); `step`/`answer` responses also carry `name` and `revision` for the client's run file.
 
 Scope: §4.2 of the design over either backend; the server executes scripts.
 
