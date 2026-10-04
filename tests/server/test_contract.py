@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from aip.server.backend import CatalogBackend, NotFound, RunBackend
+from aip.server.backend import CatalogBackend, GovernanceBackend, NotFound, NotSupported, RunBackend
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import materialize, snapshot
 from aip.spec import load_skill
@@ -325,6 +325,157 @@ def test_runs_create_append_get_list(runs):
         runs.get("nope")
     with pytest.raises(NotFound):
         runs.append("nope", {}, status="done", pause=None)
+
+
+# -------------------------------------------------------------------- governance
+
+
+@pytest.fixture
+def governance(backend) -> GovernanceBackend:
+    return backend.governance
+
+
+def decision(tone_p: float, billing_p: float = 0.97, message: str = "I was charged twice!", manual=None) -> dict:
+    """A triage history entry as the server records it: model-answered, or manual when `manual` is given."""
+    if manual is not None:
+        return {"step": "triage", "kind": "decision", "input": {"message": message}, "manual": True,
+                "result": {"answers": {"billing": {"type": "noul", "manual": manual["billing"]},
+                                       "tone": {"type": "choice", "manual": manual["tone"]}}}}
+    return {"step": "triage", "kind": "decision", "input": {"message": message},
+            "result": {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
+                       "answers": {"billing": {"type": "noul", "noul": billing_p},
+                                   "tone": {"type": "choice", "choice": "angry" if tone_p >= 0.5 else "calm",
+                                            "confidence": max(tone_p, round(1 - tone_p, 6)),
+                                            "probabilities": {"angry": tone_p, "calm": round(1 - tone_p, 6)}}}}}
+
+
+def route(tone: str) -> dict:
+    return {"step": "by-tone", "kind": "router", "input": {"tone": tone},
+            "result": {"to": "escalate" if tone == "angry" else "reply"}}
+
+
+def escalate(message="I was charged twice!", billing=True, failed: str | None = None) -> dict:
+    state = {"message": message, "billing": billing, "tone": "angry"}
+    if failed is not None:
+        return {"step": "escalate", "kind": "error", "step_kind": "execution", "input": state,
+                "result": {"error": failed}}
+    return {"step": "escalate", "kind": "execution", "input": state, "result": {"ticket_id": "T-1"}}
+
+
+def reply(message="I was charged twice!", billing=True) -> dict:
+    return {"step": "reply", "kind": "client_task", "input": {"message": message, "billing": billing, "tone": "calm"},
+            "result": {"task": "...", "references": []}}
+
+
+def end(**state) -> dict:
+    return {"step": "end", "kind": "end", "input": {"message": "I was charged twice!", **state}, "result": state}
+
+
+def seed(runs, revision: str, *entries: dict, status: str = "done", name: str = "billing-support") -> str:
+    rid = runs.create(name, revision)
+    for i, entry in enumerate(entries):
+        last = i == len(entries) - 1
+        runs.append(rid, entry, status=status if last else "running", pause=None)
+    return rid
+
+
+def test_governance_backend_satisfies_protocol(governance):
+    assert isinstance(governance, GovernanceBackend)
+    with pytest.raises(NotFound):
+        governance.query("nope")
+
+
+def test_thresholds_round_trip(catalog, example):
+    catalog.publish(example)
+    assert catalog.thresholds("billing-support") == {}
+    catalog.set_thresholds("billing-support", {"tone": 0.5, "billing": 0.2})
+    assert catalog.thresholds("billing-support") == {"tone": 0.5, "billing": 0.2}
+    catalog.set_thresholds("billing-support", {})
+    assert catalog.thresholds("billing-support") == {}
+    with pytest.raises(NotFound):
+        catalog.thresholds("nope")
+    with pytest.raises(NotFound):
+        catalog.set_thresholds("nope", {"tone": 0.5})
+
+
+def test_governance_overridden_decisions(catalog, runs, governance, example):
+    rev = catalog.publish(example)
+    assert governance.query("overridden-decisions") == []
+    # kept as the model said: angry -> escalate
+    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    # tone overridden to calm at the router
+    seed(runs, rev, decision(0.55), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+    # billing overridden at the step after the router (the router input carries only `tone`)
+    seed(runs, rev, decision(0.3), route("calm"), reply(billing=False), end(billing=False, tone="calm", reply="..."))
+    # a manual decision has no model answer to override
+    seed(runs, rev, decision(0, manual={"billing": True, "tone": "calm"}), route("calm"), reply())
+    # paused at the review and never continued: nothing settled, nothing counted
+    seed(runs, rev, decision(0.52), status="paused")
+
+    rows = governance.query("overridden-decisions")
+    assert rows == [
+        {"name": "billing-support", "step": "triage", "question": "billing", "decided": 3, "overridden": 1, "rate": 1 / 3},
+        {"name": "billing-support", "step": "triage", "question": "tone", "decided": 3, "overridden": 1, "rate": 1 / 3},
+    ]
+    assert governance.query("overridden-decisions", name="other") == []
+    assert governance.query("overridden-decisions", window=2) == []          # the newest two runs settled nothing
+    assert [r["question"] for r in governance.query("overridden-decisions", limit=1)] == ["billing"]
+
+
+def test_governance_failing_scripts(catalog, runs, governance, example):
+    rev = catalog.publish(example)
+    assert governance.query("failing-scripts") == []
+    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    seed(runs, rev, decision(0.9), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
+         status="error")
+    seed(runs, rev, decision(0.9), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2"),
+         status="error")
+    seed(runs, rev, decision(0.3), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+
+    rows = governance.query("failing-scripts")
+    assert rows == [{"name": "billing-support", "step": "escalate", "script": "scripts/escalate.py",
+                     "ran": 3, "failed": 2, "rate": 2 / 3,
+                     "last_error": "RuntimeError: Script scripts/escalate.py exited with 2"}]
+    assert governance.query("failing-scripts", window=1) == []                # the newest run took the calm branch
+    assert governance.query("failing-scripts", window=2)[0]["ran"] == 1
+    assert governance.query("failing-scripts", name="other") == []
+
+
+def test_governance_missing_fields(catalog, governance, example, tmp_path):
+    catalog.publish(example)
+    assert governance.query("missing-fields") == []
+    bare = variant(tmp_path, "bare-support")
+    md = tmp_path / "bare-support" / "SKILL.md"
+    text = md.read_text()
+    head, _, tail = text.partition("do_not_use_when:\n")
+    text = head + tail[tail.index("\nsteps:") + 1:]
+    text = text[:text.index("anti_patterns:")].rstrip() + "\n```\n"
+    md.write_text(text)
+    bare = snapshot(tmp_path / "bare-support")
+    assert bare.procedure["do_not_use_when"] == [] and bare.procedure["anti_patterns"] == []
+    rev = catalog.publish(bare)
+    assert governance.query("missing-fields") == [
+        {"name": "bare-support", "revision": rev, "missing": ["do_not_use_when", "anti_patterns"]}]
+    assert governance.query("missing-fields", name="billing-support") == []
+    catalog.retire("bare-support", rev)                                       # nothing live, nothing to report
+    assert governance.query("missing-fields") == []
+
+
+def test_governance_untaken_branches(backend, catalog, runs, governance, example):
+    rev = catalog.publish(example)
+    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    if isinstance(backend, FilesystemBackend):
+        with pytest.raises(NotSupported):
+            governance.query("untaken-branches")
+        return
+    assert governance.query("untaken-branches") == [
+        {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "calm", "to": "reply",
+         "runs": 1, "router_runs": 1}]
+    seed(runs, rev, decision(0.3), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+    assert governance.query("untaken-branches") == []
+    assert governance.query("untaken-branches", window=1) == [
+        {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "angry", "to": "escalate",
+         "runs": 1, "router_runs": 1}]
 
 
 # -------------------------------------------------------------------- neo4j only

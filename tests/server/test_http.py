@@ -251,7 +251,8 @@ def test_capabilities(backend, no_key):
     publish(TestClient(create_app(backend)))
     plain = TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json()
     assert plain == {"name": "billing-support", "revision": snapshot(EXAMPLE).revision,
-                     "decision_model": False, "executes_scripts": True, "persists_runs": True}
+                     "decision_model": False, "executes_scripts": True, "persists_runs": True,
+                     "governance": True}
     with_model = TestClient(create_app(backend, client=FakeJev(0.9))).get("/procedures/billing-support/capabilities").json()
     assert with_model["decision_model"] is True
     with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):
@@ -455,6 +456,115 @@ def test_runs_answer_501_without_a_run_backend(backend, no_key):
                  json={"after": None, "payload": {"message": "hi"}, "history": [],
                        "answers": {"billing": False, "tone": "calm"}})
     assert r.status_code == 200 and r.json()["run_id"] is None                 # the step still runs
+
+
+# ---------------------------------------------------------------------- governance
+
+
+def broken_variant(tmp_path: Path, name: str = "broken-support") -> Path:
+    """A copy of the example whose escalate script exits non-zero."""
+    import shutil
+
+    copy = tmp_path / name
+    shutil.copytree(EXAMPLE, copy)
+    md = copy / "SKILL.md"
+    md.write_text(md.read_text().replace("name: billing-support", f"name: {name}"))
+    (copy / "scripts" / "escalate.py").write_text("import sys\nsys.stderr.write('boom')\nsys.exit(2)\n")
+    return copy
+
+
+def test_governance_thresholds_endpoints_merge_under_the_request(backend, no_key, example):
+    app = create_app(backend, client=FakeJev(0.55, 0.97), tokens={"rw": {"read", "publish"}, "ro": {"read"}})
+    api = TestClient(app, client=("203.0.113.7", 40000), headers={"Authorization": "Bearer rw"})
+    publish(api)
+    start = {"message": "I was charged twice!"}
+    body = {"after": None, "payload": start, "history": []}
+
+    assert api.get("/catalog/billing-support/thresholds").json() == {"name": "billing-support", "thresholds": {}}
+    assert api.get("/catalog/billing-support").json()["thresholds"] == {}
+    assert api.post("/procedures/billing-support/step", json=body).json()["review"] != []   # author's 0.6
+
+    r = api.post("/catalog/billing-support/thresholds", json={"thresholds": {"tone": 0.5}})
+    assert r.status_code == 200 and r.json() == {"name": "billing-support", "thresholds": {"tone": 0.5}}
+    assert api.get("/catalog/billing-support/thresholds").json()["thresholds"] == {"tone": 0.5}
+    assert api.get("/catalog/billing-support").json()["thresholds"] == {"tone": 0.5}
+    assert api.post("/procedures/billing-support/step", json=body).json()["review"] == []    # stored 0.5 passes 0.55
+    r = api.post("/procedures/billing-support/step", json={**body, "thresholds": {"tone": 0.7}})
+    assert r.json()["review"][0]["reason"] == "confidence below 0.7"                          # the request wins
+
+    r = api.post("/catalog/billing-support/thresholds", json={"thresholds": {"tone": 1.5}})
+    assert r.status_code == 422 and r.json()["error"]["kind"] == "invalid_request"
+    assert api.post("/catalog/nope/thresholds", json={"thresholds": {"tone": 0.5}}).status_code == 404
+    assert api.get("/catalog/nope/thresholds").status_code == 404
+    r = api.post("/catalog/billing-support/thresholds", json={"thresholds": {}}, headers={"Authorization": "Bearer ro"})
+    assert r.status_code == 403
+    assert api.get("/catalog/billing-support/thresholds", headers={"Authorization": "Bearer ro"}).status_code == 200
+    assert api.post("/catalog/billing-support/thresholds", json={"thresholds": {}}).json()["thresholds"] == {}
+    assert api.post("/procedures/billing-support/step", json=body).json()["review"] != []
+
+
+def test_governance_queries_over_http(backend, no_key, example, tmp_path):
+    api = TestClient(create_app(backend, client=FakeJev(0.55, 0.97)), raise_server_exceptions=False)
+    publish(api)
+    listing = api.get("/governance").json()
+    assert [q["query"] for q in listing] == ["overridden-decisions", "failing-scripts", "missing-fields",
+                                             "untaken-branches"]
+    assert listing[0]["path"] == "/governance/overridden-decisions" and listing[0]["description"]
+    for query in ("overridden-decisions", "failing-scripts", "missing-fields"):
+        assert api.get(f"/governance/{query}").json() == []
+    r = api.get("/governance/untaken-branches")
+    assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    r = api.get("/governance/nope")
+    assert r.status_code == 404 and "GET /governance" in r.json()["error"]["message"]
+    assert api.get("/governance/failing-scripts", params={"window": 0}).status_code == 422
+
+    # the client overrides tone after the review: one overridden decision
+    start = {"message": "I was charged twice!"}
+    first = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []}).json()
+    assert first["review"] and first["suggested"]["tone"] == "angry"
+    r = api.post("/procedures/billing-support/step",
+                 json={"after": "triage", "payload": {**first["suggested"], "tone": "calm"},
+                       "history": first["history"], "run_id": first["run_id"]})
+    assert r.status_code == 200 and r.json()["ran"] == "reply"
+    assert api.get("/governance/overridden-decisions").json() == [
+        {"name": "billing-support", "step": "triage", "question": "tone", "decided": 1, "overridden": 1, "rate": 1.0}]
+    assert api.get("/governance/overridden-decisions", params={"name": "other"}).json() == []
+
+    # a script that exits non-zero: the run ends in error, recorded against the step that raised
+    r = publish(api, broken_variant(tmp_path))
+    assert r.status_code == 201, r.text
+    body = {"after": "triage", "payload": {**start, "billing": True, "tone": "angry"}, "history": []}
+    r = api.post("/procedures/broken-support/step", json=body)
+    assert r.status_code == 500, r.text
+    err = r.json()["error"]
+    assert err["kind"] == "step_failed" and err["location"] == "escalate" and "boom" in err["message"]
+    run = api.get(f"/runs/{err['run_id']}").json()
+    assert run["status"] == "error" and run["name"] == "broken-support"
+    assert run["history"][-1]["step"] == "escalate" and run["history"][-1]["kind"] == "error"
+    assert run["history"][-1]["step_kind"] == "execution"
+    assert api.post("/procedures/broken-support/step", json=body).status_code == 500
+
+    rows = api.get("/governance/failing-scripts").json()
+    assert len(rows) == 1
+    assert {k: rows[0][k] for k in ("name", "step", "script", "ran", "failed", "rate")} == {
+        "name": "broken-support", "step": "escalate", "script": "scripts/escalate.py", "ran": 2, "failed": 2, "rate": 1.0}
+    assert "boom" in rows[0]["last_error"]
+    assert api.get("/governance/failing-scripts", params={"name": "billing-support"}).json() == []
+    assert api.get("/governance/missing-fields").json() == []
+    assert api.get("/runs", params={"status": "error"}).json()[0]["name"] == "broken-support"
+
+
+def test_governance_answers_501_without_a_governance_backend(backend, no_key):
+    class NoGovernance:
+        catalog = backend.catalog
+        runs = backend.runs
+
+    api = TestClient(create_app(NoGovernance()))
+    publish(api)
+    assert api.get("/governance").status_code == 200
+    r = api.get("/governance/missing-fields")
+    assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    assert api.get("/procedures/billing-support/capabilities").json()["governance"] is False
 
 
 # ---------------------------------------------------------------------- the client

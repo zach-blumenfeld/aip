@@ -1,8 +1,10 @@
 """The storage contract (design §5): two protocols, implemented per backend.
 
 `CatalogBackend` holds skill revisions and answers name, revision, file, and search
-questions about them. `RunBackend` records run history. A backend class may
-implement both; the server only ever talks to these methods.
+questions about them, and keeps each name's threshold overrides. `RunBackend` records
+run history. `GovernanceBackend` answers the named corpus queries of
+`aip.server.governance` over both. A backend class may implement all three; the
+server only ever talks to these methods.
 
 Search semantics are deliberately unspecified beyond "ranked, deterministic for a
 fixed catalog". Refs passed to `resolve` take three forms: `name` (the pinned
@@ -25,6 +27,10 @@ class NotFound(KeyError):
 
     def __str__(self) -> str:  # KeyError quotes its argument; we want the plain message
         return str(self.args[0]) if self.args else ""
+
+
+class NotSupported(NotImplementedError):
+    """A query this backend declines to answer (501 over HTTP)."""
 
 
 def split_ref(ref: str) -> tuple[str, str | None]:
@@ -71,6 +77,12 @@ class CatalogBackend(Protocol):
         """The revision's skill folder on disk, named after the skill: what the server loads and executes.
         The filesystem backend hands out its published copy; others materialise into a hash-checked cache."""
 
+    def thresholds(self, name: str) -> Dict[str, float]:
+        """The per-question threshold overrides stored for `name` (design §7); `{}` when none."""
+
+    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
+        """Replace the stored overrides for `name`; `{}` clears them."""
+
 
 @runtime_checkable
 class RunBackend(Protocol):
@@ -84,3 +96,11 @@ class RunBackend(Protocol):
 
     def list(self, name: str | None = None, status: str | None = None, limit: int = 50) -> List[RunSummary]:
         """Newest first, optionally filtered by name and status."""
+
+
+@runtime_checkable
+class GovernanceBackend(Protocol):
+    def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50) -> List[JSON]:
+        """Rows for one of `aip.server.governance.QUERIES` over the last `window` runs (filtered to
+        `name` when given); raises NotFound for an unknown query and NotSupported for one this
+        backend declines."""

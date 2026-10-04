@@ -1,7 +1,7 @@
 """The filesystem backend (design §5.2): a root directory and nothing else.
 
     <root>/
-    ├── catalog.json                 names -> {pinned, revisions: [{revision, published_at, retired}]}
+    ├── catalog.json                 names -> {pinned, thresholds, revisions: [{revision, published_at, retired}]}
     ├── catalog.lock                 flock target; catalog.json is the only file ever rewritten
     ├── skills/<name>/<revision>/    one revision
     │   ├── .aip-manifest.json       the record minus file bytes: manifest (path, size, sha256, mode)
@@ -13,7 +13,8 @@
 Writes are atomic per file (temp name, then rename); a revision directory is built
 beside its final name and renamed into place. Search is weighted BM25 with Porter stemming
 (`aip.server.search`) over an in-memory index of every name's resolved revision, rebuilt
-on publish, pin, and retire.
+on publish, pin, and retire. Governance queries scan the run files with the helpers in
+`aip.server.governance`; `untaken-branches` is declined (`NotSupported`).
 """
 
 from __future__ import annotations
@@ -31,7 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
-from aip.server.backend import NotFound, split_ref
+from aip.server import governance
+from aip.server.backend import NotFound, NotSupported, split_ref
 from aip.server.search import BM25Index
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, materialize)
@@ -249,6 +251,15 @@ class FilesystemCatalog:
     def resolve(self, ref: str) -> tuple[str, str]:
         return self._resolve_in(self._read_catalog(), ref)
 
+    def thresholds(self, name: str) -> Dict[str, float]:
+        return dict(self._entry(self._read_catalog(), name).get("thresholds") or {})
+
+    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
+        with self._locked():
+            catalog = self._read_catalog()
+            self._entry(catalog, name)["thresholds"] = {q: float(v) for q, v in thresholds.items()}
+            self._write_catalog(catalog)
+
     # ------------------------------------------------------------------ search
 
     def _reindex(self) -> None:
@@ -329,10 +340,56 @@ class FilesystemRuns:
         return out[:limit]
 
 
+# ------------------------------------------------------------------------ governance
+
+
+class FilesystemGovernance:
+    """`GovernanceBackend` by scanning the last `window` run files."""
+
+    def __init__(self, catalog: FilesystemCatalog, runs: FilesystemRuns):
+        self.catalog = catalog
+        self.runs = runs
+
+    def _window(self, name: str | None, window: int) -> List[RunRecord]:
+        return [self.runs.get(s.id) for s in self.runs.list(name=name, limit=window)]
+
+    def _script_of(self, name: str, revision: str, step: str) -> str | None:
+        try:
+            steps = self.catalog._manifest(name, revision).get("steps", [])
+        except NotFound:
+            return None
+        return next((s.get("script") for s in steps if s.get("name") == step), None)
+
+    def _resolved_procedures(self, name: str | None):
+        catalog = self.catalog._read_catalog()
+        for entry_name in sorted(catalog):
+            if name is not None and entry_name != name:
+                continue
+            try:
+                _, revision = self.catalog._resolve_in(catalog, entry_name)
+            except NotFound:
+                continue
+            yield entry_name, revision, self.catalog._manifest(entry_name, revision).get("procedure", {})
+
+    def query(self, query: str, name: str | None = None, window: int = governance.DEFAULT_WINDOW,
+              limit: int = governance.DEFAULT_LIMIT) -> List[JSON]:
+        if query not in governance.QUERIES:
+            raise NotFound(f"no governance query {query!r}")
+        if query == "overridden-decisions":
+            return governance.overridden_decisions(self._window(name, window), limit)
+        if query == "failing-scripts":
+            return governance.failing_scripts(self._window(name, window), self._script_of, limit)
+        if query == "missing-fields":
+            return governance.missing_fields(self._resolved_procedures(name), limit)
+        raise NotSupported(f"the filesystem backend does not answer {query!r}; it needs the graph")
+
+
 class FilesystemBackend:
-    """Both halves over one root: `.catalog` is the `CatalogBackend`, `.runs` the `RunBackend`."""
+    """All three halves over one root: `.catalog` is the `CatalogBackend`, `.runs` the `RunBackend`,
+    `.governance` the `GovernanceBackend`."""
 
     def __init__(self, root: Path):
         self.root = Path(root)
         self.catalog = FilesystemCatalog(self.root)
         self.runs = FilesystemRuns(self.root)
+        self.governance = FilesystemGovernance(self.catalog, self.runs)

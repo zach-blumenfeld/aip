@@ -2,7 +2,7 @@
 
 Graph per skill revision, as the 0.4 `aip db` projection wrote it:
 
-    (:Name {name, pinned})-[:HAS_REVISION]->(:Skill {id: name@revision, name, revision, description,
+    (:Name {name, pinned, thresholds})-[:HAS_REVISION]->(:Skill {id: name@revision, name, revision, description,
                                                      aip_version, frontmatter, manifest, root_name,
                                                      directories, published_at, retired})
     (:Skill)-[:HAS_FILE]->(:File {key, path, size, sha256, mode, encoding, content})
@@ -16,8 +16,17 @@ Graph per skill revision, as the 0.4 `aip db` projection wrote it:
 and per run:
 
     (:Run {id, name, revision, status, started_at, updated_at, pause})-[:OF_SKILL]->(:Skill)
-    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, input, result, manual, review, entry, at})
+    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, manual, review, entry, at})
     (:StepRun)-[:NEXT]->(:StepRun)       (:StepRun)-[:OF_STEP]->(:Step)
+    (:StepRun)-[:ANSWERED]->(:Answer {question, type, value, accepted, overridden})-[:OF_QUESTION]->(:Question)
+
+`Answer` nodes are the governance projection of a model-answered decision: `value` is the
+collapsed answer (JSON-encoded), and `accepted` is filled in by the first later step run
+whose input carries the question's key, with `overridden` set when the two differ; this is
+what `aip.server.governance.overrides` computes from a history, written at append time so
+the override query is plain Cypher. An error entry's `step` is the step that failed and
+`step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Name.thresholds`
+holds the per-question threshold overrides (design §7) as JSON.
 
 `Skill.manifest` is the record minus file bytes (what the filesystem backend keeps in
 `.aip-manifest.json`), so `get` returns exactly what was published without re-deriving
@@ -26,6 +35,9 @@ rows from the graph. `File` nodes carry the bytes; `files` verifies every hash.
 Search is a full-text index over `Skill.name`, `Skill.description`, `Procedure.purpose`,
 and `Procedure.triggers` (the `trigger_when` list joined). Hits are summed per revision,
 filtered to what each name resolves to, and an exact name match is boosted on top.
+
+Governance (`queries`, one Cypher statement per name in `aip.server.governance.QUERIES`)
+runs over the last `window` runs; `missing-fields` is given the resolved revision ids.
 
 Materialisation: `folder(name, revision)` rebuilds the skill under
 `<cache>/<name>@<revision>/<name>/` (default `~/.cache/aip`, `AIP_CACHE_DIR` overrides)
@@ -49,6 +61,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from aip.server.backend import NotFound, split_ref
+from aip.server.governance import MISSING_FIELDS, QUERIES, collapsed_answers
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
 
@@ -56,7 +69,7 @@ JSON = Dict[str, Any]
 
 STEP_LABELS = {"decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
                "router": "Router", "end": "End"}
-AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Input", "Question", "Run", "StepRun")
+AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Input", "Question", "Run", "StepRun", "Answer")
 
 FULLTEXT_INDEX = "aip_skill_text"
 NAME_BOOST = 1000.0
@@ -253,6 +266,9 @@ RETURN s.name AS name, s.revision AS revision, s.description AS description, sco
 
 SET_PIN = "MATCH (n:Name {name: $name}) SET n.pinned = $revision"
 
+GET_THRESHOLDS = "MATCH (n:Name {name: $name}) RETURN n.thresholds AS thresholds"
+SET_THRESHOLDS = "MATCH (n:Name {name: $name}) SET n.thresholds = $thresholds"
+
 RETIRE = """
 MATCH (n:Name {name: $name})-[:HAS_REVISION]->(s:Skill {revision: $revision})
 SET s.retired = true
@@ -275,8 +291,9 @@ APPEND_STEP_RUN = """
 MATCH (r:Run {id: $id})
 OPTIONAL MATCH (r)-[:STEP_RUN]->(prev:StepRun)
 WITH r, prev ORDER BY prev.order DESC LIMIT 1
-CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kind, input: $input,
-                    result: $result, manual: $manual, review: $review, entry: $entry, at: datetime($now)})
+CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kind, step_kind: $step_kind,
+                    input: $input, result: $result, manual: $manual, review: $review, entry: $entry,
+                    at: datetime($now)})
 CREATE (r)-[:STEP_RUN]->(sr)
 FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:NEXT]->(sr))
 SET r.status = $status, r.pause = $pause, r.updated_at = datetime($now)
@@ -284,6 +301,23 @@ WITH r, sr
 OPTIONAL MATCH (st:Step {key: r.name + '@' + r.revision + ':' + $step})
 FOREACH (_ IN CASE WHEN st IS NULL THEN [] ELSE [1] END | CREATE (sr)-[:OF_STEP]->(st))
 RETURN sr.order AS order
+"""
+
+# The new entry's input settles every still-open model answer in the run whose question it carries.
+SETTLE_ANSWERS = """
+MATCH (r:Run {id: $id})-[:STEP_RUN]->(:StepRun)-[:ANSWERED]->(a:Answer)
+WHERE a.accepted IS NULL AND a.question IN keys($inputs)
+SET a.accepted = $inputs[a.question], a.overridden = $inputs[a.question] <> a.value
+"""
+
+CREATE_ANSWERS = """
+MATCH (r:Run {id: $id})-[:STEP_RUN]->(sr:StepRun {order: $order})
+OPTIONAL MATCH (sr)-[:OF_STEP]->(st:Step)
+UNWIND $answers AS a
+CREATE (sr)-[:ANSWERED]->(x:Answer {question: a.question, type: a.type, value: a.value})
+WITH x, st, a
+OPTIONAL MATCH (st)-[:ASKS]->(q:Question {name: a.question})
+FOREACH (_ IN CASE WHEN q IS NULL THEN [] ELSE [1] END | CREATE (x)-[:OF_QUESTION]->(q))
 """
 
 FETCH_RUN = """
@@ -305,6 +339,63 @@ RETURN r.id AS id, r.name AS name, r.revision AS revision, r.status AS status,
 ORDER BY r.started_at DESC, r.id DESC
 LIMIT $limit
 """
+
+# ----------------------------------------------------------------------- governance
+
+# The last $window runs (newest first, optionally one name) that every run-based query starts from.
+_WINDOW = """
+MATCH (r:Run) WHERE $name IS NULL OR r.name = $name
+WITH r ORDER BY r.started_at DESC, r.id DESC LIMIT $window
+"""
+
+queries: Dict[str, str] = {
+    "overridden-decisions": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:ANSWERED]->(a:Answer)
+WHERE a.accepted IS NOT NULL
+WITH r.name AS name, sr.step AS step, a.question AS question, count(a) AS decided,
+     sum(CASE WHEN a.overridden THEN 1 ELSE 0 END) AS overridden
+WHERE overridden > 0
+RETURN name, step, question, decided, overridden, toFloat(overridden) / decided AS rate
+ORDER BY overridden DESC, rate DESC, name, step, question
+LIMIT $limit
+""",
+    "failing-scripts": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun)
+WHERE sr.kind = 'execution' OR (sr.kind = 'error' AND sr.step_kind = 'execution')
+OPTIONAL MATCH (sr)-[:OF_STEP]->(st:Step)
+WITH r.name AS name, sr.step AS step, sr, st ORDER BY sr.at DESC
+WITH name, step, [x IN collect(st.script) WHERE x IS NOT NULL][0] AS script, count(sr) AS ran,
+     sum(CASE WHEN sr.kind = 'error' THEN 1 ELSE 0 END) AS failed,
+     [x IN collect(CASE WHEN sr.kind = 'error' THEN sr.result END) WHERE x IS NOT NULL][0] AS last_error
+WHERE failed > 0
+RETURN name, step, script, ran, failed, toFloat(failed) / ran AS rate, last_error
+ORDER BY failed DESC, rate DESC, name, step
+LIMIT $limit
+""",
+    "missing-fields": """
+MATCH (n:Name)-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
+WHERE s.id IN $ids
+WITH n, s, [f IN $fields WHERE size(coalesce(p[f], [])) = 0] AS missing
+WHERE size(missing) > 0
+RETURN n.name AS name, s.revision AS revision, missing
+ORDER BY name
+LIMIT $limit
+""",
+    "untaken-branches": _WINDOW + """
+MATCH (r)-[:OF_SKILL]->(s:Skill)
+WITH s, collect(r) AS runs
+MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(router:Step:Router)-[b:BRANCH]->(target:Step)
+OPTIONAL MATCH (run:Run)-[:STEP_RUN]->(rs:StepRun)-[:OF_STEP]->(router) WHERE run IN runs
+OPTIONAL MATCH (rs)-[:NEXT]->(nxt:StepRun)-[:OF_STEP]->(target)
+WITH s, router, b, target, size(runs) AS runs, count(DISTINCT rs) AS router_runs, count(nxt) AS taken
+WHERE taken = 0
+RETURN s.name AS name, s.revision AS revision, router.name AS router, b.value AS value, target.name AS to,
+       runs, router_runs
+ORDER BY name, revision, router, value
+LIMIT $limit
+""",
+}
+assert set(queries) == set(QUERIES)
 
 CLEAR = "MATCH (n) WHERE " + " OR ".join(f"n:{label}" for label in AIP_LABELS) + " DETACH DELETE n"
 
@@ -531,6 +622,27 @@ class Neo4jCatalog:
         name, rev = split_ref(ref)
         return name, self._resolve_entry(self._entry(name), rev)
 
+    def thresholds(self, name: str) -> Dict[str, float]:
+        self._entry(name)
+        rows = self._read(GET_THRESHOLDS, name=name)
+        return dict(_load(rows[0]["thresholds"]) or {}) if rows else {}
+
+    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
+        self._entry(name)
+        self.driver.execute_query(SET_THRESHOLDS, name=name,
+                                  thresholds=_dump({q: float(v) for q, v in thresholds.items()}),
+                                  database_=self.database)
+
+    def resolved_ids(self, name: str | None = None) -> List[str]:
+        """`name@revision` for what every name (or one) resolves to; names with nothing live are skipped."""
+        out = []
+        for entry_name, entry in sorted(self._entries(name).items()):
+            try:
+                out.append(f"{entry_name}@{self._resolve_entry(entry, None)}")
+            except NotFound:
+                continue
+        return out
+
     # ---------------------------------------------------------- materialisation
 
     def folder(self, name: str, revision: str) -> Path:
@@ -585,15 +697,25 @@ class Neo4jRuns:
 
     def append(self, run_id: str, entry: JSON, status: str, pause: JSON | None) -> None:
         params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
+                  "step_kind": entry.get("step_kind"),
                   "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
                   "manual": bool(entry.get("manual", False)), "review": _dump(entry.get("review")),
                   "entry": json.dumps(entry, sort_keys=True), "status": status, "pause": _dump(pause),
                   "now": _now()}
+        payload = entry.get("input")
+        inputs = {k: _dump(v) for k, v in payload.items()} if isinstance(payload, dict) else {}
+        answers = (entry.get("result") or {}).get("answers") or {}
+        collapsed = [{"question": q, "type": answers[q].get("type"), "value": _dump(v)}
+                     for q, v in collapsed_answers(entry).items()]
 
         def tx_fn(tx):
             if tx.run(RUN_EXISTS, id=run_id).single() is None:
                 raise NotFound(f"no run {run_id!r}")
-            tx.run(APPEND_STEP_RUN, **params).consume()
+            if inputs:
+                tx.run(SETTLE_ANSWERS, id=run_id, inputs=inputs).consume()
+            order = tx.run(APPEND_STEP_RUN, **params).single()["order"]
+            if collapsed:
+                tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=collapsed).consume()
 
         with self.driver.session(database=self.database) as session:
             session.execute_write(tx_fn)
@@ -613,8 +735,35 @@ class Neo4jRuns:
                 for r in self._read(LIST_RUNS, name=name, status=status, limit=int(limit))]
 
 
+# ------------------------------------------------------------------------ governance
+
+
+class Neo4jGovernance:
+    """`GovernanceBackend`: one Cypher statement per query (`queries`)."""
+
+    def __init__(self, driver, database: str, catalog: Neo4jCatalog):
+        self.driver = driver
+        self.database = database
+        self.catalog = catalog
+
+    def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50) -> List[JSON]:
+        if query not in queries:
+            raise NotFound(f"no governance query {query!r}")
+        params: JSON = {"name": name, "window": int(window), "limit": int(limit)}
+        if query == "missing-fields":
+            params["ids"] = self.catalog.resolved_ids(name)
+            params["fields"] = list(MISSING_FIELDS)
+        records, _, _ = self.driver.execute_query(queries[query], database_=self.database, **params)
+        rows = [r.data() for r in records]
+        if query == "failing-scripts":
+            for row in rows:
+                row["last_error"] = (_load(row["last_error"]) or {}).get("error")
+        return rows
+
+
 class Neo4jBackend:
-    """Both halves over one driver: `.catalog` is the `CatalogBackend`, `.runs` the `RunBackend`.
+    """All three halves over one driver: `.catalog` is the `CatalogBackend`, `.runs` the `RunBackend`,
+    `.governance` the `GovernanceBackend`.
 
     Opens the driver, verifies connectivity, and creates the constraints and the full-text
     index on construction. `close()` (or the context manager) releases the driver.
@@ -627,6 +776,7 @@ class Neo4jBackend:
         ensure_schema(self.driver, self.conn.database)
         self.catalog = Neo4jCatalog(self.driver, self.conn.database, cache_dir)
         self.runs = Neo4jRuns(self.driver, self.conn.database)
+        self.governance = Neo4jGovernance(self.driver, self.conn.database, self.catalog)
 
     def clear(self) -> None:
         """Delete every AIP node (names, skills, files, projection, runs). For tests and resets."""
