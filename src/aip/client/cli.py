@@ -207,7 +207,7 @@ def resume_command(argv: list[str]) -> int:
 
 
 def db_command(argv: list[str]) -> int:
-    """`aip db load|list|export`: the Neo4j projection. Connection from NEO4J_* env or flags."""
+    """`aip db load|list|export`: the Neo4j backend, 0.4 shape. Connection from NEO4J_* env or flags."""
     from aip.db.neo4j import Connection, export, list_skills, load
 
     connection = argparse.ArgumentParser(add_help=False)
@@ -247,7 +247,9 @@ def db_command(argv: list[str]) -> int:
             return 0
         width = max(len(r["name"]) for r in rows)
         for r in rows:
-            print(f"{r['name'].ljust(width)}  {r['revision']}  aip {r['aip_version']}  {r['steps']} steps  {r['files']} files  {r['loaded_at']}")
+            flags = "".join(f"  {flag}" for flag, on in (("pinned", r.get("pinned")), ("retired", r.get("retired"))) if on)
+            print(f"{r['name'].ljust(width)}  {r['revision']}  aip {r['aip_version']}  {r['steps']} steps  "
+                  f"{r['files']} files  {r['published_at']}{flags}")
         return 0
     try:
         target = export(args.name, args.out, revision=args.revision, conn=conn)

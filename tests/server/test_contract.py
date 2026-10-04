@@ -1,10 +1,12 @@
 """Backend contract tests (design §5.3), parametrised over every registered backend.
 
 Each case gets a fresh backend. The filesystem backend runs against a temp dir; the
-Neo4j backend joins at M2 (skipped without NEO4J_URI).
+Neo4j backend against NEO4J_URI (plus NEO4J_USERNAME / NEO4J_PASSWORD / NEO4J_DATABASE
+as needed), wiping every AIP node before each case, and is skipped without it.
 """
 
 import hashlib
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -17,14 +19,29 @@ from aip.server.records import materialize, snapshot
 
 EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "billing-support"
 
+needs_neo4j = pytest.mark.skipif(not os.environ.get("NEO4J_URI"), reason="NEO4J_URI not set")
+
+
+def neo4j_backend(tmp: Path):
+    from aip.server.backends.neo4j import Neo4jBackend
+
+    backend = Neo4jBackend(cache_dir=tmp / "cache")
+    backend.clear()
+    return backend
+
+
 BACKENDS = {
     "filesystem": lambda tmp: FilesystemBackend(tmp / "root"),
+    "neo4j": neo4j_backend,
 }
 
 
-@pytest.fixture(params=sorted(BACKENDS))
+@pytest.fixture(params=["filesystem", pytest.param("neo4j", marks=needs_neo4j)])
 def backend(request, tmp_path):
-    return BACKENDS[request.param](tmp_path)
+    backend = BACKENDS[request.param](tmp_path)
+    yield backend
+    if hasattr(backend, "close"):
+        backend.close()
 
 
 @pytest.fixture
@@ -154,6 +171,17 @@ def test_binary_files_survive(catalog, tmp_path):
     assert catalog.file("bin-skill", rev, "assets/logo.bin") == blob
 
 
+def test_folder_is_a_loadable_copy(catalog, example, tmp_path):
+    """Both backends hand the server an on-disk folder to execute from (the filesystem copy in
+    place, the Neo4j cache); it is the published tree byte for byte."""
+    rev = catalog.publish(example)
+    folder = catalog.folder("billing-support", rev)
+    assert tree(folder) == tree(EXAMPLE)
+    assert catalog.folder("billing-support", rev) == folder            # stable across calls
+    with pytest.raises(NotFound):
+        catalog.folder("billing-support", "0000000000000000")
+
+
 # ------------------------------------------------------------------------- search
 
 
@@ -269,3 +297,81 @@ def test_runs_create_append_get_list(runs):
         runs.get("nope")
     with pytest.raises(NotFound):
         runs.append("nope", {}, status="done", pause=None)
+
+
+# -------------------------------------------------------------------- neo4j only
+
+
+@needs_neo4j
+class TestNeo4j:
+    """What the graph adds beyond the contract: the 0.4 `aip db` shim, the projection, the cache."""
+
+    @pytest.fixture
+    def neo4j(self, tmp_path):
+        backend = neo4j_backend(tmp_path)
+        yield backend
+        backend.close()
+
+    def test_db_shim_round_trips(self, neo4j, example, tmp_path):
+        from aip.db.neo4j import export, fetch, list_skills, load
+
+        skill_id = load(EXAMPLE)
+        assert skill_id == example.id
+        assert load(EXAMPLE) == skill_id                                # idempotent
+        other = variant(tmp_path, "billing-other")
+        assert load(tmp_path / "billing-other") != skill_id
+
+        names = {(r["name"], r["revision"]) for r in list_skills()}
+        assert names == {("billing-support", example.revision), ("billing-other", other.revision)}
+
+        out = export("billing-support", tmp_path / "export")
+        assert out == tmp_path / "export" / "billing-support"
+        assert tree(out) == tree(EXAMPLE)
+        assert snapshot(out).id == skill_id
+
+        assert fetch("billing-support")["id"] == skill_id
+        assert fetch("nope") is None
+        with pytest.raises(KeyError):
+            export("nope", tmp_path / "x")
+
+    def test_projection_has_steps_files_and_names(self, neo4j, example):
+        neo4j.catalog.publish(example)
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (n:Name {name: $name})-[:HAS_REVISION]->(s:Skill {id: $id})"
+            "-[:HAS_PROCEDURE]->(p)-[:HAS_STEP]->(st) "
+            "OPTIONAL MATCH (st)-[:USES]->(f:File) "
+            "WITH st, collect(f.path) AS files ORDER BY st.order "
+            "RETURN st.name AS step, st.kind AS kind, labels(st) AS labels, files",
+            name="billing-support", id=example.id, database_=neo4j.conn.database)
+        steps = {r["step"]: (r["kind"], sorted(r["files"]), set(r["labels"])) for r in rows}
+        assert [r["step"] for r in rows] == ["triage", "by-tone", "escalate", "reply", "end"]
+        assert steps["escalate"] == ("execution", ["assets/config.json", "scripts/escalate.py"],
+                                     {"Step", "Execution"})
+        assert steps["by-tone"][0] == "router" and "Router" in steps["by-tone"][2]
+        assert steps["reply"][1] == ["assets/policy.md", "assets/reply.md", "references/help.md"]
+
+    def test_runs_link_to_the_steps_they_executed(self, neo4j, example):
+        rev = neo4j.catalog.publish(example)
+        rid = neo4j.runs.create("billing-support", rev)
+        neo4j.runs.append(rid, {"step": "triage", "kind": "decision", "input": {"message": "hi"},
+                                "result": {"answers": {}}}, status="running", pause=None)
+        neo4j.runs.append(rid, {"step": "by-tone", "kind": "router", "input": {}, "result": {}},
+                          status="done", pause=None)
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (r:Run {id: $id})-[:OF_SKILL]->(s:Skill) "
+            "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:NEXT]->(b:StepRun) "
+            "MATCH (a)-[:OF_STEP]->(sa:Step), (b)-[:OF_STEP]->(sb:Step) "
+            "RETURN s.id AS skill, a.step AS first, sa.key AS first_key, b.step AS second, a.input AS input",
+            id=rid, database_=neo4j.conn.database)
+        row = rows[0].data()
+        assert row["skill"] == example.id and row["first"] == "triage" and row["second"] == "by-tone"
+        assert row["first_key"] == f"{example.id}:triage"
+        assert row["input"] == '{"message": "hi"}'
+
+    def test_cache_is_rebuilt_when_a_file_is_tampered(self, neo4j, example):
+        rev = neo4j.catalog.publish(example)
+        folder = neo4j.catalog.folder("billing-support", rev)
+        assert folder == neo4j.catalog.cache_dir / example.id
+        (folder / "assets" / "policy.md").write_text("tampered\n")
+        assert neo4j.catalog.folder("billing-support", rev) == folder
+        assert tree(folder) == tree(EXAMPLE)
