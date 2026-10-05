@@ -66,7 +66,9 @@ brittle, so it is not done. Here, `aip.spec` remains as the home of the loader a
 re-exports the format from `aip_spec`, so the five modules that import `aip.spec` today do
 not change.
 
-## - [ ] S0 — Create `aip-spec`
+## - [x] S0 — Create `aip-spec`
+
+Done 2026-10-05, commit 94215a9 in `aip-spec`: the spec half (models, validator, runtime block, authoring skill, example) as the `aip-spec` distribution with its CLI, installer, and 36 tests; `SKILL.md` also drops `scripts/validate.py` from anti-pattern 3 in favour of `aip-spec validate`, since the installed skill no longer carries the script.
 
 In the new repo, from the current `aip-0.5a0` tree.
 
