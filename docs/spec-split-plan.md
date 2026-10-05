@@ -149,7 +149,9 @@ uv run aip runtime | head -1                     # "# AIP runtime — format 0.5
 ls SKILL.md references assets examples 2>&1 | grep -c "No such"   # 4
 ```
 
-## - [ ] S2 — Install path
+## - [x] S2 — Install path
+
+Done 2026-10-05, commit b324949: `aip skill install|list|remove` writes both skills through `aip_spec.agents`, `install.sh` installs uv, `aip-spec`, and `aip` then runs it, the README's install path is the one-liner with the format sections pointing at the spec repo, and `tests/test_runtime_skill.py` is 10 passed (full suite 98 passed, 28 skipped).
 
 - `aip skill install [agent] [--path DIR]`, `skill list`, `skill remove`: drops both skills,
   `aip-runtime` from this package and the authoring skill through `aip_spec.skill_dir()`,
