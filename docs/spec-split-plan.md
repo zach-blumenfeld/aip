@@ -68,7 +68,7 @@ not change.
 
 ## - [x] S0 — Create `aip-spec`
 
-Done 2026-10-05, commit 94215a9 in `aip-spec`: the spec half (models, validator, runtime block, authoring skill, example) as the `aip-spec` distribution with its CLI, installer, and 36 tests; `SKILL.md` also drops `scripts/validate.py` from anti-pattern 3 in favour of `aip-spec validate`, since the installed skill no longer carries the script.
+Done 2026-10-05, commits 94215a9 and 3744797 in `aip-spec`: the spec half (models, validator, runtime block, authoring skill, example) as the `aip-spec` distribution with its CLI, installer, and 36 tests. Departure from the bullets below: `scripts/validate.py` is not carried over; `aip-spec validate` is the one validator, the installer puts it on PATH, and the skill names only that command (anti-pattern 3 included). The plain-clone install route is not supported.
 
 In the new repo, from the current `aip-0.5a0` tree.
 
