@@ -264,7 +264,9 @@ curl -s localhost:8000/governance/overridden-decisions | jq .   # a list (empty 
 kill %1
 ```
 
-## - [ ] M7 — `aip-inspector`
+## - [x] M7 — `aip-inspector`
+
+Done 2026-10-05, aip commit 6be3247 (inspector repo `~/dev/aip-inspector`, its I0–I6 through ea502d8): the five views ship in the inspector repo against the HTTP API only, hash-routed under `/inspector/` (catalog with the step graph as inline SVG, source manifest and viewer with a client-side revision diff, run console over `/peek`, `/step`, and `/answer` with per-run threshold overrides, history replaying a run as a trace over the graph, governance with pin, retire, thresholds, and the four corpus queries); `npm run build && npm run sync` writes the bundle into `src/aip/server/inspector/` (committed here, in the wheel) and `create_app(inspector=dir)` mounts it with StaticFiles at `/inspector/`, a missing bundle answering 404 with the fix. The inspector's e2e boots a filesystem `aip server` from this repo with `billing-support` published twice, drives the console through both branches in headless Chrome, and asserts the runs in history; it runs every spec against Vite and again against the served bundle. Proof: `uv run pytest -q` 128 passed / 28 skipped, `PLAYWRIGHT_CHANNEL=chrome npm run e2e` 32 passed, and `aip server --backend filesystem --inspector` answered `/inspector/` 200, bare `/inspector` 307, and the hashed JS asset 200 from the packaged copy.
 
 Scope: §10 of the design, in its own repo, against the API only.
 
