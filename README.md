@@ -29,32 +29,32 @@ Skills](https://arxiv.org/pdf/2606.04781) demonstrates lift for Claude Sonnet ac
 - **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
 - **Database-ingestable.** Schema-validated YAML projects into a graph database for governed distribution, audit, and analytics.
 
-## Quickstart
+## Install
 
-AIP ships as an Agent Skill for co-authoring AIP skills. Install it into your agent's skills directory; the skill activates the next time you talk to your agent about authoring or validating an AIP artifact.
-
-**Requirements:** [uv](https://docs.astral.sh/uv/) — used to run the bundled Python validator. Install with
+One line installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) (the format and its validator), and both Agent Skills, `aip` (authoring and validating AIP skills) and `aip-runtime` (running published procedures), into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie):
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash    # aip + aip-spec + both skills
 ```
 
-AIP `0.4a0` is in active development on the `aip-s1` branch and is not tagged yet. Install from the branch.
-
-**Install AIP** (Claude Code, project-local, tracks `aip-s1`):
+Only the format, no runtime (author and validate skills, nothing to run them against):
 
 ```bash
-git clone --depth 1 --branch aip-s1 https://github.com/zach-blumenfeld/aip.git ./.claude/skills/aip
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/main/install.sh | bash   # aip-spec + the aip skill
 ```
 
-The released [tags](https://github.com/zach-blumenfeld/aip/tags) (`v0.3a3` and earlier) predate the 0.4a0 format and do not work with the current tooling. Once 0.4a0 is tagged and merged to `main`, pin a release with `--branch v0.4a0` instead.
+Prefer Python tooling:
 
-For **user-global install** or **other agents**, change the target directory:
+```bash
+uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a0   # `aip-spec`, the validator the skill calls
+uv tool install git+https://github.com/zach-blumenfeld/aip.git@aip-0.5a0     # `aip`; pulls aip-spec in as a library
+aip skill install                   # both skills, every detected agent
+aip skill install claude-code       # one agent;  aip skill list  shows them
+aip skill install --path ./.claude/skills    # a project-local skills directory
+aip skill remove
+```
 
-- **Claude Code, user-global:** `~/.claude/skills/aip`
-- **Other Agent-Skills–compatible runtimes:** check the runtime's docs for where it loads skills from.
-
-Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation.
+Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
 
 ### Model Recommendation for Co-Authoring
 
@@ -66,34 +66,29 @@ For *consuming* the resulting skill, the opposite holds: AIP's structure is what
 
 The AIP skill exposes two top-level procedures:
 
-1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into an execution graph validated against the AIP procedure schema, runs it, and tests it. Details in [`SKILL.md` § Authoring an Agent Skill](SKILL.md#authoring-an-agent-skill).
-2. **Validate an AIP skill** — run the bundled validator directly, or let the agent run it as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill](SKILL.md#validating-an-aip-skill).
+1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into an execution graph validated against the AIP procedure schema, runs it, and tests it. Details in [`SKILL.md` § Authoring an Agent Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#authoring-an-agent-skill) in the spec repo.
+2. **Validate an AIP skill** — run `aip-spec validate` (or `aip validate`, the same checks) directly, or let the agent run it as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#validating-an-aip-skill).
+
+The authoring skill lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec); `aip skill install` writes the copy bundled in that package.
 
 ## AIP Skill Spec
 
-The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](SKILL.md#aip-specification). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is the fixed AIP runtime block followed by exactly one fenced YAML block, so every skill carries its own execution semantics and any agent can run it with no aip tooling present, and adds one frontmatter key, `metadata.aip-version`.
+The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#aip-specification) in the spec repo, [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is the fixed AIP runtime block followed by exactly one fenced YAML block, so every skill carries its own execution semantics and any agent can run it with no aip tooling present, and adds one frontmatter key, `metadata.aip-version`.
 
 ## The Procedure Format
 
-There is one format. It is defined by the pydantic models in `src/aip/spec/models.py`; the JSON Schema at [`assets/procedure.schema.json`](assets/procedure.schema.json) is generated from them and committed for editors and non-Python consumers. Regenerate it with `aip schema --write assets/procedure.schema.json`; a test fails if it drifts. The runtime block every authored skill carries at the top of its body lives in the package too (`aip runtime` prints it); the validator rejects a skill whose block is missing or edited. For the server case, the package also ships the `aip-runtime` meta-skill ([`skills/aip-runtime/SKILL.md`](skills/aip-runtime/SKILL.md); `aip runtime --skill --out <skills dir>` writes it), the one page an agent reads to find and run published procedures through the client. Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. See [`examples/billing-support`](examples/billing-support) for a complete skill.
+There is one format, and it lives in [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec): the pydantic models in `src/aip_spec/models.py`, the JSON Schema generated from them at [`assets/procedure.schema.json`](https://github.com/zach-blumenfeld/aip-spec/blob/main/assets/procedure.schema.json) for editors and non-Python consumers, and the runtime block every authored skill carries at the top of its body (`aip-spec runtime` or `aip runtime` prints it; the validator rejects a skill whose block is missing or edited). Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. The `billing-support` example ships in that package: `aip-spec example billing-support --out .` copies it out.
 
-## Installing the `aip` CLI
-
-```bash
-uv tool install --editable .        # from the repo root; puts `aip` on PATH, tracks your edits
-uv tool uninstall aip               # to remove
-```
-
-Inside the repo, `uv run aip ...` works without installing. Every command below assumes `aip` is on PATH.
+This package depends on `aip-spec` and adds the runtime: `aip.spec.loader` builds the executable `Procedure` from a validated folder, and `aip.spec` re-exports the format so `from aip.spec import ProcedureSpec` keeps working. For the server case, it also ships the `aip-runtime` meta-skill ([`skills/aip-runtime/SKILL.md`](skills/aip-runtime/SKILL.md)), the one page an agent reads to find and run published procedures through the client; `aip skill install` writes it beside the authoring skill, and `aip runtime --skill --out <skills dir>` writes it alone.
 
 ## Validation
 
 ```bash
-aip validate <path/to/skill-folder>                  # with the CLI installed
-uv run scripts/validate.py <path/to/skill-folder>   # from a plain git clone, no install
+aip-spec validate <path/to/skill-folder>             # what the authoring skill runs
+aip validate <path/to/skill-folder>                  # the same checks, from this package
 ```
 
-Both run the same checks: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, unique input names, thresholds naming real questions, and every referenced asset, reference, and script present on disk.
+Both run the checks in `aip_spec`: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, unique input names, thresholds naming real questions, and every referenced asset, reference, and script present on disk.
 
 Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
 
@@ -145,29 +140,36 @@ Each load is lossless: every file under the skill folder is stored as a `File` n
 ```bash
 uv sync --group dev                                    # pytest and the Neo4j driver
 uv run pytest -q                                       # the Neo4j backend tests skip unless NEO4J_URI is set
+uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall aip` removes it
 ```
+
+`pyproject.toml`'s `[tool.uv.sources]` points `aip-spec` at a sibling checkout, `../aip-spec`, so the format can be edited there and seen here without reinstalling; the git pin in `dependencies` is what an install sees.
 
 The rebuild toward the client-server architecture is tracked milestone by milestone in [`docs/PLAN.md`](docs/PLAN.md); the design it implements is [`docs/server-design.md`](docs/server-design.md).
 
-### Bumping the AIP protocol version
+### Bumping the AIP format version
 
-The AIP format version (currently `0.5a0`) is referenced in **multiple places** that must stay in sync. When bumping:
+The format version (currently `0.5a0`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
 
-1. **`src/aip/spec/models.py`** — `FORMAT_VERSION`. The validator rejects skills whose `metadata.aip-version` differs from it, except the versions in `LEGACY_VERSIONS`, which pass with a `runtime_block_outdated` warning.
-2. **`src/aip/spec/runtime.md`** — the block's heading carries the version; if the text changes, keep the previous text as `runtime-<old>.md` and add `<old>` to `LEGACY_VERSIONS`.
-3. **`assets/procedure.schema.json`** — regenerate with `aip schema --write assets/procedure.schema.json`.
-4. **`SKILL.md`** — the frontmatter version, the embedded runtime block, and every example that shows `metadata.aip-version`.
-5. **`examples/`** — each example skill's `metadata.aip-version`.
-6. **`README.md`** — install commands and any version references.
-7. **`CHANGELOG.md`** — promote `[Unreleased]` to the new version section with a date.
-8. **Git tag** — create the `v<X>` tag after the version-bump commit lands.
+1. `FORMAT_VERSION` in `src/aip_spec/models.py` and `version` in `pyproject.toml`.
+2. `src/aip_spec/runtime.md` — the block's heading carries the version; if the text changes, keep the previous text as `runtime-<old>.md` and add `<old>` to `LEGACY_VERSIONS`.
+3. `assets/procedure.schema.json` — regenerate with `aip-spec schema --write assets/procedure.schema.json`.
+4. `SKILL.md` — the frontmatter version, the embedded runtime block, and every example that shows `metadata.aip-version`.
+5. `examples/` — each example skill's `metadata.aip-version`.
+6. `README.md` — install commands and any version references.
+7. `CHANGELOG.md` — promote `[Unreleased]` to the new version section with a date.
+8. `install.sh` — the default `AIP_SPEC_REF`.
+9. The `v<X>` tag, after the version-bump commit lands.
 
-Drift is caught automatically: the schema-sync test fails if the committed schema is stale, and validation of the bundled example fails on an `aip_version_mismatch`.
+Then here:
+
+1. The git pin on `aip-spec` in `pyproject.toml`, and `uv lock`.
+2. `skills/aip-runtime/SKILL.md` and its package copy — `metadata.aip-version`.
+3. `install.sh` — the default `AIP_SPEC_REF`, and `AIP_REF` once this repo's own tag exists.
+4. `CHANGELOG.md` — promote `[Unreleased]`.
+
+Drift is caught automatically: the spec's schema-sync and runtime-block tests fail if its files disagree, validation of the bundled example fails on an `aip_version_mismatch`, and `tests/test_runtime_skill.py` here fails if the `aip-runtime` skill's version lags `FORMAT_VERSION`.
 
 ### Changelog
 
 See [`CHANGELOG.md`](CHANGELOG.md). The format follows [Keep a Changelog](https://keepachangelog.com/). Add notable changes under `[Unreleased]` as you make them; promote to a versioned section when you tag the release.
-
-## Why is the AIP SKILL.md not written in AIP?
-
-For the same reason that AI requires humans to build it: something has to exist before. Eventually the AIP skill itself may be authored in AIP form, just as agents may eventually build agents — but we're not there yet.

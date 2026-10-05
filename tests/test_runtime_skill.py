@@ -1,7 +1,8 @@
 """Tests for the `aip-runtime` meta-skill (M5): the one page an agent reads to run published
 procedures through the client. It is a plain Agent Skill, so its frontmatter must pass the
 Agent Skills rules; every `aip <command>` it names must exist; the copy shipped in the
-package must match the one in the repo; and `aip runtime --skill` must write it out."""
+package must match the one in the repo; `aip runtime --skill` must write it out; and
+`aip skill install` must write it beside the authoring skill from `aip-spec`."""
 
 import io
 import re
@@ -10,7 +11,8 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from aip_spec import FORMAT_VERSION
+import yaml
+from aip_spec import FORMAT_VERSION, skill_dir
 from aip_spec.skill import check_frontmatter, parse_skill_md
 
 from aip.client import runtime_skill_text
@@ -25,8 +27,6 @@ MAX_LINES = 120
 
 
 def frontmatter_and_body() -> tuple[dict, str]:
-    import yaml
-
     match = FRONTMATTER.match(SKILL_MD.read_text())
     assert match, "SKILL.md must begin with YAML frontmatter"
     return yaml.safe_load(match.group(1)), match.group(2)
@@ -89,6 +89,33 @@ class TestRuntimeSkill(unittest.TestCase):
             # The written copy is itself a valid Agent Skill folder: name matches its folder.
             frontmatter, _ = frontmatter_and_body()
             self.assertEqual(list(check_frontmatter(frontmatter, written.parent)), [])
+
+    def test_skill_install_writes_both_skills(self):
+        """`aip skill install --path DIR` writes `aip/` (from aip-spec) and `aip-runtime/` (from here),
+        each a valid Agent Skill folder; `remove` takes both away."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                code = main(["skill", "install", "--path", tmp])
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip", "aip-runtime"])
+            for name, expected in (("aip", (skill_dir() / "SKILL.md").read_text()), ("aip-runtime", SKILL_MD.read_text())):
+                folder = Path(tmp) / name
+                self.assertEqual((folder / "SKILL.md").read_text(), expected)
+                frontmatter = yaml.safe_load(FRONTMATTER.match((folder / "SKILL.md").read_text()).group(1))
+                issues = list(check_frontmatter(frontmatter, folder))
+                self.assertEqual(issues, [], [i.to_record() for i in issues])
+                self.assertEqual(frontmatter["name"], name)
+                self.assertEqual(frontmatter["metadata"]["aip-version"], FORMAT_VERSION)
+            self.assertTrue((Path(tmp) / "aip" / "references").is_dir())
+            self.assertTrue((Path(tmp) / "aip" / "assets" / "procedure.schema.json").is_file())
+            self.assertEqual(sorted(p.name for p in (Path(tmp) / "aip-runtime").iterdir()), ["SKILL.md"])
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["skill", "install", "--path", tmp]), 0, "idempotent")
+                self.assertEqual(main(["skill", "remove", "--path", tmp]), 0)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["skill", "list"]), 0)
 
     def test_out_requires_skill(self):
         with tempfile.TemporaryDirectory() as tmp, redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:

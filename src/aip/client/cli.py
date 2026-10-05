@@ -1,9 +1,9 @@
 """The `aip` command line entry point.
 
 Local: validate, schema, runtime (the block, or `--skill` for the `aip-runtime` meta-skill),
-info, run, resume, db, server. Against a configured
-server (`aip config`, or `AIP_SERVER`): search, list, publish, get, pin, retire, and
-`info`/`run` by name. A folder path always bypasses the server.
+skill (install both skills into the agents on this machine), info, run, resume, db, server.
+Against a configured server (`aip config`, or `AIP_SERVER`): search, list, publish, get, pin,
+retire, and `info`/`run` by name. A folder path always bypasses the server.
 """
 
 import argparse
@@ -81,6 +81,48 @@ def runtime_command(argv: list[str]) -> int:
     else:
         sys.stdout.write(text)
     return 0
+
+
+def skill_command(argv: list[str]) -> int:
+    """Install, list, or remove the two AIP skills: the `aip` authoring skill, bundled in
+    `aip-spec`, and the `aip-runtime` meta-skill, bundled here. Agent detection is
+    `aip_spec.agents`, the same catalog `aip-spec skill install` uses."""
+    from aip_spec import agents, skill_dir
+    from aip_spec.resources import SKILL_ENTRIES as AUTHORING_ENTRIES, SKILL_NAME as AUTHORING
+
+    from aip.client import RUNTIME_SKILL, runtime_skill_dir
+
+    names = [AUTHORING, RUNTIME_SKILL]
+    parser = argparse.ArgumentParser(prog="aip skill", description=f"Install the AIP skills ({', '.join(names)}) "
+                                     "into the agents on this machine.")
+    sub = parser.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("install", help="into every detected agent, one named agent, or a skills directory")
+    p.add_argument("agent", nargs="?", help=f"one of: {', '.join(agents.AGENTS)}")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR", help="a skills directory; writes DIR/<skill>/ for each")
+    sub.add_parser("list", help="supported agents, whether each is detected, and which skills are installed")
+    p = sub.add_parser("remove", help="from one agent, or from every agent that has either skill")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    args = parser.parse_args(argv)
+
+    if args.action == "list":
+        print(agents.table(names))
+        return 0
+    try:
+        if args.action == "install":
+            sources = [(skill_dir(), AUTHORING_ENTRIES), (runtime_skill_dir(), ("SKILL.md",))]
+            for label, folder in agents.install(sources, args.agent, args.path):
+                print(f"installed {folder.name} -> {folder}  ({label})")
+            return 0
+        removed = agents.remove(names, args.agent, args.path)
+        for folder in removed:
+            print(f"removed {folder}")
+        if not removed:
+            print(f"neither {' nor '.join(names)} is installed anywhere `aip skill list` looks")
+        return 0
+    except (KeyError, agents.NoAgentDetected) as exc:
+        print(f"aip skill: {exc.args[0]}", file=sys.stderr)
+        return 1
 
 
 def _example_input(items) -> dict:
@@ -585,6 +627,7 @@ COMMANDS = {
     "validate": validate_command,
     "schema": schema_command,
     "runtime": runtime_command,
+    "skill": skill_command,
     "info": info_command,
     "run": run_command,
     "resume": resume_command,
