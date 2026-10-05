@@ -112,7 +112,9 @@ uv run aip-spec skill install --path /tmp/skills && uv run aip-spec validate /tm
     # with SKILL.md, references/, assets/, and `head -3 /tmp/skills/aip/SKILL.md` shows the frontmatter
 ```
 
-## - [ ] S1 — `aip` depends on `aip-spec`
+## - [x] S1 — `aip` depends on `aip-spec`
+
+Done 2026-10-05, commit a93505f here and 26a2d93 in `aip-inspector`: `aip` pins `aip-spec@v0.5a0` (path override to `../aip-spec` for local work), `aip.spec` keeps only the loader and re-exports the rest, the runtime skill moves to `aip.client`, the root skill files and the example are gone, and the suite is 97 passed (128 minus the 31 format tests now in `aip-spec`).
 
 Here. The repo stops being a skill.
 
