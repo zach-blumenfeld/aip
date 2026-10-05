@@ -7,6 +7,7 @@ name = "aip"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aip-spec" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "pydantic" },
@@ -34,6 +35,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aip-spec", editable = "../aip-spec" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.26.0" },
@@ -53,6 +55,24 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
+
+[[package]]
+name = "aip-spec"
+version = "0.5a0"
+source = { editable = "../aip-spec" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.11" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "annotated-doc"

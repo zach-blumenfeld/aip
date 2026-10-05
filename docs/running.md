@@ -29,7 +29,7 @@ flowchart LR
     runner --> runfile
 ```
 
-- **`aip.spec`** parses `SKILL.md`, validates the frontmatter, the YAML against the format models, and the graph, then builds the runtime `Procedure`.
+- **`aip_spec`** (the `aip-spec` package) parses `SKILL.md` and validates the frontmatter, the YAML against the format models, and the graph; **`aip.spec.loader`** builds the runtime `Procedure` from the result.
 - **`aip.model`** is the engine. `Procedure.run(after, payload, history, thresholds)` is the whole server operation: resolve routers on the client's input, validate it against the receiving step's `inputs`, run the step, append a history entry, describe what comes next.
 - **`aip.client.backend`** is the seam between runner and engine. `LocalBackend` calls `Procedure.run` in-process. An HTTP backend will post the same arguments to the AIP server. The runner is written against the interface, so it does not change when the server arrives.
 - **`aip.client.runner`** is the client. It follows the engine's suggested input from step to step and stops when a decision belongs to the client.
@@ -101,7 +101,7 @@ With a key set, decisions run against the model and only low-confidence answers 
 
 ```json
 {
-  "skill_dir": "examples/billing-support",
+  "skill_dir": "billing-support",
   "after": null,
   "suggested": { "message": "I was charged twice!" },
   "history": [],
@@ -125,7 +125,9 @@ The last four are set when the run is on a server (below): the URL, the exact `n
 
 `.aip/` is gitignored. Nothing else is written: the skill folder is read-only to the runner, state travels in memory and in the run file, and scripts write only what they choose to.
 
-## Worked example: `examples/billing-support`
+## Worked example: `billing-support`
+
+The example skill ships with the `aip-spec` package; `aip-spec example billing-support --out .` writes it to `./billing-support`, which the commands below run.
 
 The graph: `triage` (decision: is it billing, what is the tone) → `by-tone` (router) → `escalate` (script opens a ticket) or `reply` (client drafts a reply against the policy) → `end`.
 
@@ -133,7 +135,7 @@ The graph: `triage` (decision: is it billing, what is the tone) → `by-tone` (r
 
 ```bash
 $ echo '{"message": "I was charged twice!"}' > start.json
-$ aip run examples/billing-support --input start.json --run-file run.json
+$ aip run billing-support --input start.json --run-file run.json
 {
   "paused": "decision",
   "step": "triage",
@@ -235,7 +237,7 @@ $ aip resume run.json --input reply.json
 ### Interactive
 
 ```bash
-$ aip run examples/billing-support --interactive
+$ aip run billing-support --interactive
 message (string): I was charged twice!
 
 tone: confidence below 0.6  (model says "angry")
@@ -256,7 +258,8 @@ Nothing changes in the protocol. `aip server` exposes `Procedure.run` over HTTP 
 
 ```
 $ export AIP_SERVER=http://localhost:8000            # or: aip config --server http://localhost:8000 [--token T]
-$ aip publish examples/billing-support               # validate locally, upload, server validates again
+$ aip-spec example billing-support --out .            # the bundled example, as a folder
+$ aip publish billing-support                        # validate locally, upload, server validates again
 billing-support@3f9c2a7d1e5b8c04
 $ aip search "refund"                                # ranked by the server
 billing-support@3f9c2a7d1e5b8c04  0.812  Triage an inbound billing message ...
@@ -264,7 +267,7 @@ $ aip info billing-support --example-input > start.json
 $ aip run billing-support --input start.json         # same pause, same resume command
 ```
 
-`aip run <name>` uses `HttpBackend`, which posts the same `after`, `payload`, `history`, and `thresholds` to `/procedures/<name>@<revision>/step` (and `/answer` for a manual decision) that `LocalBackend` passes to `Procedure.run`. The first call pins the name to one revision for the whole run. Pauses are identical; the run file additionally carries `server`, `name`, `revision`, and `run_id`, and `GET /runs/<run_id>` on the server shows the same history the client printed. A folder path (`aip run examples/billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.
+`aip run <name>` uses `HttpBackend`, which posts the same `after`, `payload`, `history`, and `thresholds` to `/procedures/<name>@<revision>/step` (and `/answer` for a manual decision) that `LocalBackend` passes to `Procedure.run`. The first call pins the name to one revision for the whole run. Pauses are identical; the run file additionally carries `server`, `name`, `revision`, and `run_id`, and `GET /runs/<run_id>` on the server shows the same history the client printed. A folder path (`aip run ./billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.
 
 The server also keeps per-question threshold overrides per name (`GET|POST /catalog/<name>/thresholds`, body `{"thresholds": {"tone": 0.5}}`); a `step` merges them over the author's defaults and under the request's own `thresholds`, so a run's `--threshold` still wins for that call. Over its run history it answers four governance questions, `GET /governance/<query>` with `name`, `window` (the last N runs), and `limit`: `overridden-decisions` (model answers the client changed before continuing), `failing-scripts` (execution steps that raised, with the latest error), `missing-fields` (resolved revisions without `do_not_use_when` or `anti_patterns`), and `untaken-branches` (router branches no run followed; Neo4j only, 501 on the filesystem backend). `GET /governance` lists them.
 

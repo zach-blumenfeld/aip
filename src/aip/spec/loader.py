@@ -1,14 +1,14 @@
 """Build the runtime Procedure from a validated skill.
 
-Imports the runtime model lazily so validation (`aip.spec.skill`) stays light:
+Imports the runtime model lazily so validation (`aip_spec.skill`) stays light:
 it needs only pydantic and pyyaml, not the decision-model SDK.
 """
 
 from pathlib import Path
 from typing import Any
 
-from aip.spec import models as spec
-from aip.spec.skill import LoadedSkill, VERSION_KEY, load_skill
+from aip_spec import models as spec
+from aip_spec.skill import LoadedSkill, VERSION_KEY, load_skill
 
 
 def _split(path: str) -> tuple[str, str]:

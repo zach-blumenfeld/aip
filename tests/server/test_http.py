@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from aip_spec import example_dir
 from fastapi.testclient import TestClient
 from typesafe_sdk import SystemOneResponse
 
@@ -24,7 +25,7 @@ from aip.server.app import create_app, upload_of
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import snapshot
 
-EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "billing-support"
+EXAMPLE = example_dir("billing-support")
 
 
 class FakeJev:

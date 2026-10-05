@@ -5,12 +5,13 @@ import shutil
 from pathlib import Path
 
 import pytest
+from aip_spec import example_dir
 
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import snapshot
 from aip.server.search import BM25Index, stem, tokenize
 
-EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "billing-support"
+EXAMPLE = example_dir("billing-support")
 
 # Reference outputs of Porter's 1980 algorithm (the paper's own examples and a few from
 # the procedure vocabulary); a stemmer that deviates breaks "charged" finding "charge".

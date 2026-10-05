@@ -25,7 +25,7 @@ def _emit(issues) -> tuple[int, int]:
 
 
 def validate_command(argv: list[str]) -> int:
-    from aip.spec import validate_skill
+    from aip_spec import validate_skill
 
     parser = argparse.ArgumentParser(prog="aip validate", description="Validate an AIP skill folder.")
     parser.add_argument("skill_dir", type=Path, help="path to the skill folder (containing SKILL.md)")
@@ -42,7 +42,7 @@ def validate_command(argv: list[str]) -> int:
 
 
 def schema_command(argv: list[str]) -> int:
-    from aip.spec import json_schema
+    from aip_spec import json_schema
 
     parser = argparse.ArgumentParser(prog="aip schema", description="Print the JSON Schema generated from the format models.")
     parser.add_argument("--write", type=Path, default=None, help="write to this path instead of stdout")
@@ -58,7 +58,9 @@ def schema_command(argv: list[str]) -> int:
 
 
 def runtime_command(argv: list[str]) -> int:
-    from aip.spec import runtime_skill_text, runtime_text
+    from aip_spec import runtime_text
+
+    from aip.client import runtime_skill_text
 
     parser = argparse.ArgumentParser(prog="aip runtime", description="Print the AIP runtime block every authored skill carries "
                                      "at the top of its body; with --skill, the `aip-runtime` Agent Skill that tells an agent "
@@ -160,7 +162,7 @@ def _target(arg: str) -> tuple[str, Any]:
 
 def _remote_skill(server, ref: str):
     """A `LoadedSkill` built from the published SKILL.md, so `describe_skill` renders it as for a folder."""
-    from aip.spec.skill import LoadedSkill, parse_skill_md, parse_spec
+    from aip_spec.skill import LoadedSkill, parse_skill_md, parse_spec
     import tempfile
 
     text = server.file(ref, "SKILL.md").decode("utf-8")

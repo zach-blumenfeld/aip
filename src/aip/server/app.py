@@ -300,7 +300,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     @app.post("/catalog", dependencies=[require(PUBLISH)], status_code=201)
     def publish(body: PublishBody) -> JSON:
         from aip.spec import validate_skill
-        from aip.spec.skill import parse_skill_md
+        from aip_spec.skill import parse_skill_md
 
         if not body.files:
             raise ApiError(422, "invalid_request", "no files in the upload")

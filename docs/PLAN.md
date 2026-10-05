@@ -43,7 +43,7 @@ off, commit":
 
 | Path | Verdict | Why |
 |---|---|---|
-| `src/aip/spec/` (models, skill, loader, runtime.md) | keep | the format; the runtime block text and version change (M4) |
+| `src/aip/spec/` | keep | the loader; the format (models, skill, runtime.md) moved to the `aip-spec` package in S1 of `spec-split-plan.md` |
 | `src/aip/model/` (procedure, steps, resources, types) | keep | `Procedure.run` is the server's engine as-is |
 | `src/aip/client/backend.py` | keep, extend | `Backend` protocol stays; `HttpBackend` is added beside `LocalBackend` |
 | `src/aip/client/runner.py` | keep, extend | `RunFile` gains server fields; the loop does not change |
@@ -52,9 +52,9 @@ off, commit":
 | `src/aip/server/__init__.py` | replace | one-line docstring today; becomes the package |
 | `tests/test_db.py` | replace | becomes the Neo4j half of the backend contract tests |
 | `tests/test_spec.py`, `test_model.py`, `test_runner.py` | keep | extended, never rewritten |
-| `scripts/validate.py` | keep | plain-clone validator, unchanged |
-| `examples/billing-support/` | keep | the fixture for every milestone |
-| `SKILL.md`, `references/`, `assets/procedure.schema.json` | keep | the authoring skill; §Running gains the server case (M4) |
+| `scripts/validate.py` | gone | `aip-spec validate` is the one validator (S1) |
+| `examples/billing-support/` | moved | bundled in `aip-spec`; tests take `aip_spec.example_dir("billing-support")` (S1) |
+| `SKILL.md`, `references/`, `assets/procedure.schema.json` | moved | the authoring skill lives in the `aip-spec` repo (S1) |
 | `docs/running.md` | keep, amend | add the HTTP case (M4) |
 | `README.md`, `CHANGELOG.md` | keep, amend | per milestone |
 | `pyproject.toml` | amend | `server` extra (fastapi/uvicorn or starlette), `dev` group with pytest |

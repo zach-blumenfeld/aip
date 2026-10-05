@@ -6,6 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
+    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a0",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",
@@ -27,5 +28,15 @@ aip = "aip.client.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The `aip-spec` dependency is a git URL until both packages are on PyPI.
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
+
+# Local work across the two checkouts (`../aip-spec` beside this repo): the format is edited
+# there and seen here without reinstalling. The git pin in `dependencies` is the published
+# truth; this override is what `uv sync` uses in this checkout and nowhere else.
+[tool.uv.sources]
+aip-spec = { path = "../aip-spec", editable = true }

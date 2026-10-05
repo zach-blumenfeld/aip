@@ -4,7 +4,7 @@ from typing import Any, Dict, List, TypeAlias
 
 from jsonschema import Draft202012Validator
 
-from aip.spec.models import DataType  # the format owns the vocabulary
+from aip_spec.models import DataType  # the format owns the vocabulary
 
 JSON: TypeAlias = Dict[str, Any]
 

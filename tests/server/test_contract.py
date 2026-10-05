@@ -12,13 +12,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from aip_spec import example_dir
 
 from aip.server.backend import CatalogBackend, GovernanceBackend, NotFound, NotSupported, RunBackend
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import materialize, snapshot
 from aip.spec import load_skill
 
-EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "billing-support"
+EXAMPLE = example_dir("billing-support")
 
 needs_neo4j = pytest.mark.skipif(not os.environ.get("NEO4J_URI"), reason="NEO4J_URI not set")
 

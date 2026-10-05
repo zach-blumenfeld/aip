@@ -10,9 +10,11 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+from aip_spec import FORMAT_VERSION
+from aip_spec.skill import check_frontmatter, parse_skill_md
+
+from aip.client import runtime_skill_text
 from aip.client.cli import COMMANDS, main
-from aip.spec import FORMAT_VERSION, runtime_skill_text
-from aip.spec.skill import check_frontmatter, parse_skill_md
 
 REPO = Path(__file__).parent.parent
 SKILL_DIR = REPO / "skills" / "aip-runtime"
@@ -65,7 +67,7 @@ class TestRuntimeSkill(unittest.TestCase):
 
     def test_package_copy_matches_repo_copy(self):
         self.assertEqual(runtime_skill_text(), SKILL_MD.read_text(),
-                         "src/aip/spec/aip-runtime/SKILL.md and skills/aip-runtime/SKILL.md have drifted; copy one over the other")
+                         "src/aip/client/aip-runtime/SKILL.md and skills/aip-runtime/SKILL.md have drifted; copy one over the other")
 
     def test_runtime_skill_prints_it(self):
         out = io.StringIO()

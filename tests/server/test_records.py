@@ -12,10 +12,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from aip_spec import example_dir
 
 from aip.server.records import materialize, snapshot
 
-EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "billing-support"
+EXAMPLE = example_dir("billing-support")
 
 
 def tree(root: Path) -> dict:
