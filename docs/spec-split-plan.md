@@ -3,8 +3,8 @@
 AIP is two things, and today they share one repo. The **spec** is the format: the pydantic
 models, the validator, the runtime block every skill carries, and the authoring skill that
 compiles source material into it. The **protocol** is the runtime: `Procedure.run`, the
-client, the server, the backends, and the inspector. Spec users need a skill and two
-pure-Python dependencies. Protocol users need a package and a server. This plan moves the
+client, the server, the backends, and the inspector. Spec users need the `aip-spec`
+package, which installs the skill. Protocol users need the `aip` package and a server. This plan moves the
 spec to `https://github.com/zach-blumenfeld/aip-spec` and makes `aip` depend on it.
 
 Why the split is cheap: `src/aip/spec/models.py`, `skill.py`, `runtime.md`, and
@@ -49,9 +49,9 @@ run the tests, tick it off, commit", starting from a fresh session with no histo
 
 | Today in `aip` | After | Why |
 |---|---|---|
-| `SKILL.md`, `references/skill-creation-best-practices.md` | `aip-spec` root, and bundled into its wheel | the authoring skill; the repo root renders on GitHub and clones as a skill, the wheel copy is what `aip-spec skill install` writes |
+| `SKILL.md`, `references/skill-creation-best-practices.md` | `aip-spec` root, and bundled into its wheel | the authoring skill; the repo root renders on GitHub, the wheel copy is what `aip-spec skill install` writes |
 | `assets/procedure.schema.json` | `aip-spec/assets/`, bundled | generated from the models; `SCHEMA_ID` points at the spec repo's tag |
-| `scripts/validate.py` | `aip-spec/scripts/` | the plain-clone validator; it finds the sibling `src/` as now, and falls back to the installed package as now |
+| `scripts/validate.py` | deleted | `aip-spec validate` is the one validator, and the installer puts it on PATH; there is no plain-clone install route (decided 2026-10-05) |
 | `src/aip/spec/models.py`, `skill.py`, `runtime.md`, `runtime-0.4a0.md` | `aip-spec/src/aip_spec/` | the format, with no runtime import |
 | `src/aip/spec/loader.py` | stays, in `src/aip/spec/` | builds `aip.model.Procedure`; that is protocol |
 | `src/aip/spec/aip-runtime/SKILL.md`, `runtime_skill_text()` | stay, move to `src/aip/client/` | the `aip-runtime` skill is about the client |
@@ -68,11 +68,11 @@ not change.
 
 ## - [x] S0 — Create `aip-spec`
 
-Done 2026-10-05, commits 94215a9 and 3744797 in `aip-spec`: the spec half (models, validator, runtime block, authoring skill, example) as the `aip-spec` distribution with its CLI, installer, and 36 tests. Departure from the bullets below: `scripts/validate.py` is not carried over; `aip-spec validate` is the one validator, the installer puts it on PATH, and the skill names only that command (anti-pattern 3 included). The plain-clone install route is not supported.
+Done 2026-10-05, commits 94215a9 and 3744797 in `aip-spec`: the spec half (models, validator, runtime block, authoring skill, example) as the `aip-spec` distribution with its CLI, installer, and 36 tests; `scripts/validate.py` was first carried over and then dropped for `aip-spec validate` alone.
 
 In the new repo, from the current `aip-0.5a0` tree.
 
-- Root: `SKILL.md`, `references/`, `assets/procedure.schema.json`, `scripts/validate.py`,
+- Root: `SKILL.md`, `references/`, `assets/procedure.schema.json`,
   `examples/billing-support/`, `README.md`, `CHANGELOG.md` (the format entries lifted from
   here), `LICENSE`, `install.sh`.
 - `pyproject.toml`: `name = "aip-spec"`, `version = "0.5a0"`, `dependencies = ["pydantic>=2.11", "pyyaml>=6.0.3"]`,
@@ -85,7 +85,8 @@ In the new repo, from the current `aip-0.5a0` tree.
   plus `skill_dir()` and `example_dir(name)` returning the bundled paths.
 - `aip_spec.cli`: `validate <folder>` (today's output contract), `schema [--write]`,
   `runtime` (prints the block), `skill install [agent] [--path DIR]`, `skill list`,
-  `skill remove`, `example <name> --out DIR`. `scripts/validate.py` wraps `validate`.
+  `skill remove`, `example <name> --out DIR`. No `scripts/validate.py`: the CLI is the one
+  validator, and the install path is the only path.
 - `SPEC_URL` and `SCHEMA_ID` in `models.py` point at `https://github.com/zach-blumenfeld/aip-spec`
   and `https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/v0.5a0/assets/procedure.schema.json`.
 - `install.sh`: install uv if missing, `uv tool install --force git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a0`,
@@ -96,15 +97,15 @@ In the new repo, from the current `aip-0.5a0` tree.
   `check_frontmatter` and carries `references/` and `assets/`.
 - `SKILL.md` changes, and only these: the functional-test step says to run the skill with
   the `aip-runtime` skill if it is installed and otherwise to execute the procedure
-  yourself per the runtime block, and names no `aip` command; the validator line becomes
-  `aip-spec validate ./<skill-name>`, with `uv run scripts/validate.py` noted as the
-  equivalent from a clone; the `compatibility` field names `uv`.
+  yourself per the runtime block, and names no `aip` command; every validator line,
+  anti-pattern 3 included, becomes `aip-spec validate ./<skill-name>`; the `compatibility`
+  field names `uv`.
 
 Proof:
 
 ```
 uv sync --group dev && uv run pytest -q                       # the spec half of today's 128
-uv run scripts/validate.py examples/billing-support           # VALID
+uv run aip-spec validate examples/billing-support             # VALID
 uv run aip-spec schema | diff - assets/procedure.schema.json  # no output
 uv run aip-spec skill install --path /tmp/skills && uv run aip-spec validate /tmp/skills/aip 2>&1 | head -1
     # the authoring skill is not an AIP skill, so this reports the body error; the point is the folder exists
@@ -213,7 +214,7 @@ changes until it re-bootstraps.
 - Publishing either package to PyPI. The names `aip` and `aip-spec` are free as of
   2026-10-05; when it happens, `aip-spec` goes first, because PyPI refuses a package whose
   dependency is a git URL, and the two `install.sh` lines lose their `git+` prefix.
-- A self-contained `scripts/validate.py` that needs neither a clone nor an install. PEP 723
-  can declare `aip-spec` as a git dependency of the script; with `aip-spec skill install`
-  as the front door it matters less, and it belongs to the spec repo once it exists.
+- A `scripts/validate.py` in the spec repo, self-contained or otherwise. Decided against on
+  2026-10-05: two ways to validate confused the skill's reader. `aip-spec validate` is the
+  one command, and the installer is the one way the skill arrives.
 - Moving the server design or this plan's parent, `PLAN.md`, which stay here.
