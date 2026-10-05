@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import tarfile
 from pathlib import Path
 from unittest import mock
@@ -650,3 +651,67 @@ def test_cli_catalog_commands(api, example, tmp_path, capsys):
         assert "no server is configured" in str(exc.value)
         with pytest.raises(SystemExit):
             main(["search", "refund"])
+
+
+# ----------------------------------------------------------------------- inspector
+
+
+def test_inspector_mount(backend, no_key, tmp_path):
+    """`--inspector`: the built bundle at /inspector/, the packaged one by default, 404 with the fix when absent."""
+    from aip.server.app import INSPECTOR_DIR
+
+    bundle = tmp_path / "dist"
+    (bundle / "assets").mkdir(parents=True)
+    (bundle / "index.html").write_text('<!doctype html><div id="root"></div><script src="/inspector/assets/a.js"></script>')
+    (bundle / "assets" / "a.js").write_text("console.log('hi')")
+    api = TestClient(create_app(backend, inspector=bundle), raise_server_exceptions=False)
+    page = api.get("/inspector/")
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    assert '<div id="root">' in page.text
+    assert api.get("/inspector", follow_redirects=False).status_code == 307
+    assert api.get("/inspector").text == page.text                                        # follows to the page
+    asset = api.get("/inspector/assets/a.js")
+    assert asset.status_code == 200 and "javascript" in asset.headers["content-type"]
+    assert api.get("/inspector/assets/missing.js").status_code == 404
+    assert api.get("/catalog").json() == []                                               # the API is untouched
+
+    # No bundle: a clear 404 in the error envelope, naming the directory and the command that fills it.
+    api = TestClient(create_app(backend, inspector=tmp_path / "empty"), raise_server_exceptions=False)
+    for path in ("/inspector", "/inspector/", "/inspector/assets/a.js"):
+        res = api.get(path)
+        assert res.status_code == 404, path
+        err = res.json()["error"]
+        assert err["kind"] == "not_found" and "npm run build && npm run sync" in err["message"]
+        assert str(tmp_path / "empty") in err["message"]
+
+    # Not asked for: nothing at /inspector at all.
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
+    assert api.get("/inspector/").status_code == 404
+
+    # The bundle shipped in the package is what `aip server --inspector` serves by default.
+    assert (INSPECTOR_DIR / "index.html").is_file(), f"no inspector bundle in {INSPECTOR_DIR}: run `npm run sync` in aip-inspector"
+    api = TestClient(create_app(backend, inspector=INSPECTOR_DIR), raise_server_exceptions=False)
+    page = api.get("/inspector/")
+    assert page.status_code == 200 and "/inspector/assets/" in page.text
+    for src in re.findall(r'(?:src|href)="(/inspector/assets/[^"]+)"', page.text):
+        assert api.get(src).status_code == 200, src
+
+
+def test_server_command_inspector_flag(backend, no_key, tmp_path, monkeypatch):
+    """`aip server --inspector [DIR]` passes the packaged dir, a given dir, or nothing to create_app."""
+    from aip.client import cli
+    from aip.server import app as app_module
+
+    seen = []
+
+    def fake_create_app(backend, **kwargs):
+        seen.append(kwargs.get("inspector"))
+        return object()
+
+    monkeypatch.setattr(app_module, "create_app", fake_create_app)
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    root = str(tmp_path / "root")
+    assert cli.main(["server", "--root", root]) == 0
+    assert cli.main(["server", "--root", root, "--inspector"]) == 0
+    assert cli.main(["server", "--root", root, "--inspector", str(tmp_path / "dist")]) == 0
+    assert seen == [None, app_module.INSPECTOR_DIR, tmp_path / "dist"]
