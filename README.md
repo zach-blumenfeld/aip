@@ -12,22 +12,66 @@
 
 ## What Is AIP?
 
-AIP is an extension to the [Agent Skills Spec](https://agentskills.io/home). The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/). It models skills as an execution graph. 
+Agent Instruction Protocol (AIP) is a protocol that uses graphs to represent and run procedures.
 
-## Why Use AIP?
+A **procedure** is an instance of step-by-step know-how: an executable workflow that guides an agent on how to perform a task using tools and logical sequences.
 
-AIP provides improved performance and stronger governance for autonomous agent skills.
+Two protocols cover parts of this today. **MCP** decouples tools, resources, and other assets into a portable service any agent can call. **Agent Skills** represent procedural knowledge in a portable way that humans can read and maintain. AIP replaces both with a single unified protocol, built to give teams running autonomous agents predictability, governance, and cost savings. By treating procedures as first-class citizens, AIP provides a client-server architecture for not just calling individual tools but sequenced workflows of tools and steps, with typed I/O contracts, that can be distributed, executed by economical AI models, and governed by humans on the backend.
 
-**Performance**
-- **Structured skills outperform freeform** and AIP enforces this authoring discipline. AIP requires schema-validated commitments to structured YAML with a purpose, triggers and non-triggers, steps with script-backed nodes and I/O edges, and anti-patterns. Early A/B evidence in our pre-print paper: [AIP: A Graph Representation for Learning and Governing Agent
-Skills](https://arxiv.org/pdf/2606.04781) demonstrates lift for Claude Sonnet across a wide variety of SkillsBench tasks.
-- **Concrete tuning surface.** The schema gives a structured place to iterate when running evals — adjust typed fields, tighten validation. Plain markdown retunes only by rewriting prose.
-- **Drift caught at write time.** Validation surfaces missing fields, wrong types, and rename mistakes before an agent silently misreads them.
+Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills ([Evidence So Far](#evidence-so-far)).
 
-**Governance**
-- **Validated against a standard.** Every skill validates against the one AIP procedure schema and its graph rules. Quality gate before any consumer sees the skill.
-- **Queryable at corpus scale.** Cross-skill questions become single queries ("every runbook missing a gotchas section") — no doc-trawling.
-- **Database-ingestable.** Schema-validated YAML projects into a graph database for governed distribution, audit, and analytics.
+## AIP Design
+
+AIP is two pieces:
+
+1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into procedures. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec).
+2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, runs scripts, answers decisions with a structured decision model, and follows routers; the client, an agent or a person, handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
+
+## How It Works
+
+```mermaid
+flowchart LR
+    subgraph authoring["Authoring (once, with a frontier model)"]
+        doc["runbook, playbook,<br/>freeform SKILL.md"] --> skill["aip skill<br/>compiles to an AIP step graph"]
+        skill --> validate["aip-spec validate"]
+        validate --> publish["aip publish"]
+    end
+    subgraph clients["Clients"]
+        agent["any agent +<br/>aip-runtime meta-skill"] --> cli["aip CLI<br/>search · info · run · resume"]
+        insp["aip-inspector<br/>catalog · run console · history · governance"]
+    end
+    subgraph server["aip server (one HTTP API)"]
+        api["/catalog · /procedures/{name}/step · /runs · /governance"]
+        engine["execution engine<br/>steps · routing · validation"]
+        scripts["scripts run here"]
+        model["decision model (TypeSafe)<br/>answers questions, flags low confidence"]
+        api --> engine
+        engine --> scripts
+        engine --> model
+    end
+    subgraph backend["Backend (one interface)"]
+        neo["Neo4j<br/>catalog · files · runs · answers<br/>full-text search · graph queries"]
+        fs["Filesystem<br/>a directory"]
+    end
+    publish --> api
+    cli --> api
+    insp --> api
+    engine --> backend
+    api --> backend
+```
+
+The agent never decides anything the procedure can decide. It starts a run, and the server walks the graph: it validates each step's input, runs scripts, asks the decision model, and follows routers. It stops only at a pause the agent must handle: a task to perform, a decision answered below its threshold to confirm or override, or, with no decision model configured, the questions themselves. Every step, answer, and pause is recorded against the revision that ran, which is what the history and governance views read.
+
+## Evidence So Far
+
+Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](https://arxiv.org/pdf/2606.04781), published at a VLDB 2026 workshop, measured the previous format (`0.3a3`, skills as structured YAML loaded into context, before the server existed) on a stratified core of 24 [SkillsBench](https://www.skillsbench.ai) tasks. Each task's human-curated skill was converted to AIP once by Claude Opus; Claude Sonnet 4.6 then solved the task with either the original or the conversion, five trials per task.
+
+| Skill given to the solver | Pass rate | Mean reward |
+|---|---|---|
+| Human-curated Agent Skill | 50.8% | 0.567 |
+| The same skill converted to AIP | **63.3%** | **0.668** |
+
+Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. The format has moved on since (typed step kinds, a decision model with thresholds, server-side scripts, the runtime block); measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
 
 ## Install
 
