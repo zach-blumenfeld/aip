@@ -6,7 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a0",
+    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a1",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",

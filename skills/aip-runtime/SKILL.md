@@ -3,7 +3,7 @@ name: aip-runtime
 description: Run published AIP procedures (runbooks, step-by-step workflows) from an AIP server with the `aip` command. Use when a task might match a known procedure, runbook, or workflow, when the user mentions aip or AIP, or when AIP_SERVER is set; search the catalog first, then run the match and answer its pauses instead of doing the steps by hand.
 license: Apache-2.0
 metadata:
-  aip-version: "0.5a0"
+  aip-version: "0.5a1"
 ---
 
 # Running AIP procedures

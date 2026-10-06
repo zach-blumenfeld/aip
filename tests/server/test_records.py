@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from aip_spec import example_dir
+from aip_spec import FORMAT_VERSION, example_dir
 
 from aip.server.records import materialize, snapshot
 
@@ -37,7 +37,7 @@ def test_snapshot_captures_files_and_graph():
     b = snapshot(EXAMPLE)
     assert b.name == "billing-support"
     assert b.id == f"billing-support@{b.revision}" and len(b.revision) == 16
-    assert b.aip_version == "0.5a0"
+    assert b.aip_version == FORMAT_VERSION
     paths = {f.path for f in b.files}
     assert {"SKILL.md", "scripts/escalate.py", "source/README.md"} <= paths
     assert all(f.encoding == "utf-8" for f in b.files)

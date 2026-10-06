@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from aip_spec import example_dir
+from aip_spec import FORMAT_VERSION, example_dir
 from fastapi.testclient import TestClient
 from typesafe_sdk import SystemOneResponse
 
@@ -117,7 +117,7 @@ def test_publish_search_info_and_listing(api, example):
     for ref in ("billing-support", f"billing-support@{example.revision}", "billing-support@latest"):
         info = api.get(f"/catalog/{ref}").json()
         assert info["name"] == "billing-support" and info["revision"] == example.revision
-    assert info["id"] == example.id and info["aip_version"] == "0.5a0" and info["retired"] is False
+    assert info["id"] == example.id and info["aip_version"] == FORMAT_VERSION and info["retired"] is False
     assert info["meta"]["name"] == "billing-support"
     assert info["start"]["step"] == "triage" and info["start"]["inputs"] == {"message": "string"}
     assert set(info["start"]["questions"]) == {"billing", "tone"}

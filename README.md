@@ -46,7 +46,7 @@ curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/main/insta
 Prefer Python tooling:
 
 ```bash
-uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a0   # `aip-spec`, the validator the skill calls
+uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a1   # `aip-spec`, the validator the skill calls
 uv tool install git+https://github.com/zach-blumenfeld/aip.git@aip-0.5a0     # `aip`; pulls aip-spec in as a library
 aip skill install                   # both skills, every detected agent
 aip skill install claude-code       # one agent;  aip skill list  shows them
@@ -149,7 +149,7 @@ The rebuild toward the client-server architecture is tracked milestone by milest
 
 ### Bumping the AIP format version
 
-The format version (currently `0.5a0`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
+The format version (currently `0.5a1`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
 
 1. `FORMAT_VERSION` in `src/aip_spec/models.py` and `version` in `pyproject.toml`.
 2. `src/aip_spec/runtime.md` — the block's heading carries the version; if the text changes, keep the previous text as `runtime-<old>.md` and add `<old>` to `LEGACY_VERSIONS`.
