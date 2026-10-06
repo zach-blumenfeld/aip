@@ -66,13 +66,13 @@ For *consuming* the resulting skill, the opposite holds: AIP's structure is what
 
 ## End-to-End Walkthrough
 
-Fresh machine, nothing installed, about twenty minutes. Everything here is on the `aip-0.5a0` branch of [zach-blumenfeld/aip](https://github.com/zach-blumenfeld/aip), not `main`.
+Everything here is on the `aip-0.5a0` branch of [zach-blumenfeld/aip](https://github.com/zach-blumenfeld/aip), not `main`.
 
-You need:
+### Prerequisites
 
 - macOS or Linux with `curl`.
-- A Neo4j database. [Aura Free](https://console.neo4j.io) works: create an instance and keep the URI, user, and password it shows you.
-- A [TypeSafe](https://typesafe.ai) API key. Optional: without it, every decision step pauses and asks you to answer instead of the model.
+- A Neo4j database. [Aura](https://console.neo4j.io) works.
+- A [TypeSafe](https://typesafe.ai) API key. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model.
 - [Claude Code](https://claude.com/claude-code) for steps 5 and 6. Any agent `aip skill list` names works the same way.
 
 ### 1. Install
@@ -96,22 +96,28 @@ If `aip` is not found, open a new terminal. uv installs commands into `~/.local/
 aip server --init       # writes ~/.config/aip/server.toml, every setting commented
 ```
 
-Open that file and set four lines. Under `[backend]`:
+Open that file and set 6 lines. 
 
+Under `[backend]`:
 ```toml
 kind = "neo4j"
 uri = "neo4j+s://xxxxxxxx.databases.neo4j.io"   # from Aura
 user = "neo4j"
 password = "..."
+database = "neo4j"
 ```
 
-Under `[decision_model]`, uncomment `api_key` and paste your TypeSafe key. That file is the whole configuration; `aip server` reads it from any folder. Then:
+Under `[decision_model]`
+```toml
+api_key = "..." # your TYPESAFE_API_KEY  , optioal but highly recommended 
+```
+Then start the aip server:
 
 ```bash
 aip server --inspector
 ```
-
-Expect four lines: configured from your file, the neo4j backend at your URI, `decision model: TypeSafe jev-latest` (or `none` if you skipped the key), and the inspector URL. Leave it running. In a second terminal:
+Leave it running. In a second terminal you will publish an AIP skill to the server. 
+You will use the hello-world example for now.  Later you will see how to compile your own. 
 
 ```bash
 aip config --server http://localhost:8000      # where the client and the agents send requests
@@ -126,7 +132,7 @@ aip publish billing-support                    # validates, uploads, prints bill
 Open http://localhost:8000/inspector/. Four tabs across the top plus the server link at the right:
 
 - **catalog**: every published name with its step graph drawn. Click `billing-support` for the procedure page: purpose, triggers, each step with its inputs and questions, the files it ships (source viewer), the diff between any two revisions, and the governance controls (pin a revision, retire one, override a decision's confidence thresholds).
-- **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a decision the model was unsure about, a task it needs you to do, or the questions themselves when there is no model.
+- **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a decision the model was unsure about, a task it needs the client to do, or the questions themselves when there is no model.
 - **history**: every run, step by step, with what each step got and produced.
 - **governance**: corpus queries across all runs: decisions the client overrode, scripts that failed, skills missing fields, branches no run has taken.
 - **server link** (top right): the server URL and bearer token the page uses.
@@ -167,10 +173,12 @@ Every file of every revision is also in there as `File` nodes with exact bytes; 
 
 ### 5. Run it through an agent
 
-The installer put the `aip-runtime` skill into Claude Code if it found it; `aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config. Open Claude Code in any folder and try:
+The installer put the `aip-runtime` skill into Claude Code if it found it so you should be able to just ask the below to see it work:
 
 - `A customer wrote: "I was charged twice! Refund me today or I'm gone." Handle it.`
 - `A customer asks politely whether they can still get a refund on a subscription they forgot to cancel last month. Deal with it.`
+
+`aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config.
 
 Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket the server's script opened. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the inspector's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
 
