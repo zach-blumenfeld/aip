@@ -56,21 +56,142 @@ aip skill remove
 
 Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
 
-To run a server with the web inspector:
-
-```bash
-aip server --init                   # writes ~/.config/aip/server.toml; put your TypeSafe key in it
-aip server --inspector              # http://localhost:8000/inspector/
-aip-spec example billing-support --out .   &&   AIP_SERVER=http://localhost:8000 aip publish billing-support
-```
-
-Every setting is in that one file ([Configuring the server](#configuring-the-server)). Without a TypeSafe key the server still runs; decision steps pause for you to answer.
+The [End-to-End Walkthrough](#end-to-end-walkthrough) below takes a fresh machine through install, a Neo4j-backed server with the inspector, an agent run, and authoring a skill.
 
 ### Model Recommendation for Co-Authoring
 
 Use the **largest frontier model available** when using the AIP skill. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
 
 For *consuming* the resulting skill, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
+
+## End-to-End Walkthrough
+
+Fresh machine, nothing installed, about twenty minutes. Everything here is on the `aip-0.5a0` branch of [zach-blumenfeld/aip](https://github.com/zach-blumenfeld/aip), not `main`.
+
+You need:
+
+- macOS or Linux with `curl`.
+- A Neo4j database. [Aura Free](https://console.neo4j.io) works: create an instance and keep the URI, user, and password it shows you.
+- A [TypeSafe](https://typesafe.ai) API key. Optional: without it, every decision step pauses and asks you to answer instead of the model.
+- [Claude Code](https://claude.com/claude-code) for steps 5 and 6. Any agent `aip skill list` names works the same way.
+
+### 1. Install
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/aip-0.5a0/install.sh | bash
+```
+
+That installs [uv](https://docs.astral.sh/uv/) if missing, then two commands, `aip-spec` (the format and validator) and `aip` (runtime, server, client), and puts two Agent Skills into every agent it detects: `aip` for authoring and `aip-runtime` for running published procedures. Check:
+
+```bash
+aip --help
+aip skill list          # which agents got the skills
+```
+
+If `aip` is not found, open a new terminal. uv installs commands into `~/.local/bin`.
+
+### 2. Start a server on Neo4j, with the example published
+
+```bash
+aip server --init       # writes ~/.config/aip/server.toml, every setting commented
+```
+
+Open that file and set four lines. Under `[backend]`:
+
+```toml
+kind = "neo4j"
+uri = "neo4j+s://xxxxxxxx.databases.neo4j.io"   # from Aura
+user = "neo4j"
+password = "..."
+```
+
+Under `[decision_model]`, uncomment `api_key` and paste your TypeSafe key. That file is the whole configuration; `aip server` reads it from any folder. Then:
+
+```bash
+aip server --inspector
+```
+
+Expect four lines: configured from your file, the neo4j backend at your URI, `decision model: TypeSafe jev-latest` (or `none` if you skipped the key), and the inspector URL. Leave it running. In a second terminal:
+
+```bash
+aip config --server http://localhost:8000      # where the client and the agents send requests
+aip-spec example billing-support --out .       # the bundled example skill, written to ./billing-support
+aip publish billing-support                    # validates, uploads, prints billing-support@<revision>
+```
+
+`aip publish <folder>` is how any skill gets onto the server. `aip list` shows the catalog.
+
+### 3. The inspector
+
+Open http://localhost:8000/inspector/. Four tabs across the top plus the server link at the right:
+
+- **catalog**: every published name with its step graph drawn. Click `billing-support` for the procedure page: purpose, triggers, each step with its inputs and questions, the files it ships (source viewer), the diff between any two revisions, and the governance controls (pin a revision, retire one, override a decision's confidence thresholds).
+- **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a decision the model was unsure about, a task it needs you to do, or the questions themselves when there is no model.
+- **history**: every run, step by step, with what each step got and produced.
+- **governance**: corpus queries across all runs: decisions the client overrode, scripts that failed, skills missing fields, branches no run has taken.
+- **server link** (top right): the server URL and bearer token the page uses.
+
+Try two runs of `billing-support`. Message `I was charged twice this month and I am furious, fix it or I cancel`: the model marks it billing and angry, the router sends it to the escalation script, and the run ends with a ticket id and the tier2 queue. Message `Hi, could you tell me whether my March invoice was a duplicate?`: calm, so the run pauses with a client task asking you to draft the reply from the policy; type one and the run ends.
+
+### 4. See it in Neo4j
+
+Open your database in Neo4j Browser or Query and run these. The skill and its procedure graph:
+
+```cypher
+MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
+MATCH p1 = (p)-[:HAS_STEP]->(st:Step)
+OPTIONAL MATCH p2 = (st)-[:INPUTS_TO|BRANCH]->(:Step)
+OPTIONAL MATCH p3 = (st)-[:DECLARES_INPUT|ASKS]->()
+RETURN n, s, p, p1, p2, p3
+```
+
+Every run of the skill, with the answers and the steps they ran against:
+
+```cypher
+MATCH (r:Run {name: 'billing-support'})-[:OF_SKILL]->(s:Skill)
+MATCH p1 = (r)-[:STEP_RUN]->(sr:StepRun)
+OPTIONAL MATCH p2 = (sr)-[:NEXT]->(:StepRun)
+OPTIONAL MATCH p3 = (sr)-[:OF_STEP]->(:Step)
+OPTIONAL MATCH p4 = (sr)-[:ANSWERED]->(:Answer)-[:OF_QUESTION]->(:Question)
+RETURN r, s, p1, p2, p3, p4
+```
+
+Just the run trails, when that gets busy:
+
+```cypher
+MATCH p = (r:Run {name: 'billing-support'})-[:STEP_RUN]->(:StepRun)-[:NEXT*0..]->(:StepRun)
+RETURN p
+```
+
+Every file of every revision is also in there as `File` nodes with exact bytes; `aip get billing-support --out ./restored` rebuilds the folder from them and verifies the hashes.
+
+### 5. Run it through an agent
+
+The installer put the `aip-runtime` skill into Claude Code if it found it; `aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config. Open Claude Code in any folder and try:
+
+- `A customer wrote: "I was charged twice! Refund me today or I'm gone." Handle it.`
+- `A customer asks politely whether they can still get a refund on a subscription they forgot to cancel last month. Deal with it.`
+
+Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket the server's script opened. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the inspector's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
+
+### 6. Compile and publish your own skill
+
+The `aip` authoring skill turns a document into a procedure. Put the material in a folder: a runbook in markdown, an existing freeform `SKILL.md`, a support playbook, anything with steps and decisions. Use the largest model you have; this is the hard part. In Claude Code, from that folder:
+
+```
+Author an AIP skill from ./refund-runbook.md
+```
+
+The agent asks you to pick a name, scaffolds `./<name>/` with your document under `source/`, writes `SKILL.md` as a step graph (decisions with questions, scripts, tasks for the client, routers), runs `aip-spec validate` until it passes, then walks your source line by line checking nothing was dropped. Then:
+
+```bash
+aip validate ./<name>                    # the same checks, any time
+aip info ./<name>                        # what it does, the input it expects, how it flows
+aip run ./<name> --interactive           # run it locally, answering on the terminal
+aip publish ./<name>                     # onto the server; refresh the inspector
+```
+
+Edit, validate, publish again: the same name gets a new revision, and the inspector's diff shows what changed. Pin a revision when the catalog should resolve to it regardless of what is published later.
 
 ## Procedures
 
