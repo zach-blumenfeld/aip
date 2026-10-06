@@ -35,7 +35,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aip-spec", editable = "../aip-spec" },
+    { name = "aip-spec", git = "https://github.com/zach-blumenfeld/aip-spec.git?rev=v0.5a0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.26.0" },
@@ -59,20 +59,11 @@ dev = [
 [[package]]
 name = "aip-spec"
 version = "0.5a0"
-source = { editable = "../aip-spec" }
+source = { git = "https://github.com/zach-blumenfeld/aip-spec.git?rev=v0.5a0#37447970ed5350cd17a1b0da7bde85abbd0d65e4" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "pydantic", specifier = ">=2.11" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "annotated-doc"

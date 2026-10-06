@@ -143,7 +143,7 @@ uv run pytest -q                                       # the Neo4j backend tests
 uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall aip` removes it
 ```
 
-`pyproject.toml`'s `[tool.uv.sources]` points `aip-spec` at a sibling checkout, `../aip-spec`, so the format can be edited there and seen here without reinstalling; the git pin in `dependencies` is what an install sees.
+`aip-spec` installs from the git tag pinned in `pyproject.toml`. To work against a sibling checkout instead, layer it on per command: `uv run --with-editable ../aip-spec pytest -q`. (A `[tool.uv.sources]` path override is not an option: uv applies a git-fetched project's sources when installing it, which broke `uv tool install`.)
 
 The rebuild toward the client-server architecture is tracked milestone by milestone in [`docs/PLAN.md`](docs/PLAN.md); the design it implements is [`docs/server-design.md`](docs/server-design.md).
 

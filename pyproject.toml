@@ -35,8 +35,7 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
 
-# Local work across the two checkouts (`../aip-spec` beside this repo): the format is edited
-# there and seen here without reinstalling. The git pin in `dependencies` is the published
-# truth; this override is what `uv sync` uses in this checkout and nowhere else.
-[tool.uv.sources]
-aip-spec = { path = "../aip-spec", editable = true }
+# No `[tool.uv.sources]` override for `aip-spec`: uv applies a git-fetched project's sources
+# when installing it, so a `../aip-spec` path here broke `uv tool install git+...aip`. For
+# local work against a sibling checkout, layer it on per command:
+#   uv run --with-editable ../aip-spec pytest -q
