@@ -40,7 +40,7 @@ ok "uv"
 info "Installing aip-spec ($AIP_SPEC_REF)…"
 uv tool install --force "git+https://github.com/zach-blumenfeld/aip-spec.git@$AIP_SPEC_REF"
 info "Installing aip ($AIP_REF)…"
-uv tool install --force "git+https://github.com/zach-blumenfeld/aip.git@$AIP_REF"
+uv tool install --force "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@$AIP_REF"
 hash -r 2>/dev/null || true
 ok "aip, with aip-spec $(aip-spec --version)"
 

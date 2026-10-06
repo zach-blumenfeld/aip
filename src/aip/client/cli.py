@@ -8,6 +8,7 @@ retire, and `info`/`run` by name. A folder path always bypasses the server.
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -556,11 +557,28 @@ def db_command(argv: list[str]) -> int:
 
 def server_command(argv: list[str]) -> int:
     """`aip server`: the HTTP API over the filesystem or Neo4j backend. Scripts run in this process."""
+    from aip.server.config import (CONFIG_ENV, CONFIG_FILE, DEFAULT_ROOT, ENV_FILE, EXAMPLE, ConfigError, apply_config,
+                                   decision_model_status, find_config, load_env_file, read_config,
+                                   user_config_path, write_example)
+
     parser = argparse.ArgumentParser(prog="aip server", description="Serve the AIP catalog and execution API.",
-                                     epilog="Publishing is code execution on this server: scripts run here with its "
-                                            "privileges. Without --token the server is open; keep --host on localhost.")
+                                     epilog="Configuration, highest precedence first: these flags, the environment "
+                                            "(NEO4J_*, TYPESAFE_*; a .env file is loaded into it), the config file, "
+                                            "defaults. `--example-config` prints a complete file. Decision steps are "
+                                            "answered by TypeSafe when TYPESAFE_API_KEY (or decision_model.api_key) is "
+                                            "set; otherwise every decision pauses for the client. Publishing is code "
+                                            "execution on this server: scripts run here with its privileges. Without "
+                                            "--token the server is open; keep --host on localhost.")
+    parser.add_argument("--config", type=Path, default=None, metavar="FILE",
+                        help=f"TOML config file (default ${CONFIG_ENV}, else ./{CONFIG_FILE}, else "
+                             f"{user_config_path()})")
+    parser.add_argument("--init", nargs="?", const=True, default=None, metavar="FILE",
+                        help=f"write a complete config file to edit, to {user_config_path()} or FILE, and exit")
+    parser.add_argument("--env-file", type=Path, default=None, metavar="FILE",
+                        help=f"KEY=value file loaded into the environment without overriding it (default ./{ENV_FILE} if present)")
+    parser.add_argument("--example-config", action="store_true", help=f"print a complete {CONFIG_FILE} and exit")
     parser.add_argument("--backend", choices=["filesystem", "neo4j"], default="filesystem")
-    parser.add_argument("--root", type=Path, default=None, help="filesystem backend: the root directory (default ./aip-root)")
+    parser.add_argument("--root", type=Path, default=None, help=f"filesystem backend: the root directory (default {DEFAULT_ROOT})")
     parser.add_argument("--uri", default=None, help="neo4j backend: bolt URI; default $NEO4J_URI or neo4j://localhost:7687")
     parser.add_argument("--user", default=None, help="neo4j: default $NEO4J_USERNAME or neo4j")
     parser.add_argument("--password", default=None, help="neo4j: default $NEO4J_PASSWORD")
@@ -575,6 +593,34 @@ def server_command(argv: list[str]) -> int:
                         help="also serve the aip-inspector web client at /inspector/, from the bundle shipped in this "
                              "package or from DIR (a built `dist/`)")
     parser.add_argument("--log-level", default="info")
+
+    # Files first, so their values become the defaults the flags override.
+    pre, _ = parser.parse_known_args(argv)
+    if pre.example_config:
+        print(EXAMPLE, end="")
+        return 0
+    if pre.init is not None:
+        target = user_config_path() if pre.init is True else Path(pre.init)
+        try:
+            write_example(target)
+        except ConfigError as exc:
+            print(f"aip server: {exc}", file=sys.stderr)
+            return 1
+        print(f"wrote {target}\nedit it (the decision model key, the backend), then run: aip server")
+        return 0
+    env_file = pre.env_file if pre.env_file is not None else (Path(ENV_FILE) if Path(ENV_FILE).is_file() else None)
+    config_file = find_config(pre.config)
+    loaded: list[str] = []
+    try:
+        if env_file is not None:
+            applied = load_env_file(env_file)
+            loaded.append(f"{env_file} ({len(applied)} set)")
+        if config_file is not None:
+            parser.set_defaults(**apply_config(read_config(config_file)))
+            loaded.append(str(config_file))
+    except ConfigError as exc:
+        print(f"aip server: {exc}", file=sys.stderr)
+        return 1
     args = parser.parse_args(argv)
 
     try:
@@ -586,7 +632,7 @@ def server_command(argv: list[str]) -> int:
 
     if args.backend == "filesystem":
         from aip.server.backends.filesystem import FilesystemBackend
-        root = args.root or Path("aip-root")
+        root = args.root or DEFAULT_ROOT.expanduser()
         backend = FilesystemBackend(root)
         where = f"filesystem backend at {root.resolve()}"
     else:
@@ -595,7 +641,11 @@ def server_command(argv: list[str]) -> int:
         for attr, value in (("uri", args.uri), ("user", args.user), ("password", args.password), ("database", args.database)):
             if value is not None:
                 setattr(conn, attr, value)
-        backend = Neo4jBackend(conn, cache_dir=args.cache_dir)
+        try:
+            backend = Neo4jBackend(conn, cache_dir=args.cache_dir)
+        except Exception as exc:                      # driver missing, unreachable, bad credentials
+            print(f"aip server: cannot open the neo4j backend at {conn.uri}: {exc}", file=sys.stderr)
+            return 1
         where = f"neo4j backend at {conn.uri}"
 
     tokens = {}
@@ -608,7 +658,13 @@ def server_command(argv: list[str]) -> int:
               "and execute code here", file=sys.stderr)
     inspector = None if args.inspector is None else (INSPECTOR_DIR if args.inspector is True else Path(args.inspector))
     app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost, inspector=inspector)
+    if loaded:
+        print(f"aip server: configured from {', '.join(loaded)}", file=sys.stderr)
     print(f"aip server: {where}; http://{args.host}:{args.port}", file=sys.stderr)
+    print(f"aip server: {decision_model_status()}", file=sys.stderr)
+    if tokens:
+        print(f"aip server: {len(tokens)} bearer token(s); loopback clients "
+              f"{'need one too' if args.no_localhost else 'need none'}", file=sys.stderr)
     if inspector is not None:
         if (inspector / "index.html").is_file():
             print(f"aip server: inspector at http://{args.host}:{args.port}/inspector/ (from {inspector})", file=sys.stderr)

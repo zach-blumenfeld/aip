@@ -47,7 +47,7 @@ Prefer Python tooling:
 
 ```bash
 uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a1   # `aip-spec`, the validator the skill calls
-uv tool install git+https://github.com/zach-blumenfeld/aip.git@aip-0.5a0     # `aip`; pulls aip-spec in as a library
+uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@aip-0.5a0"   # `aip` with `aip server`; pulls aip-spec in
 aip skill install                   # both skills, every detected agent
 aip skill install claude-code       # one agent;  aip skill list  shows them
 aip skill install --path ./.claude/skills    # a project-local skills directory
@@ -55,6 +55,16 @@ aip skill remove
 ```
 
 Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
+
+To run a server with the web inspector:
+
+```bash
+aip server --init                   # writes ~/.config/aip/server.toml; put your TypeSafe key in it
+aip server --inspector              # http://localhost:8000/inspector/
+aip-spec example billing-support --out .   &&   AIP_SERVER=http://localhost:8000 aip publish billing-support
+```
+
+Every setting is in that one file ([Configuring the server](#configuring-the-server)). Without a TypeSafe key the server still runs; decision steps pause for you to answer.
 
 ### Model Recommendation for Co-Authoring
 
@@ -120,6 +130,14 @@ aip pin <name> <revision>  /  aip retire <name>@<revision>
 `src/aip/server/inspector/`; that directory is generated there by the inspector repo's `npm run build && npm run sync`.
 
 `aip run` drives the procedure locally with the same engine the server uses. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
+
+### Configuring the server
+
+`aip server --init` writes `~/.config/aip/server.toml`, every setting commented, and `aip server` reads it from there. The file is also looked for as `--config FILE`, `$AIP_SERVER_CONFIG`, and `./aip-server.toml`, in that order, the first found wins; `--example-config` prints the same template. Precedence, highest first: flags, the environment (a `./.env` or `--env-file` is loaded into it without overriding anything already set), the file, defaults. The filesystem catalog lives in `~/.local/share/aip/server` unless `root` says otherwise. The startup log names what it loaded, the backend, and whether a decision model is configured.
+
+The file has three tables. `[server]` is the listener and tokens; `[backend]` picks `filesystem` (`root`) or `neo4j` (`uri`, `user`, `password`, `database`, `cache_dir`); `[decision_model]` is the TypeSafe client that answers decision steps (`api_key`, `base_url`, `model`). Secrets can live in the file, in `.env`, or in the environment as `NEO4J_*` and `TYPESAFE_*`; the file never overrides a variable that is already set.
+
+**Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, and only the process that executes the procedure needs the key: the server for `aip run <name>`, your shell for `aip run <folder>`. Without a key the server answers no decisions and every decision step pauses with its `questions` for you to answer by hand; with one, the model answers and the run only pauses with a `review` block when an answer falls under its threshold. `curl $AIP_SERVER/procedures/<name>/capabilities` reports `decision_model` as the server sees it; the inspector's Server page shows the same.
 
 ## Loading Skills into Neo4j
 

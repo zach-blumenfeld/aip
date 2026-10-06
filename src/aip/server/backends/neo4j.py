@@ -95,7 +95,7 @@ class Connection:
         try:
             from neo4j import GraphDatabase
         except ImportError as exc:  # pragma: no cover
-            raise RuntimeError("the Neo4j driver is not installed; install with `uv sync --extra neo4j`") from exc
+            raise RuntimeError("the Neo4j driver is not installed; install `aip[server]` (or `uv sync --extra neo4j` in the repo)") from exc
         # notifications off: an empty database otherwise logs a warning per unknown label on every read
         return GraphDatabase.driver(self.uri, auth=(self.user, self.password), notifications_min_severity="OFF")
 

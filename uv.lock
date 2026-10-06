@@ -21,6 +21,7 @@ neo4j = [
 ]
 server = [
     { name = "fastapi" },
+    { name = "neo4j" },
     { name = "uvicorn" },
 ]
 
@@ -40,6 +41,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "neo4j", marker = "extra == 'neo4j'", specifier = ">=6.0" },
+    { name = "neo4j", marker = "extra == 'server'", specifier = ">=6.0" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "typesafe-sdk", specifier = ">=0.7.1" },
