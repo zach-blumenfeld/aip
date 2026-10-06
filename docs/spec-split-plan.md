@@ -189,7 +189,9 @@ uv run pytest -q tests/test_runtime_skill.py
 uv run aip skill install --path /tmp/skills && ls /tmp/skills      # aip  aip-runtime
 ```
 
-## - [ ] S3 — Tag and pin
+## - [x] S3 — Tag and pin
+
+Done 2026-10-06, commit a37daf2: `v0.5a0` tagged and pushed in `aip-spec` (37447970) by Zach, with `aip-0.5a0` pushed here. The proof ran in a fresh `HOME` with no uv: the installer put uv and `aip-spec` in place, then `aip` failed because uv applies a git-fetched project's `tool.uv.sources`, so the `../aip-spec` override from S1 is removed and the pin alone resolves to the tag (verified with `--no-sources` against GitHub, then with the fixed tree and no flags). `aip skill list`, `aip-spec validate` on the copied example (`VALID`), and `aip skill install` into a detected agent all passed. The `curl | bash` line re-runs verbatim once this commit is pushed.
 
 After Zach has read S0 to S2.
 
