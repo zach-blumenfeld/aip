@@ -4,12 +4,32 @@ Imports the runtime model lazily so validation (`aip_spec.skill`) stays light:
 it needs only pydantic and pyyaml, not the decision-model SDK.
 """
 
+import os
 from pathlib import Path
 from typing import Any
 
 from aip_spec import models as spec
 from aip_spec.skill import LoadedSkill, VERSION_KEY, load_skill
 
+
+
+def default_step_timeout() -> float | None:
+    """Seconds an execution step without its own `timeout` may run before it is killed.
+
+    `AIP_STEP_TIMEOUT` overrides the built-in 60 s; `0`, `none`, or `inf` means wait
+    forever. A server or harness sets it for the whole catalog; a step's own `timeout`
+    always wins.
+    """
+    raw = os.environ.get("AIP_STEP_TIMEOUT", "").strip().lower()
+    if not raw:
+        return 60.0
+    if raw in ("0", "none", "inf", "infinite"):
+        return None
+    try:
+        value = float(raw)
+    except ValueError as err:
+        raise ValueError(f"AIP_STEP_TIMEOUT must be a number of seconds, 0, or none; got {raw!r}") from err
+    return value if value > 0 else None
 
 def _split(path: str) -> tuple[str, str]:
     """'assets/sub/x.md' -> ('assets', 'sub/x.md')."""
@@ -54,7 +74,7 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
                     inputs=inputs(step.inputs),
                     script=model.Script(aip_id, _split(step.script)[1]),
                     assets=[asset(a) for a in step.assets],
-                    timeout=step.timeout if step.timeout is not None else 60.0,
+                    timeout=step.timeout if step.timeout is not None else default_step_timeout(),
                 )
             case spec.ClientTaskStep():
                 nodes[step.name] = model.ClientTask(
