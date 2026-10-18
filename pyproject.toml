@@ -1,6 +1,6 @@
 [project]
 name = "aip"
-version = "0.1.0"
+version = "0.5a1"
 description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
 readme = "README.md"
 license = "Apache-2.0"

@@ -1,6 +1,8 @@
 # A fresh agent runs `billing-support` through `aip-runtime`
 
-The M5 fresh-agent check (`docs/PLAN.md`). A Claude Code session was started with `claude -p` from an empty directory whose only skill was `aip-runtime` (written by `aip runtime --skill --out .claude/skills`; `--setting-sources project` kept the user's own skills out). `AIP_SERVER` pointed at a filesystem-backed `aip server` on port 8765 with `examples/billing-support` published. The agent was given the task in plain words and nothing else: no procedure, no SKILL.md, no mention of AIP.
+The fresh-agent check for the `aip-runtime` skill (milestone M5 of the 0.5a0 rebuild). A Claude Code session was started with `claude -p` from an empty directory whose only skill was `aip-runtime` (written by `aip runtime --skill --out .claude/skills`; `--setting-sources project` kept the user's own skills out). `AIP_SERVER` pointed at a filesystem-backed `aip server` on port 8765 with `examples/billing-support` published. The agent was given the task in plain words and nothing else: no procedure, no SKILL.md, no mention of AIP.
+
+The transcript predates the split of the format into `aip-spec`, so its setup publishes `examples/billing-support` from this repo; today the same folder comes from `aip-spec example billing-support --out .`.
 
 The transcript below is the session's stream-json output rendered as text; tool outputs are verbatim. The agent completed the procedure through `search` → `info` → `run` → `resume` and never fetched or read the procedure's own SKILL.md: the only `/files/SKILL.md` request in the server log is `aip info` rendering its summary, and the agent's turns contain no `aip get`, no `curl`, and no file reads.
 

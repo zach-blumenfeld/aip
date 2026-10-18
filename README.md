@@ -91,7 +91,7 @@ Prefer Python tooling:
 
 ```bash
 uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a1   # `aip-spec`, the validator the skill calls
-uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@aip-0.5a0"   # `aip` with `aip server`; pulls aip-spec in
+uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@main"        # `aip` with `aip server`; pulls aip-spec in
 aip skill install                   # both skills, every detected agent
 aip skill install claude-code       # one agent;  aip skill list  shows them
 aip skill install --path ./.claude/skills    # a project-local skills directory
@@ -110,8 +110,6 @@ For *consuming* the resulting skill, the opposite holds: AIP's structure is what
 
 ## End-to-End Walkthrough
 
-Everything here is on the `aip-0.5a0` branch of [zach-blumenfeld/aip](https://github.com/zach-blumenfeld/aip), not `main`.
-
 ### Prerequisites
 
 - macOS or Linux with `curl`.
@@ -122,7 +120,7 @@ Everything here is on the `aip-0.5a0` branch of [zach-blumenfeld/aip](https://gi
 ### 1. Install
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/aip-0.5a0/install.sh | bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 ```
 
 That installs [uv](https://docs.astral.sh/uv/) if missing, then two commands, `aip-spec` (the format and validator) and `aip` (runtime, server, client), and puts two Agent Skills into every agent it detects: `aip` for authoring and `aip-runtime` for running published procedures. Check:
@@ -312,10 +310,13 @@ The file has three tables. `[server]` is the listener and tokens; `[backend]` pi
 
 **Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, and only the process that executes the procedure needs the key: the server for `aip run <name>`, your shell for `aip run <folder>`. Without a key the server answers no decisions and every decision step pauses with its `questions` for you to answer by hand; with one, the model answers and the run only pauses with a `review` block when an answer falls under its threshold. `curl $AIP_SERVER/procedures/<name>/capabilities` reports `decision_model` as the server sees it; the inspector's Server page shows the same.
 
+**Scripts and trust.** A procedure's execution steps are scripts, and the server runs them as a subprocess with its own privileges on its own machine: whatever the server process can read, write, or reach, a published script can too. The server does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies, so isolation is the deployment's job (a container, a dedicated user, seccomp). Publishing a skill is therefore equivalent to running code on the server. Give the `publish` scope only to people you would let open a shell there, and keep the server on localhost or behind a token everywhere else.
+
 ## Loading Skills into Neo4j
 
+The Neo4j driver ships with the `server` extra the installer uses; in a clone, `uv sync --extra neo4j` adds it.
+
 ```bash
-uv sync --extra neo4j                                  # the driver is an optional dependency
 export NEO4J_URI=neo4j://localhost:7687 NEO4J_USERNAME=neo4j NEO4J_PASSWORD=...
 aip db load <path/to/skill-folder>                     # validates, then writes one revision
 aip db list                                            # every skill and revision in the database
@@ -336,7 +337,7 @@ uv tool install --editable .                           # `aip` on PATH, tracking
 
 `aip-spec` installs from the git tag pinned in `pyproject.toml`. To work against a sibling checkout instead, layer it on per command: `uv run --with-editable ../aip-spec pytest -q`. (A `[tool.uv.sources]` path override is not an option: uv applies a git-fetched project's sources when installing it, which broke `uv tool install`.)
 
-The rebuild toward the client-server architecture is tracked milestone by milestone in [`docs/PLAN.md`](docs/PLAN.md); the design it implements is [`docs/server-design.md`](docs/server-design.md).
+The design behind the client-server architecture is [`docs/server-design.md`](docs/server-design.md).
 
 ### Bumping the AIP format version
 

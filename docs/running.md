@@ -13,7 +13,7 @@ flowchart LR
     subgraph aip["aip package"]
         spec["aip.spec<br/>ProcedureSpec models<br/>validate · load"]
         model["aip.model<br/>Procedure.run<br/>steps · routing · validation"]
-        backend["aip.client.backend<br/>LocalBackend (today)<br/>HttpBackend (later)"]
+        backend["aip.client.backend<br/>LocalBackend · HttpBackend"]
         runner["aip.client.runner<br/>loop · pause · resume"]
         cli["aip run / aip resume"]
     end
@@ -31,7 +31,7 @@ flowchart LR
 
 - **`aip_spec`** (the `aip-spec` package) parses `SKILL.md` and validates the frontmatter, the YAML against the format models, and the graph; **`aip.spec.loader`** builds the runtime `Procedure` from the result.
 - **`aip.model`** is the engine. `Procedure.run(after, payload, history, thresholds)` is the whole server operation: resolve routers on the client's input, validate it against the receiving step's `inputs`, run the step, append a history entry, describe what comes next.
-- **`aip.client.backend`** is the seam between runner and engine. `LocalBackend` calls `Procedure.run` in-process. An HTTP backend will post the same arguments to the AIP server. The runner is written against the interface, so it does not change when the server arrives.
+- **`aip.client.backend`** is the seam between runner and engine. `LocalBackend` calls `Procedure.run` in-process; `HttpBackend` posts the same arguments to an AIP server (see [With a server](#with-a-server)). The runner is written against the interface, so it is the same loop either way.
 - **`aip.client.runner`** is the client. It follows the engine's suggested input from step to step and stops when a decision belongs to the client.
 
 ## The step protocol

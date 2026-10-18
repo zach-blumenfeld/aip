@@ -13,10 +13,10 @@
 # Idempotent: safe to re-run; it upgrades the package and refreshes both skills.
 set -euo pipefail
 
-# The refs to install. `aip` is the `aip-0.5a0` branch until 0.5a0 is tagged here, then
-# that tag; `aip-spec` is the format tag `aip`'s pyproject pins. The version-bump checklist
-# in README.md moves both.
-AIP_REF="${AIP_REF:-aip-0.5a0}"
+# The refs to install. `aip` is `main` until a release is tagged here, then that tag;
+# `aip-spec` is the format tag `aip`'s pyproject pins. The version-bump checklist in
+# README.md moves both.
+AIP_REF="${AIP_REF:-main}"
 AIP_SPEC_REF="${AIP_SPEC_REF:-v0.5a1}"
 
 info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
