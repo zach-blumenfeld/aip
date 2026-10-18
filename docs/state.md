@@ -53,8 +53,8 @@ sight. The run history records each step's input as the projected keys.
 
 Execution and client_task steps declare `outputs` the same way, and a decision's outputs are its
 question names. The step's result is checked against them before it is merged into the full
-state. Today the client's run file carries the full state between calls; from B1 the server
-holds it.
+state. The full state has one home: the run file for a local run, the server's run record for
+a served one, where the client's run file holds only the run id and the pending pause.
 
 ## Where keys come from
 
@@ -78,7 +78,8 @@ contents only on request, the one lazy part) and `answer_with` (the step's `outp
 types, what the answer must contain). The shapes for every pause kind, done, and error are in
 [`cli-json.md`](cli-json.md) and are tested against the CLI.
 
-The answer is merged over the state the run file holds, so it carries only the keys asked for.
+The answer is merged over the state the run holds (the run file locally, the server for a served
+run), so it carries only the keys asked for.
 
 ## Files
 

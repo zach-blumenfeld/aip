@@ -2,7 +2,7 @@
 
 Graph per skill revision, as the 0.4 `aip db` projection wrote it:
 
-    (:Name {name, pinned, thresholds})-[:HAS_REVISION]->(:Skill {id: name@revision, name, revision, description,
+    (:Name {name, pinned})-[:HAS_REVISION]->(:Skill {id: name@revision, name, revision, description,
                                                      aip_version, frontmatter, manifest, root_name,
                                                      directories, published_at, retired})
     (:Skill)-[:HAS_FILE]->(:File {key, path, size, sha256, mode, encoding, content})
@@ -15,7 +15,7 @@ Graph per skill revision, as the 0.4 `aip db` projection wrote it:
 
 and per run:
 
-    (:Run {id, name, revision, status, started_at, updated_at, pause})-[:OF_SKILL]->(:Skill)
+    (:Run {id, name, revision, status, started_at, updated_at, pause, state, after, version})-[:OF_SKILL]->(:Skill)
     (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, manual, review, entry, at})
     (:StepRun)-[:NEXT]->(:StepRun)       (:StepRun)-[:OF_STEP]->(:Step)
     (:StepRun)-[:ANSWERED]->(:Answer {question, type, value, accepted, overridden})-[:OF_QUESTION]->(:Question)
@@ -25,8 +25,9 @@ collapsed answer (JSON-encoded), and `accepted` is filled in by the first later 
 whose input carries the question's key, with `overridden` set when the two differ; this is
 what `aip.server.governance.overrides` computes from a history, written at append time so
 the override query is plain Cypher. An error entry's `step` is the step that failed and
-`step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Name.thresholds`
-holds the per-question threshold overrides (design §7) as JSON.
+`step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Run.state` is the
+run's full state (JSON) and `Run.version` its number of appends: an append takes the run's
+write lock, checks the version it was given, and bumps it, in one transaction.
 
 `Skill.manifest` is the record minus file bytes (what the filesystem backend keeps in
 `.aip-manifest.json`), so `get` returns exactly what was published without re-deriving
@@ -60,7 +61,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from aip.server.backend import NotFound, split_ref
+from aip.server.backend import NotFound, StaleRun, split_ref
 from aip.server.governance import MISSING_FIELDS, QUERIES, collapsed_answers
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
@@ -266,9 +267,6 @@ RETURN s.name AS name, s.revision AS revision, s.description AS description, sco
 
 SET_PIN = "MATCH (n:Name {name: $name}) SET n.pinned = $revision"
 
-GET_THRESHOLDS = "MATCH (n:Name {name: $name}) RETURN n.thresholds AS thresholds"
-SET_THRESHOLDS = "MATCH (n:Name {name: $name}) SET n.thresholds = $thresholds"
-
 RETIRE = """
 MATCH (n:Name {name: $name})-[:HAS_REVISION]->(s:Skill {revision: $revision})
 SET s.retired = true
@@ -278,14 +276,21 @@ RETURN s.id AS id
 
 CREATE_RUN = """
 CREATE (r:Run {id: $id, name: $name, revision: $revision, status: 'running',
-               started_at: datetime($now), updated_at: datetime($now), pause: NULL})
+               started_at: datetime($now), updated_at: datetime($now), pause: NULL, version: 0})
 WITH r
 OPTIONAL MATCH (s:Skill {id: $name + '@' + $revision})
 FOREACH (_ IN CASE WHEN s IS NULL THEN [] ELSE [1] END | CREATE (r)-[:OF_SKILL]->(s))
 RETURN r.id AS id
 """
 
-RUN_EXISTS = "MATCH (r:Run {id: $id}) RETURN r.id AS id"
+# Setting a property takes the run's write lock, so the version read here holds until commit.
+LOCK_RUN = "MATCH (r:Run {id: $id}) SET r.version = coalesce(r.version, 0) RETURN r.version AS version"
+
+SET_RUN = """
+MATCH (r:Run {id: $id})
+SET r.status = $status, r.pause = $pause, r.updated_at = datetime($now), r.version = $version
+FOREACH (_ IN CASE WHEN $has_state THEN [1] ELSE [] END | SET r.state = $state, r.after = $after)
+"""
 
 APPEND_STEP_RUN = """
 MATCH (r:Run {id: $id})
@@ -296,7 +301,6 @@ CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kin
                     at: datetime($now)})
 CREATE (r)-[:STEP_RUN]->(sr)
 FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:NEXT]->(sr))
-SET r.status = $status, r.pause = $pause, r.updated_at = datetime($now)
 WITH r, sr
 OPTIONAL MATCH (st:Step {key: r.name + '@' + r.revision + ':' + $step})
 FOREACH (_ IN CASE WHEN st IS NULL THEN [] ELSE [1] END | CREATE (sr)-[:OF_STEP]->(st))
@@ -326,7 +330,7 @@ OPTIONAL MATCH (r)-[:STEP_RUN]->(sr:StepRun)
 WITH r, sr ORDER BY sr.order
 RETURN r.id AS id, r.name AS name, r.revision AS revision, r.status AS status,
        toString(r.started_at) AS started_at, toString(r.updated_at) AS updated_at, r.pause AS pause,
-       collect(sr.entry) AS history
+       r.state AS state, r.after AS after, coalesce(r.version, 0) AS version, collect(sr.entry) AS history
 """
 
 LIST_RUNS = """
@@ -622,17 +626,6 @@ class Neo4jCatalog:
         name, rev = split_ref(ref)
         return name, self._resolve_entry(self._entry(name), rev)
 
-    def thresholds(self, name: str) -> Dict[str, float]:
-        self._entry(name)
-        rows = self._read(GET_THRESHOLDS, name=name)
-        return dict(_load(rows[0]["thresholds"]) or {}) if rows else {}
-
-    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
-        self._entry(name)
-        self.driver.execute_query(SET_THRESHOLDS, name=name,
-                                  thresholds=_dump({q: float(v) for q, v in thresholds.items()}),
-                                  database_=self.database)
-
     def resolved_ids(self, name: str | None = None) -> List[str]:
         """`name@revision` for what every name (or one) resolves to; names with nothing live are skipped."""
         out = []
@@ -695,30 +688,40 @@ class Neo4jRuns:
                                   database_=self.database)
         return run_id
 
-    def append(self, run_id: str, entry: JSON, status: str, pause: JSON | None) -> None:
-        params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
-                  "step_kind": entry.get("step_kind"),
-                  "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
-                  "manual": bool(entry.get("manual", False)), "review": _dump(entry.get("review")),
-                  "entry": json.dumps(entry, sort_keys=True), "status": status, "pause": _dump(pause),
-                  "now": _now()}
-        payload = entry.get("input")
-        inputs = {k: _dump(v) for k, v in payload.items()} if isinstance(payload, dict) else {}
-        answers = (entry.get("result") or {}).get("answers") or {}
-        collapsed = [{"question": q, "type": answers[q].get("type"), "value": _dump(v)}
-                     for q, v in collapsed_answers(entry).items()]
+    def append(self, run_id: str, entry: JSON | None, status: str, pause: JSON | None, *,
+               expected: int | None = None, state: JSON | None = None, after: str | None = None) -> int:
+        now = _now()
+        if entry is not None:
+            params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
+                      "step_kind": entry.get("step_kind"),
+                      "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
+                      "manual": bool(entry.get("manual", False)), "review": _dump(entry.get("review")),
+                      "entry": json.dumps(entry, sort_keys=True), "now": now}
+            payload = entry.get("input")
+            inputs = {k: _dump(v) for k, v in payload.items()} if isinstance(payload, dict) else {}
+            answers = (entry.get("result") or {}).get("answers") or {}
+            collapsed = [{"question": q, "type": answers[q].get("type"), "value": _dump(v)}
+                         for q, v in collapsed_answers(entry).items()]
 
         def tx_fn(tx):
-            if tx.run(RUN_EXISTS, id=run_id).single() is None:
+            row = tx.run(LOCK_RUN, id=run_id).single()
+            if row is None:
                 raise NotFound(f"no run {run_id!r}")
-            if inputs:
-                tx.run(SETTLE_ANSWERS, id=run_id, inputs=inputs).consume()
-            order = tx.run(APPEND_STEP_RUN, **params).single()["order"]
-            if collapsed:
-                tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=collapsed).consume()
+            version = int(row["version"])
+            if expected is not None and expected != version:
+                raise StaleRun(f"run {run_id!r} is at version {version}, not {expected}")
+            if entry is not None:
+                if inputs:
+                    tx.run(SETTLE_ANSWERS, id=run_id, inputs=inputs).consume()
+                order = tx.run(APPEND_STEP_RUN, **params).single()["order"]
+                if collapsed:
+                    tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=collapsed).consume()
+            tx.run(SET_RUN, id=run_id, status=status, pause=_dump(pause), now=now, version=version + 1,
+                   has_state=state is not None, state=_dump(state), after=after).consume()
+            return version + 1
 
         with self.driver.session(database=self.database) as session:
-            session.execute_write(tx_fn)
+            return session.execute_write(tx_fn)
 
     def get(self, run_id: str) -> RunRecord:
         rows = self._read(FETCH_RUN, id=run_id)
@@ -727,7 +730,8 @@ class Neo4jRuns:
         row = rows[0]
         return RunRecord(id=row["id"], name=row["name"], revision=row["revision"], status=row["status"],
                          started_at=row["started_at"], updated_at=row["updated_at"], pause=_load(row["pause"]),
-                         history=[_load(e) for e in row["history"] if e is not None])
+                         history=[_load(e) for e in row["history"] if e is not None],
+                         state=_load(row["state"]) or {}, after=row["after"], version=int(row["version"]))
 
     def list(self, name: str | None = None, status: str | None = None, limit: int = 50) -> List[RunSummary]:
         return [RunSummary(id=r["id"], name=r["name"], revision=r["revision"], status=r["status"],

@@ -269,6 +269,9 @@ class RunRecord:
     updated_at: str
     pause: JSON | None = None
     history: List[JSON] = field(default_factory=list)
+    state: JSON = field(default_factory=dict)   # the run's full state: the one copy
+    after: str | None = None    # the step whose output the next input answers (None: the start)
+    version: int = 0            # appends so far; `append(expected=...)` checks it
 
 
 @dataclass(frozen=True)

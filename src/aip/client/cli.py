@@ -281,7 +281,7 @@ def _outcome(call, debug: bool, progress: bool) -> int:
 
     try:
         return call()
-    except SystemExit as exc:                     # a usage problem `_target` or `--threshold` found
+    except SystemExit as exc:                     # a usage problem `_target` found
         if not isinstance(exc.code, str):
             raise
         exc = _BadInput(exc.code.removeprefix("aip: "))
@@ -306,16 +306,6 @@ def _outcome_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--debug", action="store_true", help="print a traceback on stderr when the run fails")
 
 
-def _thresholds(pairs: list[str]) -> dict[str, float]:
-    out: dict[str, float] = {}
-    for pair in pairs:
-        name, _, value = pair.partition("=")
-        if not name or not value:
-            raise SystemExit(f"aip: --threshold expects name=value, got {pair!r}")
-        out[name] = float(value)
-    return out
-
-
 def run_command(argv: list[str]) -> int:
     from aip.client.backend import HttpBackend, LocalBackend
     from aip.client.runner import Runner
@@ -328,16 +318,15 @@ def run_command(argv: list[str]) -> int:
     parser.add_argument("--interactive", action="store_true", help="prompt on the terminal instead of pausing to a run file")
     parser.add_argument("--run-file", type=Path, default=None,
                         help="where to write the run file (default ~/.aip/runs/<run-id>.json; AIP_HOME moves it)")
-    parser.add_argument("--threshold", action="append", default=[], metavar="NAME=VALUE", help="override a decision threshold")
     _outcome_flags(parser)
     args = parser.parse_args(argv)
 
     def go() -> int:
         kind, where = _target(args.skill)
         backend = HttpBackend(where, name=args.skill) if kind == "name" else LocalBackend(where)
-        runner = Runner(backend, Path(args.skill), run_file=args.run_file, interactive=args.interactive,
+        runner = Runner(backend, run_file=args.run_file, interactive=args.interactive,
                         progress=args.progress, debug=args.debug)
-        return runner.start(_read_input(args.input), _thresholds(args.threshold)).code
+        return runner.start(_read_input(args.input)).code
     return _outcome(go, args.debug, args.progress)
 
 
@@ -360,7 +349,7 @@ def resume_command(argv: list[str]) -> int:
         configured = settings()
         token = configured["token"] if run.server and configured["server"] == run.server else None
         backend = backend_for(run, token=token, session=_session_for(run.server))
-        runner = Runner(backend, Path(run.skill_dir), run_file=path, interactive=args.interactive,
+        runner = Runner(backend, run_file=path, interactive=args.interactive,
                         progress=args.progress, debug=args.debug, run_id=run.run_id)
         return runner.resume(run, _read_input(args.input)).code
     return _outcome(go, args.debug, args.progress)

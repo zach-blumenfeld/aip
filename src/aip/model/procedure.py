@@ -84,8 +84,7 @@ class Procedure:
             node = target
         return node, entries
 
-    def run(self, after: str | None, payload: JSON, history: List[JSON] | None = None,
-            thresholds: Dict[str, float] | None = None) -> StepResponse:
+    def run(self, after: str | None, payload: JSON, history: List[JSON] | None = None) -> StepResponse:
         """
         The single server operation.
 
@@ -109,4 +108,4 @@ class Procedure:
             return StepResponse(ran=end.name, kind=end.kind, result=final, suggested=final,
                                 review=[], next=None, history=history)
 
-        return node.accept(payload, history, thresholds=thresholds)
+        return node.accept(payload, history)

@@ -25,8 +25,9 @@ default `~/.aip/runs/<run_id>.json` (`AIP_HOME` moves `~/.aip`; `aip run --run-f
 picks an explicit path). `run_id` is the server's run id on a served run and a generated one on
 a local run. `aip resume <run_id> --input <answer.json>` answers a pause, from any directory;
 `aip resume <run_id>` with no input retries a failed step. A run file's path works in place of
-the id. An answer is merged over the state the run file holds, so it
-carries only the keys the pause asks for.
+the id. An answer is merged over the state the run holds (the run file of a local run; the
+server, for a served run, whose run file holds only the run id, server, revision and pause), so
+it carries only the keys the pause asks for.
 
 ## Paused
 

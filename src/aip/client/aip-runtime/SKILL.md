@@ -61,8 +61,8 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
    | `review`      | `proposed_answers`, and `review`: the ones under their confidence threshold | only the keys you override, e.g. `{"tone": "calm"}`; `{}` accepts every proposed answer |
    | `client_task` | `task`: what to do; `state`; `references`; `answer_with` | the work product under every key in `answer_with`, with those types |
 
-   `state` is only what this step needs. The run file holds the rest and your answer is
-   merged over it, so send only the keys asked for. Load a `references` entry only if the
+   `state` is only what this step needs. The run holds the rest (the server, for a published
+   procedure) and your answer is merged over it, so send only the keys asked for. Load a `references` entry only if the
    task says you need it.
 
 5. **On an error**, read `error`, `step` and `message`. `invalid_input` / `invalid_output`
@@ -80,8 +80,9 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 - **One run, one run id.** Every outcome prints `run_id`; `aip resume <run_id>` finds the
   run file (`run_file`, under `~/.aip/runs/`) from any directory and rewrites it. Do not edit it. Do not start a second run of the same task.
 - **Report the result** from `state` (the end step's declared keys) in the task's terms,
-  and say which procedure ran, by name. What each step produced is in the run's history
-  (`history` in the run file). If the run stops with an error you cannot fix, report the
+  and say which procedure ran, by name. What each step produced is in the run's history:
+  on the server for a published procedure (`GET /runs/<run_id>`), in the run file's
+  `history` for a folder. If the run stops with an error you cannot fix, report the
   error; do not improvise the remaining steps.
 - **Do not publish, pin, or retire** anything unless asked; those change the catalog for
   everyone.

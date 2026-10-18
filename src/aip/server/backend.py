@@ -1,8 +1,8 @@
 """The storage contract (design §5): two protocols, implemented per backend.
 
 `CatalogBackend` holds skill revisions and answers name, revision, file, and search
-questions about them, and keeps each name's threshold overrides. `RunBackend` records
-run history. `GovernanceBackend` answers the named corpus queries of
+questions about them. `RunBackend` holds each run: its history, and the one copy of its
+state and of what it waits for. `GovernanceBackend` answers the named corpus queries of
 `aip.server.governance` over both. A backend class may implement all three; the
 server only ever talks to these methods.
 
@@ -31,6 +31,11 @@ class NotFound(KeyError):
 
 class NotSupported(NotImplementedError):
     """A query this backend declines to answer (501 over HTTP)."""
+
+
+class StaleRun(Exception):
+    """An `append` whose expected version is not the run's current one: another write got there first
+    (409 over HTTP)."""
 
 
 def split_ref(ref: str) -> tuple[str, str | None]:
@@ -77,20 +82,19 @@ class CatalogBackend(Protocol):
         """The revision's skill folder on disk, named after the skill: what the server loads and executes.
         The filesystem backend hands out its published copy; others materialise into a hash-checked cache."""
 
-    def thresholds(self, name: str) -> Dict[str, float]:
-        """The per-question threshold overrides stored for `name` (design §7); `{}` when none."""
-
-    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
-        """Replace the stored overrides for `name`; `{}` clears them."""
-
 
 @runtime_checkable
 class RunBackend(Protocol):
     def create(self, name: str, revision: str) -> str:
         """Start a run record; returns its id."""
 
-    def append(self, run_id: str, entry: JSON, status: str, pause: JSON | None) -> None:
-        """Add one history entry and set the run's status and current pause (None when running)."""
+    def append(self, run_id: str, entry: JSON | None, status: str, pause: JSON | None, *,
+               expected: int | None = None, state: JSON | None = None, after: str | None = None) -> int:
+        """Add one history entry (or none) and set the run's status and current pause (None when
+        running); with `state`, also set the run's state and `after` (the step the next input
+        answers). Every append bumps the run's version by one and returns the new version; with
+        `expected`, the write is refused with `StaleRun` unless the run is at that version, checked
+        and written atomically."""
 
     def get(self, run_id: str) -> RunRecord: ...
 

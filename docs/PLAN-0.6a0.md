@@ -180,7 +180,24 @@ client doing both jobs in one process. B1 moves the run record to the server; B2
 client what it must check before executing; B3 moves scripts; B4 moves decisions.
 
 
-### - [ ] B1 (aip): the server holds the run
+### - [x] B1 (aip): the server holds the run
+
+Done 2026-10-18, aip only. The loop the runner had is now `aip.model.engine` (`start`, `submit`
+over a cursor of after/state/history/pause), and both the local client and the server run it, so
+the two homes cannot drift. Choices beyond the text: `POST /runs` requires `input` and is the only
+way to open a run, so a served run has the server's id from its first pause (A4's local id that
+moved is gone); a step that fails is a 200 carrying the error object (the run recorded it), a start
+input or answer that does not fit is a 422 that changes nothing, and a post whose `step` or
+`version` is not the run's current one, or that lost the race, is a 409 `stale_run`. `append`
+stays one entry per call (`entry` may be None) with keyword `expected`, `state`, `after`, and
+returns the new version; catalog `thresholds`/`set_thresholds` are gone from both backends and
+`info` no longer reports `thresholds` (each question row has its own). The decision pause carries
+the author's `thresholds`, in the reply and the run file; the CLI does not print them. The server
+keeps a failed step's `error` entry in its history for governance but leaves it out of the cursor,
+so its ledger equals a local run's for runs that succeed. Locally, a first step that fails while
+running is now resumable; only a rejected start input is not. Neo4j contract tests pass against a
+local `neo4j:5` container. The bundled inspector's threshold editing 404s until I3, and
+`running.md`'s worked example still shows pre-A4 `run_id: null` (C1).
 
 New request shape for served runs: `POST /runs` with the start input opens a run and returns
 the first pause or the first execution step to perform; `POST /runs/{id}/result` carries one

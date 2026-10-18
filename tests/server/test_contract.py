@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from aip_spec import FORMAT_VERSION, example_dir
 
-from aip.server.backend import CatalogBackend, GovernanceBackend, NotFound, NotSupported, RunBackend
+from aip.server.backend import CatalogBackend, GovernanceBackend, NotFound, NotSupported, RunBackend, StaleRun
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import materialize, snapshot
 from aip.spec import load_skill
@@ -328,6 +328,26 @@ def test_runs_create_append_get_list(runs):
         runs.append("nope", {}, status="done", pause=None)
 
 
+def test_runs_hold_state_and_refuse_a_stale_append(runs):
+    rid = runs.create("billing-support", "abc123")
+    assert runs.get(rid).version == 0 and runs.get(rid).state == {}
+    assert runs.append(rid, None, "paused", {"kind": "decision", "step": "triage"}, expected=0,
+                       state={"message": "hi"}, after=None) == 1
+    run = runs.get(rid)
+    assert (run.version, run.status, run.history, run.state, run.after) == (1, "paused", [], {"message": "hi"}, None)
+
+    assert runs.append(rid, {"step": "triage", "kind": "decision"}, "running", None, expected=1) == 2
+    with pytest.raises(StaleRun):                                  # another write got there first
+        runs.append(rid, {"step": "triage", "kind": "decision"}, "running", None, expected=1)
+    assert runs.append(rid, {"step": "by-tone", "kind": "router"}, "paused", {"kind": "client_task"},
+                       expected=2, state={"message": "hi", "tone": "calm"}, after="triage") == 3
+    run = runs.get(rid)
+    assert [e["step"] for e in run.history] == ["triage", "by-tone"]
+    assert (run.version, run.state, run.after) == (3, {"message": "hi", "tone": "calm"}, "triage")
+    assert runs.append(rid, None, "paused", {"kind": "client_task"}) == 4    # no `expected`: unchecked
+    assert runs.get(rid).state == {"message": "hi", "tone": "calm"}         # no `state`: kept
+
+
 # -------------------------------------------------------------------- governance
 
 
@@ -384,19 +404,6 @@ def test_governance_backend_satisfies_protocol(governance):
     assert isinstance(governance, GovernanceBackend)
     with pytest.raises(NotFound):
         governance.query("nope")
-
-
-def test_thresholds_round_trip(catalog, example):
-    catalog.publish(example)
-    assert catalog.thresholds("billing-support") == {}
-    catalog.set_thresholds("billing-support", {"tone": 0.5, "billing": 0.2})
-    assert catalog.thresholds("billing-support") == {"tone": 0.5, "billing": 0.2}
-    catalog.set_thresholds("billing-support", {})
-    assert catalog.thresholds("billing-support") == {}
-    with pytest.raises(NotFound):
-        catalog.thresholds("nope")
-    with pytest.raises(NotFound):
-        catalog.set_thresholds("nope", {"tone": 0.5})
 
 
 def test_governance_overridden_decisions(catalog, runs, governance, example):

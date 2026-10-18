@@ -1,19 +1,22 @@
-"""The HTTP server (design §4.2): one API over either backend; the server executes scripts.
+"""The HTTP server (design §4.2): one API over either backend; the server holds every run.
 
 `create_app(backend)` returns a FastAPI application. `backend` is anything with a
 `.catalog` (`CatalogBackend`) and, optionally, a `.runs` (`RunBackend`); the filesystem
 and Neo4j backends both qualify. Every endpoint is one of three kinds:
 
 - **catalog**: `/catalog`, `/catalog/search`, `/catalog/{ref}`, `/catalog/{ref}/files`,
-  `/catalog/{ref}/files/{path}`, `POST /catalog`, `POST /catalog/{name}/pin|retire`, and
-  `GET|POST /catalog/{name}/thresholds` for the per-question overrides a `step` merges under
-  the request's own `thresholds` (design §7).
-- **execution**: `/procedures/{ref}/peek|step|answer|capabilities`, one per method of
-  the client's `Backend` protocol. The procedure is loaded from the backend's folder for
-  that revision (`catalog.folder`), cached per revision, and `Procedure.run` does the
-  work; scripts run here, with this process's interpreter and privileges.
-- **runs**: `/runs`, `/runs/{id}`; `step` and `answer` append to the run named by their
-  `run_id` (creating one when absent). Without a `RunBackend` these answer 501.
+  `/catalog/{ref}/files/{path}`, `POST /catalog`, `POST /catalog/{name}/pin|retire`.
+  Decision thresholds are the author's, from SKILL.md, and nothing else.
+- **runs**: `POST /runs` opens a run on a start input and replies with where it stopped;
+  `POST /runs/{id}/result` carries one thing to it (the answer to its pause, or nothing to
+  retry a failed step); `GET /runs`, `GET /runs/{id}`. Each call loads the run from the
+  `RunBackend`, steps it with `aip.model.engine`, and stores what changed with a version
+  check, so nothing per run stays in this process and any replica can answer any call; a
+  write that lost a race answers 409. Scripts still run here (until B3). Without a
+  `RunBackend` these answer 501.
+- **execution** (deprecated, one version): `/procedures/{ref}/peek|step|answer|capabilities`,
+  where the client carries the state and history on every call. `step` and `answer` reply
+  with a `Deprecation` header and append to the run named by their `run_id`.
 - **governance**: `/governance` lists the named corpus queries of `aip.server.governance`;
   `/governance/{query}?name=&window=&limit=` answers one through the backend's `.governance`
   (501 when it has none or declines the query).
@@ -50,9 +53,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from aip.model import Decision, describe_next
+from aip.model import Decision, describe_next, engine
+from aip.model.engine import Advance, Cursor
 from aip.model.types import InputValidationError, OutputValidationError, StepError, example_input
-from aip.server.backend import NotFound, NotSupported, split_ref
+from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
 from aip.server.governance import DEFAULT_LIMIT, DEFAULT_WINDOW, QUERIES
 from aip.server.records import MANIFEST, SkillRecord, snapshot
 
@@ -61,6 +65,9 @@ JSON = Dict[str, Any]
 READ, PUBLISH = "read", "publish"
 ALL_SCOPES = frozenset({READ, PUBLISH})
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+# On the replies of `/procedures/{ref}/step|answer`, which go once `POST /runs` has had a version.
+DEPRECATED = {"Deprecation": "true", "Link": '</runs>; rel="successor-version"'}
 
 # The inspector bundle the package ships (design §10): `aip server --inspector` serves it.
 INSPECTOR_DIR = Path(__file__).parent / "inspector"
@@ -91,7 +98,6 @@ class PeekBody(BaseModel):
 
 class StepBody(PeekBody):
     history: List[JSON] = Field(default_factory=list)
-    thresholds: Dict[str, float] | None = None
     run_id: str | None = None
 
 
@@ -118,10 +124,15 @@ class RevisionBody(BaseModel):
 class RunBody(BaseModel):
     name: str
     revision: str | None = None
+    input: JSON
 
 
-class ThresholdsBody(BaseModel):
-    thresholds: Dict[str, float]
+class ResultBody(BaseModel):
+    """One thing for a run. `answer` answers its pause (omit it to retry a failed step); `step`
+    and `version` are what the client last saw, and a run that has moved on answers 409."""
+    answer: JSON | None = None
+    step: str | None = None
+    version: int | None = None
 
 
 # ------------------------------------------------------------------------------- app
@@ -160,6 +171,10 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     @app.exception_handler(NotSupported)
     async def _not_supported(_: Request, exc: NotSupported):
         return JSONResponse(ApiError(501, "not_supported", str(exc)).body(), status_code=501)
+
+    @app.exception_handler(StaleRun)
+    async def _stale(_: Request, exc: StaleRun):
+        return JSONResponse(ApiError(409, "stale_run", str(exc)).body(), status_code=409)
 
     @app.exception_handler(InputValidationError)
     @app.exception_handler(OutputValidationError)
@@ -230,9 +245,11 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             run_id = runs.create(name, revision)
         new_entries = response["history"][carried:]
         status, pause = run_status(response)
+        state = response["result"] if response["next"] is None else response["suggested"]
         for i, entry in enumerate(new_entries):
             last = i == len(new_entries) - 1
-            runs.append(run_id, entry, status if last else "running", pause if last else None)
+            runs.append(run_id, entry, status if last else "running", pause if last else None,
+                        **({"state": state, "after": response["ran"]} if last else {}))
         return run_id
 
     def record_failure(run_id: str | None, name: str, revision: str, node: Any, payload: JSON,
@@ -247,7 +264,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             detail = exc.fields() if isinstance(exc, StepError) else {}
             runs.append(run_id, {"step": getattr(node, "name", None), "kind": "error",
                                  "step_kind": getattr(node, "kind", None), "input": payload,
-                                 "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}, "error", None)
+                                 "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}, "failed", None)
         except Exception:  # the failure itself is what the client needs to hear about
             pass
         return run_id
@@ -273,8 +290,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
                     raise ApiError(422, "no_decision_model",
                                    f"step {node.name!r} is a decision and this server has no decision model; "
                                    "answer its questions through /answer", location=node.name)
-                thresholds = {**catalog.thresholds(name), **(body.thresholds or {})}
-                response = proc.run(body.after, body.payload, body.history, thresholds or None).to_dict()
+                response = proc.run(body.after, body.payload, body.history).to_dict()
             else:
                 node, entries = proc.resolve(body.after, body.payload)
                 if not isinstance(node, Decision):
@@ -293,6 +309,32 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             failed_step(body, name, revision, node, exc)
         run_id = record_run(body.run_id, name, revision, len(body.history), response)
         return {**response, "run_id": run_id, "name": name, "revision": revision}
+
+    def store(run_id: str, version: int, advance: Advance) -> int:
+        """Append what one call did, every write checked against the version before it: the new
+        history entries, a failure's entry, then the run's status, pause, state and `after`."""
+        cursor = advance.cursor
+        entries = [*advance.entries, *([advance.failure] if advance.failure is not None else [])]
+        for entry in entries[:-1]:
+            version = runs.append(run_id, entry, "running", None, expected=version)
+        return runs.append(run_id, entries[-1] if entries else None, cursor.status, cursor.pause,
+                           expected=version, state=cursor.state, after=cursor.after)
+
+    def reply(run_id: str, name: str, revision: str, version: int, advance: Advance) -> JSON:
+        """Where the run stopped: the paused, done, or error object the CLI prints (a decision pause
+        also carries its `thresholds`), the run's id and version, and the `--progress` lines of
+        the steps this call completed."""
+        out = {**advance.outcome(), "run_id": run_id, "name": name, "revision": revision, "version": version,
+               "steps": advance.lines}
+        if advance.error is not None:
+            out["resumable"] = True
+        return out
+
+    def rejected(advance: Advance, status: int) -> ApiError:
+        """A call that changed nothing: a start input or an answer that does not fit."""
+        error = dict(advance.error)
+        kind, message, step = error.pop("error"), error.pop("message"), error.pop("step")
+        return ApiError(status, kind, message, location=step, **error)
 
     # ------------------------------------------------------------------ catalog
 
@@ -361,7 +403,6 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             "aip_version": record.aip_version, "published_at": record.published_at, "retired": record.retired,
             **{k: record.procedure.get(k) for k in ("purpose", "trigger_when", "do_not_use_when", "anti_patterns")},
             "example_input": example_input(described["start"]["inputs"]),
-            "thresholds": catalog.thresholds(name),
             "step_details": record.steps, "edges": record.edges, "branches": record.branches,
             "inputs": record.inputs, "questions": record.questions, "resources": record.resources,
             "files": [f.manifest_entry() for f in record.files],
@@ -397,18 +438,6 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         catalog.retire(name, body.revision)
         return {"name": name, "retired": body.revision}
 
-    @app.get("/catalog/{name}/thresholds", dependencies=[require(READ)])
-    def get_thresholds(name: str) -> JSON:
-        return {"name": name, "thresholds": catalog.thresholds(name)}
-
-    @app.post("/catalog/{name}/thresholds", dependencies=[require(PUBLISH)])
-    def set_thresholds(name: str, body: ThresholdsBody) -> JSON:
-        bad = {q: v for q, v in body.thresholds.items() if not 0.0 <= v <= 1.0}
-        if bad:
-            raise ApiError(422, "invalid_request", f"thresholds must be between 0 and 1: {bad}")
-        catalog.set_thresholds(name, body.thresholds)
-        return {"name": name, "thresholds": catalog.thresholds(name)}
-
     # ---------------------------------------------------------------- execution
 
     @app.get("/procedures/{ref}/capabilities", dependencies=[require(READ)])
@@ -427,19 +456,46 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         return describe_next(node)
 
     @app.post("/procedures/{ref}/step", dependencies=[require(READ)])
-    def step(ref: str, body: StepBody) -> JSON:
+    def step(ref: str, body: StepBody, response: Response) -> JSON:
+        response.headers.update(DEPRECATED)
         return execute(ref, body, None)
 
     @app.post("/procedures/{ref}/answer", dependencies=[require(READ)])
-    def answer(ref: str, body: AnswerBody) -> JSON:
+    def answer(ref: str, body: AnswerBody, response: Response) -> JSON:
+        response.headers.update(DEPRECATED)
         return execute(ref, body, body.answers)
 
     # --------------------------------------------------------------------- runs
 
     @app.post("/runs", dependencies=[require(READ)], status_code=201)
-    def create_run(body: RunBody) -> JSON:
+    def open_run(body: RunBody) -> JSON:
+        """Open a run on the start input and step it until it stops. A start input the first step
+        rejects is a 422 and opens nothing."""
+        require_runs()
         name, revision = resolve(body.name if body.revision is None else f"{body.name}@{body.revision}")
-        return {"run_id": require_runs().create(name, revision), "name": name, "revision": revision}
+        advance = engine.start(procedure(name, revision), body.input, has_decision_model())
+        if advance.cursor is None:
+            raise rejected(advance, 422)
+        run_id = runs.create(name, revision)
+        return reply(run_id, name, revision, store(run_id, 0, advance), advance)
+
+    @app.post("/runs/{run_id}/result", dependencies=[require(READ)])
+    def post_result(run_id: str, body: ResultBody | None = None) -> JSON:
+        """Carry one thing to a run. 409 when the run has moved past what the client saw (`step`,
+        `version`) or another call wrote first; 422 when the answer does not fit (the run stays)."""
+        body = body or ResultBody()
+        run = require_runs().get(run_id)
+        if body.version is not None and body.version != run.version:
+            raise ApiError(409, "stale_run", f"run {run_id!r} is at version {run.version}, not {body.version}")
+        pending = (run.pause or {}).get("step")
+        if body.step is not None and body.step != pending:
+            raise ApiError(409, "stale_run", f"run {run_id!r} is not waiting on step {body.step!r} "
+                                             f"(status {run.status}, step {pending!r})")
+        cursor = Cursor(run.after, run.state, [e for e in run.history if e.get("kind") != "error"], run.pause)
+        advance = engine.submit(procedure(run.name, run.revision), cursor, body.answer, has_decision_model())
+        if advance.kept:
+            raise rejected(advance, 422 if advance.error["error"] in ("invalid_input", "invalid_output") else 409)
+        return reply(run_id, run.name, run.revision, store(run_id, run.version, advance), advance)
 
     @app.get("/runs", dependencies=[require(READ)])
     def list_runs(name: str | None = Query(None), status: str | None = Query(None),
@@ -452,7 +508,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     def get_run(run_id: str) -> JSON:
         r = require_runs().get(run_id)
         return {"run_id": r.id, "name": r.name, "revision": r.revision, "status": r.status,
-                "started_at": r.started_at, "updated_at": r.updated_at, "pause": r.pause, "history": r.history}
+                "started_at": r.started_at, "updated_at": r.updated_at, "version": r.version,
+                "after": r.after, "pause": r.pause, "state": r.state, "history": r.history}
 
     # --------------------------------------------------------------- governance
 
@@ -509,8 +566,8 @@ def mount_inspector(app: FastAPI, bundle: Path) -> bool:
 def run_status(response: JSON) -> tuple[str, JSON | None]:
     """The run status and pause block a step response implies: done at the end, paused when the
     client must act (a client task, or answers to review), running otherwise. The pause block
-    is the client's (`aip.client.runner.pause_of`)."""
-    from aip.client.runner import pause_of
+    is the client's (`aip.model.engine.pause_of`)."""
+    from aip.model.engine import pause_of
 
     if response["next"] is None:
         return "done", None

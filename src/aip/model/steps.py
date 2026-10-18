@@ -152,11 +152,11 @@ class BaseStep(ABC):
         """The keys this step's result adds to the state. By default the (validated) result itself."""
         return dict(result)
 
-    def review(self, result: JSON, thresholds: Dict[str, float] | None = None) -> List[JSON]:
+    def review(self, result: JSON) -> List[JSON]:
         """Items the client should look at before passing `suggested` through."""
         return []
 
-    def accept(self, payload: JSON, history: List[JSON], thresholds: Dict[str, float] | None = None) -> StepResponse:
+    def accept(self, payload: JSON, history: List[JSON]) -> StepResponse:
         """
         Validate the posted state against the declared inputs, run the step on just those
         keys, and merge what it produced back into the full state.
@@ -173,7 +173,7 @@ class BaseStep(ABC):
             kind=self.kind,
             result=result,
             suggested={**payload, **self.produced(result)},
-            review=self.review(result, thresholds),
+            review=self.review(result),
             next=describe_next(self.inputsTo),
             history=[*history, entry],
         )
@@ -217,8 +217,8 @@ class Decision(BaseStep):
     questions: keyed by name; answers come back under the same names and, after
                collapse, become state keys of the same name: a decision's outputs
     history: send the run history to the decision model too; off unless the author asks
-    thresholds: per-question author defaults. Noul: margin around 0.5.
-                Choice / Score: minimum confidence. The client may override on accept.
+    thresholds: per-question, the author's, and the only ones applied. Noul: margin around 0.5.
+                Choice / Score: minimum confidence. Unset questions use the type's default.
     client: optional injected TypeSafe client (tests, connection reuse); otherwise one
             is opened per invoke using TYPESAFE_API_KEY from the environment
     """
@@ -316,9 +316,9 @@ class Decision(BaseStep):
             raise OutputValidationError(self.name, [f"no answer for {missing}"])
         return {name: self.collapse(result["answers"][name]) for name in self.questions}
 
-    def review(self, result: JSON, thresholds: Dict[str, float] | None = None) -> List[JSON]:
+    def review(self, result: JSON) -> List[JSON]:
         """Answers whose uncertainty crosses the threshold, with what the client needs to decide."""
-        limits = {**self.thresholds, **(thresholds or {})}
+        limits = self.thresholds
         flagged: List[JSON] = []
         for name, answer in result["answers"].items():
             if answer["type"] == "noul":

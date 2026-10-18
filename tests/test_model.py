@@ -129,8 +129,9 @@ class ProcedureRunTest(unittest.TestCase):
         self.assertEqual(r.history[-1]["step"], "triage")
         self.assertNotIn("assets", r.history[-1]["input"])
 
-    def test_threshold_override_silences_review(self):
-        r = self.proc.run(None, {"message": "hi"}, thresholds={"billing": 0.01})
+    def test_the_authors_threshold_silences_review(self):
+        self.proc.nodes["triage"].thresholds = {"billing": 0.01}
+        r = self.proc.run(None, {"message": "hi"})
         self.assertEqual(r.review, [])
 
     def test_server_routes_to_execution_then_end(self):
