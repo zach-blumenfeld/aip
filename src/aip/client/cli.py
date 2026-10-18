@@ -326,7 +326,8 @@ def run_command(argv: list[str]) -> int:
     parser.add_argument("skill", metavar="skill_dir|name")
     parser.add_argument("--input", "-i", help="JSON object for the start step; `-` reads stdin")
     parser.add_argument("--interactive", action="store_true", help="prompt on the terminal instead of pausing to a run file")
-    parser.add_argument("--run-file", type=Path, default=None, help="where to write the run file on pause")
+    parser.add_argument("--run-file", type=Path, default=None,
+                        help="where to write the run file (default ~/.aip/runs/<run-id>.json; AIP_HOME moves it)")
     parser.add_argument("--threshold", action="append", default=[], metavar="NAME=VALUE", help="override a decision threshold")
     _outcome_flags(parser)
     args = parser.parse_args(argv)
@@ -346,21 +347,37 @@ def resume_command(argv: list[str]) -> int:
 
     parser = argparse.ArgumentParser(prog="aip resume", description="Continue a run, locally or on the server the run "
                                      "file names: answer its pause, or with no input retry the step that failed.")
-    parser.add_argument("run_file", type=Path)
+    parser.add_argument("run", metavar="run_id|run_file",
+                        help="the run id every outcome prints, or a run file's path")
     parser.add_argument("--input", "-i", help="JSON object answering the pause; `-` reads stdin")
     parser.add_argument("--interactive", action="store_true")
     _outcome_flags(parser)
     args = parser.parse_args(argv)
 
     def go() -> int:
-        run = RunFile.load(args.run_file)
+        path = _run_file(args.run)
+        run = RunFile.load(path)
         configured = settings()
         token = configured["token"] if run.server and configured["server"] == run.server else None
         backend = backend_for(run, token=token, session=_session_for(run.server))
-        runner = Runner(backend, Path(run.skill_dir), run_file=args.run_file, interactive=args.interactive,
-                        progress=args.progress, debug=args.debug)
+        runner = Runner(backend, Path(run.skill_dir), run_file=path, interactive=args.interactive,
+                        progress=args.progress, debug=args.debug, run_id=run.run_id)
         return runner.resume(run, _read_input(args.input)).code
     return _outcome(go, args.debug, args.progress)
+
+
+def _run_file(ref: str) -> Path:
+    """`aip resume`'s argument: an existing path, else a run id under the user's home."""
+    from aip.client.runner import RUN_ID, run_path
+
+    if Path(ref).is_file() or not RUN_ID.fullmatch(ref):
+        if not Path(ref).is_file():
+            raise _BadInput(f"no run file {ref}")
+        return Path(ref)
+    path = run_path(ref)
+    if not path.is_file():
+        raise _BadInput(f"no run {ref!r} (looked for {path})")
+    return path
 
 
 def _session_for(url: str | None):

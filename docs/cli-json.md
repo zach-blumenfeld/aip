@@ -11,8 +11,8 @@ else unless asked: no prose, no traceback. A run stops one of three ways:
 
 This is a contract: agents, the aip-runtime skill, and the console parse it. Every example on
 this page is checked against the CLI's real output by `tests/test_cli_json.py` (a local run of
-the `billing-support` example from aip-spec, so `run_id` is `null`; on a served run it is the
-server's run id).
+the `billing-support` example from aip-spec; the test reads `4f1c9a2e7b3d5068` as whatever id the run
+was given).
 
 Flags:
 
@@ -20,9 +20,12 @@ Flags:
   is then printed on one line too, so the whole output is JSON lines.
 - `--debug`: on an error, the traceback goes to stderr. Stdout is unchanged.
 
-Every outcome except an error before anything ran writes the run file named by `run_file`.
-`aip resume <run_file> --input <answer.json>` answers a pause; `aip resume <run_file>` with no
-input retries a failed step. An answer is merged over the state the run file holds, so it
+Every outcome except an error before anything ran writes the run file named by `run_file`, by
+default `~/.aip/runs/<run_id>.json` (`AIP_HOME` moves `~/.aip`; `aip run --run-file <path>`
+picks an explicit path). `run_id` is the server's run id on a served run and a generated one on
+a local run. `aip resume <run_id> --input <answer.json>` answers a pause, from any directory;
+`aip resume <run_id>` with no input retries a failed step. A run file's path works in place of
+the id. An answer is merged over the state the run file holds, so it
 carries only the keys the pause asks for.
 
 ## Paused
@@ -57,8 +60,8 @@ would have: `questions` and `state`.
   "state": {
     "message": "I was charged twice for March. Could you check?"
   },
-  "run_id": null,
-  "run_file": "run.json"
+  "run_id": "4f1c9a2e7b3d5068",
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -87,8 +90,8 @@ from 0). The questions define the answer's shape, so there is no `answer_with`.
   "answer_with": {
     "reply": "string"
   },
-  "run_id": null,
-  "run_file": "run.json"
+  "run_id": "4f1c9a2e7b3d5068",
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -124,8 +127,8 @@ The decision model answered, but at least one question fell under its threshold.
       "reason": "confidence below 0.6"
     }
   ],
-  "run_id": null,
-  "run_file": "run.json"
+  "run_id": "4f1c9a2e7b3d5068",
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -139,11 +142,11 @@ Answer: only the overrides, `{"tone": "calm"}`, or `{}` to accept every proposed
 ```json
 {
   "done": true,
-  "run_id": null,
+  "run_id": "4f1c9a2e7b3d5068",
   "state": {
     "message": "I was charged twice for March. Could you check?"
   },
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -169,7 +172,7 @@ Every error has `error` (the kind), `step` (the failing step; `null` when no ste
 have no branch.
 
 A step that failed while running leaves the run file at the state before it, so
-`aip resume <run_file>` with no input retries it once the cause is fixed:
+`aip resume <run_id>` with no input retries it once the cause is fixed:
 
 <!-- cli-json: error-script-failed -->
 ```json
@@ -180,9 +183,9 @@ A step that failed while running leaves the run file at the state before it, so
   "script": "scripts/escalate.py",
   "exit_code": 1,
   "stderr": "ticket service unreachable",
-  "run_id": null,
+  "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -199,14 +202,14 @@ decision pause above was answered with `{"billing": true}` only:
     "tone"
   ],
   "invalid": [],
-  "run_id": null,
+  "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
 An error before any step ran (a start input missing a key, an unknown skill) is not resumable
-and writes no run file: fix the input and `aip run` again.
+and writes no run file; its `run_id` is `null` on a local run: fix the input and `aip run` again.
 
 ## `--progress`
 
@@ -223,5 +226,5 @@ The angry branch, resumed after the decision pause with `{"billing": true, "tone
 {"event": "step", "step": "triage", "kind": "decision", "resolver": "manual"}
 {"event": "step", "step": "by-tone", "kind": "router", "to": "escalate"}
 {"event": "step", "step": "escalate", "kind": "execution", "seconds": "<seconds>"}
-{"done": true, "run_id": null, "state": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel."}, "run_file": "run.json"}
+{"done": true, "run_id": "4f1c9a2e7b3d5068", "state": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel."}, "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
 ```

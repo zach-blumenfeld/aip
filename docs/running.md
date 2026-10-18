@@ -19,7 +19,7 @@ flowchart LR
     end
     jev["TypeSafe System One<br/>(TYPESAFE_API_KEY)"]
     client["client<br/>agent or person"]
-    runfile[(".aip/runs/*.json")]
+    runfile[("~/.aip/runs/&lt;run-id&gt;.json")]
 
     md --> spec --> model
     res --> model
@@ -77,7 +77,7 @@ loop:
     after, payload, history = response.ran, response.suggested, response.history
 ```
 
-Every stop prints one JSON object and, unless it is an error before any step ran, writes the run file: the shapes, field by field, are in [`docs/cli-json.md`](cli-json.md). A pause carries only the paused step's declared inputs as `state`. `aip resume <run-file> --input answer.json` merges the answer over the state the run file holds and re-enters the loop at `after`. With `--interactive`, a pause becomes terminal prompts instead. `--progress` adds one JSON line per completed step before the final object; `--debug` puts the traceback of a failure on stderr.
+Every stop prints one JSON object and, unless it is an error before any step ran, writes the run file: the shapes, field by field, are in [`docs/cli-json.md`](cli-json.md). A pause carries only the paused step's declared inputs as `state`. `aip resume <run-id> --input answer.json` merges the answer over the state the run file holds and re-enters the loop at `after`. With `--interactive`, a pause becomes terminal prompts instead. `--progress` adds one JSON line per completed step before the final object; `--debug` puts the traceback of a failure on stderr.
 
 | exit code | printed                                                        |
 |-----------|----------------------------------------------------------------|
@@ -85,7 +85,7 @@ Every stop prints one JSON object and, unless it is an error before any step ran
 | 0         | `{"done": true, ...}`: the end step's state                    |
 | 1         | `{"error": <kind>, ...}`: `script_failed`, `timeout`, `invalid_input`, `invalid_output`, `requires_unmet`, or `server` |
 
-A step that fails while running (a script exits non-zero, times out, or returns keys it did not declare) leaves the run file at the state before it; `aip resume <run-file>` with no input retries it. An answer that does not fit its pause leaves the pause in place, to be answered again.
+A step that fails while running (a script exits non-zero, times out, or returns keys it did not declare) leaves the run file at the state before it; `aip resume <run-id>` with no input retries it. An answer that does not fit its pause leaves the pause in place, to be answered again.
 
 ### Pause kinds
 
@@ -99,11 +99,11 @@ With a key set, decisions run against the model and only low-confidence answers 
 
 ## Files
 
-`aip run` writes exactly one file: the run file, at `.aip/runs/<skill>-<timestamp>.json` unless `--run-file` says otherwise. It is written at every pause, at an error once a step has run, and at done, when its `history` is the run's whole ledger. It holds everything needed to continue:
+`aip run` writes exactly one file: the run file, at `~/.aip/runs/<run-id>.json` unless `--run-file` names a path (`AIP_HOME` moves `~/.aip`). Every outcome prints the `run_id`, and `aip resume <run-id>` finds the file from any directory; `aip resume <path>` works too. A local run's id is generated when it starts; a served run's is the server's, and a served run paused before its first step (so before the server has a run) is keyed by a local id until the server assigns one, when the file moves to the server's id. It is written at every pause, at an error once a step has run, and at done, when its `history` is the run's whole ledger. It holds everything needed to continue:
 
 ```json
 {
-  "skill_dir": "billing-support",
+  "skill_dir": "/home/you/work/billing-support",
   "after": null,
   "state": { "message": "I was charged twice!" },
   "history": [],
@@ -119,15 +119,15 @@ With a key set, decisions run against the model and only low-confidence answers 
   "server": null,
   "name": null,
   "revision": null,
-  "run_id": null
+  "run_id": "4f1c9a2e7b3d5068"
 }
 ```
 
-`state` is the run's full state; the pause's `state` is the slice the paused step declared. `pause.kind` is also `error` (with the failing `step`, retried by a bare `resume`) or `done`.
+`skill_dir` is absolute, so the run resumes from anywhere. `state` is the run's full state; the pause's `state` is the slice the paused step declared. `pause.kind` is also `error` (with the failing `step`, retried by a bare `resume`) or `done`.
 
-The last four are set when the run is on a server (below): the URL, the exact `name` and `revision` the run is pinned to, and the server's `run_id` once a step has run. `aip resume` rebuilds the right backend from them, so a run file is self-contained either way.
+The last four are set when the run is on a server (below): the URL, the exact `name` and `revision` the run is pinned to, and the server's `run_id` once a step has run (a local run's `run_id` is its generated id). `aip resume` rebuilds the right backend from them, so a run file is self-contained either way.
 
-`.aip/` is gitignored. Nothing else is written: the skill folder is read-only to the runner, state travels in memory and in the run file, and scripts write only what they choose to.
+Nothing else is written: the skill folder is read-only to the runner, state travels in memory and in the run file, and scripts write only what they choose to.
 
 ## Worked example: `billing-support`
 

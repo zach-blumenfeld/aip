@@ -12,14 +12,19 @@ are a contract, documented in `docs/cli-json.md`:
   `resume` with no input retries it. A bad answer to a pause leaves the pause in place.
 
 Every outcome but an error before anything ran writes the run file; at done it holds the
-whole history, the ledger of a local run. With `progress`, one JSON line per completed step
+whole history, the ledger of a local run. Run files live under the user's home, at
+`~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it), so `aip resume <run-id>` works from any
+directory; a served run is keyed by the id the server assigned, a local run by a generated one. With `progress`, one JSON line per completed step
 is printed before the final object. In interactive mode a pause becomes prompts instead.
 """
 
 import json
+import os
+import re
 import sys
 import time
 import traceback
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -32,6 +37,27 @@ JSON = Dict[str, Any]
 EXIT_DONE = 0
 EXIT_PAUSED = 0
 EXIT_ERROR = 1
+
+RUN_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def aip_home() -> Path:
+    """`AIP_HOME`, else `~/.aip`: where run files live."""
+    override = os.environ.get("AIP_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".aip"
+
+
+def run_path(run_id: str) -> Path:
+    """The run file of `run_id` under `aip_home()`."""
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError(f"not a run id: {run_id!r}")
+    return aip_home() / "runs" / f"{run_id}.json"
+
+
+def new_run_id() -> str:
+    """A local run's id, the same shape the server's run backends assign."""
+    return uuid.uuid4().hex[:16]
+
 
 # The error kinds of the error object; anything else is reported as `server`.
 ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "server")
@@ -150,18 +176,20 @@ def pause_of(response: JSON) -> JSON | None:
 class Runner:
     def __init__(self, backend: Backend, skill_dir: Path, run_file: Path | None = None,
                  interactive: bool = False, prompter: Prompter = input, out=None,
-                 progress: bool = False, debug: bool = False):
+                 progress: bool = False, debug: bool = False, run_id: str | None = None):
+        """`run_file` is an explicit path; without one the run file is `run_path(<run id>)`.
+        `run_id` is a resumed run's id; a new local run generates one."""
         self.backend = backend
         self.skill_dir = Path(skill_dir)
-        self.run_file = run_file or self._default_run_file()
+        self.run_file = run_file
+        # keyed: the run file lives under the user's home by id, and follows the id if it changes
+        self.keyed = run_file is None or Path(run_file).resolve().parent == run_path("x").parent.resolve()
+        self.run_id = run_id or (Path(run_file).stem if run_file is not None and self.keyed else new_run_id())
         self.interactive = interactive
         self.prompt = prompter
         self.out = out or sys.stdout
         self.progress = progress
         self.debug = debug
-
-    def _default_run_file(self) -> Path:
-        return Path(".aip") / "runs" / f"{self.skill_dir.resolve().name}-{int(time.time())}.json"
 
     # ------------------------------------------------------------------ entry points
 
@@ -265,22 +293,41 @@ class Runner:
 
     def _run_file(self, after: str | None, state: JSON, history: List[JSON], pause: JSON,
                   thresholds: Dict[str, float]) -> RunFile:
-        fields = getattr(self.backend, "run_file_fields", lambda: {})()
-        return RunFile(str(self.skill_dir), after, state, history, pause, thresholds, **fields)
+        fields = getattr(self.backend, "run_file_fields", None)
+        if fields is None:                        # local: absolute, so `resume` works from any directory
+            return RunFile(str(self.skill_dir.resolve()), after, state, history, pause, thresholds,
+                           run_id=self.run_id)
+        return RunFile(str(self.skill_dir), after, state, history, pause, thresholds, **fields())
+
+    def _save(self, run: RunFile) -> Path:
+        """Write the run file: the explicit path, else under the user's home by run id. A served
+        run is keyed by the server's id; until the server has one (a pause before the first step)
+        it is keyed by the local id, and moves once the server assigns its own."""
+        old = self.run_file
+        if self.keyed:
+            self.run_file = run_path(self._id(run))
+        run.save(self.run_file)
+        if old is not None and Path(old) != self.run_file:
+            Path(old).unlink(missing_ok=True)
+        return self.run_file
+
+    def _id(self, run: RunFile) -> str:
+        """The id `aip resume` takes for this run."""
+        return run.run_id or self.run_id
 
     def _pause(self, after: str | None, state: JSON, history: List[JSON], thresholds: Dict[str, float],
                pause: JSON) -> Outcome:
         run = self._run_file(after, state, history, pause, thresholds)
-        path = run.save(self.run_file)
+        path = self._save(run)
         block = {"paused": pause["kind"], **{k: v for k, v in pause.items() if k != "kind"},
-                 "run_id": run.run_id, "run_file": str(path)}
+                 "run_id": self._id(run), "run_file": str(path)}
         self._print(block)
         return Outcome(EXIT_PAUSED, block, path)
 
     def _done(self, state: JSON, history: List[JSON], after: str | None) -> Outcome:
         run = self._run_file(after, state, history, {"kind": "done"}, {})
-        path = run.save(self.run_file)
-        self._print({"done": True, "run_id": run.run_id, "state": state, "run_file": str(path)})
+        path = self._save(run)
+        self._print({"done": True, "run_id": self._id(run), "state": state, "run_file": str(path)})
         return Outcome(EXIT_DONE, state, path)
 
     def _failed(self, exc: BaseException, after: str | None, state: JSON, history: List[JSON],
@@ -299,24 +346,26 @@ class Runner:
         if after is None and not history:
             return self._error(error)
         pause = {"kind": "error", "step": error["step"], "error": error["error"]}
-        self.run_file = self._run_file(after, state, history, pause, thresholds).save(self.run_file)
-        return self._error(error, keep=True)
+        run = self._run_file(after, state, history, pause, thresholds)
+        self._save(run)
+        return self._error(error, keep=True, run_id=self._id(run))
 
     def _answer_needed(self, run: RunFile, keys: List[str]) -> Outcome:
         return self._error({"error": "invalid_output", "step": run.pause["step"],
                             "message": f"resume needs an answer for the paused {run.pause['kind']} step "
                                        f"{run.pause['step']!r} (--input <answer.json>)",
-                            "missing": keys, "invalid": []}, keep=True, run_id=run.run_id)
+                            "missing": keys, "invalid": []}, keep=True, run_id=self._id(run))
 
     def _error(self, error: JSON, keep: bool = False, run_id: str | None = None) -> Outcome:
         """Print the error object. `keep`: a run file exists to resume (the pause, or the retry point)."""
         if run_id is None:
-            run_id = getattr(self.backend, "run_id", None)
+            run_id = getattr(self.backend, "run_id", None) or (self.run_id if keep else None)
         block = {**error, "run_id": run_id, "resumable": keep}
-        if keep:
-            block["run_file"] = str(self.run_file)
+        held = Path(self.run_file) if keep and self.run_file is not None else None
+        if held is not None:
+            block["run_file"] = str(held)
         self._print(block)
-        return Outcome(EXIT_ERROR, block, Path(self.run_file) if keep else None)
+        return Outcome(EXIT_ERROR, block, held)
 
     def _print(self, obj: JSON) -> None:
         self.out.write((json.dumps(obj) if self.progress else json.dumps(obj, indent=2)) + "\n")

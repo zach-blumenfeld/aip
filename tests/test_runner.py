@@ -71,7 +71,7 @@ class Harness:
         out = io.StringIO()
         feed = iter(answers or [])
         runner = Runner(self.backend(run), EXAMPLE, run_file=Path(tmp) / "run.json", interactive=interactive,
-                        prompter=lambda _prompt: next(feed), out=out)
+                        prompter=lambda _prompt: next(feed), out=out, run_id=run.run_id if run else None)
         return runner, out
 
     def server_run(self, run_id: str) -> dict:
@@ -94,7 +94,7 @@ class Both(unittest.TestCase):
             self.assertEqual(bool(run.run_id), started)
         else:
             self.assertIsNone(run.server)
-            self.assertIsNone(run.run_id)
+            self.assertRegex(run.run_id, r"^[0-9a-f]{16}$")             # a local run's generated id
 
 
 class NonInteractive(Both):
@@ -287,6 +287,58 @@ class Cli(Both):
                 runs = h.api.get("/runs").json()
                 self.assertEqual(len(runs), 1)
                 self.assertEqual((runs[0]["status"], runs[0]["steps"]), ("done", 4))
+
+    def test_run_files_live_under_aip_home_keyed_by_run_id(self):
+        """No `--run-file`: the run file is `$AIP_HOME/runs/<run-id>.json`, and `aip resume <run-id>`
+        finds it from another directory. Served, the run is paused before the server has a run, so
+        the file is keyed by the local id until the answer is posted, then by the server's."""
+        from aip.client.cli import main
+        from aip.client.runner import run_path
+
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as elsewhere, \
+                mock.patch.dict(os.environ, {"AIP_CONFIG": tmp + "/none.json", "AIP_HOME": tmp + "/home"}):
+            os.environ.pop("TYPESAFE_API_KEY", None)
+            os.environ.pop("AIP_SERVER", None)
+            h = self.harness(tmp, None)
+            start = Path(tmp) / "start.json"
+            start.write_text(json.dumps({"message": "charged twice"}))
+            answers = Path(tmp) / "answers.json"
+            answers.write_text(json.dumps({"billing": True, "tone": "angry"}))
+            cwd = os.getcwd()
+            self.addCleanup(os.chdir, cwd)
+
+            target = self.target(h)
+            if self.BACKEND == "local":                # started from a relative path, as `aip run ./skill` is
+                os.chdir(EXAMPLE.parent)
+                target = EXAMPLE.name
+            out = io.StringIO()
+            with self.patched(h), mock.patch("sys.stdout", new=out):
+                self.assertEqual(main(["run", target, "--input", str(start)]), EXIT_PAUSED)
+            pause = json.loads(out.getvalue())
+            run_id = pause["run_id"]
+            self.assertRegex(run_id, r"^[0-9a-f]{16}$")
+            self.assertEqual(Path(pause["run_file"]), run_path(run_id))
+            self.assertEqual(run_path(run_id).parent, Path(tmp) / "home" / "runs")
+            self.assertTrue(run_path(run_id).is_file())
+
+            os.chdir(elsewhere)
+            out = io.StringIO()
+            with self.patched(h), mock.patch("sys.stdout", new=out):
+                self.assertEqual(main(["resume", run_id, "--input", str(answers)]), EXIT_DONE)
+            done = json.loads(out.getvalue())
+            self.assertEqual(done["state"], {"message": "charged twice"})
+            self.assertEqual(Path(done["run_file"]), run_path(done["run_id"]))
+            self.assertEqual([p.name for p in run_path(done["run_id"]).parent.iterdir()], [f"{done['run_id']}.json"])
+            self.assertFalse((Path(elsewhere) / ".aip").exists())
+            if self.BACKEND == "http":
+                self.assertEqual(done["run_id"], h.api.get("/runs").json()[0]["run_id"])   # the server's id
+            else:
+                self.assertEqual(done["run_id"], run_id)
+
+            out = io.StringIO()
+            with self.patched(h), mock.patch("sys.stdout", new=out):
+                self.assertEqual(main(["resume", "0123456789abcdef"]), EXIT_ERROR)
+            self.assertIn("no run '0123456789abcdef'", json.loads(out.getvalue())["message"])
 
     def test_errors_are_one_json_object(self):
         """A bad start input and an unknown skill: one error object on stdout, exit 1, nothing on

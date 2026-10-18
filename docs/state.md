@@ -111,7 +111,7 @@ The pause carries only what this step needs (the full example is in `cli-json.md
   "state": { "only the keys this step declared" },
   "references": [ { "uri": "...", "description": "..." } ],
   "answer_with": { "reply": "string" },
-  "run_id": null,
+  "run_id": "4f1c9a2e7b3d5068",
   "run_file": "run.json"
 }
 ```
@@ -140,7 +140,7 @@ Decision, no model configured (the agent stands in for the model, so it gets the
   "questions": { "billing": { "type": "noul", "instructions": "..." },
                  "tone": { "type": "choice", "instructions": "...", "criteria": { "angry": "...", "calm": "..." } } },
   "state": { "message": "..." },
-  "run_id": null,
+  "run_id": "4f1c9a2e7b3d5068",
   "run_file": "run.json"
 }
 ```
@@ -157,7 +157,7 @@ Review, the model answered but one question fell under its threshold:
   "state": { "message": "..." },
   "proposed_answers": { "billing": true, "tone": "angry" },
   "review": [ { "question": "tone", "confidence": 0.58, "probabilities": { "angry": 0.58, "calm": 0.42 }, "reason": "confidence below 0.7" } ],
-  "run_id": null,
+  "run_id": "4f1c9a2e7b3d5068",
   "run_file": "run.json"
 }
 ```
@@ -174,8 +174,7 @@ Each is one JSON object on stdout ([`cli-json.md`](cli-json.md)):
 - **error** (exit 1): a step failed (`script_failed`, `timeout`, `invalid_input`, `invalid_output`,
   `requires_unmet`, or `server`), with the step and the detail: the script's exit code and
   stderr, or the `missing` and `invalid` keys. No traceback unless `--debug`. The run file keeps
-  the state before the failing step, and `aip resume <run_file>` with no input retries it (by run
-  id from A4). Nothing to answer, something to fix. A bad answer to a pause is an error too, but
+  the state before the failing step, and `aip resume <run_id>` with no input retries it. Nothing to answer, something to fix. A bad answer to a pause is an error too, but
   it leaves the pause in place to be answered again.
 
 ## Try it: five commands, no server

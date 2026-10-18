@@ -53,7 +53,7 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
    Exit 0 with `"paused"`: answer it (step 4). Exit 1 with `"error"`: see step 5.
 
 4. **Answer** each pause by its `paused` kind: write the answer as a JSON object and run
-   `aip resume <run_file> --input answer.json`. Repeat until `"done": true`.
+   `aip resume <run_id> --input answer.json`. Repeat until `"done": true`.
 
    | `paused`      | what the pause carries                               | what you put in the answer file                                    |
    |---------------|------------------------------------------------------|--------------------------------------------------------------------|
@@ -68,7 +68,7 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 5. **On an error**, read `error`, `step` and `message`. `invalid_input` / `invalid_output`
    name the keys in `missing` and `invalid`: fix your input or answer and resume again (a
    bad answer leaves the pause in place). `script_failed` carries the script's `exit_code`
-   and `stderr`; if `resumable` is true, `aip resume <run_file>` with no input retries that
+   and `stderr`; if `resumable` is true, `aip resume <run_id>` with no input retries that
    step once the cause is fixed. Otherwise report the error.
 
 ## Rules
@@ -77,8 +77,8 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
   and validation are the procedure; your job is the pauses and the final result.
 - **Scripts of a published procedure run on the server.** File paths in the start input
   must be reachable there, not just here. A skill folder (`aip run <folder>`) runs here.
-- **One run, one run file.** Every outcome names it (`run_file`); `resume` reads and
-  rewrites it. Do not edit it. Do not start a second run of the same task.
+- **One run, one run id.** Every outcome prints `run_id`; `aip resume <run_id>` finds the
+  run file (`run_file`, under `~/.aip/runs/`) from any directory and rewrites it. Do not edit it. Do not start a second run of the same task.
 - **Report the result** from `state` (the end step's declared keys) in the task's terms,
   and say which procedure ran, by name. What each step produced is in the run's history
   (`history` in the run file). If the run stops with an error you cannot fix, report the
@@ -98,10 +98,10 @@ $ aip run billing-support --input start.json
 { "paused": "decision", "step": "triage",
   "questions": { "billing": {"type": "noul", ...}, "tone": {"type": "choice", "criteria": {"angry": ..., "calm": ...}} },
   "state": { "message": "I was charged twice!" },
-  "run_id": "...", "run_file": ".aip/runs/billing-support-....json" }
+  "run_id": "4f1c9a2e7b3d5068", "run_file": "~/.aip/runs/4f1c9a2e7b3d5068.json" }
 $ echo '{"billing": true, "tone": "angry"}' > answer.json
-$ aip resume .aip/runs/billing-support-....json --input answer.json
-{ "done": true, "run_id": "...", "state": { "message": "I was charged twice!" }, "run_file": "..." }
+$ aip resume 4f1c9a2e7b3d5068 --input answer.json
+{ "done": true, "run_id": "4f1c9a2e7b3d5068", "state": { "message": "I was charged twice!" }, "run_file": "..." }
 ```
 
 The angry branch ran a script on the server and opened the ticket (its `ticket_id` is in

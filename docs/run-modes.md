@@ -20,8 +20,9 @@ remembers.
 
 ## Who holds what
 
-**Local run, today and planned.** The run file holds everything: the state, the full history,
-the pause, the thresholds. `aip resume` rebuilds the run from it. Nothing else records the run.
+**Local run, today and planned.** The run file, `~/.aip/runs/<run-id>.json`, holds everything:
+the state, the full history, the pause, the thresholds. `aip resume <run-id>` rebuilds the run
+from it, from any directory. Nothing else records the run.
 
 **Served run, today.** The client still holds everything in `run.json` and resends the full
 state and history on every request. The server recomputes from what it is sent, appends the new

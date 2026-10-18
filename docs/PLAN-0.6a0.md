@@ -147,7 +147,16 @@ stderr and exit code 1, and `aip resume` retries it; `--progress` on the angry b
 three step lines; the meta-skill validates; `aip-spec validate` on a 0.5a1 skill reports
 `runtime_block_outdated`.
 
-### - [ ] A4 (aip): run files under the user's home, keyed by run id
+### - [x] A4 (aip): run files under the user's home, keyed by run id
+
+Done 2026-10-18, aip only. `aip resume` takes a run id or a path. A local run's id is 16 hex
+characters, the shape the server's backends assign; an error before any step ran still prints
+`run_id: null` and writes nothing. Choices beyond the text: a served run that pauses before its
+first step has no server id yet, so its file is keyed by a local id and moves to the server's id
+once the server assigns one; a local run file records `skill_dir` as an absolute path (the
+relative path broke resume from `/tmp`); the tests point `AIP_HOME` at a temp directory, and
+`docs/cli-json.md` shows a sample id that the test maps to the run's real one.
+`docs/examples/aip-runtime-session.md` is a verbatim recording and still shows the old paths.
 
 `aip run` writes `~/.aip/runs/<run-id>.json` (override with `AIP_HOME`), prints the id in every
 pause, and `aip resume <run-id>` finds it; `--run-file` keeps working for explicit paths. Local

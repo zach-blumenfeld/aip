@@ -1,7 +1,9 @@
 """The CLI's JSON contract (`docs/cli-json.md`): every example in the doc is what `aip run` /
 `aip resume` actually print for `billing-support`, run locally with no decision model (and, for
-the review pause, a stub one). Before comparing, `run_file` is reduced to its file name and an
-execution step's `seconds` to `<seconds>`; local runs have `run_id: null`, so nothing else varies.
+the review pause, a stub one). Run files go to the default place, `$AIP_HOME/runs/<run-id>.json`,
+and `resume` is given the run id. Before comparing, the run's generated id becomes the doc's
+`SAMPLE_ID`, `run_file` is reduced to its file name, and an execution step's `seconds` to
+`<seconds>`, so nothing else varies.
 
 Also here: a failing escalate script is `script_failed` with its stderr and exit code, and
 `aip resume` with no input retries it; `--progress` on the angry branch prints three step lines.
@@ -21,7 +23,7 @@ from unittest import mock
 from aip_spec import example_dir
 
 from aip.client.cli import main
-from aip.client.runner import RunFile
+from aip.client.runner import RunFile, run_path
 
 REPO = Path(__file__).parent.parent
 DOC = REPO / "docs" / "cli-json.md"
@@ -31,6 +33,7 @@ BLOCK = re.compile(r"<!-- cli-json: (?P<name>[a-z-]+) -->\s*```(?:json|jsonl)\n(
 MESSAGE = "I was charged twice for March. Could you check?"
 ANGRY = "This is the THIRD time you have double charged me. Fix it today or I cancel."
 REPLY = "Thanks for flagging this; duplicate charges are refunded in full within 5 business days."
+SAMPLE_ID = "4f1c9a2e7b3d5068"
 BROKEN = 'import sys\nprint("ticket service unreachable", file=sys.stderr)\nsys.exit(1)\n'
 
 
@@ -47,12 +50,19 @@ def documented() -> dict:
     return out
 
 
-def normalise(obj):
+def normalise(obj, run_id: str | None = None):
+    def value(k, v):
+        if k == "run_id" and v:
+            return SAMPLE_ID
+        if k == "run_file" and v:
+            return Path(v).name.replace(run_id, SAMPLE_ID) if run_id else Path(v).name
+        if k == "seconds":
+            return "<seconds>"
+        return normalise(v, run_id)
     if isinstance(obj, dict):
-        return {k: (Path(v).name if k == "run_file" and v else "<seconds>" if k == "seconds" else normalise(v))
-                for k, v in obj.items()}
+        return {k: value(k, v) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [normalise(x) for x in obj]
+        return [normalise(x, run_id) for x in obj]
     return obj
 
 
@@ -78,12 +88,13 @@ class CliJson(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        env = mock.patch.dict(os.environ, {"AIP_CONFIG": str(self.tmp / "none.json")})
+        env = mock.patch.dict(os.environ, {"AIP_CONFIG": str(self.tmp / "none.json"),
+                                           "AIP_HOME": str(self.tmp / "home")})
         env.start()
         self.addCleanup(env.stop)
         for key in ("TYPESAFE_API_KEY", "AIP_SERVER"):
             os.environ.pop(key, None)
-        self.run_file = self.tmp / "run.json"
+        self.run_id: str | None = None
         self.docs = documented()
 
     def write(self, name: str, obj: dict) -> str:
@@ -103,17 +114,27 @@ class CliJson(unittest.TestCase):
             printed = [json.loads(text)]
         return code, printed, err.getvalue()
 
+    @property
+    def run_file(self) -> Path:
+        return run_path(self.run_id)
+
     def run_(self, skill, message: str, *flags: str):
-        return self.aip("run", str(skill), "--input", self.write("start.json", {"message": message}),
-                        "--run-file", str(self.run_file), *flags)
+        code, printed, err = self.aip("run", str(skill), "--input", self.write("start.json", {"message": message}),
+                                      *flags)
+        self.run_id = printed[-1]["run_id"]
+        self.assertTrue(self.run_file.is_file(), "the run file is under AIP_HOME, keyed by the run id")
+        return code, printed, err
 
     def resume(self, answer: dict | None, *flags: str):
         extra = ("--input", self.write("answer.json", answer)) if answer is not None else ()
-        return self.aip("resume", str(self.run_file), *extra, *flags)
+        code, printed, err = self.aip("resume", self.run_id, *extra, *flags)
+        self.assertEqual(printed[-1]["run_id"], self.run_id, "a resumed run keeps its id")
+        return code, printed, err
 
     def assert_documented(self, name: str, printed):
         self.assertIn(name, self.docs, f"docs/cli-json.md has no `<!-- cli-json: {name} -->` block")
-        self.assertEqual(normalise(printed), self.docs[name], f"docs/cli-json.md `{name}` differs from the CLI")
+        self.assertEqual(normalise(printed, self.run_id), normalise(self.docs[name]),
+                         f"docs/cli-json.md `{name}` differs from the CLI")
 
     @contextmanager
     def decision_model(self):
