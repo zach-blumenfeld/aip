@@ -11,6 +11,7 @@ holds what, and why you would pick one. "Today" is the current code; "planned" i
 | command | `aip run ./some-skill-folder` | `aip run some-skill` with `AIP_SERVER` set |
 | where the procedure comes from | a folder on disk | the server's catalog, at a pinned revision |
 | scripts run | on your machine, in the `aip` process | today: on the server. planned: on your machine |
+| `requires` checked against | your machine | today: the server. planned: your machine |
 | decisions resolved | your decision-model key, else pause to you | today: the server's key. planned: your key, else pause |
 | run record | the run file only | the server's run store (filesystem or Neo4j); the run file is a handle |
 | search, publish, pin, retire, governance queries, console | none | yes |

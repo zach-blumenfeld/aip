@@ -77,6 +77,7 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
                     script=model.Script(aip_id, _split(step.script)[1]),
                     assets=[asset(a) for a in step.assets],
                     timeout=step.timeout if step.timeout is not None else default_step_timeout(),
+                    command=list(step.command) if step.command else None,
                 )
             case spec.ClientTaskStep():
                 nodes[step.name] = model.ClientTask(
@@ -100,8 +101,13 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
         elif not isinstance(step, spec.EndStep):
             node.inputsTo = nodes[step.inputs_to]
 
+    declared = loaded.spec.requires
+    requires = declared and model.Requires(
+        interpreter=declared.interpreter.name, version=declared.interpreter.version,
+        packages=list(declared.packages), tools=list(declared.tools))
     return model.Procedure(
         meta=meta,
+        requires=requires,
         start=nodes[loaded.spec.start.name],
         loader=model.ResourceLoader(loaded.skill_dir.resolve().parent),
         python=python,

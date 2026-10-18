@@ -217,7 +217,19 @@ alternating requests of a single run; two concurrent `result` posts for one run,
 `GET /runs/{id}` shows state and history identical to what a local run of the same inputs
 produces. The run file after a pause contains no `history` and no accumulated state.
 
-### - [ ] B2 (aip-spec, then aip): environment declaration and launch command
+### - [x] B2 (aip-spec, then aip): environment declaration and launch command
+
+Done 2026-10-18: aip-spec `6d3cfa8` (format, validator, runtime block, example) and `1bf79c7`
+(authoring SKILL.md, separately for review), tagged `v0.6a0-dev4` (tag pushed, branch not; the
+text below says dev3, which A3 used); aip pins it. Shape: `requires` is a top-level procedure key,
+`{interpreter: {name, version?}, packages: [pip name, optionally name>=version], tools: [...]}`;
+`command` is an argument list run from the script's folder. Choices beyond the text: the validator
+also rejects a step whose launcher (`command[0]`, default `python`) is neither the interpreter nor
+a tool (`undeclared_launcher`); the runtime block tells a bare agent to check `requires` and honour
+`command`. In aip the check lives in `Execution` (so it runs wherever scripts run: the server
+until B3), fails with `requires_unmet` and `missing`, is resumable like any failed step, and is
+remembered once it passes; packages and the Python version are probed in the interpreter that runs
+the scripts, and a leading `python` in `command` means that interpreter.
 
 Format: skills with execution steps must carry `requires` (interpreter and minimum version,
 packages, tools) and an execution step may carry `command` (default `["python", "<script>"]`).

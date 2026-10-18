@@ -166,7 +166,7 @@ Every error has `error` (the kind), `step` (the failing step; `null` when no ste
 | `timeout` | a script ran past the step's timeout | `script`, `seconds` |
 | `invalid_input` | the state lacks a key the step declares, or holds it with the wrong type, or a router's key has no branch | `missing`, `invalid` |
 | `invalid_output` | a result does not match the step's outputs: a script's (then `script` is set), or an answer to a pause | `missing`, `invalid` |
-| `requires_unmet` | the machine lacks what the skill's `requires` block names (reported once `requires` lands in the format, B2) | `missing` |
+| `requires_unmet` | the machine lacks what the skill's `requires` block names, checked before the first script runs | `missing` |
 | `server` | anything else: an unknown skill or folder, an unreachable server, a bug | `status` on a served run (the HTTP status) |
 
 `missing` names keys that are absent; `invalid` names keys that are mistyped, undeclared, or
@@ -203,6 +203,27 @@ decision pause above was answered with `{"billing": true}` only:
     "tone"
   ],
   "invalid": [],
+  "run_id": "4f1c9a2e7b3d5068",
+  "resumable": true,
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
+}
+```
+
+A skill with scripts declares the environment they need in `requires`. Before the first script
+runs, the machine is checked against it and every missing item is named at once, so nothing is
+half done; the run waits before that step, and `aip resume <run_id>` retries once the items are
+installed. Here the skill also asked for package `nosuchpkg` and tool `nosuchtool`:
+
+<!-- cli-json: error-requires-unmet -->
+```json
+{
+  "error": "requires_unmet",
+  "step": "escalate",
+  "message": "this machine lacks what the skill requires: package nosuchpkg; tool nosuchtool (not on PATH)",
+  "missing": [
+    "package nosuchpkg",
+    "tool nosuchtool (not on PATH)"
+  ],
   "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"

@@ -61,7 +61,7 @@ Every stop prints one JSON object and, unless it is an error before any step ran
 | 0         | `{"done": true, ...}`: the end step's state                    |
 | 1         | `{"error": <kind>, ...}`: `script_failed`, `timeout`, `invalid_input`, `invalid_output`, `requires_unmet`, or `server` |
 
-A step that fails while running (a script exits non-zero, times out, or returns keys it did not declare) leaves the run file at the state before it; `aip resume <run-id>` with no input retries it. An answer that does not fit its pause leaves the pause in place, to be answered again.
+A step that fails while running (a script exits non-zero, times out, or returns keys it did not declare) leaves the run file at the state before it; `aip resume <run-id>` with no input retries it. So does `requires_unmet`: before the first script runs, the machine that runs it is checked against the skill's `requires` block, and every missing interpreter version, package, or tool is named at once. An answer that does not fit its pause leaves the pause in place, to be answered again.
 
 ### Pause kinds
 

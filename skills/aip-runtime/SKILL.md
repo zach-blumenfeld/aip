@@ -69,7 +69,8 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
    name the keys in `missing` and `invalid`: fix your input or answer and resume again (a
    bad answer leaves the pause in place). `script_failed` carries the script's `exit_code`
    and `stderr`; if `resumable` is true, `aip resume <run_id>` with no input retries that
-   step once the cause is fixed. Otherwise report the error.
+   step once the cause is fixed. `requires_unmet` lists in `missing` what the machine running
+   the scripts lacks; install it if you may, then retry the same way. Otherwise report the error.
 
 ## Rules
 

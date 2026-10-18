@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
 
+from aip.model.environment import Requires
 from aip.model.resources import ResourceLoader
 from aip.model.steps import (
     BaseStep, EndStep, Execution, Meta, Node, Router, StepResponse, describe_next,
@@ -18,11 +19,13 @@ class Procedure:
     exposes the single server operation, `run`.
 
     python: interpreter for Execution steps (built from Meta.environment on `server create`)
+    requires: the skill's environment declaration, checked before the first Execution runs
     """
     meta: Meta
     start: BaseStep
     loader: ResourceLoader | None = None
     python: Path | None = None
+    requires: Requires | None = None
     nodes: Dict[str, Node] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
@@ -43,6 +46,8 @@ class Procedure:
                 node.loader = self.loader
             if isinstance(node, Execution) and node.python is None:
                 node.python = self.python
+            if isinstance(node, Execution) and node.requires is None:
+                node.requires = self.requires
             self._walk(node.inputsTo)
         elif isinstance(node, Router):
             if len(node.branches) < 2:

@@ -1,5 +1,6 @@
 """AIP runtime model."""
 
+from aip.model.environment import Requires, RequiresUnmet
 from aip.model.procedure import Procedure
 from aip.model.resources import Asset, Reference, Resource, ResourceLoader, Script
 from aip.model.steps import (
@@ -13,7 +14,7 @@ from aip.model.types import (
 )
 
 __all__ = [
-    "Procedure", "Asset", "Reference", "Resource", "ResourceLoader", "Script",
+    "Requires", "RequiresUnmet", "Procedure", "Asset", "Reference", "Resource", "ResourceLoader", "Script",
     "DEFAULT_MIN_CONFIDENCE", "DEFAULT_NOUL_MARGIN",
     "BaseStep", "ClientTask", "Decision", "DecisionQuestion", "EndStep", "Execution", "Meta", "Node",
     "Router", "State", "StepResponse", "describe_next",

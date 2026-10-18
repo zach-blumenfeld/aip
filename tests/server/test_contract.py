@@ -456,7 +456,7 @@ def test_governance_missing_fields(catalog, governance, example, tmp_path):
     md = tmp_path / "bare-support" / "SKILL.md"
     text = md.read_text()
     head, _, tail = text.partition("do_not_use_when:\n")
-    text = head + tail[tail.index("\nsteps:") + 1:]
+    text = head + tail[tail.index("\nrequires:") + 1:]
     text = text[:text.index("anti_patterns:")].rstrip() + "\n```\n"
     md.write_text(text)
     bare = snapshot(tmp_path / "bare-support")

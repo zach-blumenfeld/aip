@@ -12,6 +12,7 @@ import time
 
 from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
 
+from aip.model.environment import PYTHON, Requires
 from aip.model.resources import Asset, Reference, ResourceLoader, Script
 from aip.model.types import (
     JSON, DataType, InputValidationError, Inputs, OutputValidationError, ScriptFailed, ScriptTimeout,
@@ -393,10 +394,14 @@ class Execution(BaseStep):
       stdout  one JSON object holding exactly the declared `outputs` (empty stdout is {});
               a missing, mistyped, or undeclared key fails the step
       stderr  diagnostics; carried in the `script_failed` error when the exit code is non-zero
-    The script runs with `python` (the per-AIP interpreter the server built from
-    Meta.environment, falling back to the server's own), cwd set to the script's folder.
+    The script runs from its folder with `command` when the step declares one, otherwise
+    `python <script>`. `python`, as the launcher, is the per-AIP interpreter the server built
+    from Meta.environment, falling back to this process's own. Before it runs, the skill's
+    `requires` block is checked against this machine (`requires_unmet` names what is missing).
 
     script: the Script resource to run
+    command: the argument list that launches the script, from its folder; None is `python <script>`
+    requires: the skill's environment declaration, shared by every Execution of the procedure
     assets: constant inputs the script always receives, e.g. a JSON config. Re-read from
             disk on every invoke so edits are picked up.
     timeout: seconds before the script is killed; None waits forever
@@ -405,6 +410,8 @@ class Execution(BaseStep):
     script: Script
     assets: List[Asset] = field(default_factory=list)
     timeout: float | None = 60.0
+    command: List[str] | None = None
+    requires: Requires | None = None
     python: Path | None = None
 
     def render(self, state: State) -> JSON:
@@ -415,7 +422,16 @@ class Execution(BaseStep):
         payload["expects"] = describe_next(self.inputsTo)
         return payload
 
+    def argv(self, path: Path) -> List[str]:
+        """The launch command: the step's `command`, or `python` on the script."""
+        python = str(self.python or sys.executable)
+        if self.command is None:
+            return [python, str(path)]
+        return [python if arg == PYTHON and i == 0 else arg for i, arg in enumerate(self.command)]
+
     def _invoke(self, state: State) -> JSON:
+        if self.requires is not None:
+            self.requires.ensure(self.name, self.python)
         loader = self._require_loader()
         path = loader.path(self.script.uri)
         if not path.is_file():
@@ -424,7 +440,7 @@ class Execution(BaseStep):
         script = Path(*self.script.uri.parts[1:]).as_posix()     # as the SKILL.md names it
         try:
             proc = subprocess.run(
-                [str(self.python or sys.executable), str(path)],
+                self.argv(path),
                 input=json.dumps(self.render(state)),
                 capture_output=True,
                 text=True,

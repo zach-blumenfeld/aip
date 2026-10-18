@@ -32,7 +32,10 @@ the working object; the history is the ledger.
 - **execution**: runs a script. The script gets `{"state": <its declared inputs>, "assets": ...,
   "expects": ...}` on stdin (`currentState` carries the same object for one more version) and must
   print a JSON object holding exactly its declared `outputs`. A missing, mistyped, or undeclared
-  key fails the step, naming the key, and nothing is merged.
+  key fails the step, naming the key, and nothing is merged. It is launched from its folder with
+  the step's `command`, or `python <script>`; before the first script runs, the machine is checked
+  against the skill's `requires` (interpreter and minimum version, packages, tools), and a
+  `requires_unmet` error names everything missing.
 - **decision**: asks typed questions about its declared inputs; the decision model receives
   `{"state": <declared inputs>}`, plus `history` only when the step sets `history: true`. The
   answers (one key per question, typed: noul boolean, choice label, score level) are the result.

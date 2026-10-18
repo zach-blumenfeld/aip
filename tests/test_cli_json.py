@@ -6,7 +6,9 @@ and `resume` is given the run id. Before comparing, the run's generated id becom
 `<seconds>`, so nothing else varies.
 
 Also here: a failing escalate script is `script_failed` with its stderr and exit code, and
-`aip resume` with no input retries it; `--progress` on the angry branch prints three step lines.
+`aip resume` with no input retries it; `--progress` on the angry branch prints three step lines;
+a skill requiring a package the machine lacks stops before any script runs, naming the package;
+a step's `command` launches its script.
 """
 
 import io
@@ -35,6 +37,7 @@ ANGRY = "This is the THIRD time you have double charged me. Fix it today or I ca
 REPLY = "Thanks for flagging this; duplicate charges are refunded in full within 5 business days."
 SAMPLE_ID = "4f1c9a2e7b3d5068"
 BROKEN = 'import sys\nprint("ticket service unreachable", file=sys.stderr)\nsys.exit(1)\n'
+REQUIRES = 'requires:\n  interpreter:\n    name: python\n    version: "3.10"\n'
 
 
 def documented() -> dict:
@@ -148,6 +151,22 @@ class CliJson(unittest.TestCase):
         (skill / "scripts" / "escalate.py").write_text(BROKEN)
         return skill
 
+    def variant(self, requires: str, script: str | None = None, name: str = "escalate.py",
+                command: list | None = None) -> Path:
+        """billing-support with another `requires` block and, optionally, another escalate script."""
+        skill = self.tmp / "billing-support"
+        shutil.copytree(EXAMPLE, skill)
+        md = skill / "SKILL.md"
+        text = md.read_text()
+        self.assertIn(REQUIRES, text)
+        text = text.replace(REQUIRES, requires)
+        if script is not None:
+            (skill / "scripts" / name).write_text(script)
+            launch = f"    command: {json.dumps(command)}\n" if command else ""
+            text = text.replace("    script: scripts/escalate.py\n", f"    script: scripts/{name}\n{launch}")
+        md.write_text(text)
+        return skill
+
     # ----------------------------------------------------------------- the doc's examples
 
     def test_calm_branch_decision_client_task_done(self):
@@ -213,6 +232,44 @@ class CliJson(unittest.TestCase):
         self.assertEqual([e["step"] for e in history], ["triage", "by-tone", "escalate", "end"])
         self.assertEqual(history[2]["result"]["queue"], "tier2")
 
+    def test_requires_unmet_stops_before_any_script(self):
+        ran = self.tmp / "escalate-ran"
+        touch = f"import pathlib, sys\npathlib.Path({str(ran)!r}).touch()\nprint('{{\"ticket_id\": 1, \"queue\": \"q\"}}')\n"
+        skill = self.variant(REQUIRES + "  packages:\n    - nosuchpkg\n    - jsonschema>=1.0\n"
+                             "  tools:\n    - nosuchtool\n", touch)
+        self.run_(skill, ANGRY)
+        code, [error], err = self.resume({"billing": True, "tone": "angry"})
+        self.assertEqual((code, error["error"], error["step"]), (1, "requires_unmet", "escalate"))
+        self.assertEqual(error["missing"], ["package nosuchpkg", "tool nosuchtool (not on PATH)"])
+        self.assertIn("nosuchpkg", error["message"])
+        self.assertNotIn("Traceback", err)
+        self.assertFalse(ran.exists(), "no script ran")
+        self.assert_documented("error-requires-unmet", error)
+        self.assertEqual(RunFile.load(self.run_file).pause["kind"], "error")
+
+        md = skill / "SKILL.md"                                           # the machine "gets" them: retry
+        md.write_text(md.read_text().replace("    - nosuchpkg\n", "").replace("  tools:\n    - nosuchtool\n", ""))
+        code, [done], _ = self.resume(None)
+        self.assertEqual((code, done.get("done")), (0, True))
+        self.assertTrue(ran.exists())
+
+    def test_python_below_the_minimum_version_is_unmet(self):
+        skill = self.variant(REQUIRES.replace('"3.10"', '"99.0"'))
+        self.run_(skill, ANGRY)
+        code, [error], _ = self.resume({"billing": True, "tone": "angry"})
+        self.assertEqual((code, error["error"]), (1, "requires_unmet"))
+        self.assertEqual(len(error["missing"]), 1)
+        self.assertTrue(error["missing"][0].startswith("interpreter python>=99.0 (found 3."), error["missing"])
+
+    def test_command_launches_the_script(self):
+        script = 'cat > /dev/null\necho \'{"ticket_id": 7, "queue": "from-bash"}\'\n'
+        skill = self.variant(REQUIRES + "  tools:\n    - bash\n", script, "x.sh", ["bash", "x.sh"])
+        self.run_(skill, ANGRY)
+        code, [done], _ = self.resume({"billing": True, "tone": "angry"})
+        self.assertEqual((code, done.get("done")), (0, True), done)
+        escalate = RunFile.load(self.run_file).history[2]
+        self.assertEqual((escalate["step"], escalate["result"]), ("escalate", {"ticket_id": 7, "queue": "from-bash"}))
+
     def test_debug_prints_the_traceback(self):
         skill = self.broken_example()
         self.run_(skill, ANGRY)
@@ -222,7 +279,7 @@ class CliJson(unittest.TestCase):
 
     def test_every_documented_example_is_exercised(self):
         names = {"paused-decision", "paused-client-task", "paused-review", "done", "error-invalid-output",
-                 "error-script-failed", "progress"}
+                 "error-script-failed", "error-requires-unmet", "progress"}
         self.assertEqual(set(self.docs), names)
 
 
