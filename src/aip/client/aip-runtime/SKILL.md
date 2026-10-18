@@ -76,8 +76,9 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 
 - **Do not do the steps by hand** when the procedure can run them. The scripts, routing,
   and validation are the procedure; your job is the pauses and the final result.
-- **Scripts of a published procedure run on the server.** File paths in the start input
-  must be reachable there, not just here. A skill folder (`aip run <folder>`) runs here.
+- **Scripts run here, on this machine,** for a published procedure too: `aip` fetches them
+  from the server and runs them itself. Files they read and write are relative to the run's
+  working directory, the directory `aip run` started in (or `--workdir`), kept for `resume`.
 - **One run, one run id.** Every outcome prints `run_id`; `aip resume <run_id>` finds the
   run file (`run_file`, under `~/.aip/runs/`) from any directory and rewrites it. Do not edit it. Do not start a second run of the same task.
 - **Report the result** from `state` (the end step's declared keys) in the task's terms,
@@ -106,6 +107,6 @@ $ aip resume 4f1c9a2e7b3d5068 --input answer.json
 { "done": true, "run_id": "4f1c9a2e7b3d5068", "state": { "message": "I was charged twice!" }, "run_file": "..." }
 ```
 
-The angry branch ran a script on the server and opened the ticket (its `ticket_id` is in
+The angry branch ran the procedure's script here and opened the ticket (its `ticket_id` is in
 the run's history); you answered one pause. The calm branch would instead pause with
 `client_task` asking you to draft the reply, and your `{"reply": "..."}` would end the run.

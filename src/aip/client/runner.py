@@ -69,7 +69,8 @@ def new_run_id() -> str:
 class RunFile:
     """Everything needed to continue a run. A local run's file holds the whole run (`skill_dir`,
     `after`, `state`, `history`); a served run's only a handle (`server`, `name`, `revision`,
-    `version`): the server holds the rest. Both hold `run_id` and the pending `pause`
+    `version`): the server holds the rest. Both hold `run_id`, the run's working directory
+    (`workdir`, where its scripts read and write files), and the pending `pause`
     (`{"kind": "client_task"|"review"|"decision"|"error"|"done", "step", ...}`). Unset fields
     are left out of the file."""
     pause: JSON
@@ -82,6 +83,7 @@ class RunFile:
     name: str | None = None
     revision: str | None = None
     version: int | None = None            # the server's version of the run, sent back with the answer
+    workdir: str | None = None            # where the run's scripts read and write files (AIP_WORKDIR)
     created: float = field(default_factory=time.time)
 
     LOCAL: ClassVar = ("skill_dir", "after", "state", "history")
@@ -107,10 +109,10 @@ def backend_for(run: RunFile, token: str | None = None, session: Any = None) -> 
     if run.server:
         from aip.client.backend import HttpBackend
 
-        return HttpBackend(run.server, token, f"{run.name}@{run.revision}", session=session)
+        return HttpBackend(run.server, token, f"{run.name}@{run.revision}", session=session, workdir=run.workdir)
     from aip.client.backend import LocalBackend
 
-    return LocalBackend(Path(run.skill_dir))
+    return LocalBackend(Path(run.skill_dir), workdir=run.workdir)
 
 
 @dataclass

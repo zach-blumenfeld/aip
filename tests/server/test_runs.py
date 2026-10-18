@@ -119,16 +119,32 @@ def test_a_failed_step_is_recorded_and_an_empty_post_retries_it(root, tmp_path):
     pause = api.post("/runs", json={"name": "billing-support", "input": {"message": ANGRY}}).json()
     r = api.post(f"/runs/{pause['run_id']}/result", json={"answer": {"billing": True, "tone": "angry"}})
     assert r.status_code == 200, r.text
+    step = r.json()                                                         # the server runs nothing
+    assert (step["paused"], step["step"], step["script"], step["command"]) == (
+        "execute", "escalate", "scripts/escalate.py", None)
+    assert step["stdin"]["state"] == {"message": ANGRY, "tone": "angry"} and "config" in step["stdin"]["assets"]
+    assert step["requires"]["interpreter"] == "python"
+    assert api.get(f"/runs/{pause['run_id']}").json()["status"] == "running"
+
+    failure = {"error": "script_failed", "exit_code": 3, "stderr": "queue down"}
+    r = api.post(f"/runs/{pause['run_id']}/result", json={"step": "escalate", "answer": failure})
+    assert r.status_code == 200, r.text
     error = r.json()
     assert (error["error"], error["step"], error["exit_code"], error["stderr"], error["resumable"]) == (
         "script_failed", "escalate", 3, "queue down", True)
     run = api.get(f"/runs/{pause['run_id']}").json()
     assert (run["status"], run["after"], run["pause"]["kind"]) == ("failed", "triage", "error")
     assert run["state"] == {"message": ANGRY, "billing": True, "tone": "angry"}   # the state before the step
-    assert run["history"][-1]["kind"] == "error"
+    assert run["history"][-1]["kind"] == "error" and run["history"][-1]["result"]["stderr"] == "queue down"
 
     r = api.post(f"/runs/{pause['run_id']}/result")                         # no body: retry
-    assert r.status_code == 200 and r.json()["error"] == "script_failed"
+    assert r.status_code == 200 and r.json()["paused"] == "execute"
+    r = api.post(f"/runs/{pause['run_id']}/result", json={"answer": {"output": {"ticket_id": "x"}}})
+    assert r.status_code == 200 and r.json()["error"] == "invalid_output"   # checked against the outputs
+    assert set(r.json()["missing"]) == {"queue"} and r.json()["invalid"] == ["ticket_id"]
+    assert api.post(f"/runs/{pause['run_id']}/result").json()["paused"] == "execute"
+    r = api.post(f"/runs/{pause['run_id']}/result", json={"answer": {"reply": "not a report"}})
+    assert r.status_code == 422 and r.json()["error"]["kind"] == "invalid_output"   # the step still waits
     assert api.get("/governance/failing-scripts").json()[0]["failed"] == 2
 
 
@@ -183,7 +199,7 @@ def test_two_concurrent_results_for_one_run_one_is_a_409(root, api):
     winner = next(body for code, body in statuses if code == 200)
     run = api.get(f"/runs/{pause['run_id']}").json()
     assert run["version"] == winner["version"]
-    assert [e["step"] for e in run["history"]][:2] == ["triage", "by-tone"]   # one answer, recorded once
+    assert [e["step"] for e in run["history"]].count("triage") == 1          # one answer, recorded once
 
 
 # ---------------------------------------------------------------- the same run, two homes
@@ -227,6 +243,6 @@ def test_a_served_run_file_is_a_handle(api, tmp_path):
     assert outcome.payload["paused"] == "client_task"
     data = json.loads(Path(outcome.run_file).read_text())
     assert "history" not in data and "state" not in data and "after" not in data
-    assert set(data) == {"pause", "run_id", "server", "name", "revision", "version", "created"}
+    assert set(data) == {"pause", "run_id", "server", "name", "revision", "version", "workdir", "created"}
     assert data["pause"]["kind"] == "client_task" and data["pause"]["state"] == {"message": CALM, "tone": "calm"}
     assert data["version"] == api.get(f"/runs/{data['run_id']}").json()["version"]

@@ -2,8 +2,9 @@
 
 Publish, search, info, files (manifest, one file, hash-verified tar), pin and retire, the
 bearer-token scopes, and a full traversal of `billing-support` through the deprecated
-`/peek`, `/step`, and `/answer`: the angry branch runs the script on the server, the calm
-branch pauses as a client task, and every step lands in the run the server records. The
+`/peek`, `/step`, and `/answer`: the angry branch stops at the script (scripts run on the
+client, so `/step` refuses it), the calm branch pauses as a client task, and every step lands
+in the run the server records. The
 run endpoints that replace them (`POST /runs`, `POST /runs/{id}/result`) are in `test_runs.py`.
 """
 
@@ -253,7 +254,7 @@ def test_capabilities(backend, no_key):
     publish(TestClient(create_app(backend)))
     plain = TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json()
     assert plain == {"name": "billing-support", "revision": snapshot(EXAMPLE).revision,
-                     "decision_model": False, "executes_scripts": True, "persists_runs": True,
+                     "decision_model": False, "executes_scripts": False, "persists_runs": True,
                      "governance": True}
     with_model = TestClient(create_app(backend, client=FakeJev(0.9))).get("/procedures/billing-support/capabilities").json()
     assert with_model["decision_model"] is True
@@ -262,9 +263,9 @@ def test_capabilities(backend, no_key):
     assert TestClient(create_app(backend)).get("/procedures/nope/capabilities").status_code == 404
 
 
-def test_manual_traversal_angry_branch_runs_the_script_on_the_server(api, example):
+def test_manual_traversal_angry_branch_stops_at_the_script(api, example):
     """running.md, "Without a decision model": the client answers triage itself, the router
-    sends `angry` to the script, which runs here, and `end` closes the run."""
+    sends `angry` to the script, which the deprecated `/step` refuses: scripts run on the client."""
     publish(api)
     start = {"message": "I was charged twice!"}
 
@@ -294,38 +295,19 @@ def test_manual_traversal_angry_branch_runs_the_script_on_the_server(api, exampl
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "running" and [e["step"] for e in run["history"]] == ["triage"]
 
-    # the router is walked server-side, then the script opens the ticket
+    # the router is walked server-side, and the next step is the script: not here
     r = api.post("/procedures/billing-support/step",
                  json={"after": "triage", "payload": first["suggested"], "history": first["history"], "run_id": run_id})
-    assert r.status_code == 200, r.text
-    second = r.json()
-    assert (second["ran"], second["kind"]) == ("escalate", "execution")
-    assert second["result"]["queue"] == "tier2" and isinstance(second["result"]["ticket_id"], int)
-    assert second["suggested"]["ticket_id"] == second["result"]["ticket_id"]
-    assert second["next"] == {"step": "end", "kind": "end", "inputs": {"message": "string"}}
-    assert [h["step"] for h in second["history"]] == ["triage", "by-tone", "escalate"]
-    assert second["history"][1] == {"step": "by-tone", "kind": "router", "input": {"tone": "angry"},
-                                    "result": {"to": "escalate"}}
-    assert second["run_id"] == run_id
+    assert r.status_code == 409, r.text
+    assert (r.json()["error"]["kind"], r.json()["error"]["location"]) == ("runs_on_client", "escalate")
+    assert "POST /runs" in r.json()["error"]["message"]
+    assert [e["step"] for e in api.get(f"/runs/{run_id}").json()["history"]] == ["triage"]   # nothing ran
 
-    r = api.post("/procedures/billing-support/step",
-                 json={"after": "escalate", "payload": second["suggested"], "history": second["history"],
-                       "run_id": run_id})
-    assert r.status_code == 200, r.text
-    last = r.json()
-    assert last["next"] is None and last["kind"] == "end"
-    assert last["result"] == {"message": start["message"]}                         # the end step's inputs only
-    assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "escalate", "end"]
-
-    run = api.get(f"/runs/{run_id}").json()
-    assert run["status"] == "done" and run["pause"] is None
-    assert run["history"] == last["history"]
-    assert (run["name"], run["revision"]) == ("billing-support", example.revision)
     listing = api.get("/runs").json()
     assert [r["run_id"] for r in listing] == [run_id]
-    assert listing[0]["status"] == "done" and listing[0]["steps"] == 4
+    assert listing[0]["status"] == "running" and listing[0]["steps"] == 1
     assert api.get("/runs", params={"status": "paused"}).json() == []
-    assert api.get("/runs", params={"name": "billing-support", "status": "done"}).json()[0]["run_id"] == run_id
+    assert api.get("/runs", params={"name": "billing-support", "status": "running"}).json()[0]["run_id"] == run_id
 
 
 def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend, no_key, example):
@@ -518,20 +500,23 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
         {"name": "billing-support", "step": "triage", "question": "tone", "decided": 1, "overridden": 1, "rate": 1.0}]
     assert api.get("/governance/overridden-decisions", params={"name": "other"}).json() == []
 
-    # a script that exits non-zero: the run ends in error, recorded against the step that raised
+    # a script that exits non-zero on the client: the run ends in error, recorded against the step
     r = publish(api, broken_variant(tmp_path))
     assert r.status_code == 201, r.text
-    body = {"after": "triage", "payload": {**start, "billing": True, "tone": "angry"}, "history": []}
-    r = api.post("/procedures/broken-support/step", json=body)
-    assert r.status_code == 500, r.text
-    err = r.json()["error"]
-    assert err["kind"] == "script_failed" and err["location"] == "escalate" and "boom" in err["message"]
-    assert err["script"] == "scripts/escalate.py" and err["exit_code"] != 0 and "boom" in err["stderr"]
-    run = api.get(f"/runs/{err['run_id']}").json()
+    opened = api.post("/runs", json={"name": "broken-support", "input": start}).json()
+    assert opened["paused"] == "review"                                         # tone at 0.55
+    step = api.post(f"/runs/{opened['run_id']}/result", json={"answer": {}}).json()
+    assert (step["paused"], step["step"]) == ("execute", "escalate")
+    failure = {"error": "script_failed", "exit_code": 2, "stderr": "boom"}
+    err = api.post(f"/runs/{opened['run_id']}/result", json={"answer": failure}).json()
+    assert err["error"] == "script_failed" and err["step"] == "escalate" and "boom" in err["message"]
+    assert err["script"] == "scripts/escalate.py" and err["exit_code"] == 2 and err["stderr"] == "boom"
+    run = api.get(f"/runs/{opened['run_id']}").json()
     assert run["status"] == "failed" and run["name"] == "broken-support"
     assert run["history"][-1]["step"] == "escalate" and run["history"][-1]["kind"] == "error"
     assert run["history"][-1]["step_kind"] == "execution"
-    assert api.post("/procedures/broken-support/step", json=body).status_code == 500
+    assert api.post(f"/runs/{opened['run_id']}/result").json()["paused"] == "execute"   # retry
+    assert api.post(f"/runs/{opened['run_id']}/result", json={"answer": failure}).json()["error"] == "script_failed"
 
     rows = api.get("/governance/failing-scripts").json()
     assert len(rows) == 1

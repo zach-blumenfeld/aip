@@ -32,10 +32,12 @@ the working object; the history is the ledger.
 - **execution**: runs a script. The script gets `{"state": <its declared inputs>, "assets": ...,
   "expects": ...}` on stdin (`currentState` carries the same object for one more version) and must
   print a JSON object holding exactly its declared `outputs`. A missing, mistyped, or undeclared
-  key fails the step, naming the key, and nothing is merged. It is launched from its folder with
-  the step's `command`, or `python <script>`; before the first script runs, the machine is checked
-  against the skill's `requires` (interpreter and minimum version, packages, tools), and a
-  `requires_unmet` error names everything missing.
+  key fails the step, naming the key, and nothing is merged. It runs on the client, for a served
+  run too, launched from its folder with the step's `command`, or `python <script>`, with
+  `AIP_WORKDIR` set to the run's working directory, where it reads and writes files; before the
+  first script runs, the client's machine is checked against the skill's `requires` (interpreter
+  and minimum version, packages, tools), and a `requires_unmet` error names everything missing.
+  On a served run the server sends the rendered stdin and the client posts the output back.
 - **decision**: asks typed questions about its declared inputs; the decision model receives
   `{"state": <declared inputs>}`, plus `history` only when the step sets `history: true`. The
   answers (one key per question, typed: noul boolean, choice label, score level) are the result.
@@ -86,8 +88,9 @@ run), so it carries only the keys asked for.
 
 ## Files
 
-State is JSON. Scripts that read or write files do so on disk and put paths or summaries in the
-state, not contents. The state object should stay small.
+State is JSON. Scripts that read or write files do so on the client's disk, under the run's
+working directory (`AIP_WORKDIR`), and put paths or summaries in the state, not contents. The
+state object should stay small.
 
 ## Known gaps
 

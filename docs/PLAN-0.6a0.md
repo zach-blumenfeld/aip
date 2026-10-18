@@ -241,7 +241,28 @@ Test: aip-spec `uv run pytest -q` (skill with scripts and no `requires` fails); 
 pytest -q` (a skill requiring package `nosuchpkg` stops before any script with `nosuchpkg` in the
 message; a `command: ["bash", "x.sh"]` step runs).
 
-### - [ ] B3 (aip): the client executes scripts
+### - [x] B3 (aip): the client executes scripts
+
+Done 2026-10-18, aip only. The engine takes `scripts=False` and then stops at an execution step
+with an `execute` pause (`Execution.request`: script, command, rendered stdin, timeout,
+`requires`); the next post's `answer` is the client's report, `{"output", "seconds"}` or a
+failure (`script_failed` with exit code and stderr, `timeout`, `requires_unmet` with `missing`),
+which `Execution.accept_report` checks against the outputs or raises as that error, so the
+server records it as before. The server always runs with `scripts=False`; the CLI never prints
+`execute`. Local runs use the same client executor (`aip.client.executor`) in a loop around the
+same engine, so both homes run scripts one way. Choices beyond the text: the cache is filled from
+the existing manifest and per-file endpoints (no new endpoint), re-verified on every run and
+refetched on mismatch; a failed fetch leaves the run waiting at the step and `resume` retries it.
+"File side effects relative to the run's working directory" is the env var `AIP_WORKDIR`, set to
+the run's `workdir` (the cwd at `aip run`, or `--workdir`), which the run file records for both
+local and served runs; the aip-spec runtime block does not mention `AIP_WORKDIR` yet (a later
+aip-spec milestone). The deprecation window is still open, so `/step` and `/answer` stay, but
+`/step` answers 409 `runs_on_client` at an execution step; `create_app(python=)` and
+`Meta.environment` are gone and `capabilities.executes_scripts` is false. A launcher that cannot
+start (missing interpreter or script) is now a `script_failed` with exit code -1 rather than a
+`server` error. The bundled inspector's run view drives `/step`, so it stops at scripts until I2.
+`docs/examples/aip-runtime-session.md` is a verbatim recording and still says the server ran the
+script.
 
 On a served run the client fetches the pinned revision's `scripts/` and `assets/` into
 `~/.aip/cache/<name>@<revision>/` (content-hashed, verified against the manifest, never

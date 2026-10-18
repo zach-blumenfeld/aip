@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, TypeAlias
 import copy
 import json
+import os
 import subprocess
 import sys
 import time
 
 from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
 
-from aip.model.environment import PYTHON, Requires
+from aip.model.environment import PYTHON, Requires, RequiresUnmet
 from aip.model.resources import Asset, Reference, ResourceLoader, Script
 from aip.model.types import (
     JSON, DataType, InputValidationError, Inputs, OutputValidationError, ScriptFailed, ScriptTimeout,
@@ -38,16 +39,10 @@ class State:
 
 @dataclass
 class Meta:
-    """
-    Package metadata, owned by the Procedure.
-
-    `environment` is the path, relative to the skill root, of the requirements.txt or
-    pyproject.toml the server builds the script interpreter from.
-    """
+    """Package metadata, owned by the Procedure."""
     name: str
     description: str = ""
     version: str = "0.1.0"
-    environment: str | None = None
 
 
 @dataclass
@@ -381,11 +376,60 @@ class ClientTask(BaseStep):
         return {}
 
 
+WORKDIR = "AIP_WORKDIR"
+
+
+def run_script(step: str, script: str, argv: List[str], stdin: JSON, cwd: Path, timeout: float | None,
+               workdir: Path | None = None) -> JSON:
+    """Run one script under the stdin/stdout contract and return the JSON object it printed.
+
+    The script runs from `cwd` (its own folder) with `AIP_WORKDIR` set to `workdir`, the run's
+    working directory, where it reads and writes the run's files. Raises `ScriptTimeout`, or
+    `ScriptFailed` for a non-zero exit or stdout that is not one JSON object. The result is not
+    checked against the step's outputs here; `Execution.check` does that.
+    """
+    env = {**os.environ, WORKDIR: str(Path(workdir or Path.cwd()).resolve())}
+    try:
+        proc = subprocess.run(argv, input=json.dumps(stdin), capture_output=True, text=True, cwd=cwd,
+                              timeout=timeout, env=env)
+    except subprocess.TimeoutExpired as err:
+        raise ScriptTimeout(step, script, timeout) from err
+    stderr = proc.stderr.strip()
+    if proc.returncode != 0:
+        raise ScriptFailed(step, script, proc.returncode, stderr, failed_message(script, proc.returncode, stderr))
+
+    out = proc.stdout.strip()
+    if not out:
+        return {}
+    try:
+        result = json.loads(out)
+    except json.JSONDecodeError as err:
+        raise ScriptFailed(step, script, 0, stderr,
+                           f"Script {script} did not write JSON to stdout: {err}\n{out[:500]}") from err
+    if not isinstance(result, dict):
+        raise ScriptFailed(step, script, 0, stderr,
+                           f"Script {script} must write a JSON object, got {type(result).__name__}")
+    return result
+
+
+def failed_message(script: str, exit_code: int, stderr: str) -> str:
+    return f"Script {script} exited with {exit_code}:\n{stderr}"
+
+
+def launch(command: List[str] | None, path: Path, python: Path | str | None = None) -> List[str]:
+    """The argument list for a script at `path`: `command`, or `python` on the script. A leading
+    `python` is `python` (default: this process's own interpreter)."""
+    python = str(python or sys.executable)
+    if command is None:
+        return [python, str(path)]
+    return [python if arg == PYTHON and i == 0 else arg for i, arg in enumerate(command)]
+
+
 @dataclass(kw_only=True)
 class Execution(BaseStep):
     """
     Executes an action rather than making a decision. Analogous to a tool call. For now
-    a python script in the package; MCP and endpoints can be added later.
+    a script in the package; MCP and endpoints can be added later.
 
     Script contract:
       stdin   one JSON object: {"state": <the declared inputs only>, "assets": {name: content},
@@ -394,10 +438,14 @@ class Execution(BaseStep):
       stdout  one JSON object holding exactly the declared `outputs` (empty stdout is {});
               a missing, mistyped, or undeclared key fails the step
       stderr  diagnostics; carried in the `script_failed` error when the exit code is non-zero
+      env     `AIP_WORKDIR`: the run's working directory, where the run's files are
     The script runs from its folder with `command` when the step declares one, otherwise
-    `python <script>`. `python`, as the launcher, is the per-AIP interpreter the server built
-    from Meta.environment, falling back to this process's own. Before it runs, the skill's
-    `requires` block is checked against this machine (`requires_unmet` names what is missing).
+    `python <script>`. Before it runs, the skill's `requires` block is checked against the
+    machine that runs it (`requires_unmet` names what is missing).
+
+    The script runs on the client. A run that cannot run it in this process (the server's)
+    stops at the step with `request()`, what the client needs to run it, and continues with
+    `accept_report()` when the client posts what happened. `_invoke` runs it in-process.
 
     script: the Script resource to run
     command: the argument list that launches the script, from its folder; None is `python <script>`
@@ -405,6 +453,7 @@ class Execution(BaseStep):
     assets: constant inputs the script always receives, e.g. a JSON config. Re-read from
             disk on every invoke so edits are picked up.
     timeout: seconds before the script is killed; None waits forever
+    python: the interpreter for a `python` launcher in-process; None is this process's own
     """
     kind: ClassVar[str] = "execution"
     script: Script
@@ -413,6 +462,11 @@ class Execution(BaseStep):
     command: List[str] | None = None
     requires: Requires | None = None
     python: Path | None = None
+
+    @property
+    def script_path(self) -> str:
+        """The script as the SKILL.md names it, relative to the skill root: `scripts/x.py`."""
+        return Path(*self.script.uri.parts[1:]).as_posix()
 
     def render(self, state: State) -> JSON:
         """Pure projection of the declared inputs + assets into the script's stdin payload."""
@@ -424,10 +478,53 @@ class Execution(BaseStep):
 
     def argv(self, path: Path) -> List[str]:
         """The launch command: the step's `command`, or `python` on the script."""
-        python = str(self.python or sys.executable)
-        if self.command is None:
-            return [python, str(path)]
-        return [python if arg == PYTHON and i == 0 else arg for i, arg in enumerate(self.command)]
+        return launch(self.command, path, self.python)
+
+    def request(self, payload: JSON) -> JSON:
+        """What a client needs to run this step itself on `payload` (the full state, checked against
+        the declared inputs): the script, its launch command, the rendered stdin, the timeout,
+        and the skill's `requires`. The stop the server's run waits at (kind `execute`)."""
+        validate_input(self.name, self.inputs, payload)
+        r = self.requires
+        return {"kind": "execute", "step": self.name, "script": self.script_path, "command": self.command,
+                "stdin": self.render(State(currentState=project(payload, self.inputs))), "timeout": self.timeout,
+                "requires": None if r is None else {"interpreter": r.interpreter, "version": r.version,
+                                                    "packages": list(r.packages), "tools": list(r.tools)}}
+
+    def check(self, result: JSON) -> JSON:
+        """The script's result, checked against the declared outputs."""
+        try:
+            validate_output(self.name, self.outputs, result)
+        except OutputValidationError as err:
+            err.script = self.script_path
+            raise
+        return result
+
+    def accept_report(self, payload: JSON, history: List[JSON], report: JSON) -> StepResponse:
+        """Continue after the client ran the script: `report` is `{"output": {...}, "seconds"}`, or
+        a failure `{"error": "script_failed"|"timeout"|"requires_unmet", ...}` with its detail
+        (exit code and stderr, the timeout, the missing items), raised here as that error so the
+        run records it like a failure in-process."""
+        validate_input(self.name, self.inputs, payload)
+        if "error" in report:
+            raise self.reported_error(report)
+        result = self.check(report["output"])
+        entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs), "result": result}
+        if isinstance(report.get("seconds"), (int, float)):
+            entry["seconds"] = round(float(report["seconds"]), 3)
+        return StepResponse(ran=self.name, kind=self.kind, result=result, suggested={**payload, **result},
+                            review=[], next=describe_next(self.inputsTo), history=[*history, entry])
+
+    def reported_error(self, report: JSON) -> Exception:
+        """The error a client's failure report stands for."""
+        kind, script = report["error"], self.script_path
+        if kind == "timeout":
+            return ScriptTimeout(self.name, script, report.get("seconds", self.timeout))
+        if kind == "requires_unmet":
+            return RequiresUnmet(self.name, [str(m) for m in report.get("missing") or []])
+        exit_code, stderr = int(report.get("exit_code", 0) or 0), str(report.get("stderr", ""))
+        return ScriptFailed(self.name, script, exit_code, stderr,
+                            report.get("message") or failed_message(script, exit_code, stderr))
 
     def _invoke(self, state: State) -> JSON:
         if self.requires is not None:
@@ -436,39 +533,5 @@ class Execution(BaseStep):
         path = loader.path(self.script.uri)
         if not path.is_file():
             raise FileNotFoundError(f"Script {self.script.uri!s} not found at {path}")
-
-        script = Path(*self.script.uri.parts[1:]).as_posix()     # as the SKILL.md names it
-        try:
-            proc = subprocess.run(
-                self.argv(path),
-                input=json.dumps(self.render(state)),
-                capture_output=True,
-                text=True,
-                cwd=path.parent,
-                timeout=self.timeout,
-            )
-        except subprocess.TimeoutExpired as err:
-            raise ScriptTimeout(self.name, script, self.timeout) from err
-        stderr = proc.stderr.strip()
-        if proc.returncode != 0:
-            raise ScriptFailed(self.name, script, proc.returncode, stderr,
-                               f"Script {script} exited with {proc.returncode}:\n{stderr}")
-
-        out = proc.stdout.strip()
-        if not out:
-            result: JSON = {}
-        else:
-            try:
-                result = json.loads(out)
-            except json.JSONDecodeError as err:
-                raise ScriptFailed(self.name, script, 0, stderr,
-                                   f"Script {script} did not write JSON to stdout: {err}\n{out[:500]}") from err
-        if not isinstance(result, dict):
-            raise ScriptFailed(self.name, script, 0, stderr,
-                               f"Script {script} must write a JSON object, got {type(result).__name__}")
-        try:
-            validate_output(self.name, self.outputs, result)
-        except OutputValidationError as err:
-            err.script = script
-            raise
-        return result
+        return self.check(run_script(self.name, self.script_path, self.argv(path), self.render(state), path.parent,
+                                     self.timeout))

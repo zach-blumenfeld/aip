@@ -12,11 +12,16 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   retry a failed step); `GET /runs`, `GET /runs/{id}`. Each call loads the run from the
   `RunBackend`, steps it with `aip.model.engine`, and stores what changed with a version
   check, so nothing per run stays in this process and any replica can answer any call; a
-  write that lost a race answers 409. Scripts still run here (until B3). Without a
-  `RunBackend` these answer 501.
+  write that lost a race answers 409. Without a `RunBackend` these answer 501.
+  The server never runs a script: at an execution step the run stops and the reply is the
+  step to perform (`{"paused": "execute", "step", "script", "command", "stdin", "timeout",
+  "requires"}`); the client runs it next to its data and posts the report as the `answer`
+  (`{"output": {...}, "seconds"}`, or a failure with exit code and stderr, a timeout, or the
+  unmet requirements), which is validated against the step's outputs and recorded.
 - **execution** (deprecated, one version): `/procedures/{ref}/peek|step|answer|capabilities`,
   where the client carries the state and history on every call. `step` and `answer` reply
-  with a `Deprecation` header and append to the run named by their `run_id`.
+  with a `Deprecation` header and append to the run named by their `run_id`; an execution
+  step answers 409 `runs_on_client` (open the run with `POST /runs`).
 - **governance**: `/governance` lists the named corpus queries of `aip.server.governance`;
   `/governance/{query}?name=&window=&limit=` answers one through the backend's `.governance`
   (501 when it has none or declines the query).
@@ -53,7 +58,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from aip.model import Decision, describe_next, engine
+from aip.model import Decision, Execution, describe_next, engine
 from aip.model.engine import Advance, Cursor
 from aip.model.types import InputValidationError, OutputValidationError, StepError, example_input
 from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
@@ -128,7 +133,7 @@ class RunBody(BaseModel):
 
 
 class ResultBody(BaseModel):
-    """One thing for a run. `answer` answers its pause (omit it to retry a failed step); `step`
+    """One thing for a run. `answer` answers its pause or reports its script (omit it to retry a failed step); `step`
     and `version` are what the client last saw, and a run that has moved on answers 409."""
     answer: JSON | None = None
     step: str | None = None
@@ -139,13 +144,11 @@ class ResultBody(BaseModel):
 
 
 def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: Any = None,
-               python: Path | None = None, localhost_open: bool = True,
-               inspector: Path | None = None) -> FastAPI:
+               localhost_open: bool = True, inspector: Path | None = None) -> FastAPI:
     """Build the server over `backend`.
 
     tokens:          bearer token -> scopes (`read`, `publish`); empty or None means no auth
     client:          an injected decision-model client (tests); otherwise TYPESAFE_API_KEY decides
-    python:          interpreter for scripts; default this process's own
     localhost_open:  a loopback client needs no token even when tokens are configured
     inspector:       serve the inspector bundle in this directory at /inspector/ (None: do not)
     """
@@ -226,7 +229,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             if key not in procedures:
                 from aip.spec.loader import load_procedure
 
-                procedures[key] = load_procedure(catalog.folder(name, revision), client=client, python=python)
+                procedures[key] = load_procedure(catalog.folder(name, revision), client=client)
             return procedures[key]
 
     def has_decision_model() -> bool:
@@ -286,6 +289,10 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         try:
             if answers is None:
                 node, _ = proc.resolve(body.after, body.payload)
+                if isinstance(node, Execution):
+                    raise ApiError(409, "runs_on_client",
+                                   f"step {node.name!r} is an execution step and scripts run on the client; "
+                                   "open the run with POST /runs", location=node.name)
                 if isinstance(node, Decision) and not has_decision_model():
                     raise ApiError(422, "no_decision_model",
                                    f"step {node.name!r} is a decision and this server has no decision model; "
@@ -444,7 +451,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     def capabilities(ref: str) -> JSON:
         name, revision = resolve(ref)
         return {"name": name, "revision": revision, "decision_model": has_decision_model(),
-                "executes_scripts": True, "persists_runs": runs is not None, "governance": governance is not None}
+                "executes_scripts": False, "persists_runs": runs is not None, "governance": governance is not None}
 
     @app.post("/procedures/{ref}/peek", dependencies=[require(READ)])
     def peek(ref: str, body: PeekBody) -> JSON | None:
@@ -473,7 +480,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         rejects is a 422 and opens nothing."""
         require_runs()
         name, revision = resolve(body.name if body.revision is None else f"{body.name}@{body.revision}")
-        advance = engine.start(procedure(name, revision), body.input, has_decision_model())
+        advance = engine.start(procedure(name, revision), body.input, has_decision_model(), scripts=False)
         if advance.cursor is None:
             raise rejected(advance, 422)
         run_id = runs.create(name, revision)
@@ -481,8 +488,10 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
 
     @app.post("/runs/{run_id}/result", dependencies=[require(READ)])
     def post_result(run_id: str, body: ResultBody | None = None) -> JSON:
-        """Carry one thing to a run. 409 when the run has moved past what the client saw (`step`,
-        `version`) or another call wrote first; 422 when the answer does not fit (the run stays)."""
+        """Carry one thing to a run: the answer to its pause, the report of the script it waits at,
+        or nothing (retry a failed step). 409 when the run has moved past what the client saw
+        (`step`, `version`) or another call wrote first; 422 when the answer does not fit (the
+        run stays)."""
         body = body or ResultBody()
         run = require_runs().get(run_id)
         if body.version is not None and body.version != run.version:
@@ -492,7 +501,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             raise ApiError(409, "stale_run", f"run {run_id!r} is not waiting on step {body.step!r} "
                                              f"(status {run.status}, step {pending!r})")
         cursor = Cursor(run.after, run.state, [e for e in run.history if e.get("kind") != "error"], run.pause)
-        advance = engine.submit(procedure(run.name, run.revision), cursor, body.answer, has_decision_model())
+        advance = engine.submit(procedure(run.name, run.revision), cursor, body.answer, has_decision_model(),
+                                scripts=False)
         if advance.kept:
             raise rejected(advance, 422 if advance.error["error"] in ("invalid_input", "invalid_output") else 409)
         return reply(run_id, run.name, run.revision, store(run_id, run.version, advance), advance)

@@ -92,11 +92,12 @@ With a key set, decisions run against the model and only low-confidence answers 
     "thresholds": { "billing": 0.15, "tone": 0.6 }
   },
   "run_id": "4f1c9a2e7b3d5068",
+  "workdir": "/home/you/work",
   "created": 1790293854.39
 }
 ```
 
-`skill_dir` is absolute, so the run resumes from anywhere. `state` is the run's full state; the pause's `state` is the slice the paused step declared. A decision pause also keeps the author's `thresholds` (not printed). `pause.kind` is also `error` (with the failing `step`, retried by a bare `resume`) or `done` (with the result as `state`).
+`skill_dir` is absolute, so the run resumes from anywhere. `workdir` is the run's working directory (the directory `aip run` started in, or `--workdir`): scripts get it as `AIP_WORKDIR` and read and write the run's files there, whichever directory `resume` is called from. `state` is the run's full state; the pause's `state` is the slice the paused step declared. A decision pause also keeps the author's `thresholds` (not printed). `pause.kind` is also `error` (with the failing `step`, retried by a bare `resume`) or `done` (with the result as `state`).
 
 A served run's file is only a handle, since the server holds the state and the history:
 
@@ -109,13 +110,14 @@ A served run's file is only a handle, since the server holds the state and the h
   "name": "billing-support",
   "revision": "3f9c2a7d1e5b8c04",
   "version": 3,
+  "workdir": "/home/you/work",
   "created": 1790293854.39
 }
 ```
 
 `aip resume` rebuilds the right backend from it and posts only the answer, with the pause's `step` and the run's `version` so a run that moved on since is refused rather than answered twice.
 
-Nothing else is written: the skill folder is read-only to the runner, state lives in the run file (locally) or on the server, and scripts write only what they choose to.
+Nothing else is written by the runner: the skill folder is read-only to it, state lives in the run file (locally) or on the server, and scripts write only what they choose to, under `AIP_WORKDIR` by convention. A served run also keeps the revision's `scripts/` and `assets/` in `~/.aip/cache/<name>@<revision>/` (below).
 
 ## Worked example: `billing-support`
 
@@ -265,7 +267,7 @@ Same loop, same engine; prompts replace the pauses.
 
 ## With a server
 
-The same loop runs on the server, which holds the run. `aip server` runs the engine for every published skill (`docs/server-design.md`), keeps each run's state and history in its run backend, executes scripts with its own interpreter (until they move to the client, `docs/client-execution.md`), and holds the decision-model key. The client points at it once:
+The same loop runs on the server, which holds the run. `aip server` runs the engine for every published skill (`docs/server-design.md`), keeps each run's state and history in its run backend, and holds the decision-model key. It never runs a script: execution steps run on the client, next to its data (`docs/client-execution.md`). The client points at it once:
 
 ```
 $ export AIP_SERVER=http://localhost:8000            # or: aip config --server http://localhost:8000 [--token T]
@@ -285,9 +287,20 @@ $ aip run billing-support --input start.json         # same pause; `run_id` is t
 | `POST /runs` | `{"name", "revision"?, "input"}` | 201: where the run stopped |
 | `POST /runs/{id}/result` | `{"answer"?, "step"?, "version"?}`; no `answer` (or no body) retries a failed step | 200: where the run stopped |
 
+At an execution step the run stops and the reply is the step to perform, which the CLI never prints:
+
+```json
+{ "paused": "execute", "step": "escalate", "script": "scripts/escalate.py", "command": null,
+  "stdin": { "state": { "message": "...", "tone": "angry" }, "assets": { "config": "..." }, "expects": { ... } },
+  "timeout": 60.0, "requires": { "interpreter": "python", "version": "3.10", "packages": [], "tools": [] },
+  "run_id": "4f1c9a2e7b3d5068", "name": "billing-support", "revision": "3f9c2a7d1e5b8c04", "version": 2, "steps": [ ... ] }
+```
+
+`HttpBackend` fetches the revision's `scripts/` and `assets/` (never `SKILL.md`) into `~/.aip/cache/<name>@<revision>/`, each file checked against the sha256 in the server's manifest (`GET /catalog/<ref>/files`) and the cache re-verified before each run; checks `requires` against this machine; runs the script from its folder in the cache with `stdin` on stdin and the run's `workdir` as `AIP_WORKDIR`; and posts the report as the `answer`: `{"output": {...}, "seconds": 0.04}`, or a failure, `{"error": "script_failed", "exit_code": 2, "stderr": "..."}`, `{"error": "timeout", "seconds": 60}`, or `{"error": "requires_unmet", "missing": [...]}`. The server checks the output against the step's declared outputs and records it, or records the failure, so `failing-scripts` still sees every client's stderr. If the scripts cannot be fetched, the run waits at the step and `aip resume` tries again.
+
 Where the run stopped is the CLI's paused, done or error object (a decision pause also carries the author's `thresholds`) plus `run_id`, `name`, `revision`, the run's `version`, and `steps`, the `--progress` line of each step the call completed; an error carries `resumable: true`. A step that fails is a 200 with the error object: the run recorded it, with status `failed` and the state before the step. A start input or an answer that does not fit is a 422 in the error envelope and changes nothing (no run is opened; the pause stands). A post whose `step` or `version` is not the run's current one, or that lost a race with another post, is a 409 `stale_run`. Each call loads the run from the backend, steps it, and stores what changed with a version check, so nothing per run is held in the server process and any replica over the same backend can answer any call.
 
-The server resolves the name to one revision when the run opens, and the run stays on it. `GET /runs/<run_id>` shows the run's `state`, `history`, `status`, `pause` and `version`: for the same inputs, the same state and history a local run writes to its run file. `/procedures/<name>/peek|step|answer`, where the client carried the state and history itself, still answer for one version, with a `Deprecation` header. A folder path (`aip run ./billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.
+The server resolves the name to one revision when the run opens, and the run stays on it. `GET /runs/<run_id>` shows the run's `state`, `history`, `status`, `pause` and `version`: for the same inputs, the same state and history a local run writes to its run file. `/procedures/<name>/peek|step|answer`, where the client carried the state and history itself, still answer for one version, with a `Deprecation` header; `step` refuses an execution step (409 `runs_on_client`). A folder path (`aip run ./billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.
 
 Decision thresholds are the author's, from SKILL.md: there is no per-name override and no run flag, so a run's behaviour is fixed by its revision. Over its run history the server answers four governance questions, `GET /governance/<query>` with `name`, `window` (the last N runs), and `limit`: `overridden-decisions` (model answers the client changed before continuing), `failing-scripts` (execution steps that raised, with the latest error), `missing-fields` (resolved revisions without `do_not_use_when` or `anti_patterns`), and `untaken-branches` (router branches no run followed; Neo4j only, 501 on the filesystem backend). `GET /governance` lists them.
 

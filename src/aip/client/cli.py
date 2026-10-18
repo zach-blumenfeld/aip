@@ -318,12 +318,16 @@ def run_command(argv: list[str]) -> int:
     parser.add_argument("--interactive", action="store_true", help="prompt on the terminal instead of pausing to a run file")
     parser.add_argument("--run-file", type=Path, default=None,
                         help="where to write the run file (default ~/.aip/runs/<run-id>.json; AIP_HOME moves it)")
+    parser.add_argument("--workdir", type=Path, default=None,
+                        help="the run's working directory, where its scripts read and write files (AIP_WORKDIR); "
+                             "recorded in the run file so resume works from anywhere (default the current directory)")
     _outcome_flags(parser)
     args = parser.parse_args(argv)
 
     def go() -> int:
         kind, where = _target(args.skill)
-        backend = HttpBackend(where, name=args.skill) if kind == "name" else LocalBackend(where)
+        backend = (HttpBackend(where, name=args.skill, workdir=args.workdir) if kind == "name"
+                   else LocalBackend(where, workdir=args.workdir))
         runner = Runner(backend, run_file=args.run_file, interactive=args.interactive,
                         progress=args.progress, debug=args.debug)
         return runner.start(_read_input(args.input)).code

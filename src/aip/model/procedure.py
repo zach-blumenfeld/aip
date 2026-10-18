@@ -18,7 +18,7 @@ class Procedure:
     The whole graph. Binds meta, loader, and interpreter to every reachable node and
     exposes the single server operation, `run`.
 
-    python: interpreter for Execution steps (built from Meta.environment on `server create`)
+    python: interpreter for `python` scripts run in this process; None is this process's own
     requires: the skill's environment declaration, checked before the first Execution runs
     """
     meta: Meta
