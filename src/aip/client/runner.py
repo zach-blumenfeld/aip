@@ -12,8 +12,9 @@ are a contract, documented in `docs/cli-json.md`:
   `resume` with no input retries it. A bad answer to a pause leaves the pause in place.
 
 The loop itself is `aip.model.engine`, run by the backend: in this process for a skill folder,
-on the server for a published name. The runner prints, writes the run file, and in
-interactive mode answers pauses from the terminal.
+on the server for a published name. The SDK's `Driver` (`aip.sdk`) turns each stop into a
+result and writes the run file; the runner prints it, and in interactive mode answers pauses
+from the terminal.
 
 Every outcome but an error before anything ran writes the run file. A local run's file holds
 the whole run, and at done the whole history, its ledger; a served run's holds only the run
@@ -35,8 +36,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, List
 
-from aip.client.backend import Backend, Step
-from aip.model.engine import ERROR_KINDS, PRIVATE
+from aip.client.backend import Backend
+from aip.model.engine import ERROR_KINDS
 
 JSON = Dict[str, Any]
 
@@ -141,15 +142,16 @@ def error_object(exc: BaseException) -> JSON:
 
 
 class Runner:
-    def __init__(self, backend: Backend, run_file: Path | None = None,
+    """The CLI's face on a run: prints what the SDK's `Driver` returns (`docs/cli-json.md`), and in
+    interactive mode answers each pause on the terminal instead."""
+
+    def __init__(self, backend: Backend | None, run_file: Path | None = None,
                  interactive: bool = False, prompter: Prompter = input, out=None,
                  progress: bool = False, debug: bool = False, run_id: str | None = None):
         """`run_file` is an explicit path; without one the run file is `run_path(<run id>)`.
-        `run_id` is a resumed run's id."""
+        `run_id` is a resumed run's id. `backend` may be None when only `show` is used."""
         self.backend = backend
         self.run_file = run_file
-        # keyed: the run file lives under the user's home by id, and follows the id if it changes
-        self.keyed = run_file is None or Path(run_file).resolve().parent == run_path("x").parent.resolve()
         self.run_id = run_id
         self.interactive = interactive
         self.prompt = prompter
@@ -160,82 +162,46 @@ class Runner:
     # ------------------------------------------------------------------ entry points
 
     def start(self, payload: JSON | None) -> Outcome:
-        if payload is None:
-            try:
-                start = self.backend.describe()["start"]
-            except Exception as exc:
-                return self._finish(_crashed(exc))
-            if not self.interactive:
-                return self._finish(Step({"error": "invalid_input", "step": start["step"],
-                                          "message": f"no input given; start step {start['step']!r} expects {start['inputs']}",
-                                          "missing": list(start["inputs"]), "invalid": []}))
-            payload = self._prompt_inputs(start["inputs"])
-        return self._loop(self._call(lambda: self.backend.open(payload)), None)
+        from aip.sdk import Driver
+
+        def go(on_step, on_pause):
+            driver = Driver(self.backend, self.run_file, on_step, on_pause)
+            return driver.start(self.start_input(driver.start_step()) if payload is None and self.interactive
+                                else payload)
+        return self.show(go)
 
     def resume(self, run: RunFile, payload: JSON | None) -> Outcome:
-        self.run_id = run.run_id
-        if run.pause["kind"] == "done":
-            return self._finish(Step({"done": True, "state": run.pause.get("state", run.state)}, run=run,
-                                     run_id=run.run_id))
-        if payload is None and self.interactive and run.pause["kind"] != "error":
-            payload = self._ask(run.pause)
-        return self._loop(self._call(lambda: self.backend.submit(run, payload)), run)
+        from aip.sdk import Driver
 
-    # ------------------------------------------------------------------------- loop
+        if payload is None and self.interactive and run.pause["kind"] not in ("error", "done"):
+            payload = self.ask(run.pause)
+        return self.show(lambda on_step, on_pause: Driver(self.backend, self.run_file, on_step, on_pause,
+                                                          run_id=run.run_id).resume(run, payload))
 
-    def _call(self, call: Callable[[], Step]) -> Step:
+    def start_input(self, start: JSON) -> JSON:
+        """The start input, prompted on the terminal from the start step's description."""
+        return self._prompt_inputs(start["inputs"])
+
+    def show(self, call: Callable[[Callable, Callable | None], Any]) -> Outcome:
+        """Run `call(on_step, on_pause)`, an SDK call that returns a `Paused` or `Done` or raises
+        a `RunError`, and print what it stopped at: one object, after the `--progress` lines."""
+        from aip.sdk import Done, RunError
+
         try:
-            return call()
-        except Exception as exc:
-            return _crashed(exc)
-
-    def _loop(self, step: Step, run: RunFile | None) -> Outcome:
-        """Print and keep each stop; in interactive mode answer each pause on the terminal and go on."""
-        while True:
-            outcome = self._finish(step, run)
-            if not (self.interactive and "paused" in step.outcome):
-                return outcome
-            run = step.run
-            answer = self._ask(run.pause)
-            step = self._call(lambda: self.backend.submit(run, answer))
-
-    def _finish(self, step: Step, run: RunFile | None = None) -> Outcome:
-        """Print the step's lines and its outcome, writing the run file when there is one to keep."""
-        for line in step.lines:
-            self._line(line)
-        if step.exc is not None and self.debug:
-            traceback.print_exception(step.exc, file=sys.stderr)
-        outcome = step.outcome
-        if step.run is not None:
-            path = self._save(step.run)
-        elif step.kept and run is not None:
-            path = Path(self.run_file) if self.run_file is not None else None
-        else:
-            path = None
-        run_id = step.run_id or (run.run_id if run is not None and step.kept else None)
-        if "error" in outcome:
-            block = {**outcome, "run_id": run_id, "resumable": step.resumable}
-            if path is not None:
-                block["run_file"] = str(path)
+            result = call(self._line, (lambda paused: self.ask(paused.to_json())) if self.interactive else None)
+        except RunError as exc:
+            if exc.cause is not None and self.debug:
+                traceback.print_exception(exc.cause, file=sys.stderr)
+            block = exc.to_json()
             self._print(block)
-            return Outcome(EXIT_ERROR, block, path)
-        if "done" in outcome:
-            self._print({"done": True, "run_id": run_id, "state": outcome["state"], "run_file": str(path)})
-            return Outcome(EXIT_DONE, outcome["state"], path)
-        block = {**{k: v for k, v in outcome.items() if k not in PRIVATE}, "run_id": run_id, "run_file": str(path)}
+            return Outcome(EXIT_ERROR, block, exc.run_file)
+        if isinstance(result, Done):
+            self._print(result.to_json())
+            return Outcome(EXIT_DONE, result.state, result.run_file)
+        block = result.to_json()
         if not self.interactive:
             self._print(block)
-        return Outcome(EXIT_PAUSED, block, path)
-
-    def _save(self, run: RunFile) -> Path:
-        """Write the run file: the explicit path, else under the user's home by run id."""
-        old = self.run_file
-        if self.keyed:
-            self.run_file = run_path(run.run_id)
-        run.save(self.run_file)
-        if old is not None and Path(old) != self.run_file:
-            Path(old).unlink(missing_ok=True)
-        return self.run_file
+        return Outcome(EXIT_PAUSED, block, result.run_file)
 
     def _print(self, obj: JSON) -> None:
         self.out.write((json.dumps(obj) if self.progress else json.dumps(obj, indent=2)) + "\n")
@@ -246,11 +212,12 @@ class Runner:
 
     # ------------------------------------------------------------------- interactive
 
-    def _ask(self, pause: JSON) -> JSON:
-        """The answer to a pause, from the terminal."""
-        if pause["kind"] == "decision":
+    def ask(self, pause: JSON) -> JSON:
+        """The answer to a pause (a run file's, or the printed object), from the terminal."""
+        kind = pause.get("kind") or pause.get("paused")
+        if kind == "decision":
             return self._prompt_answers(pause["questions"])
-        if pause["kind"] == "client_task":
+        if kind == "client_task":
             self.out.write("\n" + pause["task"] + "\n\n")
             return self._prompt_inputs(pause["answer_with"])
         return self._prompt_review(pause["review"], pause["proposed_answers"])
@@ -307,11 +274,6 @@ class Runner:
                 dtype = "boolean" if isinstance(current, bool) else "integer" if isinstance(current, int) else "string"
                 overrides[name] = _coerce(raw, dtype)
         return overrides
-
-
-def _crashed(exc: BaseException) -> Step:
-    """A call that raised before the run could move: an unknown skill, an unreachable server."""
-    return Step(error_object(exc), exc=exc)
 
 
 def _coerce(raw: str, dtype: str) -> Any:

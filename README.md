@@ -298,7 +298,11 @@ aip info <name> --example-input > start.json
 aip run <name> --input start.json                      # runs on the server; same pause and resume
 aip get <name>[@revision] --out ./restored             # the folder back, hash-verified and validated
 aip pin <name> <revision>  /  aip retire <name>@<revision>
+aip runs [<run-id>]                                    # the server's runs; one run's state and history
+aip governance [<query>]                               # the governance queries, or one query's rows
 ```
+
+Every one of these is a thin wrapper over the Python SDK, `aip.Client` ([`docs/sdk.md`](docs/sdk.md)): `aip.Client().run("billing-support", {...})` returns the same pause or done the CLI prints, as typed objects, and shares its run files.
 
 `aip server --inspector` also serves the [aip-inspector](https://github.com/zach-blumenfeld/aip-inspector) web client
 (catalog, source, run console, history, governance) at `/inspector/`, from the bundle shipped in

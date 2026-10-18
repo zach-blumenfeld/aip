@@ -3,15 +3,17 @@
 Local: validate, schema, runtime (the block, or `--skill` for the `aip-runtime` meta-skill),
 skill (install both skills into the agents on this machine), info, run, resume, db, server.
 Against a configured server (`aip config`, or `AIP_SERVER`): search, list, publish, get, pin,
-retire, and `info`/`run` by name. A folder path always bypasses the server.
+retire, runs, governance, and `info`/`run` by name. A folder path always bypasses the server.
+
+Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
+arguments, calls one SDK method, and prints the result. schema, runtime and skill are the
+format's tooling, db loads Neo4j directly, and server serves: none of them is a client call.
 """
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
-from typing import Any
 
 
 def _emit(issues) -> tuple[int, int]:
@@ -26,17 +28,15 @@ def _emit(issues) -> tuple[int, int]:
 
 
 def validate_command(argv: list[str]) -> int:
-    from aip_spec import validate_skill
-
     parser = argparse.ArgumentParser(prog="aip validate", description="Validate an AIP skill folder.")
     parser.add_argument("skill_dir", type=Path, help="path to the skill folder (containing SKILL.md)")
     args = parser.parse_args(argv)
 
-    loaded, issues = validate_skill(args.skill_dir)
-    errors, warnings = _emit(issues)
+    result = _client().validate(args.skill_dir)
+    errors, warnings = _emit(result.issues)
     suffix = f" ({warnings} warning(s) — see stderr)" if warnings else ""
-    if errors == 0 and loaded is not None:
-        print(f"VALID: {args.skill_dir} (name: {loaded.frontmatter.get('name')}){suffix}")
+    if result.valid:
+        print(f"VALID: {args.skill_dir} (name: {result.name}){suffix}")
         return 0
     print(f"INVALID: {errors} error(s){suffix} — see stderr")
     return 1
@@ -126,61 +126,6 @@ def skill_command(argv: list[str]) -> int:
         return 1
 
 
-def _example_input(items) -> dict:
-    from aip.model.types import example_input
-
-    return example_input({item.name: item.type.value for item in items})
-
-
-def _inputs_table(items) -> str:
-    if not items:
-        return "  (none)\n"
-    width = max(len(i.name) for i in items)
-    return "".join(f"  {i.name.ljust(width)}  {i.type.value:8}  {i.description or ''}".rstrip() + "\n" for i in items)
-
-
-def describe_skill(loaded) -> str:
-    """Human-readable summary of a skill: what it does, what to give it, how it flows."""
-    fm, spec = loaded.frontmatter, loaded.spec
-    start = spec.start
-    lines = [f"{fm['name']}  (AIP {fm.get('metadata', {}).get('aip-version', '?')})", "", fm.get("description", ""), ""]
-    lines += ["PURPOSE", "  " + " ".join(spec.purpose.split()), ""]
-    lines += ["TRIGGER WHEN"] + [f"  - {t}" for t in spec.trigger_when]
-    if spec.do_not_use_when:
-        lines += ["DO NOT USE WHEN"] + [f"  - {t}" for t in spec.do_not_use_when]
-    lines += ["", f"START INPUT  (step `{start.name}`, {start.kind})", _inputs_table(start.inputs).rstrip(), "",
-              "  example start.json:", "  " + json.dumps(_example_input(start.inputs)), "",
-              f"  run:  aip run {loaded.skill_dir} --input start.json", ""]
-    lines += ["STEPS"]
-    for step in spec.steps:
-        if step.kind == "router":
-            branches = ", ".join(f"{v} -> {t}" for v, t in step.branches.items())
-            lines.append(f"  {step.name}  [router on `{step.branch_on}`]  {branches}")
-        elif step.kind == "end":
-            lines.append(f"  {step.name}  [end]")
-        else:
-            lines.append(f"  {step.name}  [{step.kind}]  -> {step.inputs_to}")
-        if getattr(step, "description", None):
-            lines.append(f"      {step.description}")
-        if step.kind == "decision":
-            for name, q in step.questions.items():
-                threshold = step.thresholds.get(name)
-                suffix = f"  (threshold {threshold})" if threshold is not None else ""
-                lines.append(f"      ? {name} [{q.type}]{suffix}: {q.instructions}")
-        if step.kind == "execution":
-            lines.append(f"      script: {step.script}" + (f"  assets: {', '.join(step.assets)}" if step.assets else ""))
-        if step.kind == "client_task":
-            lines.append(f"      template: {step.template}" + (f"  assets: {', '.join(step.assets)}" if step.assets else ""))
-            for ref in step.references:
-                lines.append(f"      reference: {ref.path}  ({ref.description})")
-    end = next((s for s in spec.steps if s.kind == "end"), None)
-    if end is not None:
-        lines += ["", "RESULT  (end state)", _inputs_table(end.inputs).rstrip()]
-    if spec.anti_patterns:
-        lines += ["", "ANTI-PATTERNS"] + [f"  - {a}" for a in spec.anti_patterns]
-    return "\n".join(lines) + "\n"
-
-
 def _server():
     """The configured server, or None. One seam for tests to point at an in-process app."""
     from aip.client.server import configured
@@ -188,72 +133,50 @@ def _server():
     return configured()
 
 
-def _target(arg: str) -> tuple[str, Any]:
-    """`("folder", Path)` when `arg` is a skill folder on disk, else `("name", Server)` when a
-    server is configured. A folder never goes through the server."""
-    path = Path(arg)
-    if path.is_dir() or path.exists():
-        return "folder", path
-    server = _server()
-    if server is None:
-        raise SystemExit(f"aip: {arg!r} is not a skill folder, and no server is configured to look it up by name "
-                         "(set AIP_SERVER or run `aip config --server URL`)")
-    if "/" in arg or "\\" in arg:
-        raise SystemExit(f"aip: no such folder {arg!r}")
-    return "name", server
+def _client():
+    """The SDK client every command is a wrapper over, on `_server()`."""
+    from aip.sdk import Client
+
+    return Client.over(_server())
 
 
-def _remote_skill(server, ref: str):
-    """A `LoadedSkill` built from the published SKILL.md, so `describe_skill` renders it as for a folder."""
-    from aip_spec.skill import LoadedSkill, parse_skill_md, parse_spec
-    import tempfile
+def _serving(call):
+    """Run a client action. A server error becomes one line on stderr and exit 1; no server, or a
+    name that is not a folder, exits with the message."""
+    from aip.sdk import InvalidInput, NoServer, NotFound, ServerError
 
-    text = server.file(ref, "SKILL.md").decode("utf-8")
-    with tempfile.TemporaryDirectory() as tmp:
-        md = Path(tmp) / "SKILL.md"
-        md.write_text(text)
-        doc, issues = parse_skill_md(md)
-    if doc is None:
-        raise SystemExit(f"aip: the server's SKILL.md for {ref} did not parse: " + "; ".join(i.message for i in issues))
-    spec, issues = parse_spec(doc.yaml_text, "SKILL.md")
-    if spec is None:
-        raise SystemExit(f"aip: the server's SKILL.md for {ref} did not parse: " + "; ".join(i.message for i in issues))
-    return LoadedSkill(skill_dir=Path(ref), frontmatter=doc.frontmatter, spec=spec)
+    try:
+        return call()
+    except ServerError as exc:
+        print(f"aip: {exc}", file=sys.stderr)
+        return 1
+    except (NoServer, NotFound, InvalidInput) as exc:
+        raise SystemExit(f"aip: {exc}") from exc
 
 
 def info_command(argv: list[str]) -> int:
-    from aip.spec import load_skill
+    from aip.sdk import InvalidSkill
 
     parser = argparse.ArgumentParser(prog="aip info", description="Describe a skill: what it does, the input it expects, and how it flows.")
     parser.add_argument("skill", metavar="skill_dir|name", help="a skill folder, or a published name (`name`, `name@rev`, `name@latest`)")
     parser.add_argument("--json", action="store_true", help="machine-readable description instead of the summary")
     parser.add_argument("--example-input", action="store_true", help="print only an example start input as JSON")
     args = parser.parse_args(argv)
-    kind, where = _target(args.skill)
-    if kind == "name":
-        def remote() -> int:
+
+    def go() -> int:
+        try:
+            info = _client().info(args.skill)
             if args.json:
-                print(json.dumps(where.info(args.skill), indent=2))
+                print(json.dumps(info.data, indent=2))
             elif args.example_input:
-                print(json.dumps(where.info(args.skill)["example_input"], indent=2))
+                print(json.dumps(info.example_input, indent=2))
             else:
-                sys.stdout.write(describe_skill(_remote_skill(where, args.skill)))
-            return 0
-        return _serving(remote)
-    try:
-        loaded = load_skill(where)
-    except ValueError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    if args.example_input:
-        print(json.dumps(_example_input(loaded.spec.start.inputs), indent=2))
+                sys.stdout.write(info.summary())
+        except InvalidSkill as exc:
+            print(exc, file=sys.stderr)
+            return 1
         return 0
-    if args.json:
-        from aip.spec.loader import build_procedure
-        print(json.dumps(build_procedure(loaded).describe(), indent=2))
-        return 0
-    sys.stdout.write(describe_skill(loaded))
-    return 0
+    return _serving(go)
 
 
 class _BadInput(ValueError):
@@ -276,25 +199,19 @@ def _read_input(spec: str | None) -> dict | None:
 
 def _outcome(call, debug: bool, progress: bool) -> int:
     """`run` and `resume`: whatever escapes the runner is still one error object on stdout, exit 1,
-    with the traceback on stderr only under --debug (`docs/cli-json.md`)."""
+    with the traceback on stderr only under --debug (`docs/cli-json.md`). A skill or run that
+    cannot be found, or an input that is not an object, is `invalid_input`."""
     from aip.client.runner import EXIT_ERROR, error_object
+    from aip.sdk import AipError, ServerError
 
     try:
         return call()
-    except SystemExit as exc:                     # a usage problem `_target` found
-        if not isinstance(exc.code, str):
-            raise
-        exc = _BadInput(exc.code.removeprefix("aip: "))
-        error = {"error": "invalid_input", "step": None, "message": str(exc), "missing": [], "invalid": []}
-        block = {**error, "run_id": None, "resumable": False}
-        print(json.dumps(block) if progress else json.dumps(block, indent=2))
-        return EXIT_ERROR
     except Exception as exc:
         if debug:
             import traceback
             traceback.print_exception(exc, file=sys.stderr)
         error = ({"error": "invalid_input", "step": None, "message": str(exc), "missing": [], "invalid": []}
-                 if isinstance(exc, _BadInput) else error_object(exc))
+                 if isinstance(exc, (_BadInput, AipError)) and not isinstance(exc, ServerError) else error_object(exc))
         block = {**error, "run_id": None, "resumable": False}
         print(json.dumps(block) if progress else json.dumps(block, indent=2))
         return EXIT_ERROR
@@ -307,7 +224,6 @@ def _outcome_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def run_command(argv: list[str]) -> int:
-    from aip.client.backend import HttpBackend, LocalBackend
     from aip.client.runner import Runner
 
     parser = argparse.ArgumentParser(prog="aip run", description="Run a procedure, pausing when the client must decide: "
@@ -325,18 +241,18 @@ def run_command(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     def go() -> int:
-        kind, where = _target(args.skill)
-        backend = (HttpBackend(where, name=args.skill, workdir=args.workdir) if kind == "name"
-                   else LocalBackend(where, workdir=args.workdir))
-        runner = Runner(backend, run_file=args.run_file, interactive=args.interactive,
-                        progress=args.progress, debug=args.debug)
-        return runner.start(_read_input(args.input)).code
+        client = _client()
+        payload = _read_input(args.input)
+        runner = Runner(None, interactive=args.interactive, progress=args.progress, debug=args.debug)
+        if payload is None and args.interactive:
+            payload = runner.start_input({"inputs": client.info(args.skill).inputs})
+        return runner.show(lambda on_step, on_pause: client.run(
+            args.skill, payload, workdir=args.workdir, run_file=args.run_file, on_step=on_step, on_pause=on_pause)).code
     return _outcome(go, args.debug, args.progress)
 
 
 def resume_command(argv: list[str]) -> int:
-    from aip.client.runner import RunFile, Runner, backend_for
-    from aip.client.server import settings
+    from aip.client.runner import RunFile, Runner
 
     parser = argparse.ArgumentParser(prog="aip resume", description="Continue a run, locally or on the server the run "
                                      "file names: answer its pause, or with no input retry the step that failed.")
@@ -348,58 +264,19 @@ def resume_command(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     def go() -> int:
-        path = _run_file(args.run)
-        run = RunFile.load(path)
-        configured = settings()
-        token = configured["token"] if run.server and configured["server"] == run.server else None
-        backend = backend_for(run, token=token, session=_session_for(run.server))
-        runner = Runner(backend, run_file=path, interactive=args.interactive,
-                        progress=args.progress, debug=args.debug, run_id=run.run_id)
-        return runner.resume(run, _read_input(args.input)).code
+        client = _client()
+        payload = _read_input(args.input)
+        runner = Runner(None, interactive=args.interactive, progress=args.progress, debug=args.debug)
+        if payload is None and args.interactive:
+            pause = RunFile.load(client.run_file(args.run)).pause
+            if pause["kind"] not in ("error", "done"):
+                payload = runner.ask(pause)
+        return runner.show(lambda on_step, on_pause: client.resume(
+            args.run, payload, on_step=on_step, on_pause=on_pause)).code
     return _outcome(go, args.debug, args.progress)
 
 
-def _run_file(ref: str) -> Path:
-    """`aip resume`'s argument: an existing path, else a run id under the user's home."""
-    from aip.client.runner import RUN_ID, run_path
-
-    if Path(ref).is_file() or not RUN_ID.fullmatch(ref):
-        if not Path(ref).is_file():
-            raise _BadInput(f"no run file {ref}")
-        return Path(ref)
-    path = run_path(ref)
-    if not path.is_file():
-        raise _BadInput(f"no run {ref!r} (looked for {path})")
-    return path
-
-
-def _session_for(url: str | None):
-    """The configured server's session when the run file points at that server (tests inject one)."""
-    if url is None:
-        return None
-    server = _server()
-    return server._session if server is not None and server.url == url.rstrip("/") else None
-
-
-def _serving(call):
-    """Run a client action; a server error becomes one line on stderr and exit 1."""
-    from aip.client.server import ServerError
-
-    try:
-        return call()
-    except ServerError as exc:
-        print(f"aip: {exc}", file=sys.stderr)
-        return 1
-
-
 # ----------------------------------------------------------------------- catalog
-
-
-def _require_server():
-    server = _server()
-    if server is None:
-        raise SystemExit("aip: no server configured (set AIP_SERVER or run `aip config --server URL`)")
-    return server
 
 
 def search_command(argv: list[str]) -> int:
@@ -408,18 +285,17 @@ def search_command(argv: list[str]) -> int:
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    server = _require_server()
 
     def go() -> int:
-        hits = server.search(args.query, args.limit)
+        hits = _client().search(args.query, args.limit)
         if args.json:
-            print(json.dumps(hits, indent=2))
+            print(json.dumps([h.data for h in hits], indent=2))
             return 0
         if not hits:
             print("no matches")
             return 0
         for h in hits:
-            print(f"{h['name']}@{h['revision']}  {h['score']:.3f}  {h.get('description') or ''}".rstrip())
+            print(f"{h.name}@{h.revision}  {h.score:.3f}  {h.description or ''}".rstrip())
         return 0
     return _serving(go)
 
@@ -428,66 +304,59 @@ def list_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="aip list", description="Every published name with the revision it resolves to.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    server = _require_server()
 
     def go() -> int:
-        rows = server.list()
+        rows = _client().list()
         if args.json:
-            print(json.dumps(rows, indent=2))
+            print(json.dumps([r.data for r in rows], indent=2))
             return 0
         if not rows:
             print("no skills published")
             return 0
-        width = max(len(r["name"]) for r in rows)
+        width = max(len(r.name) for r in rows)
         for r in rows:
-            live = [v for v in r["revisions"] if not v.get("retired")]
-            resolves = r.get("pinned") or r.get("latest") or (live[0]["revision"] if live else "-")
-            flag = "  pinned" if r.get("pinned") else ""
-            print(f"{r['name'].ljust(width)}  {resolves}  {len(r['revisions'])} revision(s){flag}  {r.get('description') or ''}".rstrip())
+            flag = "  pinned" if r.pinned else ""
+            print(f"{r.name.ljust(width)}  {r.resolves or '-'}  {len(r.revisions)} revision(s){flag}  {r.description or ''}".rstrip())
         return 0
     return _serving(go)
 
 
 def publish_command(argv: list[str]) -> int:
-    from aip.spec import validate_skill
+    from aip.sdk import InvalidSkill
 
     parser = argparse.ArgumentParser(prog="aip publish", description="Validate a skill folder locally, upload it, and print `name@revision`.")
     parser.add_argument("skill_dir", type=Path)
     args = parser.parse_args(argv)
-    server = _require_server()
-    loaded, issues = validate_skill(args.skill_dir)
-    errors, _ = _emit(issues)
-    if errors or loaded is None:
-        print(f"INVALID: {errors} error(s) — not published", file=sys.stderr)
-        return 1
 
     def go() -> int:
-        result = server.publish(args.skill_dir)
-        for w in result.get("warnings", []):
+        try:
+            result = _client().publish(args.skill_dir)
+        except InvalidSkill as exc:
+            errors, _ = _emit(exc.validation.issues)
+            print(f"INVALID: {errors} error(s) — not published", file=sys.stderr)
+            return 1
+        _emit(result.validation.issues)
+        for w in result.warnings:
             print(json.dumps(w), file=sys.stderr)
-        print(f"{result['name']}@{result['revision']}")
+        print(f"{result.name}@{result.revision}")
         return 0
     return _serving(go)
 
 
 def get_command(argv: list[str]) -> int:
-    from aip.spec import validate_skill
-
     parser = argparse.ArgumentParser(prog="aip get", description="Download a published revision losslessly to <out>/<name>/, "
                                      "verify every file against the manifest, and validate it.")
     parser.add_argument("ref", help="`name`, `name@rev`, or `name@latest`")
     parser.add_argument("--out", type=Path, default=Path("."), help="parent folder; the skill lands at <out>/<name>")
     args = parser.parse_args(argv)
-    server = _require_server()
 
     def go() -> int:
-        target = server.download(args.ref, args.out)
-        loaded, issues = validate_skill(target)
-        errors, _ = _emit(issues)
-        if errors or loaded is None:
-            print(f"wrote {target}, but it does not validate here ({errors} error(s))", file=sys.stderr)
+        fetched = _client().get(args.ref, args.out)
+        errors, _ = _emit(fetched.validation.issues)
+        if not fetched.validation.valid:
+            print(f"wrote {fetched.path}, but it does not validate here ({errors} error(s))", file=sys.stderr)
             return 1
-        print(f"wrote {target}")
+        print(f"wrote {fetched.path}")
         return 0
     return _serving(go)
 
@@ -500,11 +369,10 @@ def pin_command(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if (args.revision is None) == (not args.clear):
         parser.error("give a revision, or --clear")
-    server = _require_server()
 
     def go() -> int:
-        server.pin(args.name, None if args.clear else args.revision)
-        print(f"{args.name} pin cleared" if args.clear else f"{args.name} -> {args.revision}")
+        pinned = _client().pin(args.name, None if args.clear else args.revision)
+        print(f"{pinned.name} pin cleared" if pinned.revision is None else f"{pinned.name} -> {pinned.revision}")
         return 0
     return _serving(go)
 
@@ -513,20 +381,67 @@ def retire_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="aip retire", description="Stop a name resolving to a revision (kept for the runs that reference it).")
     parser.add_argument("ref", help="`name@revision`")
     args = parser.parse_args(argv)
-    name, sep, revision = args.ref.partition("@")
+    _, sep, revision = args.ref.partition("@")
     if not sep or not revision or revision == "latest":
         parser.error("retire takes `name@revision`")
-    server = _require_server()
 
     def go() -> int:
-        server.retire(name, revision)
-        print(f"retired {name}@{revision}")
+        retired = _client().retire(args.ref)
+        print(f"retired {retired.name}@{retired.revision}")
+        return 0
+    return _serving(go)
+
+
+def runs_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip runs", description="The server's runs, newest first; with a run id, that "
+                                     "run's state and history (a local run's from its run file).")
+    parser.add_argument("run_id", nargs="?", default=None)
+    parser.add_argument("--name", default=None, help="only runs of this skill")
+    parser.add_argument("--status", default=None, help="only runs with this status (paused, done, failed, ...)")
+    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    def go() -> int:
+        if args.run_id is not None:
+            print(json.dumps(_client().run_record(args.run_id).data, indent=2))
+            return 0
+        rows = _client().runs(args.name, args.status, args.limit)
+        if args.json:
+            print(json.dumps([r.data for r in rows], indent=2))
+            return 0
+        if not rows:
+            print("no runs")
+            return 0
+        for r in rows:
+            print(f"{r.run_id}  {r.name}@{r.revision}  {r.status}  {r.steps} step(s)  {r.updated_at}")
+        return 0
+    return _serving(go)
+
+
+def governance_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip governance", description="The server's governance queries; with a query, "
+                                     "its rows as JSON.")
+    parser.add_argument("query", nargs="?", default=None)
+    parser.add_argument("--name", default=None, help="only this skill")
+    parser.add_argument("--window", type=int, default=None, help="how many recent runs to look at")
+    parser.add_argument("--limit", type=int, default=None)
+    args = parser.parse_args(argv)
+
+    def go() -> int:
+        rows = _client().governance(args.query, name=args.name, window=args.window, limit=args.limit)
+        if args.query is None:
+            width = max((len(q.query) for q in rows), default=0)
+            for q in rows:
+                print(f"{q.query.ljust(width)}  {q.description}")
+            return 0
+        print(json.dumps(rows, indent=2))
         return 0
     return _serving(go)
 
 
 def config_command(argv: list[str]) -> int:
-    from aip.client.server import config_path, load_config, save_config, settings
+    from aip.sdk import configure
 
     parser = argparse.ArgumentParser(prog="aip config", description="Where the client points. With no flags, show it. "
                                      "AIP_SERVER and AIP_TOKEN override the file.")
@@ -537,31 +452,19 @@ def config_command(argv: list[str]) -> int:
                              "an empty string forgets it). Without one, every decision pauses for you to answer")
     parser.add_argument("--clear", action="store_true", help="forget the server, token, and decision-model key")
     args = parser.parse_args(argv)
+    writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model))
+    s = configure(args.server, args.token, args.decision_model, clear=args.clear)
     if args.clear:
-        path = save_config({})
-        print(f"cleared {path}")
+        print(f"cleared {s.path}")
         return 0
-    if args.server is not None or args.token is not None or args.decision_model is not None:
-        config = load_config()
-        if args.server is not None:
-            config["server"] = args.server.rstrip("/")
-        if args.token is not None:
-            config["token"] = args.token
-        if args.decision_model:
-            config["decision_model"] = {"api_key": args.decision_model}
-        elif args.decision_model is not None:
-            config.pop("decision_model", None)
-        path = save_config(config)
-        print(f"wrote {path}")
-    from aip.client.resolver import status
-
-    s = settings()
-    if s["server"] is None:
-        print(f"no server configured (local folders only); set AIP_SERVER or `aip config --server URL` ({config_path()})")
+    if writes:
+        print(f"wrote {s.path}")
+    if s.server is None:
+        print(f"no server configured (local folders only); set AIP_SERVER or `aip config --server URL` ({s.path})")
     else:
-        print(f"server: {s['server']}  (from {s['source']})")
-        print(f"token:  {'set' if s['token'] else 'none'}")
-    print(status())
+        print(f"server: {s.server}  (from {s.source})")
+        print(f"token:  {'set' if s.token_set else 'none'}")
+    print(s.decision_model)
     return 0
 
 
@@ -754,6 +657,8 @@ COMMANDS = {
     "get": get_command,
     "pin": pin_command,
     "retire": retire_command,
+    "runs": runs_command,
+    "governance": governance_command,
     "config": config_command,
     "db": db_command,
     "server": server_command,

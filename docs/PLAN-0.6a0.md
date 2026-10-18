@@ -314,7 +314,20 @@ pauses as a manual decision and records `resolver: manual`.
 
 ## Track S: the SDK
 
-### - [ ] S1 (aip): a public Python SDK surface
+### - [x] S1 (aip): a public Python SDK surface
+
+Done 2026-10-18, aip only. `aip.sdk` holds `Client`, the typed results and errors (`aip.AipError`
+in `aip.errors`, which `ServerError` now subclasses), and `Driver`, the run-file and outcome logic
+that was in `Runner`; `Runner` only prints and prompts. Choices beyond the text: `run`/`resume`
+return `Paused` or `Done` (each `to_json()` is the CLI's object) and raise `RunError` for the error
+object, and they write the same run files as the CLI, so either resumes the other's runs; `run`
+takes `on_step` and `on_pause` (answer pauses in-process; interactive mode is that). `Client`
+also has `list` and `run_record` (a local run's record comes from its run file), plus module-level
+`aip.settings()`/`aip.configure()` for `aip config`. Two CLI commands are new so the SDK's `runs`
+and `governance` have one: `aip runs [<run-id>]`, `aip governance [<query>]`. `schema`, `runtime`,
+`skill`, `db` and `server` are not client calls and stay off `Client`; the test lists them so a
+new command must be classified. The LangGraph example in `docs/sdk.md` is executed by the test
+with `@tool` stubbed (langchain is not a dependency).
 
 `aip.Client(server=None, token=None)` with `search`, `info`, `run`, `resume`, `publish`, `get`,
 `validate`, `runs`, `governance`, `pin`, `retire`, each returning typed results and raising
