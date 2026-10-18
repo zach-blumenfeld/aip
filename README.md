@@ -5,7 +5,7 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>Structured Skills for Performance & Governance</em></p>
+      <p><em>Graph Procedures for Predictability & Governance</em></p>
     </td>
   </tr>
 </table>
@@ -16,7 +16,14 @@ Agent Instruction Protocol (AIP) is a protocol that uses graphs to represent and
 
 A **procedure** is an instance of step-by-step know-how: an executable workflow that guides an agent on how to perform a task using tools and logical sequences.
 
-Two protocols cover parts of this today. **MCP** decouples tools, resources, and other assets into a portable service any agent can call. **Agent Skills** represent procedural knowledge in a portable way that humans can read and maintain. AIP replaces both with a single unified protocol, built to give teams running autonomous agents predictability, governance, and cost savings. By treating procedures as first-class citizens, AIP provides a client-server architecture for not just calling individual tools but sequenced workflows of tools and steps, with typed I/O contracts, that can be distributed, executed by economical AI models, and governed by humans on the backend.
+Two protocols cover parts of this today. 
+
+1. **Model Context Protocol (MCP)** _decouples tools, resources, and other assets_ into a portable service any agent can call. 
+2. **Agent Skills** _represent procedural knowledge_ in a portable way that humans can read and maintain. 
+
+AIP seeks to accomplish both these goals with a single unified protocol, built to give teams running autonomous agents _**predictability, governance, portability, and cost savings**_. 
+
+By treating procedures as first-class citizens, AIP provides a client-server architecture for not just calling individual tools but sequenced workflows of tools and steps, with typed I/O contracts, that can be distributed, executed by economical AI models, and governed by humans on the backend.
 
 Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills ([Evidence So Far](#evidence-so-far)).
 
@@ -24,7 +31,7 @@ Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% ov
 
 AIP is two pieces:
 
-1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into procedures. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec).
+1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec).
 2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, runs scripts, answers decisions with a structured decision model, and follows routers; the client, an agent or a person, handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
 
 ## How It Works
