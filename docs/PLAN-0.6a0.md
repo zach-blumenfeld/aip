@@ -59,7 +59,11 @@ anything that touches the local machine; compile additionally needs authoring to
 
 ## Track A: the state contract
 
-### - [ ] A1 (aip-spec): declared outputs and the one-producer rule
+### - [x] A1 (aip-spec): declared outputs and the one-producer rule
+
+Done 2026-10-18: aip-spec `94d45ad` (format, validator, example) and `45b5191` (authoring SKILL.md, a
+separate commit for line-by-line review), tagged `v0.6a0-dev1` locally, not pushed. aip's aip-spec
+URL is still on 0.5a1: A2 does the bump, which needs the tag pushed so uv can resolve it.
 
 Add `outputs` to execution and client_task steps (same shape as `inputs`: name, type,
 description). Decision steps' outputs are their question names. Routers and the end step add no
