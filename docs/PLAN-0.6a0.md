@@ -467,6 +467,21 @@ Test: README quickstart executed top to bottom on a clean checkout; all three te
 
 ### - [ ] C2: harness follow-ups (in `~/dev/aip-skillbench`, its own branch)
 
+BLOCKED: the `ANTHROPIC_API_KEY` in aip-skillbench's `.env` is rejected (401 "Invalid API key",
+checked against `/v1/models`), and both the re-authoring (`convert`, an Opus session) and the
+proof trial run on it. Done so far, aip-skillbench branch `aip-0.6a0` commit `3d22d8d`:
+`bootstrap` defaults to aip `v0.6a0` and aip-spec `v0.6a0`, and `bootstrap --force` passes on the
+laptop (host CLIs report `aip 0.6a0 format 0.6a0`; wheels and skills under `build/` are 0.6a0).
+`--decision-model` now puts `TYPESAFE_API_KEY` in the agent's environment; the server gets only
+`AIP_STEP_TIMEOUT`, and the patch refuses a model key for it. The authoring prompt describes the
+0.6a0 contract. The five packs (report section 5: mars-clouds-clustering, travel-planning,
+data-to-d3, fix-build-google-auto, drone-planning-control) and exoplanet-detection-period, which
+the proof trial needs, are not re-authored, so `AIP_REF.json` still records 0.5a1, the format
+the committed packs are. To finish, with a working key: `uv run aip-skillbench batch-convert
+--from curated --single --force --yes --concurrency 6 --author-model claude-opus-5-5` with
+`--task` for those six, commit the packs with the new `AIP_REF.json`, then `eval --task
+exoplanet-detection-period --mode aip-runtime --model claude-haiku-5-5` and check `config.json`.
+
 The compile step emits `outputs` and `requires`; `AIP_REF.json` pins 0.6a0; the five skills
 from the campaign-28 report are re-authored under the new rules; `--decision-model` puts the key
 in the solver's environment instead of the server's; aip-runtime mode starts the in-container
