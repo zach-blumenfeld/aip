@@ -350,7 +350,18 @@ and the server mount are removed, and aip ships no UI. The console then needs th
 the machine for interactive runs and talks to the server directly for everything else.
 
 
-### - [ ] I1 (aip): remove the served UI; version handshake
+### - [x] I1 (aip): remove the served UI; version handshake
+
+Done 2026-10-18, aip only. `create_app` takes no `inspector`, the bundle, its `.gitattributes`
+line and `aip server --inspector` are gone, and `/inspector/` is a 404. `aip --version` prints
+`aip 0.6a0.dev0 format 0.6a0`, documented in `docs/cli-json.md` and checked by
+`tests/test_cli_json.py`. Choices beyond the text: the package version moves from `0.5a1` to
+`0.6a0.dev0` so the console's minimum can tell this branch from 0.5 (C1 makes it `0.6a0` and
+must update the doc's sample line), and `aip.__version__` now reads the installed metadata. A
+`server.inspector` key in the server config is refused with a pointer to `npx aip-console`, as
+`[decision_model]` is; the `inspector = true` line that `aip server --init` used to write must be
+deleted from an existing `~/.config/aip/server.toml`. The README walkthrough now says `npx
+aip-console --server URL`, which exists from I2.
 
 Delete `aip server --inspector`, the StaticFiles mount, and `src/aip/server/inspector/`.
 `aip --version` prints `aip <version> format <format>` on one line for the console's startup

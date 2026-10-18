@@ -45,7 +45,7 @@ flowchart LR
     end
     subgraph clients["Clients"]
         agent["any agent +<br/>aip-runtime meta-skill"] --> cli["aip CLI<br/>search · info · run · resume"]
-        insp["aip-inspector<br/>catalog · run console · history · governance"]
+        insp["aip-console<br/>catalog · run console · history · governance"]
         scripts["scripts run here,<br/>next to the data"]
         model["decision model (TypeSafe)<br/>answers questions, flags low confidence"]
         cli --> scripts
@@ -107,7 +107,7 @@ aip skill remove
 
 Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
 
-The [End-to-End Walkthrough](#end-to-end-walkthrough) below takes a fresh machine through install, a Neo4j-backed server with the inspector, an agent run, and authoring a skill.
+The [End-to-End Walkthrough](#end-to-end-walkthrough) below takes a fresh machine through install, a Neo4j-backed server with the console, an agent run, and authoring a skill.
 
 ### Model Recommendation for Co-Authoring
 
@@ -159,7 +159,7 @@ database = "neo4j"
 Then start the aip server:
 
 ```bash
-aip server --inspector
+aip server
 ```
 Leave it running. In a second terminal you will publish an AIP skill to the server. 
 You will use the hello-world example for now.  Later you will see how to compile your own. 
@@ -173,9 +173,16 @@ aip publish billing-support                    # validates, uploads, prints bill
 
 `aip publish <folder>` is how any skill gets onto the server. `aip list` shows the catalog.
 
-### 3. The inspector
+### 3. The console
 
-Open http://localhost:8000/inspector/. Four tabs across the top plus the server link at the right:
+The console (formerly inspector) is a separate npm package; the server serves no UI. In another
+terminal, start it against the server and open the URL it prints:
+
+```bash
+npx aip-console --server http://localhost:8000
+```
+
+Four tabs across the top plus the server link at the right:
 
 - **catalog**: every published name with its step graph drawn. Click `billing-support` for the procedure page: purpose, triggers, each step with its inputs and questions, the files it ships (source viewer), the diff between any two revisions, and the governance controls (pin a revision, retire one).
 - **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a decision the model was unsure about, a task it needs the client to do, or the questions themselves when there is no model.
@@ -226,7 +233,7 @@ The installer put the `aip-runtime` skill into Claude Code if it found it so you
 
 `aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config.
 
-Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket the server's script opened. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the inspector's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
+Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket the server's script opened. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the console's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
 
 ### 6. Compile and publish your own skill
 
@@ -242,10 +249,10 @@ The agent asks you to pick a name, scaffolds `./<name>/` with your document unde
 aip validate ./<name>                    # the same checks, any time
 aip info ./<name>                        # what it does, the input it expects, how it flows
 aip run ./<name> --interactive           # run it locally, answering on the terminal
-aip publish ./<name>                     # onto the server; refresh the inspector
+aip publish ./<name>                     # onto the server; refresh the console
 ```
 
-Edit, validate, publish again: the same name gets a new revision, and the inspector's diff shows what changed. Pin a revision when the catalog should resolve to it regardless of what is published later.
+Edit, validate, publish again: the same name gets a new revision, and the console's diff shows what changed. Pin a revision when the catalog should resolve to it regardless of what is published later.
 
 ## Procedures
 
@@ -304,9 +311,10 @@ aip governance [<query>]                               # the governance queries,
 
 Every one of these is a thin wrapper over the Python SDK, `aip.Client` ([`docs/sdk.md`](docs/sdk.md)): `aip.Client().run("billing-support", {...})` returns the same pause or done the CLI prints, as typed objects, and shares its run files.
 
-`aip server --inspector` also serves the [aip-inspector](https://github.com/zach-blumenfeld/aip-inspector) web client
-(catalog, source, run console, history, governance) at `/inspector/`, from the bundle shipped in
-`src/aip/server/inspector/`; that directory is generated there by the inspector repo's `npm run build && npm run sync`.
+The web client, the console (formerly inspector; [aip-inspector](https://github.com/zach-blumenfeld/aip-inspector)),
+is its own npm package: `npx aip-console --server URL` serves the catalog, source, run console, history and
+governance views from a local Node process. The server serves no UI. The console checks `aip --version`
+(`aip <version> format <format>`) at startup, since interactive runs go through the `aip` CLI.
 
 `aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when this client has no decision-model key, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; every outcome prints a `run_id`, the run file is `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it, `--run-file` picks a path), `aip resume <run-id> --input answer.json` continues from any directory, and `aip resume <run-id>` with no input retries a failed step. `--progress` adds a JSON line per completed step and `--debug` a traceback on failure. Decision thresholds are the author's, from SKILL.md; nothing at run time overrides them. On a server, the server holds the run's state and history and the run file is only a handle.
 

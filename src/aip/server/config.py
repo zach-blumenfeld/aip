@@ -10,13 +10,14 @@ Precedence, highest first:
 4. built-in defaults
 
 The config file has two tables. `[server]` is the listener: `host`, `port`, `token`,
-`read_token`, `localhost_open`, `inspector`, `log_level`. `[backend]` picks the store:
+`read_token`, `localhost_open`, `log_level`. `[backend]` picks the store:
 `kind` (`filesystem` or `neo4j`), `root` for the filesystem, `uri`, `user`, `password`,
 `database`, `cache_dir` for Neo4j. The Neo4j values are applied by setting their `NEO4J_*`
 environment variables when unset, since the Neo4j connection reads those; that is what makes
 rule 2 beat rule 3 for them too. The server holds no decision-model key: decisions are
 resolved by the client (`aip config --decision-model`), so a `[decision_model]` table is
-refused with that instruction.
+refused with that instruction. The server serves no UI either, so `server.inspector` is refused
+with a pointer to the console (`npx aip-console`).
 
 The file is looked up as `--config FILE`, then `$AIP_SERVER_CONFIG`, then `./aip-server.toml`,
 then the per-user `~/.config/aip/server.toml` (`user_config_path`, beside the client's
@@ -54,7 +55,6 @@ _FLAG_KEYS = {
     ("server", "port"): "port",
     ("server", "token"): "token",
     ("server", "read_token"): "read_token",
-    ("server", "inspector"): "inspector",
     ("server", "log_level"): "log_level",
     ("backend", "kind"): "backend",
     ("backend", "root"): "root",
@@ -62,7 +62,7 @@ _FLAG_KEYS = {
 }
 
 _KNOWN = {
-    "server": {"host", "port", "token", "read_token", "localhost_open", "inspector", "log_level"},
+    "server": {"host", "port", "token", "read_token", "localhost_open", "log_level"},
     "backend": {"kind", "root", "uri", "user", "password", "database", "cache_dir"},
 }
 
@@ -77,7 +77,6 @@ port = 8000
 # token = "..."           # bearer token for read + publish; `read_token` grants read only
 # read_token = "..."
 localhost_open = true     # loopback clients need no token
-inspector = true          # serve the web client at /inspector/; or a path to a built dist/
 log_level = "info"
 
 [backend]
@@ -192,6 +191,10 @@ def read_config(path: Path) -> JSON:
         if not isinstance(values, dict):
             raise ConfigError(f"{path}: [{table}] must be a table")
         for key in values:
+            if table == "server" and key == "inspector":
+                raise ConfigError(f"{path}: server.inspector is not a server setting since 0.6a0: the server "
+                                  "serves no UI; remove the key and run the console (formerly inspector) "
+                                  "with `npx aip-console --server URL`")
             if key not in _KNOWN[table]:
                 raise ConfigError(f"{path}: unknown key {table}.{key}; expected one of {sorted(_KNOWN[table])}")
     kind = data.get("backend", {}).get("kind")
@@ -215,10 +218,6 @@ def apply_config(config: JSON, environ: Dict[str, str] | None = None) -> JSON:
             continue
         if dest in ("root", "cache_dir"):
             value = Path(str(value)).expanduser()
-        elif dest == "inspector":
-            value = value if isinstance(value, bool) else str(Path(str(value)).expanduser())
-            if value is False:
-                value = None
         defaults[dest] = value
     localhost_open = config.get("server", {}).get("localhost_open")
     if localhost_open is not None:

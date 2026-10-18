@@ -31,10 +31,8 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   `/governance/{query}?name=&window=&limit=` answers one through the backend's `.governance`
   (501 when it has none or declines the query).
 
-- **inspector** (optional): with `inspector=<dir>`, the built `aip-inspector` bundle in that
-  directory is served at `/inspector/` (`index.html` at the root, hashed assets beside it).
-  `INSPECTOR_DIR` is where the package ships it; `npm run build && npm run sync` in the
-  inspector repo refreshes it. A missing bundle answers 404 with instructions, not a crash.
+The server serves no UI: the console (formerly inspector) is its own npm package and calls
+this API like any other client.
 
 `ref` is `name`, `name@<revision>`, or `name@latest`, resolved by the catalog.
 
@@ -58,8 +56,7 @@ from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from aip.model import Decision, Execution, describe_next, engine
@@ -77,9 +74,6 @@ LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 # On the replies of `/procedures/{ref}/step|answer`, which go once `POST /runs` has had a version.
 DEPRECATED = {"Deprecation": "true", "Link": '</runs>; rel="successor-version"'}
-
-# The inspector bundle the package ships (design §10): `aip server --inspector` serves it.
-INSPECTOR_DIR = Path(__file__).parent / "inspector"
 
 
 class ApiError(Exception):
@@ -151,12 +145,11 @@ class ResultBody(BaseModel):
 
 
 def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
-               localhost_open: bool = True, inspector: Path | None = None) -> FastAPI:
+               localhost_open: bool = True) -> FastAPI:
     """Build the server over `backend`.
 
     tokens:          bearer token -> scopes (`read`, `publish`); empty or None means no auth
     localhost_open:  a loopback client needs no token even when tokens are configured
-    inspector:       serve the inspector bundle in this directory at /inspector/ (None: do not)
     """
     catalog = backend.catalog
     runs = getattr(backend, "runs", None)
@@ -540,37 +533,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
             raise ApiError(501, "not_supported", "this server does not answer governance queries")
         return governance.query(query, name=name, window=window, limit=limit)
 
-    # --------------------------------------------------------------- inspector
-
-    if inspector is not None:
-        mount_inspector(app, inspector)
-
     app.state.backend = backend
     return app
-
-
-def mount_inspector(app: FastAPI, bundle: Path) -> bool:
-    """Serve the built inspector in `bundle` at /inspector/; a missing bundle 404s with the fix.
-
-    The bundle is unauthenticated static HTML, JS and CSS: the API calls it makes carry the
-    token the user enters on its Server page, so the read scope still gates everything it shows.
-    Returns whether the bundle was found.
-    """
-    present = (bundle / "index.html").is_file()
-    if present:
-        @app.get("/inspector", include_in_schema=False)
-        def inspector_root() -> RedirectResponse:
-            return RedirectResponse("/inspector/", status_code=307)
-
-        app.mount("/inspector", StaticFiles(directory=bundle, html=True), name="inspector")
-    else:
-        @app.get("/inspector", include_in_schema=False)
-        @app.get("/inspector/{path:path}", include_in_schema=False)
-        def inspector_missing(path: str = "") -> JSONResponse:
-            raise ApiError(404, "not_found", f"the inspector bundle is not installed: no index.html in {bundle}. "
-                                             "Build it in the aip-inspector repo with `npm run build && npm run sync` "
-                                             "(or pass --inspector DIR with a built bundle).")
-    return present
 
 
 # --------------------------------------------------------------------------- helpers

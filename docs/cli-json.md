@@ -256,3 +256,14 @@ The angry branch, resumed after the decision pause with `{"billing": true, "tone
 {"event": "step", "step": "escalate", "kind": "execution", "seconds": "<seconds>"}
 {"done": true, "run_id": "4f1c9a2e7b3d5068", "state": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel."}, "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
 ```
+
+## `--version`
+
+`aip --version` prints one line of plain text, `aip <version> format <format>`: the package
+version (PEP 440) and the skill format the runtime accepts. The console (formerly inspector)
+reads it at startup and refuses an `aip` below its minimum.
+
+<!-- cli-version -->
+```text
+aip 0.6a0.dev0 format 0.6a0
+```

@@ -344,3 +344,29 @@ class Validation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+VERSION = re.compile(r"^aip (?P<version>\S+) format (?P<format>\S+)$")
+
+
+class VersionLine(unittest.TestCase):
+    """`aip --version` is the documented `aip <version> format <format>` line the console checks."""
+
+    def test_version_line(self):
+        from importlib.metadata import version
+
+        from aip.spec import FORMAT_VERSION
+
+        text = DOC.read_text()
+        self.assertIn("`aip <version> format <format>`", text)
+        sample = re.search(r"<!-- cli-version -->\s*```text\n(.*?)\n```", text).group(1)
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            self.assertEqual(main(["--version"]), 0)
+        line = out.getvalue()
+        self.assertEqual(line.count("\n"), 1)
+        got = VERSION.match(line.rstrip("\n"))
+        self.assertIsNotNone(got, line)
+        self.assertEqual(got.group("version"), version("aip"))
+        self.assertEqual(got.group("format"), FORMAT_VERSION)
+        self.assertEqual(sample, line.rstrip("\n"))         # the doc shows this branch's real line

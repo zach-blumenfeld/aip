@@ -554,9 +554,6 @@ def server_command(argv: list[str]) -> int:
     parser.add_argument("--token", default=None, help="bearer token granting the read and publish scopes")
     parser.add_argument("--read-token", default=None, help="bearer token granting the read scope only")
     parser.add_argument("--no-localhost", action="store_true", help="require a token from loopback clients too")
-    parser.add_argument("--inspector", nargs="?", const=True, default=None, metavar="DIR",
-                        help="also serve the aip-inspector web client at /inspector/, from the bundle shipped in this "
-                             "package or from DIR (a built `dist/`)")
     parser.add_argument("--log-level", default="info")
 
     # Files first, so their values become the defaults the flags override.
@@ -590,7 +587,7 @@ def server_command(argv: list[str]) -> int:
 
     try:
         import uvicorn
-        from aip.server.app import INSPECTOR_DIR, create_app
+        from aip.server.app import create_app
     except ImportError:
         print("aip server needs the server extra: `uv sync --extra server` (or `pip install 'aip[server]'`)", file=sys.stderr)
         return 1
@@ -621,20 +618,13 @@ def server_command(argv: list[str]) -> int:
     if not tokens and args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"aip server: warning: listening on {args.host} with no --token; anyone who can reach it can publish "
               "and execute code here", file=sys.stderr)
-    inspector = None if args.inspector is None else (INSPECTOR_DIR if args.inspector is True else Path(args.inspector))
-    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost, inspector=inspector)
+    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost)
     if loaded:
         print(f"aip server: configured from {', '.join(loaded)}", file=sys.stderr)
     print(f"aip server: {where}; http://{args.host}:{args.port}", file=sys.stderr)
     if tokens:
         print(f"aip server: {len(tokens)} bearer token(s); loopback clients "
               f"{'need one too' if args.no_localhost else 'need none'}", file=sys.stderr)
-    if inspector is not None:
-        if (inspector / "index.html").is_file():
-            print(f"aip server: inspector at http://{args.host}:{args.port}/inspector/ (from {inspector})", file=sys.stderr)
-        else:
-            print(f"aip server: warning: no inspector bundle in {inspector}; /inspector/ answers 404 until "
-                  "`npm run build && npm run sync` in the aip-inspector repo", file=sys.stderr)
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     finally:
@@ -665,10 +655,21 @@ COMMANDS = {
 }
 
 
+def version_line() -> str:
+    """`aip --version`: `aip <version> format <format>` on one line, which the console checks at startup."""
+    import aip
+    from aip.spec import FORMAT_VERSION
+
+    return f"aip {aip.__version__} format {FORMAT_VERSION}"
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "--version":
+        print(version_line())
+        return 0
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: aip <command> [args]\n\ncommands:\n  " + "\n  ".join(COMMANDS)
+        print("usage: aip <command> [args]\n       aip --version\n\ncommands:\n  " + "\n  ".join(COMMANDS)
               + "\n\n`info` and `run` take a skill folder, or a published name when a server is configured "
               "(`aip config`, or AIP_SERVER).")
         return 0
