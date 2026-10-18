@@ -141,7 +141,7 @@ def settled_line(pause: JSON) -> JSON | None:
 
 
 def pause_of(response: JSON) -> JSON | None:
-    """The pause a step response asks for: a client task."""
+    """The pause a step response asks for: a client task. Its `state` is the step's projected input."""
     if response["next"] is None or response["kind"] != "client_task":
         return None
     entry, result = response["history"][-1], response["result"]
@@ -210,7 +210,12 @@ def submit(procedure: Procedure, cursor: Cursor, answer: JSON | None, scripts: b
         validate_output(pause["step"], pause["answer_with"], answer, strict=False)
     except OutputValidationError as exc:
         return Advance(cursor, kept=True, error=error_object(exc), exc=exc)
-    return _drive(procedure, scripts, cursor.after, {**cursor.state, **answer}, cursor.history, answering=pause)
+    # the client task's entry is written now, like a decision's: the task it was given and the answer
+    outputs = {k: answer[k] for k in pause["answer_with"]}
+    entry = {"step": pause["step"], "kind": "client_task", "input": pause["state"],
+             "result": {"task": pause["task"], "references": pause["references"], "answer": outputs}}
+    return _drive(procedure, scripts, cursor.after, {**cursor.state, **outputs}, cursor.history,
+                  answering=pause, answered=entry)
 
 
 def _is_report(answer: JSON | None) -> bool:
@@ -224,11 +229,14 @@ def _is_report(answer: JSON | None) -> bool:
 
 def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON,
            history: List[JSON], answering: JSON | None = None, answers: tuple[JSON, JSON | None] | None = None,
-           report: JSON | None = None) -> Advance:
+           report: JSON | None = None, answered: JSON | None = None) -> Advance:
     """Step until a pause, the end, or a failure. `answering` is the pause this call answers: a bad
     answer leaves it in place. `answers` (the answers and their attribution) answers a decision
-    first, `report` an execution step the client ran."""
+    first, `report` an execution step the client ran, and `answered` is the history entry of the
+    client task this call answers."""
     carried = len(history)
+    if answered is not None:
+        history = [*history, answered]
     lines: List[JSON] = []
 
     def settle() -> None:
@@ -269,8 +277,10 @@ def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON
             return _failed(exc, node, after, payload, history, carried, lines, keep=answering is not None)
         settle()
         pause = pause_of(response)
+        if pause is not None:                        # its entry is written when it is answered
+            response["history"] = response["history"][:-1]
         for entry in response["history"][len(history):]:
-            if entry["kind"] != "end" and not (pause is not None and entry is response["history"][-1]):
+            if entry["kind"] != "end":
                 lines.append(step_line(entry))
         after, payload, history = response["ran"], response["suggested"], response["history"]
         if response["next"] is None:

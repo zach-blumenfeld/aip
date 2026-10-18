@@ -78,6 +78,8 @@ def test_open_answer_and_finish(api):
     assert task["state"] == {"message": CALM, "tone": "calm"}
     assert [line["step"] for line in task["steps"]] == ["triage", "by-tone"]
     assert task["version"] > version
+    held = api.get(f"/runs/{run_id}").json()
+    assert [e["step"] for e in held["history"]] == ["triage", "by-tone"]   # the task's entry waits for its answer
 
     r = api.post(f"/runs/{run_id}/result", json={"step": "reply", "version": task["version"],
                                                    "answer": {"reply": REPLY}})
@@ -87,6 +89,10 @@ def test_open_answer_and_finish(api):
     run = api.get(f"/runs/{run_id}").json()
     assert (run["status"], run["state"], run["version"]) == ("done", {"message": CALM}, done["version"])
     assert [e["step"] for e in run["history"]] == ["triage", "by-tone", "reply", "end"]
+    assert run["history"][2] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
+                                 "input": {"message": CALM, "tone": "calm"},
+                                 "result": {"task": task["task"], "references": task["references"],
+                                            "answer": {"reply": REPLY}}}
 
     r = api.post(f"/runs/{run_id}/result", json={"answer": {"reply": "again"}})
     assert r.status_code == 409                                             # nothing left to answer
@@ -163,6 +169,10 @@ def test_two_servers_over_one_root_serve_one_run_alternately(root, api):
         run = server.get(f"/runs/{pause['run_id']}").json()
         assert run["status"] == "done"
         assert [e["step"] for e in run["history"]] == ["triage", "by-tone", "reply", "end"]
+    assert run["history"][2] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
+                                 "input": {"message": CALM, "tone": "calm"},
+                                 "result": {"task": task["task"], "references": task["references"],
+                                            "answer": {"reply": REPLY}}}
 
 
 def test_two_concurrent_results_for_one_run_one_is_a_409(root, api):

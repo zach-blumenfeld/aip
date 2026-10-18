@@ -1,6 +1,6 @@
 # AIP server design
 
-Status: proposal for format 0.5a0, the client-server line. 0.4a0 is the last folder-only format. Companion to `running.md`, which
+Status: implemented in format 0.5a0, the client-server line; in 0.6a0 `client-execution.md` supersedes §6 and §7 (scripts and decisions run on the client) and the server holds each run's state. 0.4a0 is the last folder-only format. Companion to `running.md`, which
 describes the step protocol and the local runner this design extends.
 
 ## 1. Goal

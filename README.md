@@ -78,7 +78,7 @@ Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](
 | Human-curated Agent Skill | 50.8% | 0.567 |
 | The same skill converted to AIP | **63.3%** | **0.668** |
 
-Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. The format has moved on since (typed step kinds, a decision model with thresholds, server-side scripts, the runtime block); measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
+Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. The format has moved on since (typed step kinds, declared inputs and outputs, a decision model with thresholds, the runtime block, and a server that holds each run while the client runs its scripts and decisions); measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
 
 ## Install
 
@@ -97,13 +97,15 @@ curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/main/insta
 Prefer Python tooling:
 
 ```bash
-uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.5a1   # `aip-spec`, the validator the skill calls
-uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@main"        # `aip` with `aip server`; pulls aip-spec in
+uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a0   # `aip-spec`, the validator the skill calls
+uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a0"      # `aip` with `aip server`; pulls aip-spec in
 aip skill install                   # both skills, every detected agent
 aip skill install claude-code       # one agent;  aip skill list  shows them
 aip skill install --path ./.claude/skills    # a project-local skills directory
 aip skill remove
 ```
+
+Coming from 0.5a1: skills need three edits to validate under 0.6a0, listed in [`docs/upgrading.md`](docs/upgrading.md).
 
 Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
 
@@ -233,7 +235,7 @@ The installer put the `aip-runtime` skill into Claude Code if it found it so you
 
 `aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config.
 
-Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket the server's script opened. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the console's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
+Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket opened by the skill's script, which `aip` ran on your machine. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the console's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
 
 ### 6. Compile and publish your own skill
 
@@ -280,7 +282,7 @@ aip-spec validate <path/to/skill-folder>             # what the authoring skill 
 aip validate <path/to/skill-folder>                  # the same checks, from this package
 ```
 
-Both run the checks in `aip_spec`: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, unique input names, thresholds naming real questions, and every referenced asset, reference, and script present on disk.
+Both run the checks in `aip_spec`: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, unique input names, thresholds naming real questions, every key a step reads produced on every path to it (or a start input) and produced exactly once, `outputs` on every client task, a `requires` block when there are scripts, and every referenced asset, reference, and script present on disk.
 
 Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
 
@@ -327,7 +329,7 @@ The file has two tables. `[server]` is the listener and tokens; `[backend]` pick
 
 **Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, on the client: `aip config --decision-model KEY` stores the key in `~/.config/aip/config.json`, and `TYPESAFE_API_KEY` overrides it. That holds for `aip run <name>` against a server as much as for `aip run <folder>`. Without a key every decision step pauses with its `questions` for you to answer by hand; with one, the model answers, the author's thresholds come with the step, and the run only pauses with a `review` block when an answer falls under its threshold. The server records each decision with its attribution (`resolver` `typesafe` or `manual`, `model`, `confidence`, `reviewed`), which the `overridden-decisions` and `manual-decisions` governance queries read.
 
-**Scripts and trust.** A procedure's execution steps are scripts, and the server runs them as a subprocess with its own privileges on its own machine: whatever the server process can read, write, or reach, a published script can too. The server does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies, so isolation is the deployment's job (a container, a dedicated user, seccomp). Publishing a skill is therefore equivalent to running code on the server. Give the `publish` scope only to people you would let open a shell there, and keep the server on localhost or behind a token everywhere else.
+**Scripts and trust.** A procedure's execution steps are scripts, and they run on the client, in the `aip` process's user account, never on the server: `aip run <name>` fetches the revision's `scripts/` and `assets/` into `~/.aip/cache/<name>@<revision>/`, checks each file against the server's manifest, and runs the script with whatever that user can read, write, or reach. `aip` does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters. The server runs no user code and holds no model key, so publishing no longer means code execution on the server; it still decides what every client runs, so keep it on localhost or behind a token.
 
 ## Loading Skills into Neo4j
 
@@ -342,7 +344,7 @@ aip db export <name> --out ./restored                  # rebuilds <name>/ byte f
 
 Each load is lossless: every file under the skill folder is stored as a `File` node with its exact bytes, mode, and sha256, so `export` reproduces a folder that validates and runs identically. Alongside the files, the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Input`, and `Question` nodes with `INPUTS_TO`, `BRANCH`, `DECLARES_INPUT`, `ASKS`, and `USES` edges, the last pointing at the `File` nodes a step runs, renders, or may load. Skills are keyed `name@revision`, where the revision is a hash of the files: reloading unchanged content is a no-op, changed content adds a revision, and many skills coexist in one database. A `Name` node groups the revisions of one skill and carries its pin; `Run` and `StepRun` nodes record executions, linked `NEXT` in order and `OF_STEP` to the step they ran.
 
-`aip db` is a thin shim over the server's Neo4j backend (`aip.server.backends.neo4j`), which also serves the catalog, a full-text search index over names, descriptions, purposes, and triggers, and a hash-verified materialisation cache under `~/.cache/aip/` (`AIP_CACHE_DIR` overrides) that the server executes from. The filesystem backend (`aip.server.backends.filesystem`) offers the same contract over a plain directory.
+`aip db` is a thin shim over the server's Neo4j backend (`aip.server.backends.neo4j`), which also serves the catalog, a full-text search index over names, descriptions, purposes, and triggers, and a hash-verified materialisation cache under `~/.cache/aip/` (`AIP_CACHE_DIR` overrides) that the server loads procedures from. The filesystem backend (`aip.server.backends.filesystem`) offers the same contract over a plain directory.
 
 ## Development & Contributing
 
@@ -358,7 +360,7 @@ The design behind the client-server architecture is [`docs/server-design.md`](do
 
 ### Bumping the AIP format version
 
-The format version (currently `0.5a1`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
+The format version (currently `0.6a0`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
 
 1. `FORMAT_VERSION` in `src/aip_spec/models.py` and `version` in `pyproject.toml`.
 2. `src/aip_spec/runtime.md` — the block's heading carries the version; if the text changes, keep the previous text as `runtime-<old>.md` and add `<old>` to `LEGACY_VERSIONS`.

@@ -1,6 +1,7 @@
 # AIP design note: execution steps run on the client
 
-Status: accepted 2026-10-17 (supersedes server-design.md §6 and §7). Originally drafted in
+Status: accepted 2026-10-17, implemented in 0.6a0 (supersedes server-design.md §6 and §7; the
+current behaviour is described in `running.md` and `run-modes.md`). Originally drafted in
 aip-skillbench. Scope: execution steps (scripts), and
 decision steps under the same rule (see "Decision steps").
 

@@ -51,6 +51,7 @@ loop:
     response = Procedure.run(after, state, history)   (a failure: ERROR, below)
     if response.next is null:                      DONE, the end step's state
     if response.kind == client_task:               PAUSE client_task -> client does the task
+                                                   (its history entry is written with the answer)
     after, state, history = response.ran, response.suggested, response.history
 ```
 
@@ -66,7 +67,7 @@ else:                                              PAUSE decision    -> agent an
                                                    submit answers, attribution {manual}
 ```
 
-A pause is stored on the cursor (a review only in the client's run file: the loop still waits at the decision); an answer is merged over the cursor's state and the loop re-enters at `after`. Thresholds are the author's, from SKILL.md, and nothing else.
+A pause is stored on the cursor (a review only in the client's run file: the loop still waits at the decision); an answer is merged over the cursor's state and the loop re-enters at `after`. A paused step has no history entry until it is answered: a decision's entry records the answers and their attribution, a client task's the task it was given and the answer (`{"task", "references", "answer": {...}}`). Thresholds are the author's, from SKILL.md, and nothing else.
 
 Every stop prints one JSON object and, unless it is an error before any step ran, writes the run file: the shapes, field by field, are in [`docs/cli-json.md`](cli-json.md). A pause carries only the paused step's declared inputs as `state`. `aip resume <run-id> --input answer.json` sends the answer to the run, which merges it over the state it holds and re-enters the loop at `after`. With `--interactive`, a pause becomes terminal prompts instead. `--progress` adds one JSON line per completed step before the final object; `--debug` puts the traceback of a failure on stderr.
 
@@ -136,7 +137,7 @@ Nothing else is written by the runner: the skill folder is read-only to it, stat
 
 ## Worked example: `billing-support`
 
-The example skill ships with the `aip-spec` package; `aip-spec example billing-support --out .` writes it to `./billing-support`, which the commands below run.
+The example skill ships with the `aip-spec` package; `aip-spec example billing-support --out .` writes it to `./billing-support`, which the commands below run with no server: `./billing-support` is a folder, so the run is local. The outputs are recorded from the CLI, with the run id and home directory replaced by the sample ones the other docs use.
 
 The graph: `triage` (decision: is it billing, what is the tone) → `by-tone` (router) → `escalate` (script opens a ticket) or `reply` (client drafts a reply against the policy) → `end`.
 
@@ -144,7 +145,7 @@ The graph: `triage` (decision: is it billing, what is the tone) → `by-tone` (r
 
 ```bash
 $ echo '{"message": "I was charged twice!"}' > start.json
-$ aip run billing-support --input start.json --run-file run.json
+$ aip run ./billing-support --input start.json
 {
   "paused": "decision",
   "step": "triage",
@@ -157,25 +158,25 @@ $ aip run billing-support --input start.json --run-file run.json
                                "calm": "Neutral or polite, asking a question." } }
   },
   "state": { "message": "I was charged twice!" },
-  "run_id": null,
-  "run_file": "run.json"
+  "run_id": "4f1c9a2e7b3d5068",
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 $ echo $?
 0
 ```
 
-The client answers and resumes. The router sends `angry` to the script, which runs for real:
+The client answers and resumes by run id, from any directory. The router sends `angry` to the script, which runs for real, on this machine:
 
 ```bash
 $ echo '{"billing": true, "tone": "angry"}' > answers.json
-$ aip resume run.json --input answers.json --progress
+$ aip resume 4f1c9a2e7b3d5068 --input answers.json --progress
 {"event": "step", "step": "triage", "kind": "decision", "resolver": "manual"}
 {"event": "step", "step": "by-tone", "kind": "router", "to": "escalate"}
-{"event": "step", "step": "escalate", "kind": "execution", "seconds": 0.031}
-{"done": true, "run_id": null, "state": {"message": "I was charged twice!"}, "run_file": "run.json"}
+{"event": "step", "step": "escalate", "kind": "execution", "seconds": 0.013}
+{"done": true, "run_id": "4f1c9a2e7b3d5068", "state": {"message": "I was charged twice!"}, "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
 ```
 
-The ticket is in the run file's `history`, the run's ledger:
+The ticket is in the run file's `history`, the run's ledger (`aip runs 4f1c9a2e7b3d5068` prints it):
 
 ```json
 [
@@ -184,7 +185,7 @@ The ticket is in the run file's `history`, the run's ledger:
     "attribution": { "resolver": "manual", "model": null, "confidence": null, "reviewed": false } },
   { "step": "by-tone",  "kind": "router",    "input": { "tone": "angry" }, "result": { "to": "escalate" } },
   { "step": "escalate", "kind": "execution", "input": { "message": "...", "tone": "angry" },
-    "result": { "ticket_id": 45067, "queue": "tier2" }, "seconds": 0.031 },
+    "result": { "ticket_id": 54926, "queue": "tier2" }, "seconds": 0.013, "host": "laptop.local" },
   { "step": "end",      "kind": "end",       "input": { "message": "..." }, "result": { "message": "..." } }
 ]
 ```
@@ -203,8 +204,8 @@ Same start, with a key on this machine (`TYPESAFE_API_KEY`, or `aip config --dec
     { "question": "tone", "type": "choice", "confidence": 0.55,
       "probabilities": { "angry": 0.55, "calm": 0.45 }, "reason": "confidence below 0.6" }
   ],
-  "run_id": null,
-  "run_file": "run.json"
+  "run_id": "7d20b9e4c1a65f38",
+  "run_file": "/home/you/.aip/runs/7d20b9e4c1a65f38.json"
 }
 ```
 
@@ -212,7 +213,7 @@ Nothing is recorded yet. The client reads the message, disagrees with the model,
 
 ```bash
 $ echo '{"tone": "calm"}' > override.json
-$ aip resume run.json --input override.json
+$ aip resume 7d20b9e4c1a65f38 --input override.json
 {
   "paused": "client_task",
   "step": "reply",
@@ -223,21 +224,21 @@ $ aip resume run.json --input override.json
       "description": "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days." }
   ],
   "answer_with": { "reply": "string" },
-  "run_id": null,
-  "run_file": "run.json"
+  "run_id": "7d20b9e4c1a65f38",
+  "run_file": "/home/you/.aip/runs/7d20b9e4c1a65f38.json"
 }
 ```
 
-The client does the task and answers with the step's declared outputs. `end` declares only `message`, so that is the run's result; the reply is recorded in the history:
+The client does the task and answers with the step's declared outputs. `end` declares only `message`, so that is the run's result; the reply is recorded in the history, on the `reply` entry written when the answer was accepted, `{"step": "reply", "kind": "client_task", "input": {"message": ..., "tone": "calm"}, "result": {"task": ..., "references": [...], "answer": {"reply": "Sorry about ..."}}}`:
 
 ```bash
 $ echo '{"reply": "Sorry about the duplicate charge. A full refund is on its way within 5 business days."}' > reply.json
-$ aip resume run.json --input reply.json
+$ aip resume 7d20b9e4c1a65f38 --input reply.json
 {
   "done": true,
-  "run_id": null,
+  "run_id": "7d20b9e4c1a65f38",
   "state": { "message": "I was charged twice!" },
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/7d20b9e4c1a65f38.json"
 }
 ```
 
@@ -253,18 +254,18 @@ If `escalate.py` exits 1 with `ticket service unreachable` on stderr, the angry 
   "script": "scripts/escalate.py",
   "exit_code": 1,
   "stderr": "ticket service unreachable",
-  "run_id": null,
+  "run_id": "c3e81f0a9b247d56",
   "resumable": true,
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/c3e81f0a9b247d56.json"
 }
 ```
 
-The run file now holds the state before `escalate` (the message and both answers). Once the cause is fixed, `aip resume run.json` with no input runs `escalate` again and continues.
+The run file now holds the state before `escalate` (the message and both answers). Once the cause is fixed, `aip resume c3e81f0a9b247d56` with no input runs `escalate` again and continues.
 
 ### Interactive
 
 ```bash
-$ aip run billing-support --interactive
+$ aip run ./billing-support --interactive
 message (string): I was charged twice!
 
 tone: confidence below 0.6  (model says "angry")
@@ -290,8 +291,9 @@ $ aip publish billing-support                        # validate locally, upload,
 billing-support@3f9c2a7d1e5b8c04
 $ aip search "refund"                                # ranked by the server
 billing-support@3f9c2a7d1e5b8c04  0.812  Triage an inbound billing message ...
+$ mkdir elsewhere && cd elsewhere                    # a path that exists always runs locally, so leave ./billing-support
 $ aip info billing-support --example-input > start.json
-$ aip run billing-support --input start.json         # same pause; `run_id` is the server's
+$ aip run billing-support --input start.json         # the published revision: same pause; `run_id` is the server's
 ```
 
 `aip run <name>` uses `HttpBackend`, which makes two calls:
@@ -321,3 +323,41 @@ The server resolves the name to one revision when the run opens, and the run sta
 Decision thresholds are the author's, from SKILL.md: there is no per-name override and no run flag, so a run's behaviour is fixed by its revision. Over its run history the server answers five governance questions, `GET /governance/<query>` with `name`, `window` (the last N runs), and `limit`: `overridden-decisions` (per question and resolver, model answers the agent changed at review), `manual-decisions` (per decision step, how many were answered with no model), `failing-scripts` (execution steps that raised, with the latest error and the `exit_code` and `stderr` its client reported), `missing-fields` (resolved revisions without `do_not_use_when` or `anti_patterns`), and `untaken-branches` (router branches no run followed; Neo4j only, 501 on the filesystem backend). `GET /governance` lists them.
 
 An agent that has never seen a procedure needs one page to do all of this: the `aip-runtime` Agent Skill (`skills/aip-runtime/SKILL.md`, shipped in the package; `aip runtime --skill --out <skills dir>` writes it). It says to search first, read `info`, run, and answer the pauses, and not to do the steps by hand. [`docs/examples/aip-runtime-session.md`](examples/aip-runtime-session.md) is a transcript of a fresh agent completing `billing-support` with only that skill and `AIP_SERVER` set.
+
+### A served run, request by request
+
+The angry branch of the worked example against a server, as `HttpBackend` sends it (recorded with `curl` against `aip server --backend filesystem`; the `questions` are as above, and ids are the samples). Open the run with the start input; the server walks to the first stop, the decision, and sends the questions with the author's thresholds:
+
+```
+POST /runs  {"name": "billing-support", "input": {"message": "I was charged twice!"}}
+201 {"paused": "decision", "step": "triage", "questions": {...}, "state": {"message": "I was charged twice!"},
+     "thresholds": {"billing": 0.15, "tone": 0.6},
+     "run_id": "4f1c9a2e7b3d5068", "name": "billing-support", "revision": "3f9c2a7d1e5b8c04", "version": 1, "steps": []}
+```
+
+Post the answers with their attribution, naming the step and version they answer. The server checks them against the question types, records them, routes, and stops at the script, which is the client's to run:
+
+```
+POST /runs/4f1c9a2e7b3d5068/result
+     {"step": "triage", "version": 1, "answer": {"billing": true, "tone": "angry"},
+      "attribution": {"resolver": "manual", "model": null, "confidence": null, "reviewed": false}}
+200 {"paused": "execute", "step": "escalate", "script": "scripts/escalate.py", "command": null,
+     "stdin": {"state": {"message": "I was charged twice!", "tone": "angry"}, "currentState": {...},
+               "assets": {"config": "{\"queue\": \"tier2\", \"sla_hours\": 4}\n"},
+               "expects": {"step": "end", "kind": "end", "inputs": {"message": "string"}}},
+     "timeout": 60.0, "requires": {"interpreter": "python", "version": "3.10", "packages": [], "tools": []},
+     "run_id": "4f1c9a2e7b3d5068", ..., "version": 2,
+     "steps": [{"event": "step", "step": "triage", "kind": "decision", "resolver": "manual"}]}
+```
+
+Run the script from the cache, then post its report. The server checks the output against `escalate`'s declared outputs, records it with the host, and walks to the end:
+
+```
+POST /runs/4f1c9a2e7b3d5068/result
+     {"step": "escalate", "version": 2, "answer": {"output": {"ticket_id": 54926, "queue": "tier2"}, "seconds": 0.013, "host": "laptop.local"}}
+200 {"done": true, "state": {"message": "I was charged twice!"}, "run_id": "4f1c9a2e7b3d5068", ..., "version": 5,
+     "steps": [{"event": "step", "step": "by-tone", "kind": "router", "to": "escalate"},
+               {"event": "step", "step": "escalate", "kind": "execution", "seconds": 0.013}]}
+```
+
+`GET /runs/4f1c9a2e7b3d5068` then has `status: done` and the same four history entries a local run writes to its run file (the router's is recorded when the run moves past it, so it arrives with the script's report). The client sent the message once, at the start, and never held the run's state. The calm branch is the same with a `client_task` stop in place of `execute`: its reply is `{"paused": "client_task", ...}` as the CLI prints it, and the answer is the post's `answer`, `{"reply": "..."}`, with no attribution.

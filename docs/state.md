@@ -100,17 +100,20 @@ state object should stay small.
 
 ## Known gaps
 
-1. ~~**No declared outputs.**~~ Fixed in 0.6a0: steps declare `outputs` and the validator checks
-   every consumed key has a producer on every path or is a start input.
-2. ~~**The whole state goes to the client at every pause.**~~ Fixed (A3): a pause's `state` is
-   the paused step's declared inputs; the rest stays in the run file.
-3. ~~**`suggested` is a misleading name.**~~ Fixed (A3): every pause says `state`, and a review
-   pause puts the model's answers under `proposed_answers` beside the state they were judged on.
-4. ~~**Silent overwrites.**~~ Fixed in 0.6a0: each key is produced by exactly one step and is
-   never a start input, so the state is append-only by construction. Deliberate re-computation
-   would need an explicit opt-in.
-5. ~~**Steps receive the whole state.**~~ Fixed: scripts, decisions, and client-task templates
-   get only their declared inputs, and results are checked against declared outputs.
+The gaps 0.5a1 had (no declared outputs, the whole state at every pause and to every step,
+silent overwrites, the `suggested` name) are closed in 0.6a0. What remains:
+
+1. **No deliberate re-computation.** A key has one producer, so a procedure cannot refine a
+   value in a later step (a second draft of `reply`); it must name the new value (`reply_v2`).
+   An explicit opt-in for overwriting would be a format change.
+2. **Nothing bounds the state's size.** Files belong under `AIP_WORKDIR` with paths in the
+   state, but that is convention; a script can still return a large blob, which every later
+   step that declares it receives and the server stores.
+3. **Left-overs kept for one version.** Scripts still get `currentState` beside `state`, the
+   format still accepts a client task's `framing` flag (ignored), and the server still answers
+   the deprecated `/procedures/{ref}/step|answer`, where the client carries the state itself.
+4. **The runtime block does not mention `AIP_WORKDIR`.** An agent running a skill by hand from
+   the block alone does not know where a script expects the run's files.
 
 ## Pause shape (client task)
 
@@ -125,7 +128,7 @@ The pause carries only what this step needs (the full example is in `cli-json.md
   "references": [ { "uri": "...", "description": "..." } ],
   "answer_with": { "reply": "string" },
   "run_id": "4f1c9a2e7b3d5068",
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -154,7 +157,7 @@ Decision, no model configured on the client (the agent stands in for the model, 
                  "tone": { "type": "choice", "instructions": "...", "criteria": { "angry": "...", "calm": "..." } } },
   "state": { "message": "..." },
   "run_id": "4f1c9a2e7b3d5068",
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -171,7 +174,7 @@ Review, the client's model answered but one question fell under its threshold:
   "proposed_answers": { "billing": true, "tone": "angry" },
   "review": [ { "question": "tone", "confidence": 0.58, "probabilities": { "angry": 0.58, "calm": 0.42 }, "reason": "confidence below 0.7" } ],
   "run_id": "4f1c9a2e7b3d5068",
-  "run_file": "run.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
@@ -200,9 +203,9 @@ drafts a reply (calm). With no decision model configured, every decision pauses 
 exactly what an agent sees.
 
 ```sh
-EX=$(python3 -c "import aip_spec, pathlib; print(pathlib.Path(aip_spec.__file__).parent.parent.parent / 'examples' / 'billing-support')" 2>/dev/null \
-    || echo ~/dev/aip-skillbench/.claude/skills-src/aip-spec/examples/billing-support)
 cd "$(mktemp -d)"
+aip-spec example billing-support --out .       # the example, as ./billing-support
+EX=./billing-support
 
 # 1. start: the state is just your start input; the run pauses at the decision
 echo '{"message":"Hi, I think I was charged twice for March. Could you check?"}' > start.json
@@ -216,7 +219,8 @@ echo '{"billing": true, "tone": "calm"}' > answer1.json
 aip resume run.json --input answer1.json
 
 # 3. answer the client task with its outputs; the run ends. `state` is the end step's inputs
-#    (just `message` here); the run file's `history` is the ledger, where the reply is recorded.
+#    (just `message` here); the run file's `history` is the ledger, where the reply is recorded
+#    on the `reply` entry, beside the task it answered.
 echo '{"reply":"Thanks for flagging this; duplicate charges are refunded in full within 5 business days."}' > answer2.json
 aip resume run.json --input answer2.json
 
