@@ -13,15 +13,20 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   `RunBackend`, steps it with `aip.model.engine`, and stores what changed with a version
   check, so nothing per run stays in this process and any replica can answer any call; a
   write that lost a race answers 409. Without a `RunBackend` these answer 501.
-  The server never runs a script: at an execution step the run stops and the reply is the
-  step to perform (`{"paused": "execute", "step", "script", "command", "stdin", "timeout",
+  The server never runs a script and never calls a decision model. At a decision the run stops
+  and the reply is the decision pause with the author's `thresholds`; the client resolves it
+  and posts the answers with their `attribution` (`{"resolver": "typesafe"|"manual", "model",
+  "confidence", "reviewed"}`, plus `proposed` when reviewed; omitted means manual), which is
+  checked against the questions and recorded in the history. At an execution step the run
+  stops and the reply is the step to perform (`{"paused": "execute", "step", "script", "command", "stdin", "timeout",
   "requires"}`); the client runs it next to its data and posts the report as the `answer`
   (`{"output": {...}, "seconds"}`, or a failure with exit code and stderr, a timeout, or the
   unmet requirements), which is validated against the step's outputs and recorded.
 - **execution** (deprecated, one version): `/procedures/{ref}/peek|step|answer|capabilities`,
   where the client carries the state and history on every call. `step` and `answer` reply
   with a `Deprecation` header and append to the run named by their `run_id`; an execution
-  step answers 409 `runs_on_client` (open the run with `POST /runs`).
+  step answers 409 `runs_on_client` (open the run with `POST /runs`), a decision 422
+  `no_decision_model` (answer it through `answer`).
 - **governance**: `/governance` lists the named corpus queries of `aip.server.governance`;
   `/governance/{query}?name=&window=&limit=` answers one through the backend's `.governance`
   (501 when it has none or declines the query).
@@ -44,7 +49,6 @@ import base64
 import io
 import json
 import mimetypes
-import os
 import shutil
 import tarfile
 import tempfile
@@ -109,6 +113,7 @@ class StepBody(PeekBody):
 class AnswerBody(PeekBody):
     history: List[JSON] = Field(default_factory=list)
     answers: JSON
+    attribution: JSON | None = None
     run_id: str | None = None
 
 
@@ -133,9 +138,11 @@ class RunBody(BaseModel):
 
 
 class ResultBody(BaseModel):
-    """One thing for a run. `answer` answers its pause or reports its script (omit it to retry a failed step); `step`
-    and `version` are what the client last saw, and a run that has moved on answers 409."""
+    """One thing for a run. `answer` answers its pause or reports its script (omit it to retry a failed step), with
+    `attribution` at a decision (omit it for a manual answer); `step` and `version` are what the client last saw,
+    and a run that has moved on answers 409."""
     answer: JSON | None = None
+    attribution: JSON | None = None
     step: str | None = None
     version: int | None = None
 
@@ -143,12 +150,11 @@ class ResultBody(BaseModel):
 # ------------------------------------------------------------------------------- app
 
 
-def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: Any = None,
+def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
                localhost_open: bool = True, inspector: Path | None = None) -> FastAPI:
     """Build the server over `backend`.
 
     tokens:          bearer token -> scopes (`read`, `publish`); empty or None means no auth
-    client:          an injected decision-model client (tests); otherwise TYPESAFE_API_KEY decides
     localhost_open:  a loopback client needs no token even when tokens are configured
     inspector:       serve the inspector bundle in this directory at /inspector/ (None: do not)
     """
@@ -229,11 +235,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             if key not in procedures:
                 from aip.spec.loader import load_procedure
 
-                procedures[key] = load_procedure(catalog.folder(name, revision), client=client)
+                procedures[key] = load_procedure(catalog.folder(name, revision))
             return procedures[key]
-
-    def has_decision_model() -> bool:
-        return client is not None or bool(os.environ.get("TYPESAFE_API_KEY"))
 
     def require_runs():
         if runs is None:
@@ -293,9 +296,9 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
                     raise ApiError(409, "runs_on_client",
                                    f"step {node.name!r} is an execution step and scripts run on the client; "
                                    "open the run with POST /runs", location=node.name)
-                if isinstance(node, Decision) and not has_decision_model():
+                if isinstance(node, Decision):
                     raise ApiError(422, "no_decision_model",
-                                   f"step {node.name!r} is a decision and this server has no decision model; "
+                                   f"step {node.name!r} is a decision and decisions are resolved by the client; "
                                    "answer its questions through /answer", location=node.name)
                 response = proc.run(body.after, body.payload, body.history).to_dict()
             else:
@@ -303,7 +306,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
                 if not isinstance(node, Decision):
                     raise ApiError(422, "not_a_decision", f"the step after {body.after!r} is not a decision",
                                    location=getattr(node, "name", None))
-                response = node.accept_manual(body.payload, [*body.history, *entries], answers).to_dict()
+                response = node.accept_answers(body.payload, [*body.history, *entries], answers,
+                                               body.attribution).to_dict()
         except (ApiError, NotFound, InputValidationError):
             raise
         except OutputValidationError as exc:
@@ -450,8 +454,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     @app.get("/procedures/{ref}/capabilities", dependencies=[require(READ)])
     def capabilities(ref: str) -> JSON:
         name, revision = resolve(ref)
-        return {"name": name, "revision": revision, "decision_model": has_decision_model(),
-                "executes_scripts": False, "persists_runs": runs is not None, "governance": governance is not None}
+        return {"name": name, "revision": revision, "executes_scripts": False, "persists_runs": runs is not None, "governance": governance is not None}
 
     @app.post("/procedures/{ref}/peek", dependencies=[require(READ)])
     def peek(ref: str, body: PeekBody) -> JSON | None:
@@ -480,7 +483,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         rejects is a 422 and opens nothing."""
         require_runs()
         name, revision = resolve(body.name if body.revision is None else f"{body.name}@{body.revision}")
-        advance = engine.start(procedure(name, revision), body.input, has_decision_model(), scripts=False)
+        advance = engine.start(procedure(name, revision), body.input, scripts=False)
         if advance.cursor is None:
             raise rejected(advance, 422)
         run_id = runs.create(name, revision)
@@ -501,8 +504,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             raise ApiError(409, "stale_run", f"run {run_id!r} is not waiting on step {body.step!r} "
                                              f"(status {run.status}, step {pending!r})")
         cursor = Cursor(run.after, run.state, [e for e in run.history if e.get("kind") != "error"], run.pause)
-        advance = engine.submit(procedure(run.name, run.revision), cursor, body.answer, has_decision_model(),
-                                scripts=False)
+        advance = engine.submit(procedure(run.name, run.revision), cursor, body.answer, scripts=False,
+                                attribution=body.attribution)
         if advance.kept:
             raise rejected(advance, 422 if advance.error["error"] in ("invalid_input", "invalid_output") else 409)
         return reply(run_id, run.name, run.revision, store(run_id, run.version, advance), advance)

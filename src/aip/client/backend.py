@@ -14,9 +14,14 @@ Either way this process runs the scripts (`aip.client.executor`): the loop stops
 execution step with a request, the client runs the script next to its data, from the skill
 folder or the revision's cached `scripts/` and `assets/`, with the run's working directory
 (`workdir`, recorded in the run file) as `AIP_WORKDIR`, and carries the report back to the loop.
+
+And either way this process resolves the decisions (`aip.client.resolver`): the loop stops at
+each decision, and with a decision model configured on this client the answers go back with
+their attribution, or the run pauses for review, a pause only the client holds (the loop still
+waits at the decision); the agent's answer to the review, or to a decision with no model,
+goes back the same way.
 """
 
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,49 +74,79 @@ class LocalBackend:
 
     def __init__(self, skill_dir: Path, client: Any = None, python: Path | None = None,
                  workdir: Path | str | None = None):
+        """`client` is an injected decision-model client (tests); otherwise the configured key decides."""
         from aip.client.executor import Executor
+        from aip.client.resolver import Resolver
         from aip.spec.loader import load_procedure
 
         self.skill_dir = Path(skill_dir)
-        self._client = client
-        self.procedure = load_procedure(self.skill_dir, client=client, python=python)
+        self.procedure = load_procedure(self.skill_dir, python=python)
+        self.resolver = Resolver.configured(client)
         self.workdir = _workdir(workdir)
         self.executor = Executor(self.skill_dir, self.workdir, python)
 
     def describe(self) -> JSON:
         return self.procedure.describe()
 
-    def has_decision_model(self) -> bool:
-        return self._client is not None or bool(os.environ.get("TYPESAFE_API_KEY"))
-
     def open(self, payload: JSON, run_id: str | None = None) -> Step:
         from aip.client.runner import new_run_id
         from aip.model import engine
 
-        advance = engine.start(self.procedure, payload, self.has_decision_model(), scripts=False)
+        advance = engine.start(self.procedure, payload, scripts=False)
         return self._step(self._perform(advance), run_id or new_run_id())
 
     def submit(self, run: Any, answer: JSON | None) -> Step:
+        from aip.client.resolver import reviewed
         from aip.model import engine
-        from aip.model.engine import Cursor
+        from aip.model.engine import Advance, Cursor, error_object
+        from aip.model.types import OutputValidationError
 
         if getattr(run, "workdir", None):
             self.executor.workdir = Path(run.workdir)
         cursor = Cursor(run.after, run.state, run.history, run.pause)
-        if run.pause.get("kind") == "execute" and answer is None:
-            answer = self.executor.perform(run.pause)
-        advance = engine.submit(self.procedure, cursor, answer, self.has_decision_model(), scripts=False)
+        kind = run.pause.get("kind")
+        if kind == "execute" and answer is None:
+            advance = engine.submit(self.procedure, cursor, self.executor.perform(run.pause), scripts=False)
+        elif kind == "decision" and answer is None and self.resolver is not None:
+            advance = Advance(cursor)                       # resolve it now
+        elif kind == "review":
+            try:
+                decided = reviewed(run.pause, answer)
+            except OutputValidationError as exc:
+                return Step(error_object(exc), kept=True, run_id=run.run_id, exc=exc)
+            cursor.pause = {"kind": "decision", "step": run.pause["step"]}
+            advance = engine.submit(self.procedure, cursor, decided["answer"], scripts=False,
+                                    attribution=decided["attribution"])
+        else:
+            advance = engine.submit(self.procedure, cursor, answer, scripts=False)
         return self._step(self._perform(advance), run.run_id, created=run.created)
 
     def _perform(self, advance: Any) -> Any:
-        """Run each script the loop stops at, here, and carry its report back, until the run stops
-        for something else; the lines of every call, in order."""
+        """Run each script the loop stops at, here, and resolve each decision with the decision
+        model, carrying the result back, until the run stops for something else (a review is
+        one); the lines of every call, in order. A decision model that fails leaves the run
+        waiting at the decision: `resume` asks again."""
         from aip.model import engine
+        from aip.model.engine import Advance, error_object
 
         lines = list(advance.lines)
-        while advance.error is None and advance.cursor is not None and advance.cursor.pause["kind"] == "execute":
-            report = self.executor.perform(advance.cursor.pause)
-            advance = engine.submit(self.procedure, advance.cursor, report, self.has_decision_model(), scripts=False)
+        while advance.error is None and advance.cursor is not None:
+            pause = advance.cursor.pause
+            if pause["kind"] == "execute":
+                advance = engine.submit(self.procedure, advance.cursor, self.executor.perform(pause), scripts=False)
+            elif pause["kind"] == "decision" and self.resolver is not None:
+                try:
+                    decided = self.resolver.resolve(pause)
+                except Exception as exc:
+                    advance = Advance(advance.cursor, error={**error_object(exc), "step": pause["step"]}, exc=exc)
+                    break
+                if "answer" not in decided:
+                    advance.cursor.pause = decided          # the review: the loop still waits at the decision
+                    break
+                advance = engine.submit(self.procedure, advance.cursor, decided["answer"], scripts=False,
+                                        attribution=decided["attribution"])
+            else:
+                break
             lines += advance.lines
         advance.lines = lines
         return advance
@@ -143,16 +178,21 @@ class HttpBackend:
     When the server replies with an execution step, this client fetches the revision's
     `scripts/` and `assets/` into its cache (once), runs the script with `workdir` as the run's
     working directory, and posts the report, until the server replies with something else.
+    When it replies with a decision and this client has a decision model, the client asks it
+    and posts the answers with their attribution, or keeps a review pause in the run file
+    until the agent answers it. `client` is an injected decision-model client (tests).
     """
 
     def __init__(self, server: Any, token: str | None = None, name: str = "", *, session: Any = None,
-                 workdir: Path | str | None = None, python: Path | None = None):
+                 workdir: Path | str | None = None, python: Path | None = None, client: Any = None):
+        from aip.client.resolver import Resolver
         from aip.client.server import Server
 
         self.server = server if isinstance(server, Server) else Server(str(server), token, session=session)
         self.ref = name
         self.workdir = _workdir(workdir)
         self.python = python
+        self.resolver = Resolver.configured(client)
         self._executors: Dict[str, Any] = {}
 
     def describe(self) -> JSON:
@@ -164,13 +204,30 @@ class HttpBackend:
         return self._call("/runs", body, None)
 
     def submit(self, run: Any, answer: JSON | None) -> Step:
+        from aip.client.resolver import manual, reviewed
+        from aip.model.engine import error_object
+        from aip.model.types import OutputValidationError
+
         if getattr(run, "workdir", None):
             self.workdir = Path(run.workdir)
-        if run.pause.get("kind") == "execute" and answer is None:
+        kind = run.pause.get("kind")
+        if kind == "execute" and answer is None:
             # the client stopped before it reported the script: run it now
             return self._perform(run, [])
+        if kind == "decision" and answer is None and self.resolver is not None:
+            return self._decide(run, [])
+        attribution = None
+        if kind == "review":
+            try:
+                decided = reviewed(run.pause, answer)
+            except OutputValidationError as exc:
+                return Step(error_object(exc), kept=True, run_id=run.run_id, exc=exc)
+            answer, attribution = decided["answer"], decided["attribution"]
+        elif kind == "decision":
+            attribution = manual()
         body = {"step": run.pause.get("step"), "version": run.version,
-                **({"answer": answer} if answer is not None else {})}
+                **({"answer": answer} if answer is not None else {}),
+                **({"attribution": attribution} if attribution is not None else {})}
         return self._call(f"/runs/{run.run_id}/result", body, run)
 
     def executor(self, name: str, revision: str) -> Any:
@@ -194,6 +251,24 @@ class HttpBackend:
         except Exception as exc:
             return Step({**error_object(exc), "step": run.pause["step"]}, lines, run, run_id=run.run_id, exc=exc)
         body = {"step": run.pause["step"], "version": run.version, "answer": report}
+        return self._call(f"/runs/{run.run_id}/result", body, run, lines)
+
+    def _decide(self, run: Any, lines: List[JSON]) -> Step:
+        """Resolve the decision the run waits at with the decision model and post the answers, or
+        stop at a review, which only this client holds. If the model fails the run waits at the
+        decision (an error, resumable: `resume` asks again)."""
+        from aip.client.runner import error_object
+
+        try:
+            decided = self.resolver.resolve(run.pause)
+        except Exception as exc:
+            return Step({**error_object(exc), "step": run.pause["step"]}, lines, run, run_id=run.run_id, exc=exc)
+        if "answer" not in decided:
+            run.pause = decided
+            return Step({"paused": "review", **{k: v for k, v in decided.items() if k != "kind"}}, lines, run,
+                        run_id=run.run_id)
+        body = {"step": run.pause["step"], "version": run.version, "answer": decided["answer"],
+                "attribution": decided["attribution"]}
         return self._call(f"/runs/{run.run_id}/result", body, run, lines)
 
     def _call(self, path: str, body: JSON, run: Any, lines: List[JSON] | None = None) -> Step:
@@ -224,4 +299,8 @@ class HttpBackend:
                         created=run.created if run is not None else time.time())
         if pause["kind"] == "execute":
             return self._perform(saved, lines)
+        if pause["kind"] == "decision":
+            if self.resolver is not None:
+                return self._decide(saved, lines)
+            pause.pop("history", None)                     # for a resolver; the agent answers without it
         return Step(outcome, lines, saved, run_id=meta["run_id"])

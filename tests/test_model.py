@@ -205,7 +205,30 @@ class ProcedureRunTest(unittest.TestCase):
         for answers in ({"billing": True, "tone": "meh"}, {"billing": "yes", "tone": "calm"},
                         {"billing": True, "tone": "calm", "mood": "x"}):
             with self.subTest(answers), self.assertRaises(OutputValidationError):
-                triage.accept_manual({"message": "x"}, [], answers)
+                triage.accept_answers({"message": "x"}, [], answers)
+
+    def test_answers_are_recorded_with_their_attribution(self):
+        triage = self.proc.nodes["triage"]
+        answers = {"billing": True, "tone": "calm"}
+        manual = triage.accept_answers({"message": "x"}, [], answers)
+        self.assertEqual(manual.history[-1]["attribution"],
+                         {"resolver": "manual", "model": None, "confidence": None, "reviewed": False})
+        self.assertEqual(manual.history[-1]["result"], {"answers": answers})
+        self.assertEqual(manual.suggested, {"message": "x", **answers})
+
+        reviewed = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.58},
+                    "reviewed": True, "proposed": {"billing": True, "tone": "angry"}}
+        r = triage.accept_answers({"message": "x"}, [], answers, reviewed)
+        self.assertEqual(r.history[-1]["attribution"], reviewed)
+
+        bad = [{"resolver": "oracle"}, {**reviewed, "confidence": {"tone": 1.5}},
+               {**reviewed, "confidence": {"mood": 0.5}}, {**reviewed, "proposed": {"tone": "angry"}},
+               {**reviewed, "proposed": {"billing": True, "tone": "furious"}}, {**reviewed, "reviewed": "yes"},
+               {"resolver": "manual", "model": "jev-1", "confidence": None, "reviewed": False}]
+        for attribution in bad:
+            with self.subTest(attribution), self.assertRaises(OutputValidationError) as ctx:
+                triage.accept_answers({"message": "x"}, [], answers, attribution)
+            self.assertEqual(ctx.exception.invalid, ["attribution"])
 
     def test_validation_failures(self):
         cases = {

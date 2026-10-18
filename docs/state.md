@@ -38,10 +38,15 @@ the working object; the history is the ledger.
   first script runs, the client's machine is checked against the skill's `requires` (interpreter
   and minimum version, packages, tools), and a `requires_unmet` error names everything missing.
   On a served run the server sends the rendered stdin and the client posts the output back.
-- **decision**: asks typed questions about its declared inputs; the decision model receives
-  `{"state": <declared inputs>}`, plus `history` only when the step sets `history: true`. The
-  answers (one key per question, typed: noul boolean, choice label, score level) are the result.
-  Nothing else is added, which is why a client cannot slip extra keys in at a decision.
+- **decision**: asks typed questions about its declared inputs. The run stops at every decision
+  and the client resolves it: with a decision model configured on the client (`TYPESAFE_API_KEY`
+  or `aip config --decision-model`), the model receives `{"state": <declared inputs>}`, plus
+  `history` only when the step sets `history: true`, and the client applies the author's
+  thresholds, sent with the step; without one, the agent answers. The answers (one key per
+  question, typed: noul boolean, choice label, score level) are the result, posted with their
+  attribution, `{"resolver": "typesafe"|"manual", "model", "confidence", "reviewed"}` (plus the
+  model's `proposed` answers when reviewed), which the history records. Nothing else is added,
+  which is why a client cannot slip extra keys in at a decision. The server never calls a model.
 - **client_task**: hands work to the client. The task template renders from the declared inputs
   only. The client's answer must contain the step's declared `outputs` with their types; the
   pause's `answer_with` lists them.
@@ -74,8 +79,9 @@ input, and the start step must declare it so the client knows to supply it.
 
 ## What the client sees at a pause
 
-A pause happens at a client task, at a decision nothing could answer, or at a decision the model
-answered under its threshold. `aip run` / `aip resume` print one JSON object, and the whole of it
+A pause happens at a client task, at a decision the client has no model for, or at a decision
+the client's model answered under its threshold (a review, which only the client holds until it
+is answered). `aip run` / `aip resume` print one JSON object, and the whole of it
 lands in the agent's context, so it carries only what the paused step needs: `state` is the
 step's declared inputs, never the run's whole state. At a client task it also has `task` (the
 template rendered from those inputs, nothing prepended), `references` (names and descriptions;
@@ -133,12 +139,12 @@ cannot do, and it is what the answer is validated against.
 
 ## Pause shapes (decision and review)
 
-What goes to the decision model: `questions` as printed, and `state` built as
+What goes to the decision model, which the client calls with its own key: `questions` as printed, and `state` built as
 `{"state": <the step's declared inputs>}`, with `"history": <every prior step's input and result>`
 added only when the step sets `history: true`. History grows with the run and is billed on every
 decision, so it is off by default.
 
-Decision, no model configured (the agent stands in for the model, so it gets the same two things):
+Decision, no model configured on the client (the agent stands in for the model, so it gets the same two things):
 
 ```json
 {
@@ -153,9 +159,9 @@ Decision, no model configured (the agent stands in for the model, so it gets the
 ```
 
 Answer: one key per question, `{"billing": true, "tone": "calm"}`. No `answer_with`: the
-questions block already defines the answer shape.
+questions block already defines the answer shape. Recorded as `"resolver": "manual"`.
 
-Review, the model answered but one question fell under its threshold:
+Review, the client's model answered but one question fell under its threshold:
 
 ```json
 {
@@ -170,13 +176,15 @@ Review, the model answered but one question fell under its threshold:
 ```
 
 Answer: only overrides, `{"tone": "calm"}`, or `{}` to accept. The questions are not repeated;
-the model already answered them.
+the model already answered them. Recorded as `"resolver": "typesafe"`, `"reviewed": true`, with
+the model's `proposed` answers beside the final ones, which is what the `overridden-decisions`
+governance query counts.
 
 ## Three ways a run stops
 
 Each is one JSON object on stdout ([`cli-json.md`](cli-json.md)):
 
-- **paused** (exit 0): the client must answer (client task, decision with no resolver, or review).
+- **paused** (exit 0): the agent must answer (client task, decision with no model on the client, or review).
 - **done** (exit 0): the end step was reached; `state` is the end step's inputs.
 - **error** (exit 1): a step failed (`script_failed`, `timeout`, `invalid_input`, `invalid_output`,
   `requires_unmet`, or `server`), with the step and the detail: the script's exit code and

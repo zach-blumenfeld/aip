@@ -16,15 +16,16 @@ Graph per skill revision, as the 0.4 `aip db` projection wrote it:
 and per run:
 
     (:Run {id, name, revision, status, started_at, updated_at, pause, state, after, version})-[:OF_SKILL]->(:Skill)
-    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, manual, review, entry, at})
+    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, resolver, review, entry, at})
     (:StepRun)-[:NEXT]->(:StepRun)       (:StepRun)-[:OF_STEP]->(:Step)
-    (:StepRun)-[:ANSWERED]->(:Answer {question, type, value, accepted, overridden})-[:OF_QUESTION]->(:Question)
+    (:StepRun)-[:ANSWERED]->(:Answer {question, resolver, model, value, accepted, reviewed, overridden})
+              -[:OF_QUESTION]->(:Question)
 
-`Answer` nodes are the governance projection of a model-answered decision: `value` is the
-collapsed answer (JSON-encoded), and `accepted` is filled in by the first later step run
-whose input carries the question's key, with `overridden` set when the two differ; this is
-what `aip.server.governance.overrides` computes from a history, written at append time so
-the override query is plain Cypher. An error entry's `step` is the step that failed and
+A decision step run's `resolver` is its attribution's (`typesafe` or `manual`). `Answer` nodes
+are the governance projection of a model-answered decision, one per question: `value` is what
+the model proposed and `accepted` what the run recorded (both JSON-encoded), `overridden`
+when the agent changed it at review; this is what `aip.server.governance.model_answers`
+computes from a history entry, written at append time so the decision queries are plain Cypher. An error entry's `step` is the step that failed and
 `step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Run.state` is the
 run's full state (JSON) and `Run.version` its number of appends: an append takes the run's
 write lock, checks the version it was given, and bumps it, in one transaction.
@@ -62,7 +63,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from aip.server.backend import NotFound, StaleRun, split_ref
-from aip.server.governance import MISSING_FIELDS, QUERIES, collapsed_answers
+from aip.server.governance import MISSING_FIELDS, QUERIES, attribution, model_answers
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
 
@@ -297,7 +298,7 @@ MATCH (r:Run {id: $id})
 OPTIONAL MATCH (r)-[:STEP_RUN]->(prev:StepRun)
 WITH r, prev ORDER BY prev.order DESC LIMIT 1
 CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kind, step_kind: $step_kind,
-                    input: $input, result: $result, manual: $manual, review: $review, entry: $entry,
+                    input: $input, result: $result, resolver: $resolver, review: $review, entry: $entry,
                     at: datetime($now)})
 CREATE (r)-[:STEP_RUN]->(sr)
 FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:NEXT]->(sr))
@@ -307,18 +308,12 @@ FOREACH (_ IN CASE WHEN st IS NULL THEN [] ELSE [1] END | CREATE (sr)-[:OF_STEP]
 RETURN sr.order AS order
 """
 
-# The new entry's input settles every still-open model answer in the run whose question it carries.
-SETTLE_ANSWERS = """
-MATCH (r:Run {id: $id})-[:STEP_RUN]->(:StepRun)-[:ANSWERED]->(a:Answer)
-WHERE a.accepted IS NULL AND a.question IN keys($inputs)
-SET a.accepted = $inputs[a.question], a.overridden = $inputs[a.question] <> a.value
-"""
-
 CREATE_ANSWERS = """
 MATCH (r:Run {id: $id})-[:STEP_RUN]->(sr:StepRun {order: $order})
 OPTIONAL MATCH (sr)-[:OF_STEP]->(st:Step)
 UNWIND $answers AS a
-CREATE (sr)-[:ANSWERED]->(x:Answer {question: a.question, type: a.type, value: a.value})
+CREATE (sr)-[:ANSWERED]->(x:Answer {question: a.question, resolver: a.resolver, model: a.model, value: a.value,
+                                    accepted: a.accepted, reviewed: a.reviewed, overridden: a.overridden})
 WITH x, st, a
 OPTIONAL MATCH (st)-[:ASKS]->(q:Question {name: a.question})
 FOREACH (_ IN CASE WHEN q IS NULL THEN [] ELSE [1] END | CREATE (x)-[:OF_QUESTION]->(q))
@@ -355,12 +350,20 @@ WITH r ORDER BY r.started_at DESC, r.id DESC LIMIT $window
 queries: Dict[str, str] = {
     "overridden-decisions": _WINDOW + """
 MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:ANSWERED]->(a:Answer)
-WHERE a.accepted IS NOT NULL
-WITH r.name AS name, sr.step AS step, a.question AS question, count(a) AS decided,
+WITH r.name AS name, sr.step AS step, a.question AS question, a.resolver AS resolver, count(a) AS decided,
      sum(CASE WHEN a.overridden THEN 1 ELSE 0 END) AS overridden
 WHERE overridden > 0
-RETURN name, step, question, decided, overridden, toFloat(overridden) / decided AS rate
+RETURN name, step, question, resolver, decided, overridden, toFloat(overridden) / decided AS rate
 ORDER BY overridden DESC, rate DESC, name, step, question
+LIMIT $limit
+""",
+    "manual-decisions": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun {kind: 'decision'})
+WITH r.name AS name, sr.step AS step, count(sr) AS decided,
+     sum(CASE WHEN coalesce(sr.resolver, 'manual') = 'manual' THEN 1 ELSE 0 END) AS manual
+WHERE manual > 0
+RETURN name, step, decided, manual, toFloat(manual) / decided AS rate
+ORDER BY manual DESC, rate DESC, name, step
 LIMIT $limit
 """,
     "failing-scripts": _WINDOW + """
@@ -695,13 +698,9 @@ class Neo4jRuns:
             params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
                       "step_kind": entry.get("step_kind"),
                       "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
-                      "manual": bool(entry.get("manual", False)), "review": _dump(entry.get("review")),
+                      "resolver": (attribution(entry) or {}).get("resolver"), "review": _dump(entry.get("review")),
                       "entry": json.dumps(entry, sort_keys=True), "now": now}
-            payload = entry.get("input")
-            inputs = {k: _dump(v) for k, v in payload.items()} if isinstance(payload, dict) else {}
-            answers = (entry.get("result") or {}).get("answers") or {}
-            collapsed = [{"question": q, "type": answers[q].get("type"), "value": _dump(v)}
-                         for q, v in collapsed_answers(entry).items()]
+            answers = [{**a, "value": _dump(a["value"]), "accepted": _dump(a["accepted"])} for a in model_answers(entry)]
 
         def tx_fn(tx):
             row = tx.run(LOCK_RUN, id=run_id).single()
@@ -711,11 +710,9 @@ class Neo4jRuns:
             if expected is not None and expected != version:
                 raise StaleRun(f"run {run_id!r} is at version {version}, not {expected}")
             if entry is not None:
-                if inputs:
-                    tx.run(SETTLE_ANSWERS, id=run_id, inputs=inputs).consume()
                 order = tx.run(APPEND_STEP_RUN, **params).single()["order"]
-                if collapsed:
-                    tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=collapsed).consume()
+                if answers:
+                    tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=answers).consume()
             tx.run(SET_RUN, id=run_id, status=status, pause=_dump(pause), now=now, version=version + 1,
                    has_state=state is not None, state=_dump(state), after=after).consume()
             return version + 1

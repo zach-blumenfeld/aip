@@ -1,8 +1,8 @@
 # Run modes: local and served
 
 A procedure can be run two ways with the same `aip` command. This page says what each is, who
-holds what, and why you would pick one. "Today" is the current code; "planned" is the rest of
-`docs/client-execution.md` (decisions moving to the client; scripts already have).
+holds what, and why you would pick one. Everything here is the current code: scripts and
+decisions both run on the client (`docs/client-execution.md`).
 
 ## The two modes
 
@@ -12,7 +12,7 @@ holds what, and why you would pick one. "Today" is the current code; "planned" i
 | where the procedure comes from | a folder on disk | the server's catalog, at a pinned revision |
 | scripts run | on your machine, in the `aip` process | on your machine, in the `aip` process, from a verified cache of the revision's `scripts/` and `assets/` |
 | `requires` checked against | your machine | your machine |
-| decisions resolved | your decision-model key, else pause to you | today: the server's key. planned: your key, else pause |
+| decisions resolved | your decision-model key, else pause to you | your decision-model key, else pause to you; the server records the answer and who gave it |
 | run record | the run file only | the server's run store (filesystem or Neo4j); the run file is a handle |
 | search, publish, pin, retire, governance queries, console | none | yes |
 
@@ -21,26 +21,27 @@ remembers.
 
 ## Who holds what
 
-**Local run, today and planned.** The run file, `~/.aip/runs/<run-id>.json`, holds everything:
+**Local run.** The run file, `~/.aip/runs/<run-id>.json`, holds everything:
 the state, the full history, the pause. `aip resume <run-id>` rebuilds the run from it, from any
 directory. Nothing else records the run.
 
-**Served run, today.** The server's run record is the state and the history, and it is the only
+**Served run.** The server's run record is the state and the history, and it is the only
 copy. The client's run file holds a handle: run id, server, revision, the run's version, and the
 pending pause, and the run's working directory. Each request carries the run id and one thing
-(the answer to a pause, the report of a script the client ran, or nothing to retry a failed
-step; planned, also decision answers with attribution); the server loads the run, validates,
+(the answer to a pause, decision answers with their attribution, the report of a script the
+client ran, or nothing to retry a failed step); the server loads the run, validates,
 merges, routes, stores under a version check, and replies with the next pause or the next
 script to run, filtered to that step's declared keys. The server keeps nothing
 in process memory between requests, so any replica can answer any request, and of two posts
 racing on one run exactly one is applied (the other gets a 409). The client never sees or
 resends accumulated state. The client runs every script next to its data, with the run's
 working directory as `AIP_WORKDIR`, and posts the output (or the exit code and stderr); the
-server never runs user code. Decisions still use the server's key.
-
-**Served run, planned.** The same record and requests, but the client also resolves decisions
-with its own key, posting each answer with attribution; the server holds no model key
-(`docs/client-execution.md`).
+server never runs user code. At a decision the server sends the questions, the step's declared
+inputs, and the author's thresholds; the client asks its own decision model (if it has a key),
+pauses for review when an answer falls under its threshold, and posts the answers with
+attribution (`resolver`, `model`, `confidence`, `reviewed`), or the agent's answers as
+`manual`. The server checks the answers against the question types and records the
+attribution in the history; it holds no model key.
 
 ## Why pick each
 

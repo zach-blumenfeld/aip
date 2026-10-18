@@ -9,15 +9,14 @@ Precedence, highest first:
    into flag defaults and fills in unset environment variables)
 4. built-in defaults
 
-The config file has three tables. `[server]` is the listener: `host`, `port`, `token`,
+The config file has two tables. `[server]` is the listener: `host`, `port`, `token`,
 `read_token`, `localhost_open`, `inspector`, `log_level`. `[backend]` picks the store:
 `kind` (`filesystem` or `neo4j`), `root` for the filesystem, `uri`, `user`, `password`,
-`database`, `cache_dir` for Neo4j. `[decision_model]` is the TypeSafe client every decision
-step uses: `api_key`, `base_url`, `model`. Without an `api_key` (here or as
-`TYPESAFE_API_KEY`) the server answers no decisions; every decision step pauses for the
-client to answer. The Neo4j and decision-model values are applied by setting their
-`NEO4J_*` and `TYPESAFE_*` environment variables when unset, since the Neo4j connection
-and the TypeSafe SDK read those; that is what makes rule 2 beat rule 3 for them too.
+`database`, `cache_dir` for Neo4j. The Neo4j values are applied by setting their `NEO4J_*`
+environment variables when unset, since the Neo4j connection reads those; that is what makes
+rule 2 beat rule 3 for them too. The server holds no decision-model key: decisions are
+resolved by the client (`aip config --decision-model`), so a `[decision_model]` table is
+refused with that instruction.
 
 The file is looked up as `--config FILE`, then `$AIP_SERVER_CONFIG`, then `./aip-server.toml`,
 then the per-user `~/.config/aip/server.toml` (`user_config_path`, beside the client's
@@ -47,9 +46,6 @@ _ENV_KEYS = {
     ("backend", "user"): "NEO4J_USERNAME",
     ("backend", "password"): "NEO4J_PASSWORD",
     ("backend", "database"): "NEO4J_DATABASE",
-    ("decision_model", "api_key"): "TYPESAFE_API_KEY",
-    ("decision_model", "base_url"): "TYPESAFE_BASE_URL",
-    ("decision_model", "model"): "TYPESAFE_DEFAULT_MODEL",
 }
 
 # config key -> argparse destination, for the values only flags carry
@@ -68,7 +64,6 @@ _FLAG_KEYS = {
 _KNOWN = {
     "server": {"host", "port", "token", "read_token", "localhost_open", "inspector", "log_level"},
     "backend": {"kind", "root", "uri", "user", "password", "database", "cache_dir"},
-    "decision_model": {"api_key", "base_url", "model"},
 }
 
 EXAMPLE = """\
@@ -94,13 +89,8 @@ root = "~/.local/share/aip/server"   # filesystem: where the catalog and runs li
 # database = "neo4j"               # or NEO4J_DATABASE
 # cache_dir = "~/.cache/aip"       # neo4j: where revisions are materialised to run
 
-[decision_model]
-# The TypeSafe client that answers decision steps. Without an api_key (here or as
-# TYPESAFE_API_KEY) the server answers no decisions and every decision step pauses for
-# the client to answer by hand.
-# api_key = "..."                  # or TYPESAFE_API_KEY
-# base_url = "https://api.typesafe.ai"   # or TYPESAFE_BASE_URL (this is the default)
-# model = "jev-latest"             # or TYPESAFE_DEFAULT_MODEL (this is the default)
+# No decision model here: clients resolve decisions with their own key
+# (`aip config --decision-model KEY`, or TYPESAFE_API_KEY on the client).
 """
 
 
@@ -185,7 +175,7 @@ def load_env_file(path: Path, environ: Dict[str, str] | None = None) -> Dict[str
 
 
 def read_config(path: Path) -> JSON:
-    """Parse and check the TOML: only the three known tables and their keys."""
+    """Parse and check the TOML: only the two known tables and their keys."""
     try:
         data = tomllib.loads(path.read_text())
     except OSError as exc:
@@ -193,6 +183,10 @@ def read_config(path: Path) -> JSON:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     for table, values in data.items():
+        if table == "decision_model":
+            raise ConfigError(f"{path}: [decision_model] is not a server setting since 0.6a0: clients resolve "
+                              "decisions with their own key; remove the table and run "
+                              "`aip config --decision-model KEY` on each client")
         if table not in _KNOWN:
             raise ConfigError(f"{path}: unknown table [{table}]; expected one of {sorted(_KNOWN)}")
         if not isinstance(values, dict):
@@ -207,8 +201,8 @@ def read_config(path: Path) -> JSON:
 
 
 def apply_config(config: JSON, environ: Dict[str, str] | None = None) -> JSON:
-    """Flag defaults from the file (`{dest: value}`), and the `NEO4J_*` / `TYPESAFE_*`
-    variables set where the environment does not already have them."""
+    """Flag defaults from the file (`{dest: value}`), and the `NEO4J_*` variables set where the
+    environment does not already have them."""
     environ = os.environ if environ is None else environ
     defaults: JSON = {}
     for (table, key), var in _ENV_KEYS.items():
@@ -232,17 +226,5 @@ def apply_config(config: JSON, environ: Dict[str, str] | None = None) -> JSON:
     return defaults
 
 
-def decision_model_status(environ: Dict[str, str] | None = None) -> str:
-    """One line for the startup log: which model answers decisions, or that none does."""
-    environ = os.environ if environ is None else environ
-    if not environ.get("TYPESAFE_API_KEY"):
-        return "decision model: none (TYPESAFE_API_KEY unset); every decision step pauses for the client to answer"
-    from typesafe_sdk.constants import DEFAULT_BASE_URL, DEFAULT_MODEL
-
-    model = environ.get("TYPESAFE_DEFAULT_MODEL") or DEFAULT_MODEL
-    base = environ.get("TYPESAFE_BASE_URL") or DEFAULT_BASE_URL
-    return f"decision model: TypeSafe {model} at {base}"
-
-
-__all__ = ["CONFIG_ENV", "CONFIG_FILE", "ENV_FILE", "EXAMPLE", "ConfigError", "apply_config", "decision_model_status",
+__all__ = ["CONFIG_ENV", "CONFIG_FILE", "ENV_FILE", "EXAMPLE", "ConfigError", "apply_config",
            "DEFAULT_ROOT", "find_config", "load_env_file", "parse_env_file", "read_config", "user_config_path", "write_example"]

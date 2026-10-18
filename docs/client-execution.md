@@ -114,9 +114,9 @@ files.
 Same rule as scripts: the client resolves them automatically; the agent only sees a decision
 nothing else could answer.
 
-- **Today:** the server answers a decision with the decision model (TypeSafe) when the key is in
-  the server's environment, otherwise pauses; the client only ever answers a pause.
-- **After:** the client answers the decision with the decision model when its key is configured
+- **Before 0.6a0 (B4):** the server answered a decision with the decision model (TypeSafe) when
+  the key was in the server's environment, otherwise paused; the client only ever answered a pause.
+- **Now:** the client answers the decision with the decision model when its key is configured
   on the client (`aip config`), applies the author's confidence thresholds (sent with the step), and pauses for the agent
   only when no resolver is configured or confidence is below threshold (a review pause, accepted
   with an empty answer or overridden). It posts the answer to the server with attribution.

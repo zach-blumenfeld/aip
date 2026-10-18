@@ -532,26 +532,36 @@ def config_command(argv: list[str]) -> int:
                                      "AIP_SERVER and AIP_TOKEN override the file.")
     parser.add_argument("--server", default=None, help="the server URL")
     parser.add_argument("--token", default=None, help="the bearer token")
-    parser.add_argument("--clear", action="store_true", help="forget the server and token")
+    parser.add_argument("--decision-model", default=None, metavar="KEY",
+                        help="the TypeSafe API key this client resolves decisions with (TYPESAFE_API_KEY overrides; "
+                             "an empty string forgets it). Without one, every decision pauses for you to answer")
+    parser.add_argument("--clear", action="store_true", help="forget the server, token, and decision-model key")
     args = parser.parse_args(argv)
     if args.clear:
         path = save_config({})
         print(f"cleared {path}")
         return 0
-    if args.server is not None or args.token is not None:
+    if args.server is not None or args.token is not None or args.decision_model is not None:
         config = load_config()
         if args.server is not None:
             config["server"] = args.server.rstrip("/")
         if args.token is not None:
             config["token"] = args.token
+        if args.decision_model:
+            config["decision_model"] = {"api_key": args.decision_model}
+        elif args.decision_model is not None:
+            config.pop("decision_model", None)
         path = save_config(config)
         print(f"wrote {path}")
+    from aip.client.resolver import status
+
     s = settings()
     if s["server"] is None:
         print(f"no server configured (local folders only); set AIP_SERVER or `aip config --server URL` ({config_path()})")
-        return 0
-    print(f"server: {s['server']}  (from {s['source']})")
-    print(f"token:  {'set' if s['token'] else 'none'}")
+    else:
+        print(f"server: {s['server']}  (from {s['source']})")
+        print(f"token:  {'set' if s['token'] else 'none'}")
+    print(status())
     return 0
 
 
@@ -612,17 +622,15 @@ def db_command(argv: list[str]) -> int:
 def server_command(argv: list[str]) -> int:
     """`aip server`: the HTTP API over the filesystem or Neo4j backend. Scripts run in this process."""
     from aip.server.config import (CONFIG_ENV, CONFIG_FILE, DEFAULT_ROOT, ENV_FILE, EXAMPLE, ConfigError, apply_config,
-                                   decision_model_status, find_config, load_env_file, read_config,
-                                   user_config_path, write_example)
+                                   find_config, load_env_file, read_config, user_config_path, write_example)
 
     parser = argparse.ArgumentParser(prog="aip server", description="Serve the AIP catalog and execution API.",
                                      epilog="Configuration, highest precedence first: these flags, the environment "
-                                            "(NEO4J_*, TYPESAFE_*; a .env file is loaded into it), the config file, "
-                                            "defaults. `--example-config` prints a complete file. Decision steps are "
-                                            "answered by TypeSafe when TYPESAFE_API_KEY (or decision_model.api_key) is "
-                                            "set; otherwise every decision pauses for the client. Publishing is code "
-                                            "execution on this server: scripts run here with its privileges. Without "
-                                            "--token the server is open; keep --host on localhost.")
+                                            "(NEO4J_*; a .env file is loaded into it), the config file, "
+                                            "defaults. `--example-config` prints a complete file. The server runs no "
+                                            "scripts and holds no decision-model key: clients run scripts and resolve "
+                                            "decisions (`aip config --decision-model`), and the server records them. "
+                                            "Without --token the server is open; keep --host on localhost.")
     parser.add_argument("--config", type=Path, default=None, metavar="FILE",
                         help=f"TOML config file (default ${CONFIG_ENV}, else ./{CONFIG_FILE}, else "
                              f"{user_config_path()})")
@@ -660,7 +668,7 @@ def server_command(argv: list[str]) -> int:
         except ConfigError as exc:
             print(f"aip server: {exc}", file=sys.stderr)
             return 1
-        print(f"wrote {target}\nedit it (the decision model key, the backend), then run: aip server")
+        print(f"wrote {target}\nedit it (the backend, the tokens), then run: aip server")
         return 0
     env_file = pre.env_file if pre.env_file is not None else (Path(ENV_FILE) if Path(ENV_FILE).is_file() else None)
     config_file = find_config(pre.config)
@@ -715,7 +723,6 @@ def server_command(argv: list[str]) -> int:
     if loaded:
         print(f"aip server: configured from {', '.join(loaded)}", file=sys.stderr)
     print(f"aip server: {where}; http://{args.host}:{args.port}", file=sys.stderr)
-    print(f"aip server: {decision_model_status()}", file=sys.stderr)
     if tokens:
         print(f"aip server: {len(tokens)} bearer token(s); loopback clients "
               f"{'need one too' if args.no_localhost else 'need none'}", file=sys.stderr)

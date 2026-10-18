@@ -32,7 +32,7 @@ Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% ov
 AIP is two pieces:
 
 1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec).
-2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, runs scripts, answers decisions with a structured decision model, and follows routers; the client, an agent or a person, handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
+2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, validates every step's input and output, and follows routers; the `aip` client runs the scripts next to the data and answers decisions with a structured decision model, and the agent or person behind it handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
 
 ## How It Works
 
@@ -46,15 +46,15 @@ flowchart LR
     subgraph clients["Clients"]
         agent["any agent +<br/>aip-runtime meta-skill"] --> cli["aip CLI<br/>search · info · run · resume"]
         insp["aip-inspector<br/>catalog · run console · history · governance"]
+        scripts["scripts run here,<br/>next to the data"]
+        model["decision model (TypeSafe)<br/>answers questions, flags low confidence"]
+        cli --> scripts
+        cli --> model
     end
     subgraph server["aip server (one HTTP API)"]
         api["/catalog · /runs · /governance"]
         engine["execution engine<br/>steps · routing · validation"]
-        scripts["scripts run here"]
-        model["decision model (TypeSafe)<br/>answers questions, flags low confidence"]
         api --> engine
-        engine --> scripts
-        engine --> model
     end
     subgraph backend["Backend (one interface)"]
         neo["Neo4j<br/>catalog · files · runs · answers<br/>full-text search · graph queries"]
@@ -67,7 +67,7 @@ flowchart LR
     api --> backend
 ```
 
-The agent never decides anything the procedure can decide. It starts a run, and the server walks the graph: it validates each step's input, runs scripts, asks the decision model, and follows routers. It stops only at a pause the agent must handle: a task to perform, a decision answered below its threshold to confirm or override, or, with no decision model configured, the questions themselves. Every step, answer, and pause is recorded against the revision that ran, which is what the history and governance views read.
+The agent never decides anything the procedure can decide. It starts a run, and the server walks the graph: it validates each step's input and follows routers, while the `aip` client runs the scripts and asks the decision model. It stops only at a pause the agent must handle: a task to perform, a decision answered below its threshold to confirm or override, or, with no decision model configured, the questions themselves. Every step, answer, and pause is recorded against the revision that ran, which is what the history and governance views read.
 
 ## Evidence So Far
 
@@ -121,7 +121,7 @@ For *consuming* the resulting skill, the opposite holds: AIP's structure is what
 
 - macOS or Linux with `curl`.
 - A Neo4j database. [Aura](https://console.neo4j.io) works.
-- A [TypeSafe](https://typesafe.ai) API key. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model.
+- A [TypeSafe](https://typesafe.ai) API key, set on the client. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model.
 - [Claude Code](https://claude.com/claude-code) for steps 5 and 6. Any agent `aip skill list` names works the same way.
 
 ### 1. Install
@@ -145,7 +145,7 @@ If `aip` is not found, open a new terminal. uv installs commands into `~/.local/
 aip server --init       # writes ~/.config/aip/server.toml, every setting commented
 ```
 
-Open that file and set 6 lines. 
+Open that file and set 5 lines. 
 
 Under `[backend]`:
 ```toml
@@ -156,10 +156,6 @@ password = "..."
 database = "neo4j"
 ```
 
-Under `[decision_model]`
-```toml
-api_key = "..." # your TYPESAFE_API_KEY  , optioal but highly recommended 
-```
 Then start the aip server:
 
 ```bash
@@ -170,6 +166,7 @@ You will use the hello-world example for now.  Later you will see how to compile
 
 ```bash
 aip config --server http://localhost:8000      # where the client and the agents send requests
+aip config --decision-model "..."              # your TYPESAFE_API_KEY: optional but highly recommended
 aip-spec example billing-support --out .       # the bundled example skill, written to ./billing-support
 aip publish billing-support                    # validates, uploads, prints billing-support@<revision>
 ```
@@ -307,15 +304,15 @@ aip pin <name> <revision>  /  aip retire <name>@<revision>
 (catalog, source, run console, history, governance) at `/inspector/`, from the bundle shipped in
 `src/aip/server/inspector/`; that directory is generated there by the inspector repo's `npm run build && npm run sync`.
 
-`aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; every outcome prints a `run_id`, the run file is `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it, `--run-file` picks a path), `aip resume <run-id> --input answer.json` continues from any directory, and `aip resume <run-id>` with no input retries a failed step. `--progress` adds a JSON line per completed step and `--debug` a traceback on failure. Decision thresholds are the author's, from SKILL.md; nothing at run time overrides them. On a server, the server holds the run's state and history and the run file is only a handle.
+`aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when this client has no decision-model key, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; every outcome prints a `run_id`, the run file is `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it, `--run-file` picks a path), `aip resume <run-id> --input answer.json` continues from any directory, and `aip resume <run-id>` with no input retries a failed step. `--progress` adds a JSON line per completed step and `--debug` a traceback on failure. Decision thresholds are the author's, from SKILL.md; nothing at run time overrides them. On a server, the server holds the run's state and history and the run file is only a handle.
 
 ### Configuring the server
 
-`aip server --init` writes `~/.config/aip/server.toml`, every setting commented, and `aip server` reads it from there. The file is also looked for as `--config FILE`, `$AIP_SERVER_CONFIG`, and `./aip-server.toml`, in that order, the first found wins; `--example-config` prints the same template. Precedence, highest first: flags, the environment (a `./.env` or `--env-file` is loaded into it without overriding anything already set), the file, defaults. The filesystem catalog lives in `~/.local/share/aip/server` unless `root` says otherwise. The startup log names what it loaded, the backend, and whether a decision model is configured.
+`aip server --init` writes `~/.config/aip/server.toml`, every setting commented, and `aip server` reads it from there. The file is also looked for as `--config FILE`, `$AIP_SERVER_CONFIG`, and `./aip-server.toml`, in that order, the first found wins; `--example-config` prints the same template. Precedence, highest first: flags, the environment (a `./.env` or `--env-file` is loaded into it without overriding anything already set), the file, defaults. The filesystem catalog lives in `~/.local/share/aip/server` unless `root` says otherwise. The startup log names what it loaded and the backend.
 
-The file has three tables. `[server]` is the listener and tokens; `[backend]` picks `filesystem` (`root`) or `neo4j` (`uri`, `user`, `password`, `database`, `cache_dir`); `[decision_model]` is the TypeSafe client that answers decision steps (`api_key`, `base_url`, `model`). Secrets can live in the file, in `.env`, or in the environment as `NEO4J_*` and `TYPESAFE_*`; the file never overrides a variable that is already set.
+The file has two tables. `[server]` is the listener and tokens; `[backend]` picks `filesystem` (`root`) or `neo4j` (`uri`, `user`, `password`, `database`, `cache_dir`). Secrets can live in the file, in `.env`, or in the environment as `NEO4J_*`; the file never overrides a variable that is already set. The server holds no decision-model key, and a `[decision_model]` table is refused with a pointer to the client setting below.
 
-**Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, and only the process that executes the procedure needs the key: the server for `aip run <name>`, your shell for `aip run <folder>`. Without a key the server answers no decisions and every decision step pauses with its `questions` for you to answer by hand; with one, the model answers and the run only pauses with a `review` block when an answer falls under its threshold. `curl $AIP_SERVER/procedures/<name>/capabilities` reports `decision_model` as the server sees it; the inspector's Server page shows the same.
+**Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, on the client: `aip config --decision-model KEY` stores the key in `~/.config/aip/config.json`, and `TYPESAFE_API_KEY` overrides it. That holds for `aip run <name>` against a server as much as for `aip run <folder>`. Without a key every decision step pauses with its `questions` for you to answer by hand; with one, the model answers, the author's thresholds come with the step, and the run only pauses with a `review` block when an answer falls under its threshold. The server records each decision with its attribution (`resolver` `typesafe` or `manual`, `model`, `confidence`, `reviewed`), which the `overridden-decisions` and `manual-decisions` governance queries read.
 
 **Scripts and trust.** A procedure's execution steps are scripts, and the server runs them as a subprocess with its own privileges on its own machine: whatever the server process can read, write, or reach, a published script can too. The server does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies, so isolation is the deployment's job (a container, a dedicated user, seccomp). Publishing a skill is therefore equivalent to running code on the server. Give the `publish` scope only to people you would let open a shell there, and keep the server on localhost or behind a token everywhere else.
 

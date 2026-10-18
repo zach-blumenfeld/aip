@@ -279,7 +279,24 @@ server and client in separate temp roots, the file appears on the client side, t
 run record holds the result; a script that exits 2 shows in `GET /governance/failing-scripts`.
 Contract test: `aip get` then `aip publish` still round-trips the revision.
 
-### - [ ] B4 (aip): the client resolves decisions with attribution
+### - [x] B4 (aip): the client resolves decisions with attribution
+
+Done 2026-10-18, aip only. The engine stops at every decision (no `decision_model` argument); the
+pause carries the author's `thresholds` and, when the step sets `history: true`, the run's
+`history`, neither printed. `aip.client.resolver` runs in both backends, so local and served runs
+resolve one way. Choices beyond the text: a review is the client's pause only (the served run's
+server still waits at the decision; a local run records nothing until it is answered), and the
+answer then carries `proposed`, the model's answers, beside the attribution, which is how
+`overridden-decisions` now counts (an override is a reviewed answer that differs from `proposed`,
+not a later step's input) and why it reports `resolver`. `confidence` is per question, a noul's
+being the probability of the side it chose. A missing `attribution` on a post means manual; a
+malformed one is a 422 `invalid_output` naming `attribution`. The history entry's `result` is now
+`{"answers": {question: value}}` and the old `manual` flag is gone; Neo4j `StepRun.manual` became
+`resolver` and `Answer` nodes are written once from the attribution. The server's `[decision_model]`
+config table is refused with a pointer to `aip config --decision-model`. A model that fails leaves
+the run at the decision, resumable. Neo4j contract tests pass against a local `neo4j:5` container.
+The bundled inspector still shows `capabilities.decision_model` and the old overridden rows (I3);
+the README's "Scripts and trust" paragraph still says the server runs scripts (B3 left it; C1).
 
 The client answers decision steps with the decision model when `TYPESAFE_API_KEY` is configured
 on the client (`aip config --decision-model`), applies the step's thresholds as sent by the server,

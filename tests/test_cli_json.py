@@ -71,6 +71,7 @@ def normalise(obj, run_id: str | None = None):
 
 class FakeTypeSafe:
     """Stands in for `TypeSafeClient()`: billing is clear, tone is a coin flip under its 0.6 threshold."""
+    TONE = 0.58
 
     def __enter__(self):
         return self
@@ -83,8 +84,8 @@ class FakeTypeSafe:
         return SystemOneResponse.model_validate({
             "model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
             "answers": {"billing": {"type": "noul", "noul": 0.97},
-                        "tone": {"type": "choice", "choice": "angry", "confidence": 0.58,
-                                 "probabilities": {"angry": 0.58, "calm": 0.42}}}})
+                        "tone": {"type": "choice", "choice": "angry", "confidence": self.TONE,
+                                 "probabilities": {"angry": self.TONE, "calm": round(1 - self.TONE, 6)}}}})
 
 
 class CliJson(unittest.TestCase):
@@ -104,6 +105,12 @@ class CliJson(unittest.TestCase):
         path = self.tmp / name
         path.write_text(json.dumps(obj))
         return str(path)
+
+    def aip_text(self, *argv: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", new=out), mock.patch("sys.stderr", new=err):
+            code = main(list(argv))
+        return code, out.getvalue(), err.getvalue()
 
     def aip(self, *argv: str) -> tuple[int, list, str]:
         """Exit code, every JSON line or object printed on stdout, and stderr."""
@@ -142,7 +149,7 @@ class CliJson(unittest.TestCase):
     @contextmanager
     def decision_model(self):
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "stub"}), \
-                mock.patch("aip.model.steps.TypeSafeClient", return_value=FakeTypeSafe()):
+                mock.patch("aip.client.resolver.TypeSafeClient", return_value=FakeTypeSafe()):
             yield
 
     def broken_example(self) -> Path:
@@ -188,14 +195,46 @@ class CliJson(unittest.TestCase):
         self.assert_documented("done", done)
         history = RunFile.load(self.run_file).history
         self.assertEqual([e["step"] for e in history], ["triage", "by-tone", "reply", "end"])
+        self.assertEqual(history[0]["attribution"],                     # no key: answered by the agent
+                         {"resolver": "manual", "model": None, "confidence": None, "reviewed": False})
 
     def test_review_pause(self):
         with self.decision_model():
             code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
             self.assertEqual(code, 0)
             self.assert_documented("paused-review", pause)
+            self.assertEqual(RunFile.load(self.run_file).history, [], "nothing is recorded until the review is answered")
             code, [pause], _ = self.resume({"tone": "calm"})            # override: the calm branch
             self.assertEqual((code, pause["paused"]), (0, "client_task"))
+        triage = RunFile.load(self.run_file).history[0]
+        self.assertEqual(triage["result"], {"answers": {"billing": True, "tone": "calm"}})
+        self.assertEqual(triage["attribution"], {"resolver": "typesafe", "model": "jev-1",
+                                                 "confidence": {"billing": 0.97, "tone": 0.58}, "reviewed": True,
+                                                 "proposed": {"billing": True, "tone": "angry"}})
+
+    def test_the_decision_model_key_is_the_clients(self):
+        """`aip config --decision-model KEY` is what this client resolves decisions with; an empty
+        key forgets it, and every decision pauses again."""
+        code, _, _ = self.aip_text("config", "--decision-model", "from-config")
+        self.assertEqual(code, 0)
+        with mock.patch("aip.client.resolver.TypeSafeClient", return_value=FakeTypeSafe()) as typesafe:
+            code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
+        self.assertEqual((code, pause["paused"]), (0, "review"))
+        typesafe.assert_called_once_with(api_key="from-config")
+        _, text, _ = self.aip_text("config")
+        self.assertIn("decision model: TypeSafe", text)
+
+        self.aip_text("config", "--decision-model", "")
+        code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
+        self.assertEqual((code, pause["paused"]), (0, "decision"))
+        _, text, _ = self.aip_text("config")
+        self.assertIn("decision model: none", text)
+
+    def test_progress_names_the_models_resolver(self):
+        with self.decision_model(), mock.patch.object(FakeTypeSafe, "TONE", 0.9):
+            code, printed, _ = self.run_(EXAMPLE, ANGRY, "--progress")
+        self.assertEqual((code, printed[-1].get("done")), (0, True))
+        self.assertEqual(printed[0], {"event": "step", "step": "triage", "kind": "decision", "resolver": "typesafe"})
 
     def test_progress_on_the_angry_branch(self):
         code, [pause], _ = self.run_(EXAMPLE, ANGRY, "--progress")       # nothing completed yet

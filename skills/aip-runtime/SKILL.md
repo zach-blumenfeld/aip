@@ -17,6 +17,7 @@ and answer when it pauses. You never execute its steps yourself.
 ```
 aip --help          # the client is installed
 aip config          # prints `server: <url>`; else set AIP_SERVER=http://host:port
+                    # and `decision model: TypeSafe` or `none`
 ```
 
 No server and no `aip`: this skill does not apply; do the task as you normally would.
@@ -57,8 +58,8 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 
    | `paused`      | what the pause carries                               | what you put in the answer file                                    |
    |---------------|------------------------------------------------------|--------------------------------------------------------------------|
-   | `decision`    | `questions` (`type`, `instructions`, `criteria`) and `state` | one key per question: `true`/`false` for `noul`, a `criteria` label for `choice`, the level number (list position from 0) for `score`; judge from `state` |
-   | `review`      | `proposed_answers`, and `review`: the ones under their confidence threshold | only the keys you override, e.g. `{"tone": "calm"}`; `{}` accepts every proposed answer |
+   | `decision`    | `questions` (`type`, `instructions`, `criteria`) and `state`: no decision model here | one key per question: `true`/`false` for `noul`, a `criteria` label for `choice`, the level number (list position from 0) for `score`; judge from `state` |
+   | `review`      | `proposed_answers` from this machine's decision model, and `review`: the ones under their confidence threshold | only the keys you override, e.g. `{"tone": "calm"}`; `{}` accepts every proposed answer |
    | `client_task` | `task`: what to do; `state`; `references`; `answer_with` | the work product under every key in `answer_with`, with those types |
 
    `state` is only what this step needs. The run holds the rest (the server, for a published
@@ -79,6 +80,10 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 - **Scripts run here, on this machine,** for a published procedure too: `aip` fetches them
   from the server and runs them itself. Files they read and write are relative to the run's
   working directory, the directory `aip run` started in (or `--workdir`), kept for `resume`.
+- **Decisions are resolved here too.** With a TypeSafe key on this machine (`TYPESAFE_API_KEY`,
+  or `aip config --decision-model KEY`) `aip` asks the model and pauses only for a `review`;
+  without one every decision pauses as `decision` for you to answer. Either way the run's
+  history records who answered (`resolver`: `typesafe` or `manual`). Do not set a key unless asked.
 - **One run, one run id.** Every outcome prints `run_id`; `aip resume <run_id>` finds the
   run file (`run_file`, under `~/.aip/runs/`) from any directory and rewrites it. Do not edit it. Do not start a second run of the same task.
 - **Report the result** from `state` (the end step's declared keys) in the task's terms,

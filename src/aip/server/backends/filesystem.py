@@ -385,6 +385,8 @@ class FilesystemGovernance:
             raise NotFound(f"no governance query {query!r}")
         if query == "overridden-decisions":
             return governance.overridden_decisions(self._window(name, window), limit)
+        if query == "manual-decisions":
+            return governance.manual_decisions(self._window(name, window), limit)
         if query == "failing-scripts":
             return governance.failing_scripts(self._window(name, window), self._script_of, limit)
         if query == "missing-fields":

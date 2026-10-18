@@ -254,12 +254,9 @@ def test_capabilities(backend, no_key):
     publish(TestClient(create_app(backend)))
     plain = TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json()
     assert plain == {"name": "billing-support", "revision": snapshot(EXAMPLE).revision,
-                     "decision_model": False, "executes_scripts": False, "persists_runs": True,
-                     "governance": True}
-    with_model = TestClient(create_app(backend, client=FakeJev(0.9))).get("/procedures/billing-support/capabilities").json()
-    assert with_model["decision_model"] is True
-    with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):
-        assert TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json()["decision_model"]
+                     "executes_scripts": False, "persists_runs": True, "governance": True}
+    with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):           # a key here changes nothing
+        assert TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json() == plain
     assert TestClient(create_app(backend)).get("/procedures/nope/capabilities").status_code == 404
 
 
@@ -286,9 +283,10 @@ def test_manual_traversal_angry_branch_stops_at_the_script(api, example):
     first = r.json()
     assert (first["ran"], first["kind"], first["review"]) == ("triage", "decision", [])
     assert first["suggested"] == {"message": "I was charged twice!", "billing": True, "tone": "angry"}
-    assert first["result"]["answers"]["tone"] == {"type": "choice", "manual": "angry"}
+    assert first["result"]["answers"] == {"billing": True, "tone": "angry"}
     assert first["next"]["kind"] == "router" and set(first["next"]["branches"]) == {"angry", "calm"}
-    assert first["history"][0]["manual"] is True
+    assert first["history"][0]["attribution"] == {"resolver": "manual", "model": None, "confidence": None,
+                                                  "reviewed": False}
     assert first["run_id"] and first["name"] == "billing-support" and first["revision"] == example.revision
     run_id = first["run_id"]
 
@@ -310,38 +308,35 @@ def test_manual_traversal_angry_branch_stops_at_the_script(api, example):
     assert api.get("/runs", params={"name": "billing-support", "status": "running"}).json()[0]["run_id"] == run_id
 
 
-def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend, no_key, example):
-    """running.md, "With a decision model": tone comes back at 0.55 < 0.6 so the response carries a
-    review; the client overrides to calm, the router sends it to the client task, the client
-    does the task and `end` accepts the reply as an extra key."""
-    api = TestClient(create_app(backend, client=FakeJev(0.55, 0.97)), raise_server_exceptions=False)
+def test_client_resolved_traversal_calm_branch_pauses_as_a_client_task(backend, no_key, example):
+    """running.md, "With a decision model": the server never calls one, even with a key in its
+    environment; the client's model proposed angry at 0.55 < 0.6, the agent reviewed it to calm,
+    and the client posts the answers with that attribution through `/answer`. The router sends
+    calm to the client task, the client does the task, and `end` accepts the reply."""
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
     publish(api)
     start = {"message": "I was charged twice!"}
 
-    r = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []})
-    assert r.status_code == 200, r.text
-    first = r.json()
-    assert first["ran"] == "triage" and first["suggested"]["tone"] == "angry" and first["suggested"]["billing"] is True
-    assert first["review"] == [{"question": "tone", "type": "choice", "confidence": 0.55,
-                                "probabilities": {"angry": 0.55, "calm": 0.45}, "reason": "confidence below 0.6"}]
-    assert first["result"]["answers"]["billing"]["noul"] == 0.97
-    run_id = first["run_id"]
-    run = api.get(f"/runs/{run_id}").json()
-    assert run["status"] == "paused"
-    assert run["pause"]["kind"] == "review" and run["pause"]["step"] == "triage"
-    assert run["pause"]["proposed_answers"]["tone"] == "angry" and run["pause"]["state"] == {"message": start["message"]}
-    assert api.get("/runs", params={"status": "paused"}).json()[0]["run_id"] == run_id
+    with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):
+        r = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []})
+    assert r.status_code == 422 and r.json()["error"]["kind"] == "no_decision_model"
 
-    # thresholds are the author's: a request's own are ignored; the endpoint says it is deprecated
-    r = api.post("/procedures/billing-support/step",
-                 json={"after": None, "payload": start, "history": [], "thresholds": {"tone": 0.5}})
-    assert r.status_code == 200 and r.json()["review"] == first["review"]
+    attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55},
+                   "reviewed": True, "proposed": {"billing": True, "tone": "angry"}}
+    r = api.post("/procedures/billing-support/answer",
+                 json={"after": None, "payload": start, "history": [], "answers": {"billing": True, "tone": "calm"},
+                       "attribution": attribution})
+    assert r.status_code == 200, r.text
     assert r.headers["deprecation"] == "true" and "/runs" in r.headers["link"]
+    first = r.json()
+    assert first["ran"] == "triage" and first["suggested"]["tone"] == "calm" and first["review"] == []
+    assert first["history"][0]["attribution"] == attribution
+    run_id = first["run_id"]
+    assert api.get(f"/runs/{run_id}").json()["status"] == "running"
 
     # the client overrides tone -> calm; the router sends it to the client task
     r = api.post("/procedures/billing-support/step",
-                 json={"after": "triage", "payload": {**first["suggested"], "tone": "calm"},
-                       "history": first["history"], "run_id": run_id})
+                 json={"after": "triage", "payload": first["suggested"], "history": first["history"], "run_id": run_id})
     assert r.status_code == 200, r.text
     second = r.json()
     assert (second["ran"], second["kind"]) == ("reply", "client_task")
@@ -368,7 +363,7 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
     assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "reply", "end"]
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "done" and run["pause"] is None and len(run["history"]) == 4
-    assert run["history"][0]["result"]["answers"]["tone"]["probabilities"] == {"angry": 0.55, "calm": 0.45}
+    assert run["history"][0]["attribution"]["proposed"]["tone"] == "angry"
 
 
 def test_execution_errors(api, example):
@@ -474,13 +469,13 @@ def test_thresholds_are_the_authors_alone(backend, no_key, example):
 
 
 def test_governance_queries_over_http(backend, no_key, example, tmp_path):
-    api = TestClient(create_app(backend, client=FakeJev(0.55, 0.97)), raise_server_exceptions=False)
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
     publish(api)
     listing = api.get("/governance").json()
-    assert [q["query"] for q in listing] == ["overridden-decisions", "failing-scripts", "missing-fields",
-                                             "untaken-branches"]
+    assert [q["query"] for q in listing] == ["overridden-decisions", "manual-decisions", "failing-scripts",
+                                             "missing-fields", "untaken-branches"]
     assert listing[0]["path"] == "/governance/overridden-decisions" and listing[0]["description"]
-    for query in ("overridden-decisions", "failing-scripts", "missing-fields"):
+    for query in ("overridden-decisions", "manual-decisions", "failing-scripts", "missing-fields"):
         assert api.get(f"/governance/{query}").json() == []
     r = api.get("/governance/untaken-branches")
     assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
@@ -488,24 +483,40 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     assert r.status_code == 404 and "GET /governance" in r.json()["error"]["message"]
     assert api.get("/governance/failing-scripts", params={"window": 0}).status_code == 422
 
-    # the client overrides tone after the review: one overridden decision
+    # the client's model proposed angry; the agent overrode tone at review: one overridden decision
     start = {"message": "I was charged twice!"}
-    first = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []}).json()
-    assert first["review"] and first["suggested"]["tone"] == "angry"
-    r = api.post("/procedures/billing-support/step",
-                 json={"after": "triage", "payload": {**first["suggested"], "tone": "calm"},
-                       "history": first["history"], "run_id": first["run_id"]})
-    assert r.status_code == 200 and r.json()["ran"] == "reply"
+    reviewed = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55},
+                "reviewed": True, "proposed": {"billing": True, "tone": "angry"}}
+    opened = api.post("/runs", json={"name": "billing-support", "input": start}).json()
+    assert opened["paused"] == "decision" and opened["thresholds"] == {"billing": 0.15, "tone": 0.6}
+    r = api.post(f"/runs/{opened['run_id']}/result",
+                 json={"answer": {"billing": True, "tone": "calm"}, "attribution": reviewed})
+    assert r.status_code == 200 and r.json()["step"] == "reply"
     assert api.get("/governance/overridden-decisions").json() == [
-        {"name": "billing-support", "step": "triage", "question": "tone", "decided": 1, "overridden": 1, "rate": 1.0}]
+        {"name": "billing-support", "step": "triage", "question": "tone", "resolver": "typesafe", "decided": 1,
+         "overridden": 1, "rate": 1.0}]
     assert api.get("/governance/overridden-decisions", params={"name": "other"}).json() == []
+    assert api.get("/governance/manual-decisions").json() == []
+
+    # an attribution that does not fit is refused and changes nothing
+    second = api.post("/runs", json={"name": "billing-support", "input": start}).json()
+    r = api.post(f"/runs/{second['run_id']}/result",
+                 json={"answer": {"billing": True, "tone": "calm"}, "attribution": {"resolver": "oracle"}})
+    assert r.status_code == 422 and r.json()["error"]["kind"] == "invalid_output"
+    assert r.json()["error"]["invalid"] == ["attribution"]
+    assert api.get(f"/runs/{second['run_id']}").json()["pause"]["kind"] == "decision"
+    # answered with no model (no attribution posted means manual)
+    r = api.post(f"/runs/{second['run_id']}/result", json={"answer": {"billing": True, "tone": "calm"}})
+    assert r.status_code == 200
+    assert api.get("/governance/manual-decisions").json() == [
+        {"name": "billing-support", "step": "triage", "decided": 2, "manual": 1, "rate": 0.5}]
 
     # a script that exits non-zero on the client: the run ends in error, recorded against the step
     r = publish(api, broken_variant(tmp_path))
     assert r.status_code == 201, r.text
     opened = api.post("/runs", json={"name": "broken-support", "input": start}).json()
-    assert opened["paused"] == "review"                                         # tone at 0.55
-    step = api.post(f"/runs/{opened['run_id']}/result", json={"answer": {}}).json()
+    assert opened["paused"] == "decision"
+    step = api.post(f"/runs/{opened['run_id']}/result", json={"answer": {"billing": True, "tone": "angry"}}).json()
     assert (step["paused"], step["step"]) == ("execute", "escalate")
     failure = {"error": "script_failed", "exit_code": 2, "stderr": "boom"}
     err = api.post(f"/runs/{opened['run_id']}/result", json={"answer": failure}).json()

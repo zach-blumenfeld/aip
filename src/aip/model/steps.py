@@ -256,25 +256,67 @@ class Decision(BaseStep):
                 result = client.system_one(state=payload, questions=self.questions)
         return result.model_dump(mode="json")
 
-    def accept_manual(self, payload: JSON, history: List[JSON], answers: JSON) -> StepResponse:
+    def accept_answers(self, payload: JSON, history: List[JSON], answers: JSON,
+                       attribution: JSON | None = None) -> StepResponse:
         """
-        The client answers the questions itself (no decision model available). `answers`
-        holds one collapsed value per question: bool for noul, label for choice, int level
-        for score. Recorded in history as a manual decision.
+        The client resolved the decision: `answers` holds one collapsed value per question (bool
+        for noul, label for choice, int level for score), and `attribution` says how it got them,
+        `{"resolver": "typesafe"|"manual", "model", "confidence": {question: float}|None,
+        "reviewed"}`, plus `proposed` (the model's answers before review) when reviewed. None is
+        a manual answer. Both are checked and recorded in the history entry.
         """
         validate_input(self.name, self.inputs, payload)
         missing = [q for q in self.questions if q not in answers]
         if missing:
             raise OutputValidationError(self.name, [f"missing answers for {missing}"], missing=missing)
         self.check_answers(answers)
-        result = {"answers": {name: {"type": self.questions[name].type, "manual": answers[name]} for name in self.questions}}
+        attribution = manual() if attribution is None else self.check_attribution(attribution)
+        result = {"answers": {name: answers[name] for name in self.questions}}
         entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs),
-                 "result": result, "manual": True}
+                 "result": result, "attribution": attribution}
         return StepResponse(
             ran=self.name, kind=self.kind, result=result,
-            suggested={**payload, **{name: answers[name] for name in self.questions}},
+            suggested={**payload, **result["answers"]},
             review=[], next=describe_next(self.inputsTo), history=[*history, entry],
         )
+
+    def check_attribution(self, attribution: JSON) -> JSON:
+        """The attribution as recorded: a known resolver, a model name, a confidence in 0..1 for
+        questions of this step, whether the answers were reviewed, and what was proposed before."""
+        errors: List[str] = []
+        if not isinstance(attribution, dict):
+            raise OutputValidationError(self.name, ["attribution must be an object"], invalid=["attribution"])
+        resolver = attribution.get("resolver")
+        if resolver not in RESOLVERS:
+            errors.append(f"attribution.resolver must be one of {list(RESOLVERS)}, got {resolver!r}")
+        model = attribution.get("model")
+        if model is not None and not isinstance(model, str):
+            errors.append("attribution.model must be a string or null")
+        scores = attribution.get("confidence")
+        if scores is not None and not (isinstance(scores, dict) and all(
+                k in self.questions and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1
+                for k, v in scores.items())):
+            errors.append("attribution.confidence must map this step's questions to numbers in 0..1")
+        reviewed = attribution.get("reviewed", False)
+        if not isinstance(reviewed, bool):
+            errors.append("attribution.reviewed must be true or false")
+        proposed = attribution.get("proposed")
+        if proposed is not None:
+            if not isinstance(proposed, dict) or set(proposed) != set(self.questions):
+                errors.append("attribution.proposed must answer every question of this step")
+            else:
+                try:
+                    self.check_answers(proposed)
+                except OutputValidationError as exc:
+                    errors += [f"attribution.proposed: {e}" for e in exc.errors]
+        if resolver == "manual" and (model is not None or scores is not None or proposed is not None):
+            errors.append("a manual answer has no model, confidence, or proposed answers")
+        if errors:
+            raise OutputValidationError(self.name, errors, invalid=["attribution"])
+        out = {"resolver": resolver, "model": model, "confidence": scores, "reviewed": reviewed}
+        if proposed is not None:
+            out["proposed"] = proposed
+        return out
 
     def check_answers(self, answers: JSON) -> None:
         """Collapsed answers must name only this step's questions and fit each question's type."""
@@ -314,22 +356,44 @@ class Decision(BaseStep):
 
     def review(self, result: JSON) -> List[JSON]:
         """Answers whose uncertainty crosses the threshold, with what the client needs to decide."""
-        limits = self.thresholds
-        flagged: List[JSON] = []
-        for name, answer in result["answers"].items():
-            if answer["type"] == "noul":
-                margin = limits.get(name, DEFAULT_NOUL_MARGIN)
-                if abs(answer["noul"] - 0.5) < margin:
-                    flagged.append({"question": name, "type": "noul", "noul": answer["noul"],
-                                    "reason": f"within {margin} of 0.5"})
-            else:
-                minimum = limits.get(name, DEFAULT_MIN_CONFIDENCE)
-                if answer["confidence"] < minimum:
-                    flagged.append({"question": name, "type": answer["type"],
-                                    "confidence": answer["confidence"],
-                                    "probabilities": answer["probabilities"],
-                                    "reason": f"confidence below {minimum}"})
-        return flagged
+        return flag(result["answers"], self.thresholds)
+
+
+def threshold(question_type: str, thresholds: Dict[str, float], name: str) -> float:
+    """A question's threshold: the author's, else its type's default."""
+    return thresholds.get(name, DEFAULT_NOUL_MARGIN if question_type == "noul" else DEFAULT_MIN_CONFIDENCE)
+
+
+def flag(answers: JSON, thresholds: Dict[str, float]) -> List[JSON]:
+    """The model's answers (`{name: {"type", ...}}`) whose uncertainty crosses their threshold: a noul
+    within its margin of 0.5, a choice or score under its minimum confidence."""
+    flagged: List[JSON] = []
+    for name, answer in answers.items():
+        limit = threshold(answer["type"], thresholds, name)
+        if answer["type"] == "noul":
+            if abs(answer["noul"] - 0.5) < limit:
+                flagged.append({"question": name, "type": "noul", "noul": answer["noul"],
+                                "reason": f"within {limit} of 0.5"})
+        elif answer["confidence"] < limit:
+            flagged.append({"question": name, "type": answer["type"], "confidence": answer["confidence"],
+                            "probabilities": answer["probabilities"], "reason": f"confidence below {limit}"})
+    return flagged
+
+
+def confidence(answer: JSON) -> float:
+    """How sure the model is of its collapsed answer: a noul's probability of the side it chose, a
+    choice's or score's own confidence."""
+    if answer["type"] == "noul":
+        return round(max(answer["noul"], 1 - answer["noul"]), 4)
+    return answer["confidence"]
+
+
+RESOLVERS = ("typesafe", "manual")
+
+
+def manual() -> JSON:
+    """The attribution of a decision answered with no model: by the client, or the agent at a pause."""
+    return {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
 
 
 class _SafeMap(dict):

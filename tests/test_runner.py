@@ -56,7 +56,7 @@ class Harness:
         self.kind, self.client = kind, client
         self.api = self.server = None
         if kind == "http":
-            app = create_app(FilesystemBackend(Path(tmp) / "root"), client=client)
+            app = create_app(FilesystemBackend(Path(tmp) / "root"))   # holds no model: the client resolves
             self.api = TestClient(app, raise_server_exceptions=False)
             assert self.api.post("/catalog", json=upload_of(EXAMPLE)).status_code == 201
             self.server = Server("http://testserver", session=self.api)
@@ -65,8 +65,8 @@ class Harness:
         if self.kind == "local":
             return LocalBackend(EXAMPLE, client=self.client)
         if run is None:
-            return HttpBackend(self.server, name="billing-support")
-        return backend_for(run, session=self.api)                     # what `aip resume` does
+            return HttpBackend(self.server, name="billing-support", client=self.client)
+        return backend_for(run, session=self.api, client=self.client)   # what `aip resume` does
 
     def runner(self, tmp, interactive=False, answers=None, run=None):
         out = io.StringIO()
@@ -119,6 +119,10 @@ class NonInteractive(Both):
             self.assertEqual(result_of(history, "escalate")["queue"], "tier2")
             self.assertEqual(history[2]["input"], {"message": "I was charged twice!", "tone": "angry"})
             self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "escalate", "end"])
+            self.assertEqual(history[0]["result"], {"answers": {"billing": True, "tone": "angry"}})
+            self.assertEqual(history[0]["attribution"], {"resolver": "typesafe", "model": "jev-1",
+                                                         "confidence": {"billing": 0.97, "tone": 0.95},
+                                                         "reviewed": False})
             if self.BACKEND == "http":                                 # the server recorded the whole run
                 run = h.server_run(printed["run_id"])
                 self.assertEqual(run["status"], "done")
@@ -137,11 +141,14 @@ class NonInteractive(Both):
             self.assertEqual(block["state"], {"message": "hmm"})              # the decision's inputs only
             self.assertNotIn("suggested", block)
             self.assertNotIn("expects", block)
+            self.assertNotIn("resolution", block)                            # the client's, not the agent's
+            if self.BACKEND == "http":                       # the server never saw the model: it waits at the decision
+                self.assertEqual(h.server_run(block["run_id"])["pause"]["kind"], "decision")
 
             run = RunFile.load(outcome.run_file)
             self.assertEqual(run.pause["step"], "triage")
-            if self.BACKEND == "local":
-                self.assertEqual(run.after, "triage")
+            if self.BACKEND == "local":                   # nothing recorded until the review is answered
+                self.assertEqual((run.after, run.history), (None, []))
             self.assert_run_file_points_at_the_server(run)
             runner2, out2 = h.runner(tmp, run=run)
             outcome2 = runner2.resume(run, {"tone": "calm"})          # client overrides -> client task
@@ -162,6 +169,10 @@ class NonInteractive(Both):
             history = h.history(outcome3)
             self.assertEqual(result_of(history, "end"), {"message": "hmm"})
             self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "reply", "end"])
+            self.assertEqual(history[0]["result"]["answers"], {"billing": True, "tone": "calm"})
+            self.assertEqual(history[0]["attribution"], {
+                "resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55},
+                "reviewed": True, "proposed": {"billing": True, "tone": "angry"}})
             if self.BACKEND == "http":
                 recorded = h.server_run(run.run_id)
                 self.assertEqual(recorded["status"], "done")
@@ -204,8 +215,9 @@ class NonInteractive(Both):
             self.assertEqual(outcome2.code, EXIT_DONE)
             history = h.history(outcome2)
             self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "escalate", "end"])
-            self.assertTrue(history[0]["manual"])
-            self.assertEqual(history[0]["result"]["answers"]["tone"]["manual"], "angry")
+            self.assertEqual(history[0]["attribution"],
+                             {"resolver": "manual", "model": None, "confidence": None, "reviewed": False})
+            self.assertEqual(history[0]["result"]["answers"], {"billing": True, "tone": "angry"})
 
 
 class Interactive(Both):

@@ -4,8 +4,8 @@ A run stops one of three ways, and the runner prints one JSON object for each; t
 are a contract, documented in `docs/cli-json.md`:
 
 - **paused**: the client must answer. `client_task` (do the step's work), `decision` (no
-  decision model: answer the questions), `review` (the model answered a question under its
-  threshold: confirm or override). Each pause carries only the paused step's declared inputs
+  decision model on this client: answer the questions), `review` (this client's decision model
+  answered a question under its threshold: confirm or override). Each pause carries only the paused step's declared inputs
   as `state`; the answer is merged over the state the run file holds.
 - **done**: the end step was reached; `state` is the end step's inputs.
 - **error**: a step failed. The run file keeps the state before the failing step, and
@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, List
 
 from aip.client.backend import Backend, Step
-from aip.model.engine import ERROR_KINDS
+from aip.model.engine import ERROR_KINDS, PRIVATE
 
 JSON = Dict[str, Any]
 
@@ -104,15 +104,17 @@ class RunFile:
         return cls(**data)
 
 
-def backend_for(run: RunFile, token: str | None = None, session: Any = None) -> Backend:
-    """The backend a run file was written against: the server it names, else the local folder."""
+def backend_for(run: RunFile, token: str | None = None, session: Any = None, client: Any = None) -> Backend:
+    """The backend a run file was written against: the server it names, else the local folder.
+    `client` is an injected decision-model client (tests); otherwise the configured key decides."""
     if run.server:
         from aip.client.backend import HttpBackend
 
-        return HttpBackend(run.server, token, f"{run.name}@{run.revision}", session=session, workdir=run.workdir)
+        return HttpBackend(run.server, token, f"{run.name}@{run.revision}", session=session, workdir=run.workdir,
+                           client=client)
     from aip.client.backend import LocalBackend
 
-    return LocalBackend(Path(run.skill_dir), workdir=run.workdir)
+    return LocalBackend(Path(run.skill_dir), client=client, workdir=run.workdir)
 
 
 @dataclass
@@ -220,7 +222,7 @@ class Runner:
         if "done" in outcome:
             self._print({"done": True, "run_id": run_id, "state": outcome["state"], "run_file": str(path)})
             return Outcome(EXIT_DONE, outcome["state"], path)
-        block = {**{k: v for k, v in outcome.items() if k != "thresholds"}, "run_id": run_id, "run_file": str(path)}
+        block = {**{k: v for k, v in outcome.items() if k not in PRIVATE}, "run_id": run_id, "run_file": str(path)}
         if not self.interactive:
             self._print(block)
         return Outcome(EXIT_PAUSED, block, path)

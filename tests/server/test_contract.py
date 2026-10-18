@@ -356,18 +356,20 @@ def governance(backend) -> GovernanceBackend:
     return backend.governance
 
 
-def decision(tone_p: float, billing_p: float = 0.97, message: str = "I was charged twice!", manual=None) -> dict:
-    """A triage history entry as the server records it: model-answered, or manual when `manual` is given."""
-    if manual is not None:
-        return {"step": "triage", "kind": "decision", "input": {"message": message}, "manual": True,
-                "result": {"answers": {"billing": {"type": "noul", "manual": manual["billing"]},
-                                       "tone": {"type": "choice", "manual": manual["tone"]}}}}
-    return {"step": "triage", "kind": "decision", "input": {"message": message},
-            "result": {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
-                       "answers": {"billing": {"type": "noul", "noul": billing_p},
-                                   "tone": {"type": "choice", "choice": "angry" if tone_p >= 0.5 else "calm",
-                                            "confidence": max(tone_p, round(1 - tone_p, 6)),
-                                            "probabilities": {"angry": tone_p, "calm": round(1 - tone_p, 6)}}}}}
+def decision(billing: bool = True, tone: str = "angry", proposed: dict | None = None, manual: bool = False,
+             message: str = "I was charged twice!") -> dict:
+    """A triage history entry as the server records it: the answers the client posted and their
+    attribution, model-resolved (reviewed when `proposed`, the model's answers, is given) or manual."""
+    answers = {"billing": billing, "tone": tone}
+    if manual:
+        attribution = {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    else:
+        attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.9},
+                       "reviewed": proposed is not None}
+        if proposed is not None:
+            attribution["proposed"] = proposed
+    return {"step": "triage", "kind": "decision", "input": {"message": message}, "result": {"answers": answers},
+            "attribution": attribution}
 
 
 def route(tone: str) -> dict:
@@ -410,35 +412,43 @@ def test_governance_overridden_decisions(catalog, runs, governance, example):
     rev = catalog.publish(example)
     assert governance.query("overridden-decisions") == []
     # kept as the model said: angry -> escalate
-    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    # tone overridden to calm at the router
-    seed(runs, rev, decision(0.55), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
-    # billing overridden at the step after the router (the router input carries only `tone`)
-    seed(runs, rev, decision(0.3), route("calm"), reply(billing=False), end(billing=False, tone="calm", reply="..."))
+    seed(runs, rev, decision(), route("angry"), escalate(), end())
+    # tone overridden to calm at review
+    seed(runs, rev, decision(tone="calm", proposed={"billing": True, "tone": "angry"}), route("calm"), reply(), end())
+    # billing overridden at review
+    seed(runs, rev, decision(billing=False, tone="calm", proposed={"billing": True, "tone": "calm"}), route("calm"),
+         reply(billing=False), end())
     # a manual decision has no model answer to override
-    seed(runs, rev, decision(0, manual={"billing": True, "tone": "calm"}), route("calm"), reply())
-    # paused at the review and never continued: nothing settled, nothing counted
-    seed(runs, rev, decision(0.52), status="paused")
+    seed(runs, rev, decision(tone="calm", manual=True), route("calm"), reply())
+    # reviewed and accepted as proposed
+    seed(runs, rev, decision(proposed={"billing": True, "tone": "angry"}), route("angry"), status="running")
 
     rows = governance.query("overridden-decisions")
     assert rows == [
-        {"name": "billing-support", "step": "triage", "question": "billing", "decided": 3, "overridden": 1, "rate": 1 / 3},
-        {"name": "billing-support", "step": "triage", "question": "tone", "decided": 3, "overridden": 1, "rate": 1 / 3},
+        {"name": "billing-support", "step": "triage", "question": "billing", "resolver": "typesafe", "decided": 4,
+         "overridden": 1, "rate": 0.25},
+        {"name": "billing-support", "step": "triage", "question": "tone", "resolver": "typesafe", "decided": 4,
+         "overridden": 1, "rate": 0.25},
     ]
     assert governance.query("overridden-decisions", name="other") == []
-    assert governance.query("overridden-decisions", window=2) == []          # the newest two runs settled nothing
+    assert governance.query("overridden-decisions", window=2) == []          # the newest two runs overrode nothing
     assert [r["question"] for r in governance.query("overridden-decisions", limit=1)] == ["billing"]
+
+    assert governance.query("manual-decisions") == [
+        {"name": "billing-support", "step": "triage", "decided": 5, "manual": 1, "rate": 0.2}]
+    assert governance.query("manual-decisions", window=1) == []               # the newest run used the model
+    assert governance.query("manual-decisions", name="other") == []
 
 
 def test_governance_failing_scripts(catalog, runs, governance, example):
     rev = catalog.publish(example)
     assert governance.query("failing-scripts") == []
-    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    seed(runs, rev, decision(0.9), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
+    seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
          status="error")
-    seed(runs, rev, decision(0.9), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2"),
+    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2"),
          status="error")
-    seed(runs, rev, decision(0.3), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+    seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
 
     rows = governance.query("failing-scripts")
     assert rows == [{"name": "billing-support", "step": "escalate", "script": "scripts/escalate.py",
@@ -471,7 +481,7 @@ def test_governance_missing_fields(catalog, governance, example, tmp_path):
 
 def test_governance_untaken_branches(backend, catalog, runs, governance, example):
     rev = catalog.publish(example)
-    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
     if isinstance(backend, FilesystemBackend):
         with pytest.raises(NotSupported):
             governance.query("untaken-branches")
@@ -479,7 +489,7 @@ def test_governance_untaken_branches(backend, catalog, runs, governance, example
     assert governance.query("untaken-branches") == [
         {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "calm", "to": "reply",
          "runs": 1, "router_runs": 1}]
-    seed(runs, rev, decision(0.3), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+    seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
     assert governance.query("untaken-branches") == []
     assert governance.query("untaken-branches", window=1) == [
         {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "angry", "to": "escalate",

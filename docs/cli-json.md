@@ -37,8 +37,9 @@ paused step's declared inputs only, never the whole run's state.
 
 ### `decision`: answer the questions
 
-No decision model is configured, so the client answers in its place. It gets what the model
-would have: `questions` and `state`.
+No decision model is configured on this client (`TYPESAFE_API_KEY`, or `aip config
+--decision-model KEY`), so the agent answers in its place. It gets what the model would have:
+`questions` and `state`. The run's history records the answer with `"resolver": "manual"`.
 
 <!-- cli-json: paused-decision -->
 ```json
@@ -103,7 +104,11 @@ types; the answer must hold every one of them: `{"reply": "..."}`.
 
 ### `review`: confirm or override the model
 
-The decision model answered, but at least one question fell under its threshold.
+This client's decision model answered, but at least one question fell under its threshold (the
+author's, from SKILL.md). Nothing is recorded yet: on a served run the server still waits at the
+decision, and the review exists only in the run file. Once answered, the history records the
+final answers with `"resolver": "typesafe"`, `"reviewed": true`, and the model's
+`proposed` answers beside them.
 
 <!-- cli-json: paused-review -->
 ```json
