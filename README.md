@@ -189,10 +189,10 @@ Four tabs across the top plus the server link at the right:
 - **catalog**: every published name with its step graph drawn. Click `billing-support` for the procedure page: purpose, triggers, each step with its inputs and questions, the files it ships (source viewer), the diff between any two revisions, and the governance controls (pin a revision, retire one).
 - **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a decision the model was unsure about, a task it needs the client to do, or the questions themselves when there is no model.
 - **history**: every run, step by step, with what each step got and produced.
-- **governance**: corpus queries across all runs: decisions the client overrode, scripts that failed, skills missing fields, branches no run has taken.
+- **governance**: corpus queries across all runs: decisions the client overrode at review, decisions answered by hand, scripts that failed (with the client's stderr), skills missing fields, branches no run has taken.
 - **server link** (top right): the server URL and bearer token the page uses.
 
-Try two runs of `billing-support`. Message `I was charged twice this month and I am furious, fix it or I cancel`: the model marks it billing and angry, the router sends it to the escalation script, and the run ends with a ticket id and the tier2 queue. Message `Hi, could you tell me whether my March invoice was a duplicate?`: calm, so the run pauses with a client task asking you to draft the reply from the policy; type one and the run ends.
+Try two runs of `billing-support`. Message `I was charged twice this month and I am furious, fix it or I cancel`: the model marks it billing and angry (with no decision-model key, you answer the two questions on the page), the router sends it to the escalation script, which runs on your machine, and the run ends; its ticket id and the tier2 queue are on the escalate step in the history tab. Message `Hi, could you tell me whether my March invoice was a duplicate?`: calm, so the run pauses with a client task asking you to draft the reply from the policy; type one and the run ends, with your reply recorded on the reply step.
 
 ### 4. See it in Neo4j
 
@@ -206,7 +206,7 @@ OPTIONAL MATCH p3 = (st)-[:DECLARES_INPUT|ASKS]->()
 RETURN n, s, p, p1, p2, p3
 ```
 
-Every run of the skill, with the answers and the steps they ran against:
+Every run of the skill, with the steps they ran and, for decisions a model answered, its answers (`Answer` nodes; a decision answered by hand has none, and its answers are on the `StepRun`):
 
 ```cypher
 MATCH (r:Run {name: 'billing-support'})-[:OF_SKILL]->(s:Skill)
@@ -235,7 +235,7 @@ The installer put the `aip-runtime` skill into Claude Code if it found it so you
 
 `aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config.
 
-Watch it search the catalog, find `billing-support`, start the run, and answer each pause. The first ends in a tier2 ticket opened by the skill's script, which `aip` ran on your machine. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the console's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
+Watch it search the catalog, find `billing-support`, start the run, and answer each pause ([`docs/examples/aip-runtime-session.md`](docs/examples/aip-runtime-session.md) is a recorded session; an agent may also skip the skill and improvise, so if it does, ask again naming the catalog). The first ends in a tier2 ticket opened by the skill's script, which `aip` ran on your machine. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the console's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
 
 ### 6. Compile and publish your own skill
 

@@ -436,7 +436,24 @@ Test: `npm run e2e` with fixtures containing both resolver kinds and a failed ru
 
 ## Track C: close out
 
-### - [ ] C1: docs and release
+### - [x] C1: docs and release
+
+Done 2026-10-18. aip-spec `6cc68a9`: a 0.5a1 skill's `runtime_block_outdated` now opens "0.5a1 skill: add
+outputs to each execution and client_task step, a requires block, and regenerate the runtime block" (an `UPGRADES`
+table beside `LEGACY_VERSIONS`), version `0.6a0`, tagged `v0.6a0`; aip pins it, is version `0.6a0`, and
+`install.sh` defaults both refs to `v0.6a0`. `docs/upgrading.md` is new; `running.md` uses run ids, recorded
+outputs, and gains a served run request by request; `state.md`'s gaps are the four that remain. Fixed beyond the
+text: I2's finding, a client task's answer missing from the history: its entry is now written when it is answered,
+`result: {task, references, answer}` (aip, with the console reading it, aip-inspector `9ba10a0`, minimum aip
+`0.6a0`). Found by the quickstart: `aip run billing-support` runs `./billing-support` when that folder exists,
+which the walkthrough's step 2 creates, so the console's runs went local; the launcher now runs `aip` from an
+empty directory (aip-inspector `da9bbb5`, with a test). The quickstart ran from a clean clone into an empty
+`HOME` via `install.sh` (`AIP_REF=aip-0.6a0`, before the tag), over a local `neo4j:5`, with no TypeSafe key, so
+the model-answered parts and `Answer` nodes were not exercised. Not executable as written: `npx aip-console`
+(the package is not on npm; the console was run from its checkout) and step 6's authoring by an agent (its CLI
+commands ran). Step 5 was a `claude -p` session, now `docs/examples/aip-runtime-session.md`; the first of two
+attempts ignored the skill and drafted a reply by hand. Still open (state.md): `currentState`, the ignored
+`framing` flag, the deprecated `/step` and `/answer`, and the runtime block's silence on `AIP_WORKDIR`.
 
 `docs/running.md` rewritten for served runs under the new request shape; `docs/state.md` gaps
 list reduced to what remains; `docs/run-modes.md` "planned" becomes "today"; README quickstart
