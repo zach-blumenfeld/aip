@@ -377,11 +377,11 @@ def route(tone: str) -> dict:
             "result": {"to": "escalate" if tone == "angry" else "reply"}}
 
 
-def escalate(message="I was charged twice!", billing=True, failed: str | None = None) -> dict:
+def escalate(message="I was charged twice!", billing=True, failed: str | None = None, **detail) -> dict:
     state = {"message": message, "billing": billing, "tone": "angry"}
     if failed is not None:
         return {"step": "escalate", "kind": "error", "step_kind": "execution", "input": state,
-                "result": {"error": failed}}
+                "result": {"error": failed, **detail}}
     return {"step": "escalate", "kind": "execution", "input": state, "result": {"ticket_id": "T-1"}}
 
 
@@ -446,14 +446,16 @@ def test_governance_failing_scripts(catalog, runs, governance, example):
     seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
     seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
          status="error")
-    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2"),
+    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2",
+                                                         exit_code=2, stderr="queue down"),
          status="error")
     seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
 
     rows = governance.query("failing-scripts")
     assert rows == [{"name": "billing-support", "step": "escalate", "script": "scripts/escalate.py",
                      "ran": 3, "failed": 2, "rate": 2 / 3,
-                     "last_error": "RuntimeError: Script scripts/escalate.py exited with 2"}]
+                     "last_error": "RuntimeError: Script scripts/escalate.py exited with 2",
+                     "exit_code": 2, "stderr": "queue down"}]
     assert governance.query("failing-scripts", window=1) == []                # the newest run took the calm branch
     assert governance.query("failing-scripts", window=2)[0]["ran"] == 1
     assert governance.query("failing-scripts", name="other") == []

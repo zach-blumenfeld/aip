@@ -6,7 +6,8 @@ the timeout, and the skill's `requires`. `Executor.perform` checks `requires` ag
 machine (once per run of the client), runs the script from its folder under the skill root
 with `AIP_WORKDIR` set to the run's working directory, and returns the report the loop
 continues with: `{"output": {...}, "seconds"}`, or a failure with its detail
-(`script_failed` with exit code and stderr, `timeout`, `requires_unmet` with what is missing).
+(`script_failed` with exit code and stderr, `timeout`, `requires_unmet` with what is missing),
+each with `host`, this machine's name, which the run's history records beside the result.
 The loop checks the output against the step's declared outputs.
 
 For a skill folder the skill root is the folder. For a served run it is the revision's
@@ -20,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import socket
 import tempfile
 import time
 from pathlib import Path
@@ -47,7 +49,10 @@ class Executor:
         self._met: set[str] = set()
 
     def perform(self, request: JSON) -> JSON:
-        """Run one execution request and report what happened."""
+        """Run one execution request and report what happened, and where."""
+        return {**self._perform(request), "host": socket.gethostname()}
+
+    def _perform(self, request: JSON) -> JSON:
         step, script = request["step"], request["script"]
         try:
             self._check(step, request.get("requires"))

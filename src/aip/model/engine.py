@@ -291,6 +291,8 @@ def _failed(exc: BaseException, node: Any, after: str | None, state: JSON, histo
     if after is None and not history and isinstance(exc, InputValidationError):
         return Advance(None, error=error, exc=exc)
     detail = exc.fields() if isinstance(exc, StepError) else {}
+    if isinstance(getattr(exc, "host", None), str):
+        detail["host"] = exc.host                           # the machine that reported a script's failure
     failure = {"step": getattr(node, "name", error["step"]), "kind": "error", "step_kind": getattr(node, "kind", None),
                "input": state, "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}
     pause = {"kind": "error", "step": error["step"], "error": error["error"]}

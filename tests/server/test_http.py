@@ -129,6 +129,11 @@ def test_publish_search_info_and_listing(api, example):
     assert len(info["trigger_when"]) == 2 and len(info["do_not_use_when"]) == 1
     assert [s["name"] for s in info["step_details"]] == ["triage", "by-tone", "escalate", "reply", "end"]
     assert {"router": "by-tone", "value": "angry", "to": "escalate"} in info["branches"]
+    # what the console draws the data flow and the environment from
+    assert [(o["step"], o["name"], o["type"]) for o in info["outputs"]] == [
+        ("escalate", "ticket_id", "integer"), ("escalate", "queue", "string"), ("reply", "reply", "string")]
+    assert info["requires"] == {"interpreter": {"name": "python", "version": "3.10"}, "packages": [], "tools": []}
+    assert next(s for s in info["step_details"] if s["name"] == "escalate")["command"] is None
     assert {f["path"] for f in info["files"]} == {f.path for f in example.files}
     assert api.get("/catalog/billing-support@0000000000000000").status_code == 404
 

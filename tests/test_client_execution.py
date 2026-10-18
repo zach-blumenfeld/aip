@@ -11,6 +11,7 @@ script's file lands on the client, and the server never runs a script at all.
 import io
 import json
 import shutil
+import socket
 from pathlib import Path
 from unittest import mock
 
@@ -129,6 +130,7 @@ def test_a_served_script_runs_on_the_client(tmp_path, server_root, workdir, clie
     escalate = next(e for e in record["history"] if e["step"] == "escalate")
     assert escalate["result"] == {"ticket_id": ticket["ticket_id"], "queue": "tier2"}
     assert escalate["input"] == {"message": ANGRY, "tone": "angry"} and isinstance(escalate["seconds"], float)
+    assert escalate["host"] == socket.gethostname()                       # which machine ran it
     assert [line["step"] for line in lines if line.get("event") == "step"] == ["triage", "by-tone", "escalate"]
     assert RunFile.load(outcome.run_file).workdir == str(workdir.resolve())
 
@@ -147,11 +149,13 @@ def test_a_failing_script_is_reported_and_retried(tmp_path, server_root, workdir
     assert [(r["name"], r["step"], r["script"], r["failed"]) for r in rows] == [
         ("billing-support", "escalate", "scripts/escalate.py", 1)]
     assert "queue down" in rows[0]["last_error"]
+    assert (rows[0]["exit_code"], rows[0]["stderr"]) == (2, "queue down")    # as the client reported it
 
     # fix the cached script (as a user would fix their machine): resume retries on the client
     run = RunFile.load(outcome.run_file)
     record = api.get(f"/runs/{run.run_id}").json()
     assert record["status"] == "failed" and record["history"][-1]["result"]["stderr"] == "queue down"
+    assert record["history"][-1]["result"]["host"] == socket.gethostname()
     out = io.StringIO()
     backend = backend_for(run, session=api)
     assert isinstance(backend, HttpBackend) and backend.workdir == workdir.resolve()

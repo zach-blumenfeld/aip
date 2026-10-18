@@ -6,7 +6,7 @@ Two layers per skill revision, as in the original Neo4j projection:
   its exact bytes (text as UTF-8, anything else base64), size, sha256, and mode, plus
   the directory list. `materialize` rebuilds the folder byte for byte and verifies hashes.
 - **Projection** (queryable): the parsed procedure as plain JSON rows (`procedure`,
-  `steps`, `edges`, `branches`, `inputs`, `questions`, `resources`) that a graph
+  `steps`, `edges`, `branches`, `inputs`, `outputs`, `questions`, `resources`) that a graph
   backend turns into nodes and edges and a filesystem backend simply stores.
 
 Identity: `name@revision`, where `revision` is a sha256 over every file's path and
@@ -122,7 +122,7 @@ class SkillRecord:
     root_name: str
     files: List[FileRecord]
     directories: List[str]
-    procedure: JSON          # {"purpose", "trigger_when", "do_not_use_when", "anti_patterns", "start", "end"}
+    procedure: JSON          # {"purpose", "trigger_when", "do_not_use_when", "anti_patterns", "start", "end", "requires"}
     steps: List[JSON]
     edges: List[JSON]        # {"from", "to"}
     branches: List[JSON]     # {"router", "value", "to"}
@@ -131,6 +131,7 @@ class SkillRecord:
     resources: List[JSON]    # {"step", "path", "role", "description"}
     published_at: str | None = None
     retired: bool = False
+    outputs: List[JSON] = field(default_factory=list)   # {"step", "order", "name", "type", "description"}
 
     @property
     def id(self) -> str:
@@ -163,7 +164,7 @@ def snapshot(skill_dir: Path) -> SkillRecord:
     fm, spec = loaded.frontmatter, loaded.spec
     files, directories = walk(skill_dir)
 
-    steps, edges, branches, inputs, questions, resources = [], [], [], [], [], []
+    steps, edges, branches, inputs, outputs, questions, resources = [], [], [], [], [], [], []
     for order, step in enumerate(spec.steps):
         record: JSON = {"name": step.name, "kind": step.kind, "order": order,
                         "description": getattr(step, "description", None)}
@@ -184,9 +185,14 @@ def snapshot(skill_dir: Path) -> SkillRecord:
                                   "instructions": q.instructions,
                                   "criteria": json.dumps(criteria) if criteria is not None else None,
                                   "threshold": step.thresholds.get(qname)})
+        if step.kind in ("execution", "client_task"):
+            for i, item in enumerate(step.outputs):
+                outputs.append({"step": step.name, "order": i, "name": item.name, "type": item.type.value,
+                                "description": item.description})
         if step.kind == "execution":
             record["script"] = step.script
             record["timeout"] = step.timeout
+            record["command"] = list(step.command) if step.command else None
             resources.append({"step": step.name, "path": step.script, "role": "script", "description": None})
             resources += [{"step": step.name, "path": a, "role": "asset", "description": None} for a in step.assets]
         if step.kind == "client_task":
@@ -206,8 +212,10 @@ def snapshot(skill_dir: Path) -> SkillRecord:
         files=files, directories=directories,
         procedure={"purpose": spec.purpose, "trigger_when": list(spec.trigger_when),
                    "do_not_use_when": list(spec.do_not_use_when), "anti_patterns": list(spec.anti_patterns),
-                   "start": spec.start.name, "end": next(s.name for s in spec.steps if s.kind == "end")},
-        steps=steps, edges=edges, branches=branches, inputs=inputs, questions=questions, resources=resources,
+                   "start": spec.start.name, "end": next(s.name for s in spec.steps if s.kind == "end"),
+                   "requires": spec.requires.model_dump() if spec.requires is not None else None},
+        steps=steps, edges=edges, branches=branches, inputs=inputs, outputs=outputs, questions=questions,
+        resources=resources,
     )
 
 

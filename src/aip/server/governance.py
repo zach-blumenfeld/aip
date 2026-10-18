@@ -13,7 +13,8 @@ Decisions are resolved by clients, and each decision entry in a run's history ca
 - `manual-decisions`: per (name, decision step), how many decisions were answered with no
   model (`resolver: manual`) out of all its recorded decisions.
 - `failing-scripts`: per execution step, how many of the windowed runs it ran in and how many of
-  those attempts ended in an error, with the latest error message.
+  those attempts ended in an error, with the latest error message and, when the client reported
+  the script's exit, its `exit_code` and `stderr` (null for a timeout or unmet requirements).
 - `missing-fields`: names whose resolved revision has an empty `do_not_use_when` or `anti_patterns`.
 - `untaken-branches`: router branches no windowed run followed, for revisions that ran at all.
   The filesystem backend declines this one (`NotSupported`, 501 over HTTP); the Neo4j backend
@@ -123,16 +124,17 @@ def failing_scripts(runs: Iterable[RunRecord], script_of: Callable[[str, str, st
             if not ran:
                 continue
             c = counts.setdefault((run.name, entry.get("step")),
-                                  {"ran": 0, "failed": 0, "last_error": None, "script": None})
+                                  {"ran": 0, "failed": 0, "last": None, "script": None})
             c["ran"] += 1
             if failed:
                 c["failed"] += 1
-                if c["last_error"] is None:
-                    c["last_error"] = (entry.get("result") or {}).get("error")
+                if c["last"] is None:
+                    c["last"] = entry.get("result") or {}
             if c["script"] is None:
                 c["script"] = script_of(run.name, run.revision, entry.get("step"))
     rows = [{"name": n, "step": s, "script": c["script"], "ran": c["ran"], "failed": c["failed"],
-             "rate": c["failed"] / c["ran"], "last_error": c["last_error"]}
+             "rate": c["failed"] / c["ran"], "last_error": c["last"].get("error"),
+             "exit_code": c["last"].get("exit_code"), "stderr": c["last"].get("stderr")}
             for (n, s), c in counts.items() if c["failed"]]
     rows.sort(key=lambda r: (-r["failed"], -r["rate"], r["name"], r["step"]))
     return rows[:limit]

@@ -758,7 +758,9 @@ class Neo4jGovernance:
         rows = [r.data() for r in records]
         if query == "failing-scripts":
             for row in rows:
-                row["last_error"] = (_load(row["last_error"]) or {}).get("error")
+                last = _load(row["last_error"]) or {}
+                row["last_error"] = last.get("error")
+                row["exit_code"], row["stderr"] = last.get("exit_code"), last.get("stderr")
         return rows
 
 

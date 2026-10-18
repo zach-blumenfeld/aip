@@ -417,7 +417,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
             **{k: record.procedure.get(k) for k in ("purpose", "trigger_when", "do_not_use_when", "anti_patterns")},
             "example_input": example_input(described["start"]["inputs"]),
             "step_details": record.steps, "edges": record.edges, "branches": record.branches,
-            "inputs": record.inputs, "questions": record.questions, "resources": record.resources,
+            "inputs": record.inputs, "outputs": record.outputs, "requires": record.procedure.get("requires"),
+            "questions": record.questions, "resources": record.resources,
             "files": [f.manifest_entry() for f in record.files],
         }
 

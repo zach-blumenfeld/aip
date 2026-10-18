@@ -576,19 +576,25 @@ class Execution(BaseStep):
         entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs), "result": result}
         if isinstance(report.get("seconds"), (int, float)):
             entry["seconds"] = round(float(report["seconds"]), 3)
+        if isinstance(report.get("host"), str):
+            entry["host"] = report["host"]
         return StepResponse(ran=self.name, kind=self.kind, result=result, suggested={**payload, **result},
                             review=[], next=describe_next(self.inputsTo), history=[*history, entry])
 
     def reported_error(self, report: JSON) -> Exception:
-        """The error a client's failure report stands for."""
+        """The error a client's failure report stands for; `host` is the machine that reported it."""
         kind, script = report["error"], self.script_path
         if kind == "timeout":
-            return ScriptTimeout(self.name, script, report.get("seconds", self.timeout))
-        if kind == "requires_unmet":
-            return RequiresUnmet(self.name, [str(m) for m in report.get("missing") or []])
-        exit_code, stderr = int(report.get("exit_code", 0) or 0), str(report.get("stderr", ""))
-        return ScriptFailed(self.name, script, exit_code, stderr,
-                            report.get("message") or failed_message(script, exit_code, stderr))
+            exc: Exception = ScriptTimeout(self.name, script, report.get("seconds", self.timeout))
+        elif kind == "requires_unmet":
+            exc = RequiresUnmet(self.name, [str(m) for m in report.get("missing") or []])
+        else:
+            exit_code, stderr = int(report.get("exit_code", 0) or 0), str(report.get("stderr", ""))
+            exc = ScriptFailed(self.name, script, exit_code, stderr,
+                               report.get("message") or failed_message(script, exit_code, stderr))
+        if isinstance(report.get("host"), str):
+            exc.host = report["host"]
+        return exc
 
     def _invoke(self, state: State) -> JSON:
         if self.requires is not None:

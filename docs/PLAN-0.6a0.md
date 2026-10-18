@@ -406,7 +406,25 @@ shows the error object and a retry button that resumes, the run appears in histo
 attribution; folder mode runs the same skill with no server; an old `aip` on the path yields the
 version message.
 
-### - [ ] I3 (aip-console): the new views
+### - [x] I3 (aip-console): the new views
+
+Done 2026-10-18, aip-inspector branch `inspector-0.6a0` plus one aip change. The server did not expose
+what the views draw, so aip's `GET /catalog/{ref}` now carries `outputs` (rows like `inputs`, for execution
+and client_task steps), `requires`, and each execution step's `command`. The client's script report and the
+history entry now carry `host`, the machine's name (on an error entry it is in `result`), and
+`failing-scripts` rows gain the latest failure's `exit_code` and `stderr`, in both backends (Neo4j contract
+tests pass against a local `neo4j:5`). In the console the run page's step cards show the declared keys
+in and out (an error entry's state is projected to the step's inputs), where the step ran (client host, the
+decision model, or the server for routers and the end), and each decision's review status (by hand,
+accepted, reviewed and kept, reviewed and overridden). The procedure page toggles the graph between control
+and data flow (start input as its own node, one dashed arrow per producer/consumer pair labelled with its
+keys) with a key table beside it, and shows `requires`, outputs and `command`; the catalog has a Requires
+column. Governance shows the model/by-hand split on `manual-decisions` rows, the resolver as a tag,
+failing-scripts' stderr and exit code, and no longer mentions threshold overrides. Choices beyond the text:
+the "resolver breakdown" covers the steps `manual-decisions` lists, which are only those with at least one
+answer given by hand; a client task's answer is still not in the server's record (I2's finding, left for
+C1), so its state out comes from later steps' inputs or is marked unrecorded. The fixtures are runs posted
+to the run API in `e2e/views.spec.ts`.
 
 The run page shows each step's `state` in and out from the declared keys and which machine ran
 it; decision entries show attribution and review status; the catalog page shows `requires`; the
