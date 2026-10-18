@@ -85,7 +85,15 @@ Test: `uv run pytest -q` with new cases: `billing-support` validates after gaini
 fails rule 1 naming `script_path, output_json, dot_path, image_path`; a fixture with two steps
 producing `tone` fails rule 2. Tag `v0.6a0-dev1`.
 
-### - [ ] A2 (aip): the runtime hands each step only its declared inputs
+### - [x] A2 (aip): the runtime hands each step only its declared inputs
+
+Done 2026-10-18. Needed a small format addition first: aip-spec `ad84e4d` adds `history` (default
+false) to decision steps and has `billing-support`'s script read `state`, tagged `v0.6a0-dev2`.
+Tags `v0.6a0-dev1` and `v0.6a0-dev2` are pushed (the branch is not) so uv can resolve the pin; aip
+now pins `v0.6a0-dev2`, so B2's tag becomes `v0.6a0-dev3`. Following A1, the done state is the
+state projected to the end step's `inputs`: for `billing-support` that is just `message`, and
+`ticket_id`/`reply` are only in the history. The client-task pause's `expects` is now the step's
+`outputs`.
 
 In `aip.model`: a step's `render` projects the state to its declared `inputs` before anything
 sees it. Scripts get `{"state": <declared keys>, "assets": ..., "expects": ...}` on stdin
@@ -176,7 +184,7 @@ produces. The run file after a pause contains no `history` and no accumulated st
 Format: skills with execution steps must carry `requires` (interpreter and minimum version,
 packages, tools) and an execution step may carry `command` (default `["python", "<script>"]`).
 Validator requires `requires` when execution steps exist. Authoring skill updated. Tag
-`v0.6a0-dev2`. aip: the client checks `requires` against the local machine before the first
+`v0.6a0-dev3`. aip: the client checks `requires` against the local machine before the first
 execution step and stops with one message naming every missing item; `command` is honoured.
 
 Test: aip-spec `uv run pytest -q` (skill with scripts and no `requires` fails); aip `uv run

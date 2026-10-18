@@ -28,6 +28,11 @@ from aip.server.backends.filesystem import FilesystemBackend
 EXAMPLE = example_dir("billing-support")
 
 
+def result_of(history: list, step: str) -> dict:
+    """What a step produced, from the run history: the final state holds only the end step's inputs."""
+    return next(e["result"] for e in history if e["step"] == step)
+
+
 class FakeJev:
     def __init__(self, tone_p: float, billing_p: float):
         self.tone_p, self.billing_p = tone_p, billing_p
@@ -99,9 +104,11 @@ class NonInteractive(Both):
             runner, out = h.runner(tmp)
             outcome = runner.start({"message": "I was charged twice!"})
             self.assertEqual(outcome.code, EXIT_DONE)
-            self.assertEqual(outcome.payload["queue"], "tier2")
-            self.assertIn("ticket_id", outcome.payload)
+            self.assertEqual(outcome.payload, {"message": "I was charged twice!"})  # the end step's inputs
             printed = json.loads(out.getvalue())
+            self.assertEqual(result_of(printed["history"], "escalate")["queue"], "tier2")
+            self.assertEqual(result_of(printed["history"], "escalate")["ticket_id"], printed["history"][2]["result"]["ticket_id"])
+            self.assertEqual(printed["history"][2]["input"], {"message": "I was charged twice!", "tone": "angry"})
             self.assertEqual([x["step"] for x in printed["history"]], ["triage", "by-tone", "escalate", "end"])
             if self.BACKEND == "http":                                 # the server recorded the whole run
                 run = h.server_run(runner.backend.run_id)
@@ -129,15 +136,16 @@ class NonInteractive(Both):
             block2 = json.loads(out2.getvalue())
             self.assertEqual((block2["paused"], block2["step"]), ("client_task", "reply"))
             self.assertIn("Duplicate charges are refunded", block2["task"])
-            self.assertEqual(block2["expects"], {"message": "string"})
+            self.assertEqual(block2["expects"], {"reply": "string"})        # the step's declared outputs
 
             run2 = RunFile.load(outcome2.run_file)
             self.assertEqual(run2.run_id, run.run_id)                 # one run across the resumes
             runner3, out3 = h.runner(tmp, run=run2)
             outcome3 = runner3.resume(run2, {"reply": "Sorry about that, refund issued."})
             self.assertEqual(outcome3.code, EXIT_DONE)
-            self.assertEqual(outcome3.payload["reply"], "Sorry about that, refund issued.")
+            self.assertEqual(outcome3.payload, {"message": "hmm"})
             history = json.loads(out3.getvalue())["history"]
+            self.assertEqual(result_of(history, "end"), {"message": "hmm"})
             self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "reply", "end"])
             if self.BACKEND == "http":
                 recorded = h.server_run(run.run_id)
@@ -183,11 +191,11 @@ class NonInteractive(Both):
 
 class Interactive(Both):
     def test_prompts_for_start_review_and_client_task(self):
-        # start: message; review: override angry -> calm; client task: end declares only
-        # `message`, so one prompt, and enter keeps the suggested value
+        # start: message; review: override angry -> calm; client task: one prompt per
+        # declared output, so just `reply`
         with tempfile.TemporaryDirectory() as tmp:
             runner, out = self.harness(tmp, FakeJev(0.55, 0.97)).runner(
-                tmp, interactive=True, answers=["I was charged twice", "calm", ""])
+                tmp, interactive=True, answers=["I was charged twice", "calm", "Refund issued."])
             outcome = runner.start(None)
             self.assertEqual(outcome.code, EXIT_DONE)
             self.assertEqual(outcome.payload["message"], "I was charged twice")
@@ -202,7 +210,8 @@ class Interactive(Both):
             outcome = runner.start({"message": "charged twice"})
             self.assertEqual(outcome.code, EXIT_DONE)
             self.assertIn("pick one of ['angry', 'calm']", out.getvalue())
-            self.assertEqual(outcome.payload["queue"], "tier2")
+            self.assertEqual(outcome.payload, {"message": "charged twice"})
+            self.assertIn('"queue": "tier2"', out.getvalue())
 
 
 class Cli(Both):
@@ -266,7 +275,8 @@ class Cli(Both):
             self.assertEqual(code, EXIT_DONE)
             done = json.loads(out.getvalue())
             self.assertTrue(done["done"])
-            self.assertIn("ticket_id", done["state"])
+            self.assertEqual(done["state"], {"message": "charged twice"})
+            self.assertIn("ticket_id", result_of(done["history"], "escalate"))
             if self.BACKEND == "http":
                 runs = h.api.get("/runs").json()
                 self.assertEqual(len(runs), 1)

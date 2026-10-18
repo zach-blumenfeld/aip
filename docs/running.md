@@ -30,7 +30,7 @@ flowchart LR
 ```
 
 - **`aip_spec`** (the `aip-spec` package) parses `SKILL.md` and validates the frontmatter, the YAML against the format models, and the graph; **`aip.spec.loader`** builds the runtime `Procedure` from the result.
-- **`aip.model`** is the engine. `Procedure.run(after, payload, history, thresholds)` is the whole server operation: resolve routers on the client's input, validate it against the receiving step's `inputs`, run the step, append a history entry, describe what comes next.
+- **`aip.model`** is the engine. `Procedure.run(after, payload, history, thresholds)` is the whole server operation: check the state holds the outputs of the step the client just answered, resolve routers on it, validate it against the receiving step's `inputs`, run the step on just those keys, check its result against its declared `outputs`, merge them into the state, append a history entry, describe what comes next. At `end` the result is the state projected to the end step's `inputs`.
 - **`aip.client.backend`** is the seam between runner and engine. `LocalBackend` calls `Procedure.run` in-process; `HttpBackend` posts the same arguments to an AIP server (see [With a server](#with-a-server)). The runner is written against the interface, so it is the same loop either way.
 - **`aip.client.runner`** is the client. It follows the engine's suggested input from step to step and stops when a decision belongs to the client.
 
@@ -91,7 +91,7 @@ A pause writes the run file, prints a JSON block, and exits with code **3**. `ai
 |---------------|----------------------------------------------------|-------------------------------------------------------------------|
 | `decision`    | `TYPESAFE_API_KEY` is unset and a decision is next | one collapsed answer per question: `true`/`false`, a label, or a level |
 | `review`      | a decision answered below its threshold            | any keys to override in `suggested`; usually the flagged question |
-| `client_task` | the step handed work to the client                 | the keys in `expects` (the next step's `inputs`); extra keys pass through |
+| `client_task` | the step handed work to the client                 | the keys in `expects` (the step's declared `outputs`), with their types |
 
 With a key set, decisions run against the model and only low-confidence answers pause. Without one, the client answers every decision itself, and history records those entries with `"manual": true`.
 
@@ -163,17 +163,16 @@ $ echo '{"billing": true, "tone": "angry"}' > answers.json
 $ aip resume run.json --input answers.json
 {
   "done": true,
-  "state": { "message": "I was charged twice!", "billing": true, "tone": "angry",
-             "ticket_id": 45067, "queue": "tier2" },
+  "state": { "message": "I was charged twice!" },
   "history": [
     { "step": "triage",   "kind": "decision",  "input": { "message": "..." },
       "result": { "answers": { "billing": { "type": "noul", "manual": true },
                                "tone":    { "type": "choice", "manual": "angry" } } },
       "manual": true },
     { "step": "by-tone",  "kind": "router",    "input": { "tone": "angry" }, "result": { "to": "escalate" } },
-    { "step": "escalate", "kind": "execution", "input": { "..." : "..." },
-      "result": { "message": "...", "ticket_id": 45067, "queue": "tier2" } },
-    { "step": "end",      "kind": "end",       "input": { "..." : "..." }, "result": { "..." : "..." } }
+    { "step": "escalate", "kind": "execution", "input": { "message": "...", "tone": "angry" },
+      "result": { "ticket_id": 45067, "queue": "tier2" } },
+    { "step": "end",      "kind": "end",       "input": { "message": "..." }, "result": { "message": "..." } }
   ]
 }
 $ echo $?
@@ -212,22 +211,21 @@ $ aip resume run.json --input override.json
     { "uri": "billing-support/references/help.md",
       "description": "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days." }
   ],
-  "expects": { "message": "string" },
+  "expects": { "reply": "string" },
   "suggested": { "message": "I was charged twice!", "billing": true, "tone": "calm" },
   "resume": "aip resume run.json --input <answer.json>",
   "run_file": "run.json"
 }
 ```
 
-The client does the task and posts its output. `end` declares only `message`, so `reply` rides along as an extra key:
+The client does the task and answers with the step's declared outputs. `end` declares only `message`, so that is the run's result; the reply is recorded in the history:
 
 ```bash
 $ echo '{"reply": "Sorry about the duplicate charge. A full refund is on its way within 5 business days."}' > reply.json
 $ aip resume run.json --input reply.json
 {
   "done": true,
-  "state": { "message": "I was charged twice!", "billing": true, "tone": "calm",
-             "reply": "Sorry about the duplicate charge. A full refund is on its way within 5 business days." },
+  "state": { "message": "I was charged twice!" },
   "history": [ "triage", "by-tone", "reply", "end" ]
 }
 ```

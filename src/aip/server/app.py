@@ -505,7 +505,7 @@ def run_status(response: JSON) -> tuple[str, JSON | None]:
     if response["kind"] == "client_task":
         return "paused", {"kind": "client_task", "step": response["ran"], "task": response["result"].get("task"),
                           "references": response["result"].get("references", []),
-                          "expects": _expects(response["next"])}
+                          "expects": response["result"].get("expects", _expects(response["next"]))}
     if response["review"]:
         return "paused", {"kind": "review", "step": response["ran"], "review": response["review"],
                           "expects": _expects(response["next"])}

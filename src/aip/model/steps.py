@@ -12,7 +12,10 @@ import sys
 from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
 
 from aip.model.resources import Asset, Reference, ResourceLoader, Script
-from aip.model.types import JSON, InputValidationError, Inputs, describe_inputs, validate_input
+from aip.model.types import (
+    JSON, DataType, InputValidationError, Inputs, OutputValidationError, describe_inputs, project,
+    validate_input, validate_output,
+)
 
 DecisionQuestion: TypeAlias = Noul | Choice | Score
 
@@ -31,8 +34,8 @@ DEFAULT_MIN_CONFIDENCE = 0.6
 @dataclass
 class State:
     """
-    Per-call view of the run: the accepted input for this step plus the history the
-    client carried in. Built by `accept()`, never persisted server-side.
+    What one step sees: the state projected to the step's declared `inputs`, plus the
+    history the client carried in. Built by `accept()`, never persisted server-side.
     """
     currentState: JSON = field(default_factory=dict)
     history: List[JSON] = field(default_factory=list)
@@ -66,8 +69,8 @@ class StepResponse:
     ran:       name of the step that ran
     kind:      "decision" | "client_task" | "execution" | "end"
     result:    raw output of the step
-    suggested: the server's proposed input for the next step; the client may post it
-               as-is or override it
+    suggested: the full state after this step: the posted state plus the keys this step
+               produced. The client posts it as the next input (answers merged over it)
     review:    items the client should look at before accepting `suggested`
                (e.g. low-confidence decision answers); empty means safe to pass through
     next:      description of what comes next (see `describe_next`); None at the end
@@ -136,13 +139,15 @@ class BaseStep(ABC):
     A node the server runs. Steps are configuration; run state flows through `accept`.
 
     name: unique within the procedure; endpoints and history refer to it
-    inputs: the shape the client must post to this step; validated on accept
+    inputs: the keys this step reads; validated on accept, and the only keys it sees
+    outputs: the keys this step adds to the state; its result is validated against them
     inputsTo: the node that receives this step's output (a step, a router, or the end)
     include_framing: prepend Meta.framing() to what this step renders
     """
     kind: ClassVar[str] = "step"
     name: str
     inputs: Inputs = field(default_factory=dict)
+    outputs: Inputs = field(default_factory=dict)
     inputsTo: "Node | None" = None
     include_framing: bool = False
     loader: ResourceLoader | None = None
@@ -152,25 +157,32 @@ class BaseStep(ABC):
     def _invoke(self, state: State) -> JSON:
         """Run the step against the accepted state and return its raw result."""
 
-    def suggest(self, result: JSON, state: State) -> JSON:
-        """Default proposal for the next input: the result itself over the current state."""
-        return {**state.currentState, **result}
+    def output_types(self) -> Inputs:
+        """The keys this step adds to the state, with their types."""
+        return dict(self.outputs)
+
+    def produced(self, result: JSON) -> JSON:
+        """The keys this step's result adds to the state. By default the (validated) result itself."""
+        return dict(result)
 
     def review(self, result: JSON, thresholds: Dict[str, float] | None = None) -> List[JSON]:
         """Items the client should look at before passing `suggested` through."""
         return []
 
     def accept(self, payload: JSON, history: List[JSON], thresholds: Dict[str, float] | None = None) -> StepResponse:
-        """Validate the client's input, run the step, and describe what comes next."""
+        """
+        Validate the posted state against the declared inputs, run the step on just those
+        keys, and merge what it produced back into the full state.
+        """
         validate_input(self.name, self.inputs, payload)
-        state = State(currentState=payload, history=copy.deepcopy(history))
+        state = State(currentState=project(payload, self.inputs), history=copy.deepcopy(history))
         result = self._invoke(state)
-        entry = {"step": self.name, "kind": self.kind, "input": payload, "result": result}
+        entry = {"step": self.name, "kind": self.kind, "input": state.currentState, "result": result}
         return StepResponse(
             ran=self.name,
             kind=self.kind,
             result=result,
-            suggested=self.suggest(result, state),
+            suggested={**payload, **self.produced(result)},
             review=self.review(result, thresholds),
             next=describe_next(self.inputsTo),
             history=[*history, entry],
@@ -215,11 +227,12 @@ class Decision(BaseStep):
     """
     Runs a SystemOne (TypeSafe / Jev) decision and hands the typed result to the client.
 
-    State is the content being evaluated; the criteria live in each question's
-    `instructions`, written by the author. No assets and no framing are injected.
+    The declared inputs are the content being evaluated; the criteria live in each
+    question's `instructions`, written by the author. No assets and no framing are injected.
 
     questions: keyed by name; answers come back under the same names and, after
-               collapse, become state keys of the same name
+               collapse, become state keys of the same name: a decision's outputs
+    history: send the run history to the decision model too; off unless the author asks
     thresholds: per-question author defaults. Noul: margin around 0.5.
                 Choice / Score: minimum confidence. The client may override on accept.
     client: optional injected TypeSafe client (tests, connection reuse); otherwise one
@@ -228,14 +241,23 @@ class Decision(BaseStep):
     kind: ClassVar[str] = "decision"
     questions: Dict[str, DecisionQuestion] = field(default_factory=dict)
     thresholds: Dict[str, float] = field(default_factory=dict)
+    history: bool = False
     client: TypeSafeClient | None = None
 
+    ANSWER_TYPES: ClassVar[Dict[str, DataType]] = {
+        "noul": DataType.BOOLEAN, "choice": DataType.STRING, "score": DataType.INTEGER}
+
     def render(self, state: State) -> JSON:
-        """Pure projection of state into the JSON `state` sent to Jev."""
-        payload: JSON = {"currentState": state.currentState}
-        if state.history:
+        """Pure projection of state into the JSON `state` sent to Jev: the declared inputs,
+        and the history only when the step asks for it."""
+        payload: JSON = {"state": state.currentState}
+        if self.history and state.history:
             payload["history"] = state.history
         return payload
+
+    def output_types(self) -> Inputs:
+        """One key per question, typed by what its answer collapses to."""
+        return {name: self.ANSWER_TYPES[q.type] for name, q in self.questions.items()}
 
     def _invoke(self, state: State) -> JSON:
         """
@@ -264,13 +286,29 @@ class Decision(BaseStep):
         missing = [q for q in self.questions if q not in answers]
         if missing:
             raise InputValidationError(self.name, [f"missing manual answers for {missing}"])
+        self.check_answers(answers)
         result = {"answers": {name: {"type": self.questions[name].type, "manual": answers[name]} for name in self.questions}}
-        entry = {"step": self.name, "kind": self.kind, "input": payload, "result": result, "manual": True}
+        entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs),
+                 "result": result, "manual": True}
         return StepResponse(
             ran=self.name, kind=self.kind, result=result,
             suggested={**payload, **{name: answers[name] for name in self.questions}},
             review=[], next=describe_next(self.inputsTo), history=[*history, entry],
         )
+
+    def check_answers(self, answers: JSON) -> None:
+        """Collapsed answers must name only this step's questions and fit each question's type."""
+        validate_output(self.name, self.output_types(), {k: v for k, v in answers.items() if k in self.questions},
+                        strict=False)
+        errors = [f"undeclared output {key!r} (not a question of this step)" for key in answers if key not in self.questions]
+        for name, q in self.questions.items():
+            value = answers[name]
+            if q.type == "choice" and value not in q.criteria:
+                errors.append(f"{name}: {value!r} is not one of {list(q.criteria)}")
+            if q.type == "score" and isinstance(value, int) and not 0 <= value < len(q.criteria):
+                errors.append(f"{name}: level {value} is outside 0..{len(q.criteria) - 1}")
+        if errors:
+            raise OutputValidationError(self.name, errors)
 
     @staticmethod
     def collapse(answer: JSON) -> Any:
@@ -284,10 +322,12 @@ class Decision(BaseStep):
                 return int(max(answer["probabilities"], key=answer["probabilities"].get))
         raise ValueError(f"unknown answer type {answer['type']!r}")
 
-    def suggest(self, result: JSON, state: State) -> JSON:
-        """Current state with each answer collapsed to a discrete value under its question name."""
-        collapsed = {name: self.collapse(answer) for name, answer in result["answers"].items()}
-        return {**state.currentState, **collapsed}
+    def produced(self, result: JSON) -> JSON:
+        """Each answer collapsed to a discrete value under its question name."""
+        missing = [name for name in self.questions if name not in result["answers"]]
+        if missing:
+            raise OutputValidationError(self.name, [f"no answer for {missing}"])
+        return {name: self.collapse(result["answers"][name]) for name in self.questions}
 
     def review(self, result: JSON, thresholds: Dict[str, float] | None = None) -> List[JSON]:
         """Answers whose uncertainty crosses the threshold, with what the client needs to decide."""
@@ -322,8 +362,8 @@ class ClientTask(BaseStep):
     for anything not expressible as a Decision or Execution.
 
     The template is this step's framing: prose rendered at invoke time with `{key}`
-    placeholders drawn from currentState, plus `{assets[name]}` and `{meta.name}`.
-    The client does the task and posts structured JSON matching `next.inputs`.
+    placeholders drawn from the step's declared inputs, plus `{assets[name]}` and
+    `{meta.name}`. The client does the task and answers with the step's `outputs`.
 
     template: the asset holding the task template
     assets: extra eager resources available to the template as {assets[name]}
@@ -347,12 +387,13 @@ class ClientTask(BaseStep):
         return f"{framing}\n{body}" if framing else body
 
     def _invoke(self, state: State) -> JSON:
-        """Hands the rendered task and the reference index to the client."""
-        return {"task": self.render(state), "references": [r.summary() for r in self.references]}
+        """Hands the rendered task, the reference index, and the keys to answer with to the client."""
+        return {"task": self.render(state), "references": [r.summary() for r in self.references],
+                "expects": describe_inputs(self.outputs)}
 
-    def suggest(self, result: JSON, state: State) -> JSON:
-        """The client must produce the next input; only the current state passes through."""
-        return dict(state.currentState)
+    def produced(self, result: JSON) -> JSON:
+        """Nothing yet: the client's answer adds the outputs, checked when it is posted."""
+        return {}
 
 
 @dataclass(kw_only=True)
@@ -362,9 +403,11 @@ class Execution(BaseStep):
     a python script in the package; MCP and endpoints can be added later.
 
     Script contract:
-      stdin   one JSON object: {"currentState": {...}, "assets": {name: content},
+      stdin   one JSON object: {"state": <the declared inputs only>, "assets": {name: content},
                                 "expects": <describe_next of the node after this one>}
-      stdout  one JSON object, this step's result (empty stdout is treated as {})
+              (`currentState` carries the same object for one version, for older scripts)
+      stdout  one JSON object holding exactly the declared `outputs` (empty stdout is {});
+              a missing, mistyped, or undeclared key fails the step
       stderr  diagnostics; surfaced in the error when the exit code is non-zero
     The script runs with `python` (the per-AIP interpreter the server built from
     Meta.environment, falling back to the server's own), cwd set to the script's folder.
@@ -381,8 +424,8 @@ class Execution(BaseStep):
     python: Path | None = None
 
     def render(self, state: State) -> JSON:
-        """Pure projection of state + assets into the script's stdin payload."""
-        payload: JSON = {"currentState": state.currentState}
+        """Pure projection of the declared inputs + assets into the script's stdin payload."""
+        payload: JSON = {"state": state.currentState, "currentState": state.currentState}
         if self.assets:
             payload["assets"] = self._require_loader().load_all(self.assets, fresh=True)
         payload["expects"] = describe_next(self.inputsTo)
@@ -415,4 +458,5 @@ class Execution(BaseStep):
             raise RuntimeError(f"Script {self.script.uri!s} did not write JSON to stdout: {err}\n{out[:500]}") from err
         if not isinstance(result, dict):
             raise RuntimeError(f"Script {self.script.uri!s} must write a JSON object, got {type(result).__name__}")
+        validate_output(self.name, self.outputs, result)
         return result

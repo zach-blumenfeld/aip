@@ -3,7 +3,7 @@ name: aip-runtime
 description: Run published AIP procedures (runbooks, step-by-step workflows) from an AIP server with the `aip` command. Use when a task might match a known procedure, runbook, or workflow, when the user mentions aip or AIP, or when AIP_SERVER is set; search the catalog first, then run the match and answer its pauses instead of doing the steps by hand.
 license: Apache-2.0
 metadata:
-  aip-version: "0.5a1"
+  aip-version: "0.6a0"
 ---
 
 # Running AIP procedures
@@ -70,10 +70,11 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 - **Do not do the steps by hand** when the server can run them. The scripts, routing,
   and validation are the procedure; your job is the pauses and the final result.
 - **Scripts run on the server.** File paths in the start input must be reachable there,
-  not just here. Output the server produced is in `state`, not on your disk.
+  not just here. Output the server produced is in the JSON (`state`, `history`), not on your disk.
 - **One run, one run file.** The pause names it (`run_file`); `resume` reads and rewrites
   it. Do not edit it. Do not start a second run of the same task.
-- **Report the result** from `state` in the task's terms, and say which procedure ran,
+- **Report the result** from `state` (the end step's declared keys; what each step produced
+  is in `history`) in the task's terms, and say which procedure ran,
   by name. If the procedure stops with an error, report the error; do not improvise the
   remaining steps.
 - **Do not publish, pin, or retire** anything unless asked; those change the catalog for
@@ -94,7 +95,7 @@ $ aip run billing-support --input start.json
   "resume": "aip resume .aip/runs/billing-support-....json --input <answer.json>", ... }
 $ echo '{"billing": true, "tone": "angry"}' > answer.json
 $ aip resume .aip/runs/billing-support-....json --input answer.json
-{ "done": true, "state": { "message": "...", "billing": true, "tone": "angry", "ticket_id": 45067, "queue": "tier2" }, ... }
+{ "done": true, "state": { "message": "..." }, "history": [ ..., { "step": "escalate", "result": { "ticket_id": 45067, "queue": "tier2" } }, ... ] }
 ```
 
 The angry branch ran a script on the server and opened the ticket; you answered one

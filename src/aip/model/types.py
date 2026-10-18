@@ -51,10 +51,39 @@ class InputValidationError(ValueError):
         super().__init__(f"Input to step {step!r} is invalid: " + "; ".join(errors))
 
 
-def validate_input(step: str, inputs: Inputs, payload: Any, strict: bool = False) -> None:
+class OutputValidationError(ValueError):
+    """A step's result does not match its declared `outputs`: a key missing, mistyped, or undeclared.
+    The step failed; nothing is merged into the state."""
+    def __init__(self, step: str, errors: List[str]):
+        self.step = step
+        self.errors = errors
+        super().__init__(f"Output of step {step!r} is invalid: " + "; ".join(errors))
+
+
+def _schema_errors(inputs: Inputs, payload: Any, strict: bool) -> List[str]:
     validator = Draft202012Validator(to_json_schema(inputs, strict))
     errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
+    return [(f"{'.'.join(str(p) for p in e.path)}: " if e.path else "") + e.message for e in errors]
+
+
+def validate_input(step: str, inputs: Inputs, payload: Any, strict: bool = False) -> None:
+    errors = _schema_errors(inputs, payload, strict)
     if errors:
-        raise InputValidationError(step, [
-            (f"{'.'.join(str(p) for p in e.path)}: " if e.path else "") + e.message for e in errors
-        ])
+        raise InputValidationError(step, errors)
+
+
+def validate_output(step: str, outputs: Inputs, result: Any, strict: bool = True) -> None:
+    """Check a step's result against its declared outputs. `strict` also rejects keys the step
+    did not declare, naming each one; off when `result` is the whole state (an answer merged over it)."""
+    if not isinstance(result, dict):
+        raise OutputValidationError(step, [f"expected a JSON object, got {type(result).__name__}"])
+    errors = _schema_errors(outputs, result, strict=False)
+    if strict:
+        errors += [f"undeclared output {key!r}" for key in result if key not in outputs]
+    if errors:
+        raise OutputValidationError(step, errors)
+
+
+def project(state: JSON, inputs: Inputs) -> JSON:
+    """The part of the state a step may see: its declared input keys, nothing else."""
+    return {name: state[name] for name in inputs if name in state}

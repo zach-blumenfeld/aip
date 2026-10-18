@@ -143,7 +143,8 @@ class Runner:
 
         if response["kind"] == "client_task":
             pause = {"kind": "client_task", "step": response["ran"], "task": response["result"]["task"],
-                     "references": response["result"]["references"], "expects": _expects(response["next"])}
+                     "references": response["result"]["references"],
+                     "expects": response["result"].get("expects", _expects(response["next"]))}
             if self.interactive:
                 self.out.write("\n" + response["result"]["task"] + "\n\n")
                 payload = self._prompt_inputs(pause["expects"], response["suggested"])

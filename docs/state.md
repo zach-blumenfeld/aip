@@ -6,49 +6,55 @@ today; the last section lists what is known to be awkward.
 ## One object, growing
 
 A run carries a single flat JSON object called the state. It starts as the client's start input.
-Every step reads the whole state, returns a result, and the result is merged over the state
-(`{**state, **result}`). Nothing is ever removed, so the state only grows.
+Each step sees only the keys it declares as `inputs`, returns exactly the keys it declares as
+`outputs`, and those are merged into the full state (`{**state, **outputs}`). Nothing is ever
+removed, so the state only grows.
 
-| step | receives | returns | state afterwards |
-|---|---|---|---|
-| start | `{s}` | | `{s}` |
-| A (execution) | `{s}` | `{A_x}` | `{s, A_x}` |
-| B (execution) | `{s, A_x}` | `{B_x}` | `{s, A_x, B_x}` |
-| C (decision) | `{s, A_x, B_x}` | its answers `{q1}` | `{s, A_x, B_x, q1}` |
-| D (client task) | `{s, A_x, B_x, q1}` | the client's answer `{D_x}` | `{s, A_x, B_x, q1, D_x}` |
+| step | declares | receives | returns | state afterwards |
+|---|---|---|---|---|
+| start | inputs `s` | | | `{s}` |
+| A (execution) | in `s`, out `A_x` | `{s}` | `{A_x}` | `{s, A_x}` |
+| B (execution) | in `A_x`, out `B_x` | `{A_x}` | `{B_x}` | `{s, A_x, B_x}` |
+| C (decision) | in `s, B_x`, question `q1` | `{s, B_x}` | its answers `{q1}` | `{s, A_x, B_x, q1}` |
+| D (client task) | in `q1`, out `D_x` | `{q1}` | the client's answer `{D_x}` | `{s, A_x, B_x, q1, D_x}` |
+| end | inputs `s, D_x` | | | the result: `{s, D_x}` |
 
-A step may overwrite an existing key by returning it. Nothing warns about that today; this
-probably needs a validator rule so a step cannot produce a key an earlier step produced (see
-"Known gaps").
+The validator (format 0.6a0) proves at write time that every key a step reads has a producer on
+every path to it, and that each key has exactly one producer, so no step overwrites another's key.
+The run's result is the state projected to the end step's `inputs`; everything else stays in the
+history.
 
 Separately from the state, the run history records every step's input and result. The state is
 the working object; the history is the ledger.
 
 ## What each step kind adds
 
-- **execution**: runs a script. The script gets the whole state on stdin as JSON and must print a
-  JSON object on stdout. That object is the step's result.
-- **decision**: asks typed questions about the state. The answers (one key per question) are the
-  result. Nothing else is added, which is why a client cannot slip extra keys in at a decision.
-- **client_task**: hands work to the client. The client's answer is the result; it must contain
-  the keys the next step declares as inputs. Extra keys in the answer are kept.
+- **execution**: runs a script. The script gets `{"state": <its declared inputs>, "assets": ...,
+  "expects": ...}` on stdin (`currentState` carries the same object for one more version) and must
+  print a JSON object holding exactly its declared `outputs`. A missing, mistyped, or undeclared
+  key fails the step, naming the key, and nothing is merged.
+- **decision**: asks typed questions about its declared inputs; the decision model receives
+  `{"state": <declared inputs>}`, plus `history` only when the step sets `history: true`. The
+  answers (one key per question, typed: noul boolean, choice label, score level) are the result.
+  Nothing else is added, which is why a client cannot slip extra keys in at a decision.
+- **client_task**: hands work to the client. The task template renders from the declared inputs
+  only. The client's answer must contain the step's declared `outputs` with their types; the
+  pause's `expects` lists them.
 - **router**: reads one key and picks the next step. Adds nothing.
-- **end**: stops. The state at that point is the run's output.
+- **end**: stops. The state projected to its `inputs` is the run's output.
 
-## Typed inputs, untyped outputs
+## Typed inputs, typed outputs
 
 Each step declares `inputs`: a list of key names with types. When the state reaches a step, the
 runtime checks that every declared key is present with the right type and rejects the run if
-not ("input to step build is invalid: script_path is a required property"). Keys the step did
-not declare ride along unchecked, and today the step still receives all of them.
+not ("input to step build is invalid: script_path is a required property"), then hands the step
+those keys and nothing else. Keys the step did not declare stay in the full state, out of its
+sight. The run history records each step's input as the projected keys.
 
-Intended rule: a step reads only what it declares. Scripts get only their declared inputs on
-stdin, client tasks see only theirs at a pause, decisions judge only theirs. The full state
-lives on the server and the step's result is merged back into it there.
-
-No step declares what it produces. So the validator cannot tell, at write time, whether the key a
-step needs will exist by the time it runs; the runtime finds out one step at a time. See
-"Known gaps".
+Execution and client_task steps declare `outputs` the same way, and a decision's outputs are its
+question names. The step's result is checked against them before it is merged into the full
+state. Today the client carries the full state between calls (`suggested`); from B1 the server
+holds it.
 
 ## Where keys come from
 
@@ -85,23 +91,21 @@ state, not contents. The state object should stay small.
 
 ## Known gaps
 
-1. **No declared outputs**, so missing keys are found at run time, not at validation. Fix: steps
-   declare the keys they produce; the validator checks every consumed key has a producer or is in
-   the start input.
-2. **The whole state goes to the client at every pause**, whatever the step needs. Same fix as
-   gap 5 below, applied at pauses.
+1. ~~**No declared outputs.**~~ Fixed in 0.6a0: steps declare `outputs` and the validator checks
+   every consumed key has a producer on every path or is a start input.
+2. **The whole state goes to the client at every pause**, whatever the step needs (`suggested`).
+   The step itself now sees only its inputs (gap 5); the pause shape is trimmed next (A3).
 3. **`suggested` is a misleading name.** It comes from an earlier design where the client could
    edit the server's proposed next input between steps. With append-only state and steps reading
    only their declared inputs, nothing is proposed any more: it is the state. Fix: call it
    `state` at every pause; at a review pause, put the decision model's proposed answers under
    their own key (e.g. `proposed_answers`) beside the state they were judged on.
-4. **Silent overwrites** of existing keys, and collisions between steps that happen to use the
-   same name. Fix: a validator rule that each key is produced by exactly one step (and is not in
-   the start input), so the state is append-only by construction. Deliberate re-computation
+4. ~~**Silent overwrites.**~~ Fixed in 0.6a0: each key is produced by exactly one step and is
+   never a start input, so the state is append-only by construction. Deliberate re-computation
    would need an explicit opt-in.
-5. **Steps receive the whole state**, not just their declared inputs (scripts on stdin, client
-   tasks at a pause). Fix: the runtime projects the state down to the step's declared inputs
-   before handing it over; the server keeps the full state.
+5. ~~**Steps receive the whole state.**~~ Fixed: scripts, decisions, and client-task templates
+   get only their declared inputs, and results are checked against declared outputs. The pause
+   still carries the whole state as `suggested` until A3.
 
 ## Proposed pause shape (client task)
 
@@ -128,10 +132,10 @@ validates the answer against.
 
 ## Proposed pause shapes (decision and review)
 
-What goes to the decision model today: `questions` as printed, and `state` built as
-`{"currentState": <whole state>, "history": <every prior step's input and result>}`. Under the
-read-only-your-inputs rule that becomes the step's declared keys only, with history included only
-when the skill asks for it. History grows with the run and is billed on every decision.
+What goes to the decision model: `questions` as printed, and `state` built as
+`{"state": <the step's declared inputs>}`, with `"history": <every prior step's input and result>`
+added only when the step sets `history: true`. History grows with the run and is billed on every
+decision, so it is off by default.
 
 Decision, no model configured (the agent stands in for the model, so it gets the same two things):
 
@@ -191,22 +195,24 @@ echo '{"message":"Hi, I think I was charged twice for March. Could you check?"}'
 aip run "$EX" --input start.json --run-file run.json
 
 # 2. answer both questions; the router picks "reply"; the run pauses at the client task.
-#    Note `suggested`: the whole state so far (message, billing, tone), and `task`: the
-#    template with only the keys the author chose rendered into it.
+#    Note `suggested`: the whole state so far (message, billing, tone), `expects`: the
+#    step's outputs ({"reply": "string"}), and `task`: the template rendered from the
+#    step's declared inputs.
 echo '{"billing": true, "tone": "calm"}' > answer1.json
 aip resume run.json --input answer1.json
 
-# 3. answer the client task; the run ends. `state` is the final merged object, `history` the ledger.
-echo '{"message":"Hi, I think I was charged twice for March. Could you check?","reply":"Thanks for flagging this; duplicate charges are refunded in full within 5 business days."}' > answer2.json
+# 3. answer the client task with its outputs; the run ends. `state` is the end step's inputs
+#    (just `message` here), `history` the ledger, where the reply is recorded.
+echo '{"reply":"Thanks for flagging this; duplicate charges are refunded in full within 5 business days."}' > answer2.json
 aip resume run.json --input answer2.json
 
 # 4. the other branch: an angry message routes to the script, which runs with no pause
 echo '{"message":"This is the THIRD time you have double charged me. Fix it today or I cancel."}' > start2.json
 aip run "$EX" --input start2.json --run-file run2.json
 echo '{"billing": true, "tone": "angry"}' > answer3.json
-aip resume run2.json --input answer3.json      # done: state now has ticket_id and queue
+aip resume run2.json --input answer3.json      # done: ticket_id and queue are in the escalate history entry
 ```
 
 Things to notice: `--input` takes a file, not inline JSON. Answering only one of two questions
-fails with a Python traceback rather than a message (a client bug). At the client-task pause,
-`expects` lists the *next* step's inputs, which is what your answer must contain.
+fails with a Python traceback rather than a message (a client bug, A3). At the client-task pause,
+`expects` lists the step's declared outputs, which is what your answer must contain.

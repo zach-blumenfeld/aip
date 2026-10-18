@@ -8,7 +8,8 @@ from aip.model.steps import (
     Router, State, StepResponse, describe_next,
 )
 from aip.model.types import (
-    JSON, DataType, InputValidationError, Inputs, describe_inputs, to_json_schema, validate_input,
+    JSON, DataType, InputValidationError, Inputs, OutputValidationError, describe_inputs, project,
+    to_json_schema, validate_input, validate_output,
 )
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "DEFAULT_MIN_CONFIDENCE", "DEFAULT_NOUL_MARGIN", "SYSTEM_FRAMING",
     "BaseStep", "ClientTask", "Decision", "DecisionQuestion", "EndStep", "Execution", "Meta", "Node",
     "Router", "State", "StepResponse", "describe_next",
-    "JSON", "DataType", "InputValidationError", "Inputs", "describe_inputs", "to_json_schema", "validate_input",
+    "JSON", "DataType", "InputValidationError", "Inputs", "OutputValidationError", "describe_inputs", "project",
+    "to_json_schema", "validate_input", "validate_output",
 ]

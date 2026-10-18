@@ -13,7 +13,7 @@ from typesafe_sdk import Choice, Noul, SystemOneResponse
 
 from aip.model import (
     Asset, ClientTask, DataType, Decision, EndStep, Execution, InputValidationError,
-    Meta, Procedure, Reference, ResourceLoader, Router, Script, to_json_schema,
+    OutputValidationError, Meta, Procedure, Reference, ResourceLoader, Router, Script, to_json_schema,
 )
 
 
@@ -54,9 +54,12 @@ def make_package(root: Path) -> None:
         "inp = json.load(sys.stdin)\n"
         "cfg = json.loads(inp['assets']['config'])\n"
         "assert inp['expects']['step'] == 'end', inp['expects']\n"
+        "open('stdin.json', 'w').write(json.dumps(inp))\n"
         "json.dump({'ticket_id': 42, 'queue': cfg['queue']}, sys.stdout)\n")
     (root / "billing/scripts/boom.py").write_text("import sys; sys.exit('bad config')")
     (root / "billing/scripts/notjson.py").write_text("print('hello')")
+    (root / "billing/scripts/extra.py").write_text("import json, sys; json.dump({'ticket_id': 1, 'note': 'x'}, sys.stdout)")
+    (root / "billing/scripts/mistyped.py").write_text("import json, sys; json.dump({'ticket_id': 'one'}, sys.stdout)")
 
 
 def make_procedure(root: Path, jev: FakeJev) -> Procedure:
@@ -66,6 +69,7 @@ def make_procedure(root: Path, jev: FakeJev) -> Procedure:
         inputs={"tone": DataType.STRING, "message": DataType.STRING},
         script=Script("billing", "escalate.py"),
         assets=[Asset("billing", "config.json")],
+        outputs={"ticket_id": DataType.INTEGER, "queue": DataType.STRING},
         inputsTo=end,
     )
     reply = ClientTask(
@@ -74,6 +78,7 @@ def make_procedure(root: Path, jev: FakeJev) -> Procedure:
         template=Asset("billing", "reply.md"),
         assets=[Asset("billing", "policy.md")],
         references=[Reference("billing", "help.md", "help doc")],
+        outputs={"reply": DataType.STRING},
         inputsTo=end,
     )
     router = Router(name="by_tone", branch_on="tone", branches={"angry": escalate, "calm": reply})
@@ -116,7 +121,7 @@ class ProcedureRunTest(unittest.TestCase):
     def test_decision_collapses_and_reviews(self):
         r = self.proc.run(None, {"message": "I was charged twice"})
         self.assertEqual(r.ran, "triage")
-        self.assertEqual(self.jev.seen, {"currentState": {"message": "I was charged twice"}})
+        self.assertEqual(self.jev.seen, {"state": {"message": "I was charged twice"}})
         self.assertEqual(r.suggested, {"message": "I was charged twice", "billing": True, "tone": "angry"})
         self.assertEqual([x["question"] for x in r.review], ["billing"])  # 0.55 is within 0.15 of 0.5
         self.assertEqual(r.next["kind"], "router")
@@ -139,6 +144,7 @@ class ProcedureRunTest(unittest.TestCase):
 
         r3 = self.proc.run(r2.ran, r2.suggested, r2.history)
         self.assertEqual((r3.ran, r3.next), ("end", None))
+        self.assertEqual(r3.result, {"message": "I was charged twice"})  # the end step's inputs, nothing else
         self.assertEqual([h["step"] for h in r3.history], ["triage", "by_tone", "escalate", "end"])
         json.dumps(r3.to_dict())  # response is JSON serializable
 
@@ -153,18 +159,64 @@ class ProcedureRunTest(unittest.TestCase):
         self.assertIn("Keep {this} literal.", task)
         self.assertEqual(r4.result["references"], [{"uri": "billing/references/help.md", "description": "help doc"}])
         self.assertEqual(r4.suggested["tone"], "calm")
+        self.assertEqual(r4.result["expects"], {"reply": "string"})  # answer with the step's outputs
         self.assertEqual(r4.next["inputs"], {"message": "string"})
+        self.assertEqual(r4.history[-1]["input"], {"tone": "calm", "message": "I was charged twice"})
+
+        with self.assertRaises(OutputValidationError) as ctx:  # the answer must hold the declared outputs
+            self.proc.run(r4.ran, r4.suggested, r4.history)
+        self.assertIn("reply", str(ctx.exception))
+        r5 = self.proc.run(r4.ran, {**r4.suggested, "reply": "Refunded."}, r4.history)
+        self.assertEqual((r5.ran, r5.result), ("end", {"message": "I was charged twice"}))
+
+    def test_script_stdin_holds_only_declared_inputs(self):
+        r1 = self.proc.run(None, {"message": "I was charged twice", "customer": "acme"})
+        r2 = self.proc.run(r1.ran, r1.suggested, r1.history)
+        self.assertEqual(r2.ran, "escalate")
+        stdin = json.loads((self.root / "billing/scripts/stdin.json").read_text())
+        self.assertEqual(stdin["state"], {"tone": "angry", "message": "I was charged twice"})
+        self.assertEqual(stdin["currentState"], stdin["state"])  # the old key, kept for one version
+        self.assertEqual(r2.history[-1]["input"], stdin["state"])
+        # the full state is kept and grows by exactly the declared outputs
+        self.assertEqual(r2.suggested, {"message": "I was charged twice", "customer": "acme", "billing": True,
+                                        "tone": "angry", "ticket_id": 42, "queue": "tier2"})
+
+    def test_script_output_is_checked_against_declared_outputs(self):
+        cases = {"extra.py": "'note'", "mistyped.py": "ticket_id"}
+        for script, named in cases.items():
+            step = Execution(name="x", script=Script("billing", script), loader=self.proc.loader,
+                             outputs={"ticket_id": DataType.INTEGER})
+            with self.subTest(script), self.assertRaises(OutputValidationError) as ctx:
+                step.accept({}, [])
+            self.assertIn(named, str(ctx.exception))
+
+    def test_decision_sends_history_only_when_declared(self):
+        r1 = self.proc.run(None, {"message": "I was charged twice"})
+        triage = self.proc.nodes["triage"]
+        triage.accept({"message": "again"}, r1.history)
+        self.assertEqual(self.jev.seen, {"state": {"message": "again"}})
+        triage.history = True
+        triage.accept({"message": "again"}, r1.history)
+        self.assertEqual(self.jev.seen, {"state": {"message": "again"}, "history": r1.history})
+
+    def test_manual_answers_are_typed(self):
+        triage = self.proc.nodes["triage"]
+        for answers in ({"billing": True, "tone": "meh"}, {"billing": "yes", "tone": "calm"},
+                        {"billing": True, "tone": "calm", "mood": "x"}):
+            with self.subTest(answers), self.assertRaises(OutputValidationError):
+                triage.accept_manual({"message": "x"}, [], answers)
 
     def test_validation_failures(self):
         cases = {
             "missing key": (None, {}),
             "wrong type": (None, {"message": 7}),
-            "bad branch": ("triage", {"message": "x", "tone": "meh"}),
-            "missing router key": ("triage", {"message": "x"}),
+            "bad branch": ("triage", {"message": "x", "billing": True, "tone": "meh"}),
         }
         for label, (after, payload) in cases.items():
             with self.subTest(label), self.assertRaises(InputValidationError):
                 self.proc.run(after, payload, [])
+        with self.assertRaises(OutputValidationError):  # a decision's outputs are its question names
+            self.proc.run("triage", {"message": "x", "billing": True}, [])
 
     def test_execution_failures_surface(self):
         for name in ("boom.py", "notjson.py"):

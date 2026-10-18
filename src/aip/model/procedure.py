@@ -8,7 +8,7 @@ from aip.model.resources import ResourceLoader
 from aip.model.steps import (
     BaseStep, EndStep, Execution, Meta, Node, Router, StepResponse, describe_next,
 )
-from aip.model.types import JSON, validate_input
+from aip.model.types import JSON, project, validate_input, validate_output
 
 
 @dataclass(kw_only=True)
@@ -90,17 +90,23 @@ class Procedure:
         The single server operation.
 
         after:   name of the step the client just completed, or None to start
-        payload: the client's accepted input for whatever comes next
+        payload: the full state, including the client's answer to `after` when it paused
         history: the history the client carried in
+
+        The state must hold `after`'s outputs (a client-task answer or a reviewed decision
+        is checked here). The end step's result is the state projected to its inputs.
         """
+        if after is not None and isinstance(prev := self.nodes.get(after), BaseStep):
+            validate_output(prev.name, prev.output_types(), payload, strict=False)
         node, entries = self.resolve(after, payload)
         history = [*(history or []), *entries]
 
         if node is None or isinstance(node, EndStep):
             end = node or EndStep()
             validate_input(end.name, end.inputs, payload)
-            history.append({"step": end.name, "kind": end.kind, "input": payload, "result": payload})
-            return StepResponse(ran=end.name, kind=end.kind, result=payload, suggested=payload,
+            final = project(payload, end.inputs) if node is not None else payload
+            history.append({"step": end.name, "kind": end.kind, "input": final, "result": final})
+            return StepResponse(ran=end.name, kind=end.kind, result=final, suggested=final,
                                 review=[], next=None, history=history)
 
         return node.accept(payload, history, thresholds=thresholds)

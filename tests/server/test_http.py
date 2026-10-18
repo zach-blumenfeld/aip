@@ -314,7 +314,7 @@ def test_manual_traversal_angry_branch_runs_the_script_on_the_server(api, exampl
     assert r.status_code == 200, r.text
     last = r.json()
     assert last["next"] is None and last["kind"] == "end"
-    assert last["result"] == second["suggested"]
+    assert last["result"] == {"message": start["message"]}                         # the end step's inputs only
     assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "escalate", "end"]
 
     run = api.get(f"/runs/{run_id}").json()
@@ -372,7 +372,7 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
                                     "result": {"to": "reply"}}
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "paused" and run["pause"]["kind"] == "client_task"
-    assert run["pause"]["step"] == "reply" and run["pause"]["expects"] == {"message": "string"}
+    assert run["pause"]["step"] == "reply" and run["pause"]["expects"] == {"reply": "string"}
     assert "Duplicate charges" in run["pause"]["task"]
 
     reply = "Sorry about the duplicate charge. A full refund is on its way within 5 business days."
@@ -381,7 +381,8 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
                        "history": second["history"], "run_id": run_id})
     assert r.status_code == 200, r.text
     last = r.json()
-    assert last["next"] is None and last["result"]["reply"] == reply and last["result"]["tone"] == "calm"
+    assert last["next"] is None and last["result"] == {"message": "I was charged twice!"}
+    assert last["history"][2]["input"] == {"message": "I was charged twice!", "tone": "calm"}
     assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "reply", "end"]
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "done" and run["pause"] is None and len(run["history"]) == 4
