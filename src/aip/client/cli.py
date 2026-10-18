@@ -554,6 +554,9 @@ def server_command(argv: list[str]) -> int:
     parser.add_argument("--token", default=None, help="bearer token granting the read and publish scopes")
     parser.add_argument("--read-token", default=None, help="bearer token granting the read scope only")
     parser.add_argument("--no-localhost", action="store_true", help="require a token from loopback clients too")
+    parser.add_argument("--allow-origin", action="append", default=None, metavar="ORIGIN",
+                        help="a web origin whose pages may call this server (CORS); repeatable. Loopback origins, "
+                             "where the console runs, always may")
     parser.add_argument("--log-level", default="info")
 
     # Files first, so their values become the defaults the flags override.
@@ -618,7 +621,7 @@ def server_command(argv: list[str]) -> int:
     if not tokens and args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"aip server: warning: listening on {args.host} with no --token; anyone who can reach it can publish "
               "and execute code here", file=sys.stderr)
-    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost)
+    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost, allow_origins=args.allow_origin)
     if loaded:
         print(f"aip server: configured from {', '.join(loaded)}", file=sys.stderr)
     print(f"aip server: {where}; http://{args.host}:{args.port}", file=sys.stderr)

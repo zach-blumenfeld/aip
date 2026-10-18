@@ -32,7 +32,9 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   (501 when it has none or declines the query).
 
 The server serves no UI: the console (formerly inspector) is its own npm package and calls
-this API like any other client.
+this API like any other client, from its own origin. So the server answers CORS for pages served
+from a loopback origin (`http://localhost:<port>`, `127.0.0.1`, `[::1]`), where the console runs,
+and for any origin in `allow_origins`; a page from anywhere else on the web cannot read it.
 
 `ref` is `name`, `name@<revision>`, or `name@latest`, resolved by the catalog.
 
@@ -56,6 +58,7 @@ from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -71,6 +74,9 @@ JSON = Dict[str, Any]
 READ, PUBLISH = "read", "publish"
 ALL_SCOPES = frozenset({READ, PUBLISH})
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+# Pages the server answers CORS for without being told: the console runs on the user's machine.
+LOOPBACK_ORIGINS = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
 
 # On the replies of `/procedures/{ref}/step|answer`, which go once `POST /runs` has had a version.
 DEPRECATED = {"Deprecation": "true", "Link": '</runs>; rel="successor-version"'}
@@ -145,11 +151,12 @@ class ResultBody(BaseModel):
 
 
 def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
-               localhost_open: bool = True) -> FastAPI:
+               localhost_open: bool = True, allow_origins: List[str] | None = None) -> FastAPI:
     """Build the server over `backend`.
 
     tokens:          bearer token -> scopes (`read`, `publish`); empty or None means no auth
     localhost_open:  a loopback client needs no token even when tokens are configured
+    allow_origins:   origins besides loopback ones whose pages may call this server (CORS)
     """
     catalog = backend.catalog
     runs = getattr(backend, "runs", None)
@@ -159,6 +166,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
     lock = threading.Lock()
 
     app = FastAPI(title="aip server", version="0.5a0", docs_url=None, redoc_url=None)
+    app.add_middleware(CORSMiddleware, allow_origins=list(allow_origins or []), allow_origin_regex=LOOPBACK_ORIGINS,
+                       allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
 
     # ------------------------------------------------------------------ errors
 

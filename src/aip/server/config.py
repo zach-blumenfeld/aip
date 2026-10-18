@@ -10,7 +10,8 @@ Precedence, highest first:
 4. built-in defaults
 
 The config file has two tables. `[server]` is the listener: `host`, `port`, `token`,
-`read_token`, `localhost_open`, `log_level`. `[backend]` picks the store:
+`read_token`, `localhost_open`, `log_level`, `allow_origins` (pages on these origins may call
+the server; loopback origins always may, for the console). `[backend]` picks the store:
 `kind` (`filesystem` or `neo4j`), `root` for the filesystem, `uri`, `user`, `password`,
 `database`, `cache_dir` for Neo4j. The Neo4j values are applied by setting their `NEO4J_*`
 environment variables when unset, since the Neo4j connection reads those; that is what makes
@@ -56,13 +57,14 @@ _FLAG_KEYS = {
     ("server", "token"): "token",
     ("server", "read_token"): "read_token",
     ("server", "log_level"): "log_level",
+    ("server", "allow_origins"): "allow_origin",
     ("backend", "kind"): "backend",
     ("backend", "root"): "root",
     ("backend", "cache_dir"): "cache_dir",
 }
 
 _KNOWN = {
-    "server": {"host", "port", "token", "read_token", "localhost_open", "log_level"},
+    "server": {"host", "port", "token", "read_token", "localhost_open", "log_level", "allow_origins"},
     "backend": {"kind", "root", "uri", "user", "password", "database", "cache_dir"},
 }
 
@@ -78,6 +80,8 @@ port = 8000
 # read_token = "..."
 localhost_open = true     # loopback clients need no token
 log_level = "info"
+# allow_origins = ["https://console.example.com"]   # web pages that may call this server;
+#                           # loopback origins (the console on this machine) always may
 
 [backend]
 kind = "filesystem"       # or "neo4j"
@@ -218,6 +222,9 @@ def apply_config(config: JSON, environ: Dict[str, str] | None = None) -> JSON:
             continue
         if dest in ("root", "cache_dir"):
             value = Path(str(value)).expanduser()
+        if dest == "allow_origin":
+            if not isinstance(value, list) or not all(isinstance(o, str) for o in value):
+                raise ConfigError("server.allow_origins must be a list of origins, like [\"https://console.example.com\"]")
         defaults[dest] = value
     localhost_open = config.get("server", {}).get("localhost_open")
     if localhost_open is not None:

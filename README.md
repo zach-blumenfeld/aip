@@ -313,8 +313,9 @@ Every one of these is a thin wrapper over the Python SDK, `aip.Client` ([`docs/s
 
 The web client, the console (formerly inspector; [aip-inspector](https://github.com/zach-blumenfeld/aip-inspector)),
 is its own npm package: `npx aip-console --server URL` serves the catalog, source, run console, history and
-governance views from a local Node process. The server serves no UI. The console checks `aip --version`
-(`aip <version> format <format>`) at startup, since interactive runs go through the `aip` CLI.
+governance views from a local Node process, and its page calls the server directly (the server answers CORS for
+loopback origins; `aip server --allow-origin ORIGIN` adds others). The server serves no UI. The console checks
+`aip --version` (`aip <version> format <format>`) at startup, since interactive runs go through the `aip` CLI.
 
 `aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when this client has no decision-model key, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; every outcome prints a `run_id`, the run file is `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it, `--run-file` picks a path), `aip resume <run-id> --input answer.json` continues from any directory, and `aip resume <run-id>` with no input retries a failed step. `--progress` adds a JSON line per completed step and `--debug` a traceback on failure. Decision thresholds are the author's, from SKILL.md; nothing at run time overrides them. On a server, the server holds the run's state and history and the run file is only a handle.
 

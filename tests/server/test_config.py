@@ -115,3 +115,12 @@ def test_the_server_serves_no_ui(tmp_path: Path):
     f.write_text("[server]\ninspector = true\n")
     with pytest.raises(ConfigError, match="npx aip-console"):
         read_config(f)
+
+
+def test_allow_origins_is_a_list_of_origins(tmp_path: Path):
+    f = tmp_path / "aip-server.toml"
+    f.write_text('[server]\nallow_origins = ["https://console.example.com"]\n')
+    assert apply_config(read_config(f), {})["allow_origin"] == ["https://console.example.com"]
+    f.write_text('[server]\nallow_origins = "https://console.example.com"\n')
+    with pytest.raises(ConfigError, match="list of origins"):
+        apply_config(read_config(f), {})

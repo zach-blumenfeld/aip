@@ -370,7 +370,28 @@ check. Nothing else in aip is console-specific.
 Test: `uv run pytest -q`; the server answers 404 on `/inspector/`; `aip --version` output
 matches the documented pattern.
 
-### - [ ] I2 (aip-console): the Node launcher and the local run view
+### - [x] I2 (aip-console): the Node launcher and the local run view
+
+Done 2026-10-18, aip-inspector branch `inspector-0.6a0` plus one aip change. The package is
+`aip-console` 0.6.0-alpha.0 (not published; the repo is not renamed) with both bin names on
+`bin/aip-console.mjs`, a dependency-free Node script that serves `dist/` at `/` (default port 4280)
+and `/console/{config,skill,run,resume,cancel}`. `run`/`resume` are POSTs that answer with an event
+stream (fetch-read, not EventSource): a `session` event, one `data:` per CLI line, then `exit` with
+code, signal and stderr. Cancel kills the CLI's process group, so its script dies too, and a closed
+stream kills it as well. The process listens on 127.0.0.1 only and refuses a foreign `Host` and any
+post that is not same-origin JSON, since a post starts a run. Choices beyond the text: "the page
+calls the server directly" needs CORS, so aip's server now answers it for loopback origins by
+default, and `aip server --allow-origin` / `server.allow_origins` adds others (aip commit beside this
+tick). The server URL is fixed by the launcher; the page keeps only the token. The run view is
+rewritten over the CLI's objects (start, decision, client task, review, done, error with Retry,
+cancel), and `aip info --json` feeds the start form in both modes. The procedure page's threshold
+editor is gone, since its endpoint went in B1 and it crashed the page, so I3's "loses threshold
+editing" is done. History's decision cards show `resolver` (and model, reviewed, overrides) from
+the attribution. I3 still owns the fuller views. The e2e publishes billing-support with an escalate
+script that writes `tickets/<id>.json` under `AIP_WORKDIR`, fails on `[outage]` while a flag file
+exists, and sleeps on `[slow]`. The Vite project is dropped: specs run against the launcher (project
+`console`) and a folder-mode launcher (project `folder`). Found, not fixed: a client task's history
+entry records the task but not the answer, so the server's history has no `reply` (aip, for I3/C1).
 
 `npx aip-console --server URL | FOLDER` (also installed as `aip-inspector`): a Node process that serves the UI, proxies nothing
 (the page calls the server directly, as today), and exposes the run view through spawned

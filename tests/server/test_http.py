@@ -651,3 +651,17 @@ def test_the_server_serves_no_ui(backend, no_key):
     assert not (Path(aip.server.__file__).parent / "inspector").exists()
     with pytest.raises(SystemExit):
         cli.main(["server", "--inspector"])
+
+
+def test_cors_answers_loopback_pages_and_allowed_origins(backend, no_key):
+    """The console serves its page from its own loopback port and calls the server directly."""
+    api = TestClient(create_app(backend, allow_origins=["https://console.example.com"]), raise_server_exceptions=False)
+    preflight = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type"}
+    for origin in ("http://localhost:5174", "http://127.0.0.1:9000", "https://console.example.com"):
+        r = api.options("/runs", headers={"Origin": origin, **preflight})
+        assert r.status_code == 200 and r.headers["access-control-allow-origin"] == origin, origin
+        assert api.get("/catalog", headers={"Origin": origin}).headers["access-control-allow-origin"] == origin
+    for origin in ("https://evil.example.com", "http://localhost.evil.com"):
+        r = api.options("/runs", headers={"Origin": origin, **preflight})
+        assert "access-control-allow-origin" not in r.headers, origin
+        assert "access-control-allow-origin" not in api.get("/catalog", headers={"Origin": origin}).headers
