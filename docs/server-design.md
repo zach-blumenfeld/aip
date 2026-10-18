@@ -243,7 +243,11 @@ word from its description, files round-trip byte for byte, pin and retire behave
 runs persist and list, and a full traversal through the HTTP layer reproduces the
 `running.md` worked example. The Neo4j variant is skipped without `NEO4J_URI`.
 
-## 6. Execution locality (decided)
+## 6. Execution locality (superseded)
+
+> Superseded 2026-10-17 by `docs/client-execution.md`: execution steps run on the client,
+> next to the files; the server keeps the procedure, routing, validation and history. The
+> text below is the earlier decision, kept for the reasoning.
 
 Scripts run on the server, with the server's interpreter for that skill. Reasons:
 `running.md` already plans a per-skill interpreter built from the skill's
@@ -267,7 +271,11 @@ Consequences:
   deployment provides (container, user, seccomp); the server itself does not
   sandbox. Document this in the server's README in plain words.
 
-## 7. Decision model
+## 7. Decision model (superseded)
+
+> Superseded 2026-10-17 by `docs/client-execution.md`, "Decision steps": the client resolves
+> decisions with the decision model configured on the client and reports the answer with
+> attribution; the server holds no model key.
 
 `TYPESAFE_API_KEY` is held by the server. `capabilities.decision_model` tells the
 client whether decisions will be answered server-side; when false the client answers
