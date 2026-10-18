@@ -36,7 +36,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aip-spec", git = "https://github.com/zach-blumenfeld/aip-spec.git?rev=v0.6a0-dev2" },
+    { name = "aip-spec", git = "https://github.com/zach-blumenfeld/aip-spec.git?rev=v0.6a0-dev3" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.26.0" },
@@ -61,7 +61,7 @@ dev = [
 [[package]]
 name = "aip-spec"
 version = "0.6a0.dev2"
-source = { git = "https://github.com/zach-blumenfeld/aip-spec.git?rev=v0.6a0-dev2#ad84e4daa331b95f4ba84a2215a7d1570e32518a" }
+source = { git = "https://github.com/zach-blumenfeld/aip-spec.git?rev=v0.6a0-dev3#7e59a9fb1dbcb0ebf7c0c352aa20a94a076b85e3" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },

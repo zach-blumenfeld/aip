@@ -1,18 +1,18 @@
 # A fresh agent runs `billing-support` through `aip-runtime`
 
-The fresh-agent check for the `aip-runtime` skill (milestone M5 of the 0.5a0 rebuild). A Claude Code session was started with `claude -p` from an empty directory whose only skill was `aip-runtime` (written by `aip runtime --skill --out .claude/skills`; `--setting-sources project` kept the user's own skills out). `AIP_SERVER` pointed at a filesystem-backed `aip server` on port 8765 with `examples/billing-support` published. The agent was given the task in plain words and nothing else: no procedure, no SKILL.md, no mention of AIP.
+The fresh-agent check for the `aip-runtime` skill, re-recorded for format 0.6a0 (milestone A3), whose pauses carry only the paused step's declared inputs and whose outcomes are the JSON objects in [`docs/cli-json.md`](../cli-json.md). A Claude Code session was started with `claude -p` from an empty directory whose only skill was `aip-runtime` (written by `aip runtime --skill --out .claude/skills`; `--setting-sources project` kept the user's own skills out). `AIP_SERVER` pointed at a filesystem-backed `aip server` on port 8765 with the `billing-support` example from aip-spec published; the server read a TypeSafe key from its config, so the triage decision was answered by the model. The agent was given the task in plain words and nothing else: no procedure, no SKILL.md, no mention of AIP.
 
-The transcript predates the split of the format into `aip-spec`, so its setup publishes `examples/billing-support` from this repo; today the same folder comes from `aip-spec example billing-support --out .`.
-
-The transcript below is the session's stream-json output rendered as text; tool outputs are verbatim. The agent completed the procedure through `search` → `info` → `run` → `resume` and never fetched or read the procedure's own SKILL.md: the only `/files/SKILL.md` request in the server log is `aip info` rendering its summary, and the agent's turns contain no `aip get`, no `curl`, and no file reads.
+The transcript below is the session's stream-json output rendered as text; tool outputs are verbatim except that the session's temporary directory is shown as `/tmp/session/` and the home directory as `~/`. The agent completed the procedure through `search` → `info` → `run` → `resume`: the model's `tone` answer fell under its threshold, so the run paused for `review`, the agent accepted the proposed answers with `{}`, and the angry branch's script opened the ticket, which the agent read from the run file's `history`. It never fetched the procedure's own SKILL.md: the only `/files/SKILL.md` request in the server log is `aip info` rendering its summary.
 
 ## Setup
 
 ```
 $ aip server --backend filesystem --root ./root --port 8765 &
 $ export AIP_SERVER=http://localhost:8765
-$ aip publish examples/billing-support
-billing-support@124d4a7b6208abed
+$ aip-spec example billing-support --out .
+wrote billing-support
+$ aip publish billing-support
+billing-support@b22b55b4afd37eb1
 $ mkdir fresh && cd fresh
 $ aip runtime --skill --out .claude/skills
 wrote .claude/skills/aip-runtime/SKILL.md
@@ -22,14 +22,86 @@ $ claude -p 'A customer wrote in: "I was charged twice!" Handle this billing mes
 
 ## Transcript
 
-**init** — model `claude-opus-5-5`, skills available: `aip-runtime` (plus Claude Code's built-in slash commands), cwd `fresh`
+**init** — model `claude-fable-5-1`, skills available: `aip-runtime` (plus Claude Code's built-in slash commands), cwd `fresh`
+
+**assistant:**
+
+I'll check the working directory for any billing tooling or customer context before drafting a response.
+
+**tool: Bash** — List files in working directory
+
+```bash
+ls -la /tmp/session/fresh
+```
+
+```
+total 0
+drwxr-xr-x@ 3 zach  wheel   96 Oct 18 12:01 .
+drwx------@ 8 zach  wheel  256 Oct 18 12:01 ..
+drwxr-xr-x@ 3 zach  wheel   96 Oct 18 12:01 .claude
+```
+
+**tool: Bash** — List and preview files under the .claude directory
+
+```bash
+find /tmp/session/fresh/.claude -type f | head -50; echo "---"; find /tmp/session/fresh/.claude -type f -name "*.md" -exec sh -c 'echo "== $1"; head -40 "$1"' _ {} \;
+```
+
+```
+/tmp/session/fresh/.claude/skills/aip-runtime/SKILL.md
+---
+== /tmp/session/fresh/.claude/skills/aip-runtime/SKILL.md
+---
+name: aip-runtime
+description: Run published AIP procedures (runbooks, step-by-step workflows) from an AIP server with the `aip` command. Use when a task might match a known procedure, runbook, or workflow, when the user mentions aip or AIP, or when AIP_SERVER is set; search the catalog first, then run the match and answer its pauses instead of doing the steps by hand.
+license: Apache-2.0
+metadata:
+  aip-version: "0.6a0"
+---
+
+# Running AIP procedures
+
+An AIP procedure is a graph of typed steps that `aip` and its server run: scripts, decisions,
+routers, and tasks it hands back to you. You find the procedure, give it its start input,
+and answer when it pauses. You never execute its steps yourself.
+
+## Check once
+
+```
+aip --help          # the client is installed
+aip config          # prints `server: <url>`; else set AIP_SERVER=http://host:port
+```
+
+No server and no `aip`: this skill does not apply; do the task as you normally would.
+A skill folder on disk (`aip run <folder>`) runs locally with the same loop below.
+
+## The loop
+
+1. **Search** whenever the task might match a known procedure. Use the task's own words.
+
+   ```
+   aip search "<a few words from the task>"      # name@revision  score  description
+   ```
+
+   Read the descriptions. Pick the one that says it is for this task, or none; a high
+   score alone is not a match. `aip list` shows every published name.
+
+2. **Inspect** the match. `info` is all you need to read; do not fetch its SKILL.md.
+
+   ```
+   aip info <name>                    # purpose, when to use, start input, steps, result
+   aip info <name> --example-input    # a JSON object with every start key, example values
+```
+
+**assistant:**
+
+The project has an AIP runbook skill, and a double-charge complaint is a classic procedure. I'll load the skill and check whether an AIP server is reachable.
 
 **tool: Skill**
 
 ```json
 {
-  "skill": "aip-runtime",
-  "args": "Customer billing message: \"I was charged twice!\" \u2014 find and run a matching procedure"
+  "skill": "aip-runtime"
 }
 ```
 
@@ -37,31 +109,42 @@ $ claude -p 'A customer wrote in: "I was charged twice!" Handle this billing mes
 Launching skill: aip-runtime
 ```
 
-**tool: Bash** — Check AIP server and search catalog
+**tool: Bash** — Check whether the aip client and server are configured
 
 ```bash
-aip config && aip search "customer charged twice billing"
+which aip && aip config; echo "AIP_SERVER=$AIP_SERVER"
 ```
 
 ```
+~/dev/aip/.venv/bin/aip
 server: http://localhost:8765  (from AIP_SERVER)
 token:  none
-billing-support@124d4a7b6208abed  20.000  Triage an inbound billing message with a structured decision model, escalate angry customers to tier 2 by script, and draft a policy-grounded reply for everyone else. Use when handling customer billing messages, refund requests, or duplicate charge complaints.
+AIP_SERVER=http://localhost:8765
 ```
 
-**tool: Bash** — Inspect billing-support procedure
+**tool: Bash** — Search the AIP catalog for a billing procedure
 
 ```bash
-aip info billing-support && aip info billing-support --example-input
+aip search "customer charged twice billing"
 ```
 
 ```
-billing-support  (AIP 0.5a0)
+billing-support@b22b55b4afd37eb1  7.552  Triage an inbound billing message with a structured decision model, escalate angry customers to tier 2 by script, and draft a policy-grounded reply for everyone else. Use when handling customer billing messages, refund requests, or duplicate charge complaints.
+```
+
+**tool: Bash** — Inspect the billing-support procedure and its example input
+
+```bash
+aip info billing-support && echo "=== EXAMPLE INPUT ===" && aip info billing-support --example-input
+```
+
+```
+billing-support  (AIP 0.6a0)
 
 Triage an inbound billing message with a structured decision model, escalate angry customers to tier 2 by script, and draft a policy-grounded reply for everyone else. Use when handling customer billing messages, refund requests, or duplicate charge complaints.
 
 PURPOSE
-  Turn an inbound billing message into either a tier-2 ticket or a drafted reply. A structured decision model classifies the message; the client confirms low-confidence calls; a script opens the ticket; the client drafts the reply against the refund policy.
+  Turn an inbound billing message into either a tier-2 ticket or a drafted reply. A structured decision classifies the message; a script opens the ticket; the agent drafts the reply against the refund policy.
 
 TRIGGER WHEN
   - A customer message about a charge, invoice, refund, or subscription arrives.
@@ -100,139 +183,155 @@ RESULT  (end state)
 ANTI-PATTERNS
   - Replying to an angry customer with a templated answer instead of escalating.
   - Promising a refund the policy does not cover.
+=== EXAMPLE INPUT ===
 {
   "message": "<string>"
 }
 ```
 
-**tool: Bash** — Run billing-support procedure
+**assistant:**
+
+The billing-support procedure matches exactly. I'll start the run with the customer's message verbatim.
+
+**tool: Bash** — Start the billing-support procedure with the customer's message
 
 ```bash
-echo '{"message": "I was charged twice!"}' > start.json && aip run billing-support --input start.json; echo "exit=$?"
+mkdir -p /tmp/session/aip-work && printf '%s' '{"message": "I was charged twice!"}' > /tmp/session/aip-work/start.json && aip run billing-support --input /tmp/session/aip-work/start.json
 ```
 
 ```
 {
-  "paused": "decision",
+  "paused": "review",
   "step": "triage",
-  "questions": {
-    "billing": {
-      "type": "noul",
-      "instructions": "Is this message about a charge, invoice, refund, or subscription payment?"
-    },
-    "tone": {
-      "type": "choice",
-      "instructions": "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands.",
-      "criteria": {
-        "angry": "Frustrated, demanding, or threatening to leave.",
-        "calm": "Neutral or polite, asking a question."
-      }
-    }
-  },
-  "expects": {
-    "message": "string"
-  },
-  "suggested": {
+  "state": {
     "message": "I was charged twice!"
   },
-  "resume": "aip resume .aip/runs/billing-support-1791094558.json --input <answer.json>",
-  "run_file": ".aip/runs/billing-support-1791094558.json"
+  "proposed_answers": {
+    "billing": true,
+    "tone": "angry"
+  },
+  "review": [
+    {
+      "question": "tone",
+      "type": "choice",
+      "confidence": 0.58,
+      "probabilities": {
+        "angry": 0.79,
+        "calm": 0.21
+      },
+      "reason": "confidence below 0.6"
+    }
+  ],
+  "run_id": "4c39c99ffbd94c76",
+  "run_file": ".aip/runs/billing-support-1792350105.json"
 }
-exit=3
 ```
 
-**tool: Bash** — Answer triage pause and resume run
+**tool: Bash** — Accept the proposed triage answers and resume the run
 
 ```bash
-echo '{"billing": true, "tone": "angry"}' > answer.json && aip resume .aip/runs/billing-support-1791094558.json --input answer.json; echo "exit=$?"
+printf '%s' '{}' > /tmp/session/aip-work/answer.json && aip resume .aip/runs/billing-support-1792350105.json --input /tmp/session/aip-work/answer.json
 ```
 
 ```
 {
   "done": true,
+  "run_id": "4c39c99ffbd94c76",
   "state": {
-    "message": "I was charged twice!",
-    "billing": true,
-    "tone": "angry",
-    "ticket_id": 68875,
-    "queue": "tier2"
+    "message": "I was charged twice!"
   },
-  "history": [
-    {
-      "step": "triage",
-      "kind": "decision",
-      "input": {
-        "message": "I was charged twice!"
+  "run_file": ".aip/runs/billing-support-1792350105.json"
+}
+```
+
+**tool: Bash** — Read the run history to find the ticket details
+
+```bash
+python3 -I -c "
+import json
+r = json.load(open('.aip/runs/billing-support-1792350105.json'))
+print(json.dumps(r.get('history', r), indent=2))
+"
+```
+
+```
+[
+  {
+    "step": "triage",
+    "kind": "decision",
+    "input": {
+      "message": "I was charged twice!"
+    },
+    "result": {
+      "model": "jev-1.13.0",
+      "usage": {
+        "input_tokens": 376,
+        "output_tokens": 50
       },
-      "result": {
-        "answers": {
-          "billing": {
-            "type": "noul",
-            "manual": true
-          },
-          "tone": {
-            "type": "choice",
-            "manual": "angry"
+      "answers": {
+        "billing": {
+          "type": "noul",
+          "noul": 0.98
+        },
+        "tone": {
+          "type": "choice",
+          "choice": "angry",
+          "confidence": 0.58,
+          "probabilities": {
+            "angry": 0.79,
+            "calm": 0.21
           }
         }
-      },
-      "manual": true
-    },
-    {
-      "step": "by-tone",
-      "kind": "router",
-      "input": {
-        "tone": "angry"
-      },
-      "result": {
-        "to": "escalate"
-      }
-    },
-    {
-      "step": "escalate",
-      "kind": "execution",
-      "input": {
-        "message": "I was charged twice!",
-        "billing": true,
-        "tone": "angry"
-      },
-      "result": {
-        "message": "I was charged twice!",
-        "ticket_id": 68875,
-        "queue": "tier2"
-      }
-    },
-    {
-      "step": "end",
-      "kind": "end",
-      "input": {
-        "message": "I was charged twice!",
-        "billing": true,
-        "tone": "angry",
-        "ticket_id": 68875,
-        "queue": "tier2"
-      },
-      "result": {
-        "message": "I was charged twice!",
-        "billing": true,
-        "tone": "angry",
-        "ticket_id": 68875,
-        "queue": "tier2"
       }
     }
-  ]
-}
-exit=0
+  },
+  {
+    "step": "by-tone",
+    "kind": "router",
+    "input": {
+      "tone": "angry"
+    },
+    "result": {
+      "to": "escalate"
+    }
+  },
+  {
+    "step": "escalate",
+    "kind": "execution",
+    "input": {
+      "message": "I was charged twice!",
+      "tone": "angry"
+    },
+    "result": {
+      "ticket_id": 82237,
+      "queue": "tier2"
+    },
+    "seconds": 0.016
+  },
+  {
+    "step": "end",
+    "kind": "end",
+    "input": {
+      "message": "I was charged twice!"
+    },
+    "result": {
+      "message": "I was charged twice!"
+    }
+  }
+]
 ```
 
 **assistant:**
 
-I escalated the message to a human: it's now **ticket #68875 in the tier-2 queue**. I used the `billing-support` procedure from your AIP server.
+The message has been handled: the billing-support procedure escalated it to a tier-2 human ticket.
 
-The procedure asked me two questions about the message:
-- **Is it about billing?** Yes, it's a duplicate charge.
-- **Tone: angry or calm?** I picked **angry**, and that choice is what sent it to a person. The message is short and has no threats or demands, so it was a close call. But it's an exclamation-mark complaint about money, not a neutral question. The procedure also warns against sending a templated reply to an upset customer, so a human seemed safer.
+Ticket 82237, queue tier2
 
-If you'd rather treat it as calm, I can rerun it. That path drafts a reply to the customer based on the refund policy instead of opening a ticket. If you do, the ticket I already opened should be closed so the case isn't handled twice.
+**What happened.** I ran the published `billing-support` AIP procedure with the customer's message verbatim. Its triage step classified the message as billing-related and leaned toward an angry tone, but flagged the tone call for review because confidence fell just under the threshold. The procedure's criteria count explicit frustration as angry, and a double-charge complaint with an exclamation fits that. I accepted the classification, and the procedure routed the message to its escalation script, which opened the ticket above.
 
-**result** — success, 7 turns, 27s
+**Why escalation rather than a drafted reply.** The procedure's own rule is that angry customers go to a human queue instead of getting a templated answer. That is also the safer outcome here, since I have no access to the billing ledger and could not have verified whether a duplicate charge actually occurred.
+
+**What to do next.** A tier-2 agent should pull the customer's recent charges, confirm whether two captures posted, and reverse the duplicate if so. No reply has been sent to the customer yet. If you would rather I draft one now, tell me and I will write it against the refund policy.
+
+**result** — success, 11 turns, 34s
+

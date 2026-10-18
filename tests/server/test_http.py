@@ -347,7 +347,7 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "paused"
     assert run["pause"]["kind"] == "review" and run["pause"]["step"] == "triage"
-    assert run["pause"]["expects"] == {"message": "string", "tone": "string"}
+    assert run["pause"]["proposed_answers"]["tone"] == "angry" and run["pause"]["state"] == {"message": start["message"]}
     assert api.get("/runs", params={"status": "paused"}).json()[0]["run_id"] == run_id
 
     # a threshold override for this call passes the same answer through without review
@@ -372,7 +372,7 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
                                     "result": {"to": "reply"}}
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "paused" and run["pause"]["kind"] == "client_task"
-    assert run["pause"]["step"] == "reply" and run["pause"]["expects"] == {"reply": "string"}
+    assert run["pause"]["step"] == "reply" and run["pause"]["answer_with"] == {"reply": "string"}
     assert "Duplicate charges" in run["pause"]["task"]
 
     reply = "Sorry about the duplicate charge. A full refund is on its way within 5 business days."
@@ -540,7 +540,8 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     r = api.post("/procedures/broken-support/step", json=body)
     assert r.status_code == 500, r.text
     err = r.json()["error"]
-    assert err["kind"] == "step_failed" and err["location"] == "escalate" and "boom" in err["message"]
+    assert err["kind"] == "script_failed" and err["location"] == "escalate" and "boom" in err["message"]
+    assert err["script"] == "scripts/escalate.py" and err["exit_code"] != 0 and "boom" in err["stderr"]
     run = api.get(f"/runs/{err['run_id']}").json()
     assert run["status"] == "error" and run["name"] == "broken-support"
     assert run["history"][-1]["step"] == "escalate" and run["history"][-1]["kind"] == "error"

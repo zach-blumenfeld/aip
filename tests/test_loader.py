@@ -66,7 +66,7 @@ class LoaderEndToEnd(unittest.TestCase):
         r3 = proc.run(r1.ran, {**r1.suggested, "tone": "calm"}, r1.history)  # override -> client task
         self.assertEqual(r3.kind, "client_task")
         self.assertIn("Duplicate charges are refunded in full", r3.result["task"])
-        self.assertIn('pertaining to "', r3.result["task"])
+        self.assertNotIn('pertaining to', r3.result["task"])                # no framing prepended
         self.assertEqual(r3.result["references"][0]["uri"], "billing-support/references/help.md")
 
         r4 = proc.run(r2.ran, r2.suggested, r2.history)

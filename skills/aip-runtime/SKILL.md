@@ -8,9 +8,9 @@ metadata:
 
 # Running AIP procedures
 
-An AIP procedure is a graph of typed steps that a server executes: scripts, decisions,
-routers, and tasks it hands back to you. You are the client. You find the procedure,
-give it its start input, and answer when it pauses. You never execute its steps yourself.
+An AIP procedure is a graph of typed steps that `aip` and its server run: scripts, decisions,
+routers, and tasks it hands back to you. You find the procedure, give it its start input,
+and answer when it pauses. You never execute its steps yourself.
 
 ## Check once
 
@@ -49,34 +49,40 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
    aip run <name> --input start.json
    ```
 
-   Exit 0: done, the JSON has `"done": true` and `state` is the result. Exit 3: a pause,
-   printed as JSON with `paused`, `step`, and a `resume` command. Exit 1: an error on
-   stderr; fix the input or report it.
+   It prints one JSON object. Exit 0 with `"done": true`: finished, `state` is the result.
+   Exit 0 with `"paused"`: answer it (step 4). Exit 1 with `"error"`: see step 5.
 
-4. **Answer** each pause by `paused` kind, write the answer as a JSON object, and run the
-   printed `resume` command with `--input <answer.json>`. Repeat until `"done": true`.
+4. **Answer** each pause by its `paused` kind: write the answer as a JSON object and run
+   `aip resume <run_file> --input answer.json`. Repeat until `"done": true`.
 
-   | `paused`      | what the block carries                              | what you put in the answer file                                    |
-   |---------------|-----------------------------------------------------|--------------------------------------------------------------------|
-   | `decision`    | `questions`: name, `type`, `instructions`, `criteria` | one key per question: `true`/`false` for `noul`, a `criteria` label for `choice`, the level number (list position from 0) for `score`; judge from `suggested` |
-   | `review`      | `review`: answers under their confidence threshold   | only the keys you override, e.g. `{"tone": "calm"}`; `{}` accepts the model's answers |
-   | `client_task` | `task`: the rendered instructions; `references`; `expects` | the work product under the keys in `expects`; extra keys pass through to the state |
+   | `paused`      | what the pause carries                               | what you put in the answer file                                    |
+   |---------------|------------------------------------------------------|--------------------------------------------------------------------|
+   | `decision`    | `questions` (`type`, `instructions`, `criteria`) and `state` | one key per question: `true`/`false` for `noul`, a `criteria` label for `choice`, the level number (list position from 0) for `score`; judge from `state` |
+   | `review`      | `proposed_answers`, and `review`: the ones under their confidence threshold | only the keys you override, e.g. `{"tone": "calm"}`; `{}` accepts every proposed answer |
+   | `client_task` | `task`: what to do; `state`; `references`; `answer_with` | the work product under every key in `answer_with`, with those types |
 
-   Your answer is merged over `suggested`, so you need not repeat what is already there.
-   Load a `references` entry only if the task text says you need it.
+   `state` is only what this step needs. The run file holds the rest and your answer is
+   merged over it, so send only the keys asked for. Load a `references` entry only if the
+   task says you need it.
+
+5. **On an error**, read `error`, `step` and `message`. `invalid_input` / `invalid_output`
+   name the keys in `missing` and `invalid`: fix your input or answer and resume again (a
+   bad answer leaves the pause in place). `script_failed` carries the script's `exit_code`
+   and `stderr`; if `resumable` is true, `aip resume <run_file>` with no input retries that
+   step once the cause is fixed. Otherwise report the error.
 
 ## Rules
 
-- **Do not do the steps by hand** when the server can run them. The scripts, routing,
+- **Do not do the steps by hand** when the procedure can run them. The scripts, routing,
   and validation are the procedure; your job is the pauses and the final result.
-- **Scripts run on the server.** File paths in the start input must be reachable there,
-  not just here. Output the server produced is in the JSON (`state`, `history`), not on your disk.
-- **One run, one run file.** The pause names it (`run_file`); `resume` reads and rewrites
-  it. Do not edit it. Do not start a second run of the same task.
-- **Report the result** from `state` (the end step's declared keys; what each step produced
-  is in `history`) in the task's terms, and say which procedure ran,
-  by name. If the procedure stops with an error, report the error; do not improvise the
-  remaining steps.
+- **Scripts of a published procedure run on the server.** File paths in the start input
+  must be reachable there, not just here. A skill folder (`aip run <folder>`) runs here.
+- **One run, one run file.** Every outcome names it (`run_file`); `resume` reads and
+  rewrites it. Do not edit it. Do not start a second run of the same task.
+- **Report the result** from `state` (the end step's declared keys) in the task's terms,
+  and say which procedure ran, by name. What each step produced is in the run's history
+  (`history` in the run file). If the run stops with an error you cannot fix, report the
+  error; do not improvise the remaining steps.
 - **Do not publish, pin, or retire** anything unless asked; those change the catalog for
   everyone.
 
@@ -91,13 +97,13 @@ $ aip info billing-support --example-input > start.json       # edit: real messa
 $ aip run billing-support --input start.json
 { "paused": "decision", "step": "triage",
   "questions": { "billing": {"type": "noul", ...}, "tone": {"type": "choice", "criteria": {"angry": ..., "calm": ...}} },
-  "suggested": { "message": "I was charged twice!" },
-  "resume": "aip resume .aip/runs/billing-support-....json --input <answer.json>", ... }
+  "state": { "message": "I was charged twice!" },
+  "run_id": "...", "run_file": ".aip/runs/billing-support-....json" }
 $ echo '{"billing": true, "tone": "angry"}' > answer.json
 $ aip resume .aip/runs/billing-support-....json --input answer.json
-{ "done": true, "state": { "message": "..." }, "history": [ ..., { "step": "escalate", "result": { "ticket_id": 45067, "queue": "tier2" } }, ... ] }
+{ "done": true, "run_id": "...", "state": { "message": "I was charged twice!" }, "run_file": "..." }
 ```
 
-The angry branch ran a script on the server and opened the ticket; you answered one
-pause. The calm branch would instead pause with `client_task` asking you to draft the
-reply, and your `{"reply": "..."}` would end the run.
+The angry branch ran a script on the server and opened the ticket (its `ticket_id` is in
+the run's history); you answered one pause. The calm branch would instead pause with
+`client_task` asking you to draft the reply, and your `{"reply": "..."}` would end the run.

@@ -106,7 +106,19 @@ Test: `uv run pytest -q` with cases: the escalate script's stdin contains exactl
 `tone`; a script that returns an undeclared key fails with the key named; a decision payload has
 no `history` unless declared. `aip run ./billing-support` end to end on both branches.
 
-### - [ ] A3 (aip): the three outcomes, the pause shapes, and the meta-skill
+### - [x] A3 (aip): the three outcomes, the pause shapes, and the meta-skill
+
+Done 2026-10-18. The 0.6a0 runtime block still told scripts they get `currentState` with the whole
+state, so aip-spec `fe4e90e` rewrites it for declared inputs (and `7e59a9f`, separately for review,
+updates the authoring SKILL.md's embedded copy); tagged `v0.6a0-dev3`, tag pushed (branch not), and
+aip pins it, so B2's tag becomes `v0.6a0-dev4`. `runtime_block_outdated` already existed. Choices
+beyond the text: every outcome also carries `run_file` (resume is by run file until A4; local
+`run_id` is `null`), and at done the run file holds the whole history, since the done object no
+longer prints it. A bad answer to a pause is an `invalid_output`/`invalid_input` error that leaves
+the pause in place; an error before any step ran writes no run file and is not resumable. The
+format's client-task `framing` flag is now ignored by the runtime; dropping it from the format is
+left for a later aip-spec milestone. The server's recorded pause uses the client's shape, and its
+error envelope carries the same kinds and detail. Execution history entries gain `seconds`.
 
 A run stops one of three ways and the CLI prints one JSON object for each, exit code 0 for
 paused and done, non-zero for error:

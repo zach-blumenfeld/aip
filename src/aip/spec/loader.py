@@ -86,7 +86,6 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
                     template=asset(step.template),
                     assets=[asset(a) for a in step.assets],
                     references=[model.Reference(aip_id, _split(r.path)[1], r.description) for r in step.references],
-                    include_framing=step.framing,
                 )
             case spec.RouterStep():
                 nodes[step.name] = model.Router(name=step.name, branch_on=step.branch_on, branches={})

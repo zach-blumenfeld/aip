@@ -256,15 +256,54 @@ def info_command(argv: list[str]) -> int:
     return 0
 
 
+class _BadInput(ValueError):
+    """`--input` is not a readable JSON object."""
+
+
 def _read_input(spec: str | None) -> dict | None:
     """`--input path.json`, `--input -` for stdin, or None."""
     if spec is None:
         return None
-    text = sys.stdin.read() if spec == "-" else Path(spec).read_text()
-    data = json.loads(text)
+    try:
+        text = sys.stdin.read() if spec == "-" else Path(spec).read_text()
+        data = json.loads(text)
+    except (OSError, ValueError) as exc:
+        raise _BadInput(f"--input {spec}: {exc}") from exc
     if not isinstance(data, dict):
-        raise SystemExit("aip: input must be a JSON object")
+        raise _BadInput(f"--input {spec}: must be a JSON object, got {type(data).__name__}")
     return data
+
+
+def _outcome(call, debug: bool, progress: bool) -> int:
+    """`run` and `resume`: whatever escapes the runner is still one error object on stdout, exit 1,
+    with the traceback on stderr only under --debug (`docs/cli-json.md`)."""
+    from aip.client.runner import EXIT_ERROR, error_object
+
+    try:
+        return call()
+    except SystemExit as exc:                     # a usage problem `_target` or `--threshold` found
+        if not isinstance(exc.code, str):
+            raise
+        exc = _BadInput(exc.code.removeprefix("aip: "))
+        error = {"error": "invalid_input", "step": None, "message": str(exc), "missing": [], "invalid": []}
+        block = {**error, "run_id": None, "resumable": False}
+        print(json.dumps(block) if progress else json.dumps(block, indent=2))
+        return EXIT_ERROR
+    except Exception as exc:
+        if debug:
+            import traceback
+            traceback.print_exception(exc, file=sys.stderr)
+        error = ({"error": "invalid_input", "step": None, "message": str(exc), "missing": [], "invalid": []}
+                 if isinstance(exc, _BadInput) else error_object(exc))
+        block = {**error, "run_id": None, "resumable": False}
+        print(json.dumps(block) if progress else json.dumps(block, indent=2))
+        return EXIT_ERROR
+
+
+def _outcome_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--progress", action="store_true",
+                        help="print one JSON line per completed step before the final object (itself one line)")
+    parser.add_argument("--debug", action="store_true", help="print a traceback on stderr when the run fails")
 
 
 def _thresholds(pairs: list[str]) -> dict[str, float]:
@@ -282,41 +321,46 @@ def run_command(argv: list[str]) -> int:
     from aip.client.runner import Runner
 
     parser = argparse.ArgumentParser(prog="aip run", description="Run a procedure, pausing when the client must decide: "
-                                     "a skill folder runs locally, a published name runs on the server.")
+                                     "a skill folder runs locally, a published name runs on the server. Prints one "
+                                     "JSON object: paused or done (exit 0), or error (exit 1); see docs/cli-json.md.")
     parser.add_argument("skill", metavar="skill_dir|name")
     parser.add_argument("--input", "-i", help="JSON object for the start step; `-` reads stdin")
     parser.add_argument("--interactive", action="store_true", help="prompt on the terminal instead of pausing to a run file")
     parser.add_argument("--run-file", type=Path, default=None, help="where to write the run file on pause")
     parser.add_argument("--threshold", action="append", default=[], metavar="NAME=VALUE", help="override a decision threshold")
+    _outcome_flags(parser)
     args = parser.parse_args(argv)
-    kind, where = _target(args.skill)
-    if kind == "name":
-        backend = HttpBackend(where, name=args.skill)
-    else:
-        try:
-            backend = LocalBackend(where)
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 1
-    runner = Runner(backend, Path(args.skill), run_file=args.run_file, interactive=args.interactive)
-    return _serving(lambda: runner.start(_read_input(args.input), _thresholds(args.threshold)).code)
+
+    def go() -> int:
+        kind, where = _target(args.skill)
+        backend = HttpBackend(where, name=args.skill) if kind == "name" else LocalBackend(where)
+        runner = Runner(backend, Path(args.skill), run_file=args.run_file, interactive=args.interactive,
+                        progress=args.progress, debug=args.debug)
+        return runner.start(_read_input(args.input), _thresholds(args.threshold)).code
+    return _outcome(go, args.debug, args.progress)
 
 
 def resume_command(argv: list[str]) -> int:
     from aip.client.runner import RunFile, Runner, backend_for
     from aip.client.server import settings
 
-    parser = argparse.ArgumentParser(prog="aip resume", description="Continue a paused run, locally or on the server the run file names.")
+    parser = argparse.ArgumentParser(prog="aip resume", description="Continue a run, locally or on the server the run "
+                                     "file names: answer its pause, or with no input retry the step that failed.")
     parser.add_argument("run_file", type=Path)
     parser.add_argument("--input", "-i", help="JSON object answering the pause; `-` reads stdin")
     parser.add_argument("--interactive", action="store_true")
+    _outcome_flags(parser)
     args = parser.parse_args(argv)
-    run = RunFile.load(args.run_file)
-    configured = settings()
-    token = configured["token"] if run.server and configured["server"] == run.server else None
-    backend = backend_for(run, token=token, session=_session_for(run.server))
-    runner = Runner(backend, Path(run.skill_dir), run_file=args.run_file, interactive=args.interactive)
-    return _serving(lambda: runner.resume(run, _read_input(args.input)).code)
+
+    def go() -> int:
+        run = RunFile.load(args.run_file)
+        configured = settings()
+        token = configured["token"] if run.server and configured["server"] == run.server else None
+        backend = backend_for(run, token=token, session=_session_for(run.server))
+        runner = Runner(backend, Path(run.skill_dir), run_file=args.run_file, interactive=args.interactive,
+                        progress=args.progress, debug=args.debug)
+        return runner.resume(run, _read_input(args.input)).code
+    return _outcome(go, args.debug, args.progress)
 
 
 def _session_for(url: str | None):

@@ -1,40 +1,50 @@
 """Drive a procedure from the command line: run, pause, resume.
 
-The runner is the client. It posts each step's input, follows `suggested` when nothing
-needs a human or agent decision, and pauses when something does:
+A run stops one of three ways, and the runner prints one JSON object for each; the shapes
+are a contract, documented in `docs/cli-json.md`:
 
-- `client_task`: the step handed work to the client; the next input must be produced
-- `review`: a decision answered below its threshold; the client confirms or overrides
-- `decision`: no decision model is available; the client answers the questions itself
+- **paused**: the client must answer. `client_task` (do the step's work), `decision` (no
+  decision model: answer the questions), `review` (the model answered a question under its
+  threshold: confirm or override). Each pause carries only the paused step's declared inputs
+  as `state`; the answer is merged over the state the run file holds.
+- **done**: the end step was reached; `state` is the end step's inputs.
+- **error**: a step failed. The run file keeps the state before the failing step, and
+  `resume` with no input retries it. A bad answer to a pause leaves the pause in place.
 
-A pause writes a run file and exits with PAUSED. `resume` continues from it. In
-interactive mode a pause becomes prompts on the terminal instead.
+Every outcome but an error before anything ran writes the run file; at done it holds the
+whole history, the ledger of a local run. With `progress`, one JSON line per completed step
+is printed before the final object. In interactive mode a pause becomes prompts instead.
 """
 
 import json
 import sys
 import time
+import traceback
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from aip.client.backend import Backend
+from aip.model.types import validate_input
 
 JSON = Dict[str, Any]
 
 EXIT_DONE = 0
+EXIT_PAUSED = 0
 EXIT_ERROR = 1
-EXIT_PAUSED = 3
+
+# The error kinds of the error object; anything else is reported as `server`.
+ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "server")
 
 
 @dataclass
 class RunFile:
-    """Everything needed to continue a paused run."""
+    """Everything needed to continue a run."""
     skill_dir: str
     after: str | None            # the step whose output the next input answers (None = start)
-    suggested: JSON              # the server's proposed next input; resume input is merged over it
+    state: JSON                  # the run's full state; an answer is merged over it
     history: List[JSON]
-    pause: JSON                  # {"kind": "client_task"|"review"|"decision", ...details}
+    pause: JSON                  # {"kind": "client_task"|"review"|"decision"|"error"|"done", "step", ...}
     thresholds: Dict[str, float] = field(default_factory=dict)
     created: float = field(default_factory=time.time)
     # set when the run is on a server: `resume` rebuilds an HttpBackend from these
@@ -50,7 +60,10 @@ class RunFile:
 
     @classmethod
     def load(cls, path: Path) -> "RunFile":
-        return cls(**json.loads(Path(path).read_text()))
+        data = json.loads(Path(path).read_text())
+        if "suggested" in data:                  # written before 0.6a0
+            data["state"] = data.pop("suggested")
+        return cls(**data)
 
 
 def backend_for(run: RunFile, token: str | None = None, session: Any = None) -> Backend:
@@ -68,22 +81,84 @@ def backend_for(run: RunFile, token: str | None = None, session: Any = None) -> 
 @dataclass
 class Outcome:
     code: int
-    payload: JSON                # final state when done, the pause block when paused
+    payload: JSON                # final state when done, the pause block when paused, the error object
     run_file: Path | None = None
 
 
 Prompter = Callable[[str], str]
 
 
+def error_object(exc: BaseException) -> JSON:
+    """The error object's kind, step, message and per-kind detail, for a local or a server failure."""
+    from aip.client.server import ServerError
+    from aip.model.types import StepError
+
+    if isinstance(exc, StepError):
+        kind = exc.kind if exc.kind in ERROR_KINDS else "server"
+        return {"error": kind, "step": exc.step, "message": str(exc), **exc.fields()}
+    if isinstance(exc, ServerError):
+        if exc.kind in ERROR_KINDS:
+            detail = {k: v for k, v in exc.extra.items() if k not in ("run_id", "errors")}
+            return {"error": exc.kind, "step": exc.location, "message": exc.message, **detail}
+        return {"error": "server", "step": exc.location, "message": str(exc), "status": exc.status}
+    return {"error": "server", "step": None, "message": f"{type(exc).__name__}: {exc}"}
+
+
+def _answer_error(error: JSON) -> bool:
+    """An answer to a pause that does not fit, as opposed to a step that failed while running."""
+    return error["error"] in ("invalid_input", "invalid_output") and "script" not in error
+
+
+def step_line(entry: JSON) -> JSON:
+    """The `--progress` line for one completed step, from its history entry."""
+    line: JSON = {"event": "step", "step": entry["step"], "kind": entry["kind"]}
+    if entry["kind"] == "router":
+        line["to"] = entry["result"]["to"]
+    elif entry["kind"] == "decision":
+        line["resolver"] = "manual" if entry.get("manual") else "typesafe"
+    elif entry["kind"] == "execution" and "seconds" in entry:
+        line["seconds"] = entry["seconds"]
+    return line
+
+
+def _settled_line(pause: JSON) -> JSON | None:
+    """The line for a paused step, printed once its answer is accepted."""
+    if pause["kind"] == "client_task":
+        return {"event": "step", "step": pause["step"], "kind": "client_task"}
+    if pause["kind"] == "review":
+        return {"event": "step", "step": pause["step"], "kind": "decision", "resolver": "typesafe"}
+    return None
+
+
+def pause_of(response: JSON) -> JSON | None:
+    """The pause a step response asks for: a client task, or a decision answered under its threshold.
+    The server records the same block on the run."""
+    if response["next"] is None:
+        return None
+    entry = response["history"][-1]
+    if response["kind"] == "client_task":
+        result = response["result"]
+        return {"kind": "client_task", "step": response["ran"], "task": result["task"], "state": entry["input"],
+                "references": result["references"], "answer_with": result["expects"]}
+    if response["review"]:
+        return {"kind": "review", "step": response["ran"], "state": entry["input"],
+                "proposed_answers": {q: response["suggested"][q] for q in entry["result"]["answers"]},
+                "review": response["review"]}
+    return None
+
+
 class Runner:
     def __init__(self, backend: Backend, skill_dir: Path, run_file: Path | None = None,
-                 interactive: bool = False, prompter: Prompter = input, out=None):
+                 interactive: bool = False, prompter: Prompter = input, out=None,
+                 progress: bool = False, debug: bool = False):
         self.backend = backend
         self.skill_dir = Path(skill_dir)
         self.run_file = run_file or self._default_run_file()
         self.interactive = interactive
         self.prompt = prompter
         self.out = out or sys.stdout
+        self.progress = progress
+        self.debug = debug
 
     def _default_run_file(self) -> Path:
         return Path(".aip") / "runs" / f"{self.skill_dir.resolve().name}-{int(time.time())}.json"
@@ -92,101 +167,163 @@ class Runner:
 
     def start(self, payload: JSON | None, thresholds: Dict[str, float] | None = None) -> Outcome:
         if payload is None:
-            start = self.backend.describe()["start"]
+            try:
+                start = self.backend.describe()["start"]
+            except Exception as exc:
+                return self._failed(exc, None, {}, [], {})
             if not self.interactive:
-                return self._error(f"no input given; start step {start['step']!r} expects {start['inputs']}")
+                return self._error({"error": "invalid_input", "step": start["step"],
+                                    "message": f"no input given; start step {start['step']!r} expects {start['inputs']}",
+                                    "missing": list(start["inputs"]), "invalid": []})
             payload = self._prompt_inputs(start["inputs"], {})
-        return self._drive(after=None, payload=payload, history=[], thresholds=thresholds or {})
+        return self._drive(None, payload, [], thresholds or {})
 
     def resume(self, run: RunFile, payload: JSON | None) -> Outcome:
-        kind = run.pause["kind"]
+        pause, kind = run.pause, run.pause["kind"]
+        if kind == "done":
+            return self._done(run.state, run.history, run.after)
+        if kind == "error":                       # retry the failing step, with any input merged in
+            return self._drive(run.after, {**run.state, **(payload or {})}, run.history, run.thresholds)
         if kind == "decision":
             answers = payload if payload is not None else (
-                self._prompt_answers(run.pause["questions"]) if self.interactive else None)
+                self._prompt_answers(pause["questions"]) if self.interactive else None)
             if answers is None:
-                return self._error("resume needs answers for the paused decision")
-            response = self.backend.answer_decision(run.after, run.suggested, run.history, answers)
-            return self._after_response(response, run.thresholds)
-        merged = {**run.suggested, **(payload or {})}
+                return self._answer_needed(run, list(pause["questions"]))
+            return self._drive(run.after, run.state, run.history, run.thresholds, answering=pause, answers=answers)
         if payload is None and self.interactive:
-            merged = self._prompt_inputs(run.pause["expects"], run.suggested)
-        elif payload is None:
-            return self._error("resume needs an input for the paused step")
-        return self._drive(after=run.after, payload=merged, history=run.history, thresholds=run.thresholds)
+            payload = (self._prompt_inputs(pause["answer_with"], {}) if kind == "client_task"
+                       else self._prompt_review(pause["review"], pause["proposed_answers"]))
+        if payload is None:
+            return self._answer_needed(run, list(pause.get("answer_with", {})))
+        if kind == "client_task":
+            from aip.model.types import OutputValidationError, validate_output
+            try:
+                validate_output(pause["step"], pause["answer_with"], payload, strict=False)
+            except OutputValidationError as exc:
+                return self._failed(exc, run.after, run.state, run.history, run.thresholds, keep=True)
+        if kind == "review":
+            unknown = [k for k in payload if k not in pause["proposed_answers"]]
+            if unknown:
+                return self._error({"error": "invalid_output", "step": pause["step"],
+                                    "message": f"not questions of step {pause['step']!r}: {unknown}; "
+                                               f"override only {list(pause['proposed_answers'])}",
+                                    "missing": [], "invalid": unknown}, keep=True)
+        return self._drive(run.after, {**run.state, **payload}, run.history, run.thresholds, answering=pause)
 
     # ------------------------------------------------------------------------- loop
 
-    def _drive(self, after: str | None, payload: JSON, history: List[JSON], thresholds: Dict[str, float]) -> Outcome:
+    def _drive(self, after: str | None, payload: JSON, history: List[JSON], thresholds: Dict[str, float],
+               answering: JSON | None = None, answers: JSON | None = None) -> Outcome:
+        """Step until a pause, the end, or an error. `answering` is the pause this call answers:
+        a bad answer leaves it in place. `answers` answers a manual decision first."""
         while True:
-            node = self.backend.peek(after, payload)
-            if node is not None and node["kind"] == "decision" and not self.backend.has_decision_model():
-                pause = {"kind": "decision", "step": node["step"], "questions": node["questions"],
-                         "expects": node["inputs"]}
-                if self.interactive:
-                    answers = self._prompt_answers(node["questions"])
+            try:
+                if answers is not None:
                     response = self.backend.answer_decision(after, payload, history, answers)
+                    answers = None
                 else:
-                    return self._pause(self._run_file(after, payload, history, pause, thresholds))
-            else:
-                response = self.backend.run(after, payload, history, thresholds)
-            outcome = self._continue(response, thresholds)
-            if outcome is not None:
-                return outcome
+                    node = self.backend.peek(after, payload)
+                    if node is not None and node["kind"] == "decision" and not self.backend.has_decision_model():
+                        validate_input(node["step"], node["inputs"], payload)     # before asking anyone
+                        if not self.interactive:
+                            self._settle(answering)
+                            return self._pause(after, payload, history, thresholds, {
+                                "kind": "decision", "step": node["step"], "questions": node["questions"],
+                                "state": {k: payload[k] for k in node["inputs"] if k in payload}})
+                        response = self.backend.answer_decision(after, payload, history,
+                                                                self._prompt_answers(node["questions"]))
+                    else:
+                        response = self.backend.run(after, payload, history, thresholds)
+            except Exception as exc:
+                return self._failed(exc, after, payload, history, thresholds, keep=answering is not None)
+            self._settle(answering)
+            answering = None
+            pause = pause_of(response)
+            for entry in response["history"][len(history):]:
+                if entry["kind"] != "end" and not (pause is not None and entry is response["history"][-1]):
+                    self._line(step_line(entry))
             after, payload, history = response["ran"], response["suggested"], response["history"]
+            if response["next"] is None:
+                return self._done(response["result"], history, after)
+            if pause is None:
+                continue
+            if not self.interactive:
+                return self._pause(after, payload, history, thresholds, pause)
+            if pause["kind"] == "client_task":
+                self.out.write("\n" + pause["task"] + "\n\n")
+                payload = self._prompt_inputs(pause["answer_with"], payload)
+            else:
+                payload = self._prompt_review(pause["review"], payload)
+            answering = pause
 
-    def _continue(self, response: JSON, thresholds: Dict[str, float]) -> Outcome | None:
-        """Decide what to do with a step response. None means keep going with `suggested`."""
-        history = response["history"]
-        if response["next"] is None:
-            self.out.write(json.dumps({"done": True, "state": response["result"], "history": history}, indent=2) + "\n")
-            return Outcome(EXIT_DONE, response["result"])
-
-        if response["kind"] == "client_task":
-            pause = {"kind": "client_task", "step": response["ran"], "task": response["result"]["task"],
-                     "references": response["result"]["references"],
-                     "expects": response["result"].get("expects", _expects(response["next"]))}
-            if self.interactive:
-                self.out.write("\n" + response["result"]["task"] + "\n\n")
-                payload = self._prompt_inputs(pause["expects"], response["suggested"])
-                return self._drive_from(response, payload, thresholds)
-            return self._pause(self._run_file(response["ran"], response["suggested"], history, pause, thresholds))
-
-        if response["review"]:
-            pause = {"kind": "review", "step": response["ran"], "review": response["review"],
-                     "expects": _expects(response["next"])}
-            if self.interactive:
-                payload = self._prompt_review(response["review"], response["suggested"])
-                return self._drive_from(response, payload, thresholds)
-            return self._pause(self._run_file(response["ran"], response["suggested"], history, pause, thresholds))
-        return None
-
-    def _drive_from(self, response: JSON, payload: JSON, thresholds: Dict[str, float]) -> Outcome:
-        return self._drive(after=response["ran"], payload=payload, history=response["history"], thresholds=thresholds)
-
-    def _after_response(self, response: JSON, thresholds: Dict[str, float]) -> Outcome:
-        """Continue a run from a response obtained outside the loop (a resumed manual decision)."""
-        outcome = self._continue(response, thresholds)
-        if outcome is not None:
-            return outcome
-        return self._drive_from(response, response["suggested"], thresholds)
+    def _settle(self, answering: JSON | None) -> None:
+        line = _settled_line(answering) if answering is not None else None
+        if line is not None:
+            self._line(line)
 
     # ---------------------------------------------------------------------- outcomes
 
-    def _run_file(self, after: str | None, suggested: JSON, history: List[JSON], pause: JSON,
+    def _run_file(self, after: str | None, state: JSON, history: List[JSON], pause: JSON,
                   thresholds: Dict[str, float]) -> RunFile:
         fields = getattr(self.backend, "run_file_fields", lambda: {})()
-        return RunFile(str(self.skill_dir), after, suggested, history, pause, thresholds, **fields)
+        return RunFile(str(self.skill_dir), after, state, history, pause, thresholds, **fields)
 
-    def _pause(self, run: RunFile) -> Outcome:
+    def _pause(self, after: str | None, state: JSON, history: List[JSON], thresholds: Dict[str, float],
+               pause: JSON) -> Outcome:
+        run = self._run_file(after, state, history, pause, thresholds)
         path = run.save(self.run_file)
-        block = {"paused": run.pause["kind"], "step": run.pause["step"], **{k: v for k, v in run.pause.items() if k not in ("kind", "step")},
-                 "suggested": run.suggested, "resume": f"aip resume {path} --input <answer.json>", "run_file": str(path)}
-        self.out.write(json.dumps(block, indent=2) + "\n")
+        block = {"paused": pause["kind"], **{k: v for k, v in pause.items() if k != "kind"},
+                 "run_id": run.run_id, "run_file": str(path)}
+        self._print(block)
         return Outcome(EXIT_PAUSED, block, path)
 
-    def _error(self, message: str) -> Outcome:
-        print(f"aip: {message}", file=sys.stderr)
-        return Outcome(EXIT_ERROR, {"error": message})
+    def _done(self, state: JSON, history: List[JSON], after: str | None) -> Outcome:
+        run = self._run_file(after, state, history, {"kind": "done"}, {})
+        path = run.save(self.run_file)
+        self._print({"done": True, "run_id": run.run_id, "state": state, "run_file": str(path)})
+        return Outcome(EXIT_DONE, state, path)
+
+    def _failed(self, exc: BaseException, after: str | None, state: JSON, history: List[JSON],
+                thresholds: Dict[str, float], keep: bool = False) -> Outcome:
+        """A step failed. The run file is rewritten to retry it from the state before it, unless
+        the failure is a bad answer to a pause (`keep`: the pause stands, answer it again) or
+        nothing had run yet (start again with `aip run`)."""
+        if self.debug:
+            traceback.print_exception(exc, file=sys.stderr)
+        error = error_object(exc)
+        run_id = getattr(exc, "extra", {}).get("run_id")
+        if run_id and hasattr(self.backend, "run_id"):
+            self.backend.run_id = run_id
+        if keep and _answer_error(error):
+            return self._error(error, keep=True)
+        if after is None and not history:
+            return self._error(error)
+        pause = {"kind": "error", "step": error["step"], "error": error["error"]}
+        self.run_file = self._run_file(after, state, history, pause, thresholds).save(self.run_file)
+        return self._error(error, keep=True)
+
+    def _answer_needed(self, run: RunFile, keys: List[str]) -> Outcome:
+        return self._error({"error": "invalid_output", "step": run.pause["step"],
+                            "message": f"resume needs an answer for the paused {run.pause['kind']} step "
+                                       f"{run.pause['step']!r} (--input <answer.json>)",
+                            "missing": keys, "invalid": []}, keep=True, run_id=run.run_id)
+
+    def _error(self, error: JSON, keep: bool = False, run_id: str | None = None) -> Outcome:
+        """Print the error object. `keep`: a run file exists to resume (the pause, or the retry point)."""
+        if run_id is None:
+            run_id = getattr(self.backend, "run_id", None)
+        block = {**error, "run_id": run_id, "resumable": keep}
+        if keep:
+            block["run_file"] = str(self.run_file)
+        self._print(block)
+        return Outcome(EXIT_ERROR, block, Path(self.run_file) if keep else None)
+
+    def _print(self, obj: JSON) -> None:
+        self.out.write((json.dumps(obj) if self.progress else json.dumps(obj, indent=2)) + "\n")
+
+    def _line(self, line: JSON) -> None:
+        if self.progress:
+            self.out.write(json.dumps(line) + "\n")
 
     # ------------------------------------------------------------------- interactive
 
@@ -246,18 +383,6 @@ class Runner:
                 dtype = "boolean" if isinstance(current, bool) else "integer" if isinstance(current, int) else "string"
                 payload[name] = _coerce(raw, dtype)
         return payload
-
-
-def _expects(next_node: JSON | None) -> JSON:
-    """The input keys the client must produce for what comes next. A router's are the union of its branches'."""
-    if next_node is None:
-        return {}
-    if next_node["kind"] == "router":
-        merged: JSON = {}
-        for branch in next_node["branches"].values():
-            merged.update(_expects(branch))
-        return merged
-    return dict(next_node.get("inputs", {}))
 
 
 def _coerce(raw: str, dtype: str) -> Any:

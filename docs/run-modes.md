@@ -54,7 +54,8 @@ Rule of thumb: local to write it, served to run it.
 
 ## What stays the same in both
 
-The format, the pause shapes, the answer files, and the validator. A skill that runs locally runs
-served without change, except that a served run pins a revision. The planned filtering of state
-to declared keys applies to both: the local runner projects the state the same way the server
-does, so authors see the same thing in either mode.
+The format, the CLI's JSON output (pauses, done, errors: `docs/cli-json.md`), the answer files,
+and the validator. A skill that runs locally runs served without change, except that a served
+run pins a revision and its outputs carry the server's `run_id`. The filtering of state to
+declared keys applies to both: each step, and each pause, sees only the step's declared inputs,
+locally and on the server alike, so authors see the same thing in either mode.

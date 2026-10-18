@@ -153,7 +153,7 @@ class ProcedureRunTest(unittest.TestCase):
         r4 = self.proc.run(r1.ran, {**r1.suggested, "tone": "calm"}, r1.history)
         self.assertEqual(r4.kind, "client_task")
         task = r4.result["task"]
-        self.assertIn('pertaining to "billing triage"', task)  # framing prepended
+        self.assertNotIn("pertaining to", task)  # the template is the whole task: nothing prepended
         self.assertIn("Skill: billing-support", task)
         self.assertIn("Refunds within 30 days.", task)
         self.assertIn("Keep {this} literal.", task)

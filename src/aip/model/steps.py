@@ -8,23 +8,17 @@ import copy
 import json
 import subprocess
 import sys
+import time
 
 from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
 
 from aip.model.resources import Asset, Reference, ResourceLoader, Script
 from aip.model.types import (
-    JSON, DataType, InputValidationError, Inputs, OutputValidationError, describe_inputs, project,
-    validate_input, validate_output,
+    JSON, DataType, InputValidationError, Inputs, OutputValidationError, ScriptFailed, ScriptTimeout,
+    describe_inputs, project, validate_input, validate_output,
 )
 
 DecisionQuestion: TypeAlias = Noul | Choice | Score
-
-SYSTEM_FRAMING = """\
-You are executing a single step in a graph shaped workflow pertaining to "{skill_context}".
-`currentState` holds the state for this specific step.
-If needed, the historic state of past steps is contained in `history`.
-Assets, if present, are fixed reference material for this step.
-"""
 
 # Default decision thresholds. Noul: flag when |p - 0.5| < margin.
 # Choice / Score: flag when the model's confidence < min_confidence.
@@ -44,21 +38,15 @@ class State:
 @dataclass
 class Meta:
     """
-    Workflow-level framing and package metadata, owned by the Procedure.
+    Package metadata, owned by the Procedure.
 
-    `system_framing` is the constant preamble steps can request. It is a template with
-    a `{skill_context}` slot filled from `description` (falling back to `name`).
     `environment` is the path, relative to the skill root, of the requirements.txt or
     pyproject.toml the server builds the script interpreter from.
     """
     name: str
     description: str = ""
     version: str = "0.1.0"
-    system_framing: str = SYSTEM_FRAMING
     environment: str | None = None
-
-    def framing(self) -> str:
-        return self.system_framing.format(skill_context=self.description or self.name)
 
 
 @dataclass
@@ -124,12 +112,13 @@ class Router:
 
     def route(self, payload: JSON) -> "Node":
         if self.branch_on not in payload:
-            raise InputValidationError(self.name, [f"missing routing key {self.branch_on!r}"])
+            raise InputValidationError(self.name, [f"missing routing key {self.branch_on!r}"], missing=[self.branch_on])
         value = payload[self.branch_on]
         key = branch_key(value)
         if key not in self.branches:
             raise InputValidationError(
-                self.name, [f"{self.branch_on}={value!r} has no branch; options: {list(self.branches)}"])
+                self.name, [f"{self.branch_on}={value!r} has no branch; options: {list(self.branches)}"],
+                invalid=[self.branch_on])
         return self.branches[key]
 
 
@@ -142,14 +131,12 @@ class BaseStep(ABC):
     inputs: the keys this step reads; validated on accept, and the only keys it sees
     outputs: the keys this step adds to the state; its result is validated against them
     inputsTo: the node that receives this step's output (a step, a router, or the end)
-    include_framing: prepend Meta.framing() to what this step renders
     """
     kind: ClassVar[str] = "step"
     name: str
     inputs: Inputs = field(default_factory=dict)
     outputs: Inputs = field(default_factory=dict)
     inputsTo: "Node | None" = None
-    include_framing: bool = False
     loader: ResourceLoader | None = None
     meta: Meta | None = None
 
@@ -176,8 +163,11 @@ class BaseStep(ABC):
         """
         validate_input(self.name, self.inputs, payload)
         state = State(currentState=project(payload, self.inputs), history=copy.deepcopy(history))
+        began = time.monotonic()
         result = self._invoke(state)
         entry = {"step": self.name, "kind": self.kind, "input": state.currentState, "result": result}
+        if isinstance(self, Execution):
+            entry["seconds"] = round(time.monotonic() - began, 3)
         return StepResponse(
             ran=self.name,
             kind=self.kind,
@@ -187,12 +177,6 @@ class BaseStep(ABC):
             next=describe_next(self.inputsTo),
             history=[*history, entry],
         )
-
-    def framing(self) -> str:
-        """The system-level preamble, or empty when not requested or no meta is bound."""
-        if not self.include_framing or self.meta is None:
-            return ""
-        return self.meta.framing()
 
     def _require_loader(self) -> ResourceLoader:
         if self.loader is None:
@@ -285,7 +269,7 @@ class Decision(BaseStep):
         validate_input(self.name, self.inputs, payload)
         missing = [q for q in self.questions if q not in answers]
         if missing:
-            raise InputValidationError(self.name, [f"missing manual answers for {missing}"])
+            raise OutputValidationError(self.name, [f"missing answers for {missing}"], missing=missing)
         self.check_answers(answers)
         result = {"answers": {name: {"type": self.questions[name].type, "manual": answers[name]} for name in self.questions}}
         entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs),
@@ -300,15 +284,18 @@ class Decision(BaseStep):
         """Collapsed answers must name only this step's questions and fit each question's type."""
         validate_output(self.name, self.output_types(), {k: v for k, v in answers.items() if k in self.questions},
                         strict=False)
-        errors = [f"undeclared output {key!r} (not a question of this step)" for key in answers if key not in self.questions]
+        invalid = [key for key in answers if key not in self.questions]
+        errors = [f"undeclared output {key!r} (not a question of this step)" for key in invalid]
         for name, q in self.questions.items():
             value = answers[name]
             if q.type == "choice" and value not in q.criteria:
                 errors.append(f"{name}: {value!r} is not one of {list(q.criteria)}")
+                invalid.append(name)
             if q.type == "score" and isinstance(value, int) and not 0 <= value < len(q.criteria):
                 errors.append(f"{name}: level {value} is outside 0..{len(q.criteria) - 1}")
+                invalid.append(name)
         if errors:
-            raise OutputValidationError(self.name, errors)
+            raise OutputValidationError(self.name, errors, invalid=invalid)
 
     @staticmethod
     def collapse(answer: JSON) -> Any:
@@ -361,17 +348,16 @@ class ClientTask(BaseStep):
     A step the client performs itself (text generation, synthesis, reasoning). Fallback
     for anything not expressible as a Decision or Execution.
 
-    The template is this step's framing: prose rendered at invoke time with `{key}`
+    The template is the whole task: prose rendered at invoke time with `{key}`
     placeholders drawn from the step's declared inputs, plus `{assets[name]}` and
-    `{meta.name}`. The client does the task and answers with the step's `outputs`.
+    `{meta.name}`. Nothing is prepended to it. The client does the task and answers with
+    the step's `outputs`.
 
     template: the asset holding the task template
     assets: extra eager resources available to the template as {assets[name]}
     references: lazy resources; only uri + description are handed to the client
-    include_framing: on by default; Meta.framing() is prepended to the rendered template
     """
     kind: ClassVar[str] = "client_task"
-    include_framing: bool = True
     template: Asset
     assets: List[Asset] = field(default_factory=list)
     references: List[Reference] = field(default_factory=list)
@@ -382,9 +368,7 @@ class ClientTask(BaseStep):
         mapping = _SafeMap(state.currentState)
         mapping["assets"] = loader.load_all(self.assets)
         mapping["meta"] = self.meta
-        body = loader.load(self.template).format_map(mapping)
-        framing = self.framing()
-        return f"{framing}\n{body}" if framing else body
+        return loader.load(self.template).format_map(mapping)
 
     def _invoke(self, state: State) -> JSON:
         """Hands the rendered task, the reference index, and the keys to answer with to the client."""
@@ -408,7 +392,7 @@ class Execution(BaseStep):
               (`currentState` carries the same object for one version, for older scripts)
       stdout  one JSON object holding exactly the declared `outputs` (empty stdout is {});
               a missing, mistyped, or undeclared key fails the step
-      stderr  diagnostics; surfaced in the error when the exit code is non-zero
+      stderr  diagnostics; carried in the `script_failed` error when the exit code is non-zero
     The script runs with `python` (the per-AIP interpreter the server built from
     Meta.environment, falling back to the server's own), cwd set to the script's folder.
 
@@ -437,26 +421,38 @@ class Execution(BaseStep):
         if not path.is_file():
             raise FileNotFoundError(f"Script {self.script.uri!s} not found at {path}")
 
-        proc = subprocess.run(
-            [str(self.python or sys.executable), str(path)],
-            input=json.dumps(self.render(state)),
-            capture_output=True,
-            text=True,
-            cwd=path.parent,
-            timeout=self.timeout,
-        )
+        script = Path(*self.script.uri.parts[1:]).as_posix()     # as the SKILL.md names it
+        try:
+            proc = subprocess.run(
+                [str(self.python or sys.executable), str(path)],
+                input=json.dumps(self.render(state)),
+                capture_output=True,
+                text=True,
+                cwd=path.parent,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired as err:
+            raise ScriptTimeout(self.name, script, self.timeout) from err
+        stderr = proc.stderr.strip()
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"Script {self.script.uri!s} exited with {proc.returncode}:\n{proc.stderr.strip()}")
+            raise ScriptFailed(self.name, script, proc.returncode, stderr,
+                               f"Script {script} exited with {proc.returncode}:\n{stderr}")
 
         out = proc.stdout.strip()
         if not out:
-            return {}
-        try:
-            result = json.loads(out)
-        except json.JSONDecodeError as err:
-            raise RuntimeError(f"Script {self.script.uri!s} did not write JSON to stdout: {err}\n{out[:500]}") from err
+            result: JSON = {}
+        else:
+            try:
+                result = json.loads(out)
+            except json.JSONDecodeError as err:
+                raise ScriptFailed(self.name, script, 0, stderr,
+                                   f"Script {script} did not write JSON to stdout: {err}\n{out[:500]}") from err
         if not isinstance(result, dict):
-            raise RuntimeError(f"Script {self.script.uri!s} must write a JSON object, got {type(result).__name__}")
-        validate_output(self.name, self.outputs, result)
+            raise ScriptFailed(self.name, script, 0, stderr,
+                               f"Script {script} must write a JSON object, got {type(result).__name__}")
+        try:
+            validate_output(self.name, self.outputs, result)
+        except OutputValidationError as err:
+            err.script = script
+            raise
         return result

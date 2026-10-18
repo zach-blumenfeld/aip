@@ -39,7 +39,7 @@ the working object; the history is the ledger.
   Nothing else is added, which is why a client cannot slip extra keys in at a decision.
 - **client_task**: hands work to the client. The task template renders from the declared inputs
   only. The client's answer must contain the step's declared `outputs` with their types; the
-  pause's `expects` lists them.
+  pause's `answer_with` lists them.
 - **router**: reads one key and picks the next step. Adds nothing.
 - **end**: stops. The state projected to its `inputs` is the run's output.
 
@@ -53,7 +53,7 @@ sight. The run history records each step's input as the projected keys.
 
 Execution and client_task steps declare `outputs` the same way, and a decision's outputs are its
 question names. The step's result is checked against them before it is merged into the full
-state. Today the client carries the full state between calls (`suggested`); from B1 the server
+state. Today the client's run file carries the full state between calls; from B1 the server
 holds it.
 
 ## Where keys come from
@@ -69,20 +69,16 @@ input, and the start step must declare it so the client knows to supply it.
 
 ## What the client sees at a pause
 
-A pause happens at a client task, or at a decision nothing could answer. The server returns:
+A pause happens at a client task, at a decision nothing could answer, or at a decision the model
+answered under its threshold. `aip run` / `aip resume` print one JSON object, and the whole of it
+lands in the agent's context, so it carries only what the paused step needs: `state` is the
+step's declared inputs, never the run's whole state. At a client task it also has `task` (the
+template rendered from those inputs, nothing prepended), `references` (names and descriptions;
+contents only on request, the one lazy part) and `answer_with` (the step's `outputs` with their
+types, what the answer must contain). The shapes for every pause kind, done, and error are in
+[`cli-json.md`](cli-json.md) and are tested against the CLI.
 
-- `task`: the step's text, with `{key}` placeholders filled from the state. The author chooses
-  which keys appear here.
-- `references`: names and descriptions of extra files; contents are fetched only on request.
-- `expects`: the keys and types the next step needs, i.e. what the answer must contain.
-- `suggested`: the whole current state. The answer is merged over it.
-
-All of this is printed by `aip run` / `aip resume` and lands in the agent's context in full.
-Only `references` is lazy.
-
-`suggested` is named for decision and review pauses, where it holds the decision model's proposed
-answers for the client to accept or correct. At a client-task pause it is simply the current
-state, and the name is confusing there.
+The answer is merged over the state the run file holds, so it carries only the keys asked for.
 
 ## Files
 
@@ -93,23 +89,19 @@ state, not contents. The state object should stay small.
 
 1. ~~**No declared outputs.**~~ Fixed in 0.6a0: steps declare `outputs` and the validator checks
    every consumed key has a producer on every path or is a start input.
-2. **The whole state goes to the client at every pause**, whatever the step needs (`suggested`).
-   The step itself now sees only its inputs (gap 5); the pause shape is trimmed next (A3).
-3. **`suggested` is a misleading name.** It comes from an earlier design where the client could
-   edit the server's proposed next input between steps. With append-only state and steps reading
-   only their declared inputs, nothing is proposed any more: it is the state. Fix: call it
-   `state` at every pause; at a review pause, put the decision model's proposed answers under
-   their own key (e.g. `proposed_answers`) beside the state they were judged on.
+2. ~~**The whole state goes to the client at every pause.**~~ Fixed (A3): a pause's `state` is
+   the paused step's declared inputs; the rest stays in the run file.
+3. ~~**`suggested` is a misleading name.**~~ Fixed (A3): every pause says `state`, and a review
+   pause puts the model's answers under `proposed_answers` beside the state they were judged on.
 4. ~~**Silent overwrites.**~~ Fixed in 0.6a0: each key is produced by exactly one step and is
    never a start input, so the state is append-only by construction. Deliberate re-computation
    would need an explicit opt-in.
 5. ~~**Steps receive the whole state.**~~ Fixed: scripts, decisions, and client-task templates
-   get only their declared inputs, and results are checked against declared outputs. The pause
-   still carries the whole state as `suggested` until A3.
+   get only their declared inputs, and results are checked against declared outputs.
 
-## Proposed pause shape (client task)
+## Pause shape (client task)
 
-For an agent that has the aip-runtime skill, the pause should carry only what this step needs:
+The pause carries only what this step needs (the full example is in `cli-json.md`):
 
 ```json
 {
@@ -118,19 +110,21 @@ For an agent that has the aip-runtime skill, the pause should carry only what th
   "task": "<rendered template: what to do for this step, never how to use aip>",
   "state": { "only the keys this step declared" },
   "references": [ { "uri": "...", "description": "..." } ],
-  "answer_with": { "message": "string", "reply": "string" },
+  "answer_with": { "reply": "string" },
+  "run_id": null,
   "run_file": "run.json"
 }
 ```
 
-Dropped: `suggested` (replaced by `state`, filtered to the declared keys, the same name at every
-pause kind and the name TypeSafe uses; structured values belong here, prose belongs in `task`), the `resume` command string (the skill knows it), and the
-framing paragraph prepended to every task (it describes `currentState` and `history`, which the
-pause does not carry, and repeats the skill). `answer_with` is `expects` renamed; it stays because
-it is generated from the graph per step, which SKILL.md cannot do, and it is what the server
-validates the answer against.
+Dropped in A3: `suggested` (replaced by `state`, filtered to the declared keys, the same name at
+every pause kind and the name TypeSafe uses; structured values belong here, prose belongs in
+`task`), the `resume` command string (the skill knows it), and the framing paragraph prepended to
+every task (it described `currentState` and `history`, which the pause does not carry, and
+repeated the skill; the format's `framing` flag on client tasks is now ignored). `answer_with` is
+`expects` renamed; it stays because it is generated from the graph per step, which SKILL.md
+cannot do, and it is what the answer is validated against.
 
-## Proposed pause shapes (decision and review)
+## Pause shapes (decision and review)
 
 What goes to the decision model: `questions` as printed, and `state` built as
 `{"state": <the step's declared inputs>}`, with `"history": <every prior step's input and result>`
@@ -146,6 +140,7 @@ Decision, no model configured (the agent stands in for the model, so it gets the
   "questions": { "billing": { "type": "noul", "instructions": "..." },
                  "tone": { "type": "choice", "instructions": "...", "criteria": { "angry": "...", "calm": "..." } } },
   "state": { "message": "..." },
+  "run_id": null,
   "run_file": "run.json"
 }
 ```
@@ -162,6 +157,7 @@ Review, the model answered but one question fell under its threshold:
   "state": { "message": "..." },
   "proposed_answers": { "billing": true, "tone": "angry" },
   "review": [ { "question": "tone", "confidence": 0.58, "probabilities": { "angry": 0.58, "calm": 0.42 }, "reason": "confidence below 0.7" } ],
+  "run_id": null,
   "run_file": "run.json"
 }
 ```
@@ -171,12 +167,16 @@ the model already answered them.
 
 ## Three ways a run stops
 
-- **paused**: the client must answer (client task, decision with no resolver, or review).
-- **done**: the end step was reached; the final state is printed.
-- **error**: a step failed (script exit, invalid input or output, unmet requirement, timeout).
-  Printed as one JSON object with the kind, the step, and the detail, exit code non-zero, no
-  traceback unless `--debug`. The run keeps the state before the failing step, and
-  `aip resume <run_id>` with no input retries it. Nothing to answer, something to fix.
+Each is one JSON object on stdout ([`cli-json.md`](cli-json.md)):
+
+- **paused** (exit 0): the client must answer (client task, decision with no resolver, or review).
+- **done** (exit 0): the end step was reached; `state` is the end step's inputs.
+- **error** (exit 1): a step failed (`script_failed`, `timeout`, `invalid_input`, `invalid_output`,
+  `requires_unmet`, or `server`), with the step and the detail: the script's exit code and
+  stderr, or the `missing` and `invalid` keys. No traceback unless `--debug`. The run file keeps
+  the state before the failing step, and `aip resume <run_file>` with no input retries it (by run
+  id from A4). Nothing to answer, something to fix. A bad answer to a pause is an error too, but
+  it leaves the pause in place to be answered again.
 
 ## Try it: five commands, no server
 
@@ -195,14 +195,14 @@ echo '{"message":"Hi, I think I was charged twice for March. Could you check?"}'
 aip run "$EX" --input start.json --run-file run.json
 
 # 2. answer both questions; the router picks "reply"; the run pauses at the client task.
-#    Note `suggested`: the whole state so far (message, billing, tone), `expects`: the
+#    Note `state`: only the step's inputs (message, tone; not billing), `answer_with`: the
 #    step's outputs ({"reply": "string"}), and `task`: the template rendered from the
 #    step's declared inputs.
 echo '{"billing": true, "tone": "calm"}' > answer1.json
 aip resume run.json --input answer1.json
 
 # 3. answer the client task with its outputs; the run ends. `state` is the end step's inputs
-#    (just `message` here), `history` the ledger, where the reply is recorded.
+#    (just `message` here); the run file's `history` is the ledger, where the reply is recorded.
 echo '{"reply":"Thanks for flagging this; duplicate charges are refunded in full within 5 business days."}' > answer2.json
 aip resume run.json --input answer2.json
 
@@ -210,9 +210,10 @@ aip resume run.json --input answer2.json
 echo '{"message":"This is the THIRD time you have double charged me. Fix it today or I cancel."}' > start2.json
 aip run "$EX" --input start2.json --run-file run2.json
 echo '{"billing": true, "tone": "angry"}' > answer3.json
-aip resume run2.json --input answer3.json      # done: ticket_id and queue are in the escalate history entry
+aip resume run2.json --input answer3.json --progress   # a line per step, then done; ticket_id is in run2.json's history
 ```
 
 Things to notice: `--input` takes a file, not inline JSON. Answering only one of two questions
-fails with a Python traceback rather than a message (a client bug, A3). At the client-task pause,
-`expects` lists the step's declared outputs, which is what your answer must contain.
+is an `invalid_output` error naming the missing one (`"missing": ["tone"]`), and the pause stays
+put for a second try. At the client-task pause, `answer_with` lists the step's declared outputs,
+which is what your answer must contain.

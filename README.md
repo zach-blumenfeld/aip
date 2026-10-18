@@ -307,7 +307,7 @@ aip pin <name> <revision>  /  aip retire <name>@<revision>
 (catalog, source, run console, history, governance) at `/inspector/`, from the bundle shipped in
 `src/aip/server/inspector/`; that directory is generated there by the inspector repo's `npm run build && npm run sync`.
 
-`aip run` drives the procedure locally with the same engine the server uses. It follows the server's suggested input from step to step and pauses, writing a run file and exiting with code 3, when the client has to act: a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself. The pause is printed as JSON with what is expected next and the exact resume command. `--threshold name=value` overrides a decision threshold for the run.
+`aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when `TYPESAFE_API_KEY` is not set, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; `aip resume <run-file> --input answer.json` continues, and `aip resume <run-file>` with no input retries a failed step. `--progress` adds a JSON line per completed step, `--debug` a traceback on failure, and `--threshold name=value` overrides a decision threshold for the run.
 
 ### Configuring the server
 

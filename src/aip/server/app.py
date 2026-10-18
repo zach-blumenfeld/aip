@@ -51,7 +51,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from aip.model import Decision, describe_next
-from aip.model.types import InputValidationError, example_input
+from aip.model.types import InputValidationError, OutputValidationError, StepError, example_input
 from aip.server.backend import NotFound, NotSupported, split_ref
 from aip.server.governance import DEFAULT_LIMIT, DEFAULT_WINDOW, QUERIES
 from aip.server.records import MANIFEST, SkillRecord, snapshot
@@ -162,9 +162,10 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         return JSONResponse(ApiError(501, "not_supported", str(exc)).body(), status_code=501)
 
     @app.exception_handler(InputValidationError)
-    async def _invalid_input(_: Request, exc: InputValidationError):
-        return JSONResponse(ApiError(422, "invalid_input", str(exc), location=exc.step, errors=exc.errors).body(),
-                            status_code=422)
+    @app.exception_handler(OutputValidationError)
+    async def _invalid_keys(_: Request, exc: InputValidationError | OutputValidationError):
+        return JSONResponse(ApiError(422, exc.kind, str(exc), location=exc.step, errors=exc.errors,
+                                     **exc.fields()).body(), status_code=422)
 
     @app.exception_handler(RequestValidationError)
     async def _invalid_request(_: Request, exc: RequestValidationError):
@@ -243,12 +244,21 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         try:
             if run_id is None:
                 run_id = runs.create(name, revision)
+            detail = exc.fields() if isinstance(exc, StepError) else {}
             runs.append(run_id, {"step": getattr(node, "name", None), "kind": "error",
                                  "step_kind": getattr(node, "kind", None), "input": payload,
-                                 "result": {"error": f"{type(exc).__name__}: {exc}"}}, "error", None)
+                                 "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}, "error", None)
         except Exception:  # the failure itself is what the client needs to hear about
             pass
         return run_id
+
+    def failed_step(body: StepBody | AnswerBody, name: str, revision: str, node: Any, exc: Exception) -> None:
+        """Record a step that failed while running and raise its error: the failure's own kind and
+        detail (`script_failed` with exit code and stderr, `timeout`, `invalid_output`), else `step_failed`."""
+        failed = record_failure(body.run_id, name, revision, node, body.payload, exc)
+        kind, detail = (exc.kind, exc.fields()) if isinstance(exc, StepError) else ("step_failed", {})
+        raise ApiError(500, kind, f"{type(exc).__name__}: {exc}", location=getattr(node, "name", body.after),
+                       **detail, **({"run_id": failed} if failed is not None else {})) from exc
 
     def execute(ref: str, body: StepBody | AnswerBody, answers: JSON | None) -> JSON:
         name, revision = resolve(ref)
@@ -273,13 +283,14 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
                 response = node.accept_manual(body.payload, [*body.history, *entries], answers).to_dict()
         except (ApiError, NotFound, InputValidationError):
             raise
+        except OutputValidationError as exc:
+            if exc.script is None:                # an answer that does not fit: nothing ran
+                raise
+            failed_step(body, name, revision, node, exc)
         except KeyError as exc:
             raise ApiError(422, "invalid_request", str(exc)) from exc
         except Exception as exc:
-            failed = record_failure(body.run_id, name, revision, node, body.payload, exc)
-            raise ApiError(500, "step_failed", f"{type(exc).__name__}: {exc}",
-                           location=getattr(node, "name", body.after),
-                           **({"run_id": failed} if failed is not None else {})) from exc
+            failed_step(body, name, revision, node, exc)
         run_id = record_run(body.run_id, name, revision, len(body.history), response)
         return {**response, "run_id": run_id, "name": name, "revision": revision}
 
@@ -497,19 +508,14 @@ def mount_inspector(app: FastAPI, bundle: Path) -> bool:
 
 def run_status(response: JSON) -> tuple[str, JSON | None]:
     """The run status and pause block a step response implies: done at the end, paused when the
-    client must act (a client task, or answers to review), running otherwise."""
-    from aip.client.runner import _expects
+    client must act (a client task, or answers to review), running otherwise. The pause block
+    is the client's (`aip.client.runner.pause_of`)."""
+    from aip.client.runner import pause_of
 
     if response["next"] is None:
         return "done", None
-    if response["kind"] == "client_task":
-        return "paused", {"kind": "client_task", "step": response["ran"], "task": response["result"].get("task"),
-                          "references": response["result"].get("references", []),
-                          "expects": response["result"].get("expects", _expects(response["next"]))}
-    if response["review"]:
-        return "paused", {"kind": "review", "step": response["ran"], "review": response["review"],
-                          "expects": _expects(response["next"])}
-    return "running", None
+    pause = pause_of(response)
+    return ("running", None) if pause is None else ("paused", pause)
 
 
 def tar_of(record: SkillRecord) -> bytes:
