@@ -6,18 +6,37 @@ Graph per skill revision, as the 0.4 `aip db` projection wrote it:
                                                      aip_version, frontmatter, manifest, root_name,
                                                      directories, published_at, retired})
     (:Skill)-[:HAS_FILE]->(:File {key, path, size, sha256, mode, encoding, content})
-    (:Skill)-[:HAS_PROCEDURE]->(:Procedure {key, purpose, trigger_when, triggers, ...})
+    (:Skill)-[:HAS_PROCEDURE]->(:Procedure {key, purpose, trigger_when, triggers, do_not_use_when, anti_patterns,
+                                            interpreter, interpreter_version, packages, tools})
     (:Procedure)-[:HAS_STEP {order}]->(:Step:<Kind> {key, name, kind, order, ...})
     (:Procedure)-[:STARTS_AT|ENDS_AT]->(:Step)
-    (:Step)-[:INPUTS_TO]->(:Step)        (:Step)-[:BRANCH {value}]->(:Step)
-    (:Step)-[:DECLARES_INPUT]->(:Input)  (:Step)-[:ASKS]->(:Question)
+    (:Step)-[:NEXT]->(:Step)             (:Step:Router)-[:THEN {value}]->(:Step)     control flow
+    (:Step)-[:PRODUCES {order}]->(:Data {key, name, type, description})              data flow
+    (:Data)-[:FEEDS {order, description}]->(:Step)
+    (:Procedure)-[:SUPPLIES]->(:Data)    (:Step)-[:ASKS]->(:Question)-[:YIELDS]->(:Data)
     (:Step)-[:USES {role, description}]->(:File)
+
+Control flow is `NEXT` from a decision, execution, or client_task step to the one that follows it, and
+`THEN {value}` from a router, one edge per branch, so `-[:NEXT|THEN*]->` from `STARTS_AT` walks the whole
+procedure. A run's `StepRun` chain is `FOLLOWED_BY`, one path through those edges, joined to them by `OF_STEP`.
+Control flow and data flow are separate edge sets over the same `Step` nodes. The data flow is
+the 0.6a0 state contract as a graph: one `Data` node per key per revision, since every key has
+exactly one producer and is never overwritten. `PRODUCES` comes from the execution or
+client_task step that declares the key in `outputs`, or from the decision whose question it
+answers (that question also `YIELDS` it); a start input, which the client supplies, is
+`SUPPLIES`d by the procedure and has no producer. `FEEDS` goes to every step that declares the
+key in `inputs`, to the router that branches on it, and to the end step, whose inputs are the
+result. The node carries the producer's type and description; a `FEEDS` edge carries the
+consumer's own description when it gives one. So `(a)-[:PRODUCES]->(:Data)-[:FEEDS]->(b)` is
+one hop of lineage, and a variable-length `PRODUCES|FEEDS` path follows a value end to end.
+(Revisions written before 0.6a1 have `Input` nodes on `DECLARES_INPUT` edges, `INPUTS_TO` and `BRANCH`
+for the control flow, and `NEXT` between their step runs.)
 
 and per run:
 
     (:Run {id, name, revision, status, started_at, updated_at, pause, state, after, version})-[:OF_SKILL]->(:Skill)
     (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, resolver, review, entry, at})
-    (:StepRun)-[:NEXT]->(:StepRun)       (:StepRun)-[:OF_STEP]->(:Step)
+    (:StepRun)-[:FOLLOWED_BY]->(:StepRun)   (:StepRun)-[:OF_STEP]->(:Step)
     (:StepRun)-[:ANSWERED]->(:Answer {question, resolver, model, value, accepted, reviewed, overridden})
               -[:OF_QUESTION]->(:Question)
 
@@ -71,7 +90,9 @@ JSON = Dict[str, Any]
 
 STEP_LABELS = {"decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
                "router": "Router", "end": "End"}
-AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Input", "Question", "Run", "StepRun", "Answer")
+AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Data", "Question", "Run", "StepRun", "Answer",
+              "Input")   # Input: the pre-0.6a1 data node, kept so `clear` empties older databases too
+QUESTION_TYPES = {"noul": "boolean", "choice": "string", "score": "integer"}   # the state type an answer lands as
 
 FULLTEXT_INDEX = "aip_skill_text"
 NAME_BOOST = 1000.0
@@ -110,7 +131,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT aip_file_key IF NOT EXISTS FOR (f:File) REQUIRE f.key IS UNIQUE",
     "CREATE CONSTRAINT aip_procedure_key IF NOT EXISTS FOR (p:Procedure) REQUIRE p.key IS UNIQUE",
     "CREATE CONSTRAINT aip_step_key IF NOT EXISTS FOR (s:Step) REQUIRE s.key IS UNIQUE",
-    "CREATE CONSTRAINT aip_input_key IF NOT EXISTS FOR (i:Input) REQUIRE i.key IS UNIQUE",
+    "CREATE CONSTRAINT aip_data_key IF NOT EXISTS FOR (d:Data) REQUIRE d.key IS UNIQUE",
     "CREATE CONSTRAINT aip_question_key IF NOT EXISTS FOR (q:Question) REQUIRE q.key IS UNIQUE",
     "CREATE CONSTRAINT aip_run_id IF NOT EXISTS FOR (r:Run) REQUIRE r.id IS UNIQUE",
     "CREATE INDEX aip_skill_name IF NOT EXISTS FOR (s:Skill) ON (s.name)",
@@ -159,7 +180,9 @@ CREATE (s)-[:HAS_FILE]->(x)
 CREATE_PROCEDURE = """
 MATCH (s:Skill {id: $id})
 CREATE (p:Procedure {key: $id, skill_id: $id, purpose: $p.purpose, trigger_when: $p.trigger_when,
-                     triggers: $triggers, do_not_use_when: $p.do_not_use_when, anti_patterns: $p.anti_patterns})
+                     triggers: $triggers, do_not_use_when: $p.do_not_use_when, anti_patterns: $p.anti_patterns,
+                     interpreter: $requires.interpreter, interpreter_version: $requires.version,
+                     packages: $requires.packages, tools: $requires.tools})
 CREATE (s)-[:HAS_PROCEDURE]->(p)
 """
 
@@ -186,21 +209,38 @@ CREATE (p)-[:ENDS_AT]->(z)
 CREATE_EDGES = """
 UNWIND $edges AS e
 MATCH (a:Step {key: $id + ':' + e.from}), (b:Step {key: $id + ':' + e.to})
-CREATE (a)-[:INPUTS_TO]->(b)
+CREATE (a)-[:NEXT]->(b)
 """
 
 CREATE_BRANCHES = """
 UNWIND $branches AS b
 MATCH (r:Step {key: $id + ':' + b.router}), (t:Step {key: $id + ':' + b.to})
-CREATE (r)-[:BRANCH {value: b.value}]->(t)
+CREATE (r)-[:THEN {value: b.value}]->(t)
 """
 
-CREATE_INPUTS = """
-UNWIND $inputs AS i
-MATCH (st:Step {key: $id + ':' + i.step})
-CREATE (n:Input {key: $id + ':' + i.step + ':' + i.name, skill_id: $id, name: i.name, type: i.type,
-                 description: i.description, order: i.order})
-CREATE (st)-[:DECLARES_INPUT]->(n)
+CREATE_DATA = """
+MATCH (p:Procedure {key: $id})
+UNWIND $data AS d
+CREATE (n:Data {key: $id + ':' + d.name, skill_id: $id, name: d.name, type: d.type, description: d.description})
+FOREACH (_ IN CASE WHEN d.start THEN [1] ELSE [] END | CREATE (p)-[:SUPPLIES]->(n))
+"""
+
+CREATE_PRODUCES = """
+UNWIND $produces AS e
+MATCH (st:Step {key: $id + ':' + e.step}), (d:Data {key: $id + ':' + e.name})
+CREATE (st)-[:PRODUCES {order: e.order}]->(d)
+"""
+
+CREATE_FEEDS = """
+UNWIND $feeds AS e
+MATCH (st:Step {key: $id + ':' + e.step}), (d:Data {key: $id + ':' + e.name})
+CREATE (d)-[:FEEDS {order: e.order, description: e.description}]->(st)
+"""
+
+CREATE_YIELDS = """
+UNWIND $questions AS q
+MATCH (qn:Question {key: $id + ':' + q.step + ':' + q.name}), (d:Data {key: $id + ':' + q.name})
+CREATE (qn)-[:YIELDS]->(d)
 """
 
 CREATE_QUESTIONS = """
@@ -301,7 +341,7 @@ CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kin
                     input: $input, result: $result, resolver: $resolver, review: $review, entry: $entry,
                     at: datetime($now)})
 CREATE (r)-[:STEP_RUN]->(sr)
-FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:NEXT]->(sr))
+FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:FOLLOWED_BY]->(sr))
 WITH r, sr
 OPTIONAL MATCH (st:Step {key: r.name + '@' + r.revision + ':' + $step})
 FOREACH (_ IN CASE WHEN st IS NULL THEN [] ELSE [1] END | CREATE (sr)-[:OF_STEP]->(st))
@@ -391,9 +431,9 @@ LIMIT $limit
     "untaken-branches": _WINDOW + """
 MATCH (r)-[:OF_SKILL]->(s:Skill)
 WITH s, collect(r) AS runs
-MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(router:Step:Router)-[b:BRANCH]->(target:Step)
+MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(router:Step:Router)-[b:THEN]->(target:Step)
 OPTIONAL MATCH (run:Run)-[:STEP_RUN]->(rs:StepRun)-[:OF_STEP]->(router) WHERE run IN runs
-OPTIONAL MATCH (rs)-[:NEXT]->(nxt:StepRun)-[:OF_STEP]->(target)
+OPTIONAL MATCH (rs)-[:FOLLOWED_BY]->(nxt:StepRun)-[:OF_STEP]->(target)
 WITH s, router, b, target, size(runs) AS runs, count(DISTINCT rs) AS router_runs, count(nxt) AS taken
 WHERE taken = 0
 RETURN s.name AS name, s.revision AS revision, router.name AS router, b.value AS value, target.name AS to,
@@ -438,6 +478,41 @@ def _load(text: str | None) -> Any:
     return None if text is None else json.loads(text)
 
 
+def data_flow(skill: SkillRecord) -> tuple[List[JSON], List[JSON], List[JSON]]:
+    """The `Data` rows and the `PRODUCES` and `FEEDS` edges of a revision, from the record's rows.
+
+    A key is declared once, by its producer (an output, or a question's collapsed answer) or,
+    for a start input, by the start step; every consumer adds a `FEEDS` edge. A key nothing
+    produces (the validator rejects it, so only in older records) still gets a node from its
+    first consumer, so the graph never has a dangling edge."""
+    start = skill.procedure["start"]
+    data: Dict[str, JSON] = {}
+    produces: List[JSON] = []
+    feeds: List[JSON] = []
+
+    def declare(name: str, type_: str | None, description: str | None, start_input: bool = False) -> None:
+        row = data.setdefault(name, {"name": name, "type": type_, "description": description, "start": False})
+        row["start"] = row["start"] or start_input
+
+    for i in skill.inputs:
+        if i["step"] == start:
+            declare(i["name"], i["type"], i["description"], start_input=True)
+    for o in skill.outputs:
+        declare(o["name"], o["type"], o["description"])
+        produces.append({"step": o["step"], "name": o["name"], "order": o["order"]})
+    for q in skill.questions:
+        declare(q["name"], QUESTION_TYPES.get(q["type"], "string"), q["instructions"])
+        produces.append({"step": q["step"], "name": q["name"], "order": q["order"]})
+    for i in skill.inputs:
+        declare(i["name"], i["type"], i["description"])
+        feeds.append({"step": i["step"], "name": i["name"], "order": i["order"], "description": i["description"]})
+    for st in skill.steps:
+        if st["kind"] == "router":
+            declare(st["branch_on"], None, None)
+            feeds.append({"step": st["name"], "name": st["branch_on"], "order": 0, "description": None})
+    return list(data.values()), produces, feeds
+
+
 def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
     """Create one revision's whole graph inside an open write transaction."""
     sid = skill.id
@@ -448,8 +523,12 @@ def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
             "manifest": json.dumps(manifest), "root_name": skill.root_name}
     tx.run(CREATE_SKILL, skill=node, directories=skill.directories, published_at=published_at)
     tx.run(CREATE_FILES, id=sid, files=[f.to_json() for f in skill.files])
+    requires = skill.procedure.get("requires") or {}
     tx.run(CREATE_PROCEDURE, id=sid, p=skill.procedure,
-           triggers="\n".join(skill.procedure.get("trigger_when") or []))
+           triggers="\n".join(skill.procedure.get("trigger_when") or []),
+           requires={"interpreter": (requires.get("interpreter") or {}).get("name"),
+                     "version": (requires.get("interpreter") or {}).get("version"),
+                     "packages": requires.get("packages"), "tools": requires.get("tools")})
     for kind, query in CREATE_STEPS.items():
         rows = [{"name": s["name"], "kind": s["kind"], "order": s["order"], "description": s["description"],
                  "props": _step_props(s)} for s in skill.steps if s["kind"] == kind]
@@ -458,8 +537,12 @@ def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
     tx.run(MARK_ENDPOINTS, id=sid, start=skill.procedure["start"], end=skill.procedure["end"])
     tx.run(CREATE_EDGES, id=sid, edges=skill.edges)
     tx.run(CREATE_BRANCHES, id=sid, branches=skill.branches)
-    tx.run(CREATE_INPUTS, id=sid, inputs=skill.inputs)
     tx.run(CREATE_QUESTIONS, id=sid, questions=skill.questions)
+    data, produces, feeds = data_flow(skill)
+    tx.run(CREATE_DATA, id=sid, data=data)
+    tx.run(CREATE_PRODUCES, id=sid, produces=produces)
+    tx.run(CREATE_FEEDS, id=sid, feeds=feeds)
+    tx.run(CREATE_YIELDS, id=sid, questions=skill.questions)
     tx.run(CREATE_RESOURCES, id=sid, resources=skill.resources)
 
 

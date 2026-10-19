@@ -561,10 +561,55 @@ class TestNeo4j:
             name="billing-support", id=example.id, database_=neo4j.conn.database)
         steps = {r["step"]: (r["kind"], sorted(r["files"]), set(r["labels"])) for r in rows}
         assert [r["step"] for r in rows] == ["triage", "by-tone", "escalate", "reply", "end"]
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (:Procedure {key: $id})-[:STARTS_AT]->(a)-[e:NEXT|THEN*]->(z:Step:End) "
+            "RETURN [x IN e | type(x) + coalesce(':' + x.value, '')] AS edges ORDER BY edges",
+            id=example.id, database_=neo4j.conn.database)
+        assert [r["edges"] for r in rows] == [["NEXT", "THEN:angry", "NEXT"], ["NEXT", "THEN:calm", "NEXT"]]
         assert steps["escalate"] == ("execution", ["assets/config.json", "scripts/escalate.py"],
                                      {"Step", "Execution"})
         assert steps["by-tone"][0] == "router" and "Router" in steps["by-tone"][2]
         assert steps["reply"][1] == ["assets/policy.md", "assets/reply.md", "references/help.md"]
+
+    def test_projection_carries_the_data_flow(self, neo4j, example):
+        neo4j.catalog.publish(example)
+        db = neo4j.conn.database
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (d:Data {skill_id: $id}) "
+            "OPTIONAL MATCH (p:Step)-[:PRODUCES]->(d) "
+            "OPTIONAL MATCH (d)-[:FEEDS]->(c:Step) "
+            "OPTIONAL MATCH (proc:Procedure)-[:SUPPLIES]->(d) "
+            "RETURN d.name AS name, d.type AS type, p.name AS producer, collect(DISTINCT c.name) AS consumers, "
+            "       proc IS NOT NULL AS start ORDER BY name",
+            id=example.id, database_=db)
+        flow = {r["name"]: r.data() for r in rows}
+        assert set(flow) == {"message", "billing", "tone", "ticket_id", "queue", "reply"}
+        # a start input: supplied by the procedure, produced by no step, read by the start step and the end
+        assert flow["message"]["start"] and flow["message"]["producer"] is None
+        assert {"triage", "end"} <= set(flow["message"]["consumers"])
+        # a decision's answer: produced by the decision, typed as the question collapses, fed to the router
+        assert (flow["tone"]["producer"], flow["tone"]["type"], flow["tone"]["start"]) == ("triage", "string", False)
+        assert "by-tone" in flow["tone"]["consumers"] and flow["billing"]["type"] == "boolean"
+        # an output nothing reads: produced, never fed
+        assert flow["ticket_id"]["producer"] == "escalate" and flow["ticket_id"]["type"] == "integer"
+        assert flow["ticket_id"]["consumers"] == [] and flow["reply"]["producer"] == "reply"
+        # lineage is one direction: start input -> decision -> answer -> router
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH path = (:Procedure {key: $id})-[:SUPPLIES]->(:Data {name: 'message'})-[:FEEDS]->(:Step {name: 'triage'})"
+            "-[:PRODUCES]->(:Data {name: 'tone'})-[:FEEDS]->(:Step {name: 'by-tone'}) RETURN count(path) AS n",
+            id=example.id, database_=db)
+        assert rows[0]["n"] == 1
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (q:Question {skill_id: $id, name: 'tone'})-[:YIELDS]->(d:Data) RETURN d.name AS name",
+            id=example.id, database_=db)
+        assert [r["name"] for r in rows] == ["tone"]
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (p:Procedure {key: $id}) RETURN p.interpreter AS interpreter, p.interpreter_version AS version, "
+            "p.packages AS packages, p.tools AS tools", id=example.id, database_=db)
+        assert rows[0].data() == {"interpreter": "python", "version": "3.10", "packages": [], "tools": []}
+        rows, _, _ = neo4j.driver.execute_query("MATCH (i:Input {skill_id: $id}) RETURN count(i) AS n",
+                                                id=example.id, database_=db)
+        assert rows[0]["n"] == 0
 
     def test_runs_link_to_the_steps_they_executed(self, neo4j, example):
         rev = neo4j.catalog.publish(example)
@@ -575,7 +620,7 @@ class TestNeo4j:
                           status="done", pause=None)
         rows, _, _ = neo4j.driver.execute_query(
             "MATCH (r:Run {id: $id})-[:OF_SKILL]->(s:Skill) "
-            "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:NEXT]->(b:StepRun) "
+            "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:FOLLOWED_BY]->(b:StepRun) "
             "MATCH (a)-[:OF_STEP]->(sa:Step), (b)-[:OF_STEP]->(sb:Step) "
             "RETURN s.id AS skill, a.step AS first, sa.key AS first_key, b.step AS second, a.input AS input",
             id=rid, database_=neo4j.conn.database)

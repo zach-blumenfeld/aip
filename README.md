@@ -201,9 +201,25 @@ Open your database in Neo4j Browser or Query and run these. The skill and its pr
 ```cypher
 MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
 MATCH p1 = (p)-[:HAS_STEP]->(st:Step)
-OPTIONAL MATCH p2 = (st)-[:INPUTS_TO|BRANCH]->(:Step)
-OPTIONAL MATCH p3 = (st)-[:DECLARES_INPUT|ASKS]->()
+OPTIONAL MATCH p2 = (st)-[:NEXT|THEN]->(:Step)
+OPTIONAL MATCH p3 = (st)-[:ASKS]->(:Question)
 RETURN n, s, p, p1, p2, p3
+```
+
+Or just the control flow, from the start step to the end, with each router's condition on its `THEN` edge:
+
+```cypher
+MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
+MATCH controlFlow = (p)-[:STARTS_AT]->(:Step)-[:NEXT|THEN*]->(:Step)
+RETURN controlFlow
+```
+
+The data flow is a second edge set over the same steps: one `Data` node per key, `PRODUCES` from the step that declares it (an output, or the decision whose question it answers), `FEEDS` into every step that reads it, and `SUPPLIES` from the procedure for the start inputs the client provides. Follow a value from the client to the result:
+
+```cypher
+MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
+MATCH dataFlow = (p)-[:SUPPLIES]->(:Data)-[:FEEDS|PRODUCES*]->()
+RETURN dataFlow
 ```
 
 Every run of the skill, with the steps they ran and, for decisions a model answered, its answers (`Answer` nodes; a decision answered by hand has none, and its answers are on the `StepRun`):
@@ -211,7 +227,7 @@ Every run of the skill, with the steps they ran and, for decisions a model answe
 ```cypher
 MATCH (r:Run {name: 'billing-support'})-[:OF_SKILL]->(s:Skill)
 MATCH p1 = (r)-[:STEP_RUN]->(sr:StepRun)
-OPTIONAL MATCH p2 = (sr)-[:NEXT]->(:StepRun)
+OPTIONAL MATCH p2 = (sr)-[:FOLLOWED_BY]->(:StepRun)
 OPTIONAL MATCH p3 = (sr)-[:OF_STEP]->(:Step)
 OPTIONAL MATCH p4 = (sr)-[:ANSWERED]->(:Answer)-[:OF_QUESTION]->(:Question)
 RETURN r, s, p1, p2, p3, p4
@@ -220,7 +236,7 @@ RETURN r, s, p1, p2, p3, p4
 Just the run trails, when that gets busy:
 
 ```cypher
-MATCH p = (r:Run {name: 'billing-support'})-[:STEP_RUN]->(:StepRun)-[:NEXT*0..]->(:StepRun)
+MATCH p = (r:Run {name: 'billing-support'})-[:STEP_RUN]->(:StepRun)-[:FOLLOWED_BY*0..]->(:StepRun)
 RETURN p
 ```
 
@@ -342,7 +358,7 @@ aip db list                                            # every skill and revisio
 aip db export <name> --out ./restored                  # rebuilds <name>/ byte for byte and verifies hashes
 ```
 
-Each load is lossless: every file under the skill folder is stored as a `File` node with its exact bytes, mode, and sha256, so `export` reproduces a folder that validates and runs identically. Alongside the files, the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Input`, and `Question` nodes with `INPUTS_TO`, `BRANCH`, `DECLARES_INPUT`, `ASKS`, and `USES` edges, the last pointing at the `File` nodes a step runs, renders, or may load. Skills are keyed `name@revision`, where the revision is a hash of the files: reloading unchanged content is a no-op, changed content adds a revision, and many skills coexist in one database. A `Name` node groups the revisions of one skill and carries its pin; `Run` and `StepRun` nodes record executions, linked `NEXT` in order and `OF_STEP` to the step they ran.
+Each load is lossless: every file under the skill folder is stored as a `File` node with its exact bytes, mode, and sha256, so `export` reproduces a folder that validates and runs identically. Alongside the files, the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Data`, and `Question` nodes: `NEXT` edges (and a router's `THEN {value}` edges) are the control flow, `PRODUCES` and `FEEDS` (one `Data` node per key, since every key has one producer) are the data flow, `SUPPLIES` marks the start inputs, `ASKS` and `YIELDS` tie a question to the key its answer lands under, and `USES` points at the `File` nodes a step runs, renders, or may load; the `requires` block sits on the `Procedure` node. Skills are keyed `name@revision`, where the revision is a hash of the files: reloading unchanged content is a no-op, changed content adds a revision, and many skills coexist in one database. A `Name` node groups the revisions of one skill and carries its pin; `Run` and `StepRun` nodes record executions, linked `FOLLOWED_BY` in order and `OF_STEP` to the step they ran.
 
 `aip db` is a thin shim over the server's Neo4j backend (`aip.server.backends.neo4j`), which also serves the catalog, a full-text search index over names, descriptions, purposes, and triggers, and a hash-verified materialisation cache under `~/.cache/aip/` (`AIP_CACHE_DIR` overrides) that the server loads procedures from. The filesystem backend (`aip.server.backends.filesystem`) offers the same contract over a plain directory.
 
