@@ -1,5 +1,10 @@
 # Upgrading a 0.5a1 skill to 0.6a0
 
+Format 0.6a1 (2026-10-19) is 0.6a0 with one more validator rule, `type_mismatch` (a consumed key carries its
+producer's type), and a new heading on the runtime block. A 0.6a0 skill validates under 0.6a1 with one
+`runtime_block_outdated` warning; to clear it, replace the runtime block with `aip-spec runtime` and set
+`metadata.aip-version` to `"0.6a1"`. Nothing else changes. The rest of this page is the 0.5a1 to 0.6a0 upgrade.
+
 Format 0.6a0 is breaking: the validator accepts 0.6a0 skills only, and a 0.5a1 skill fails with
 one message that says what to change, ahead of the errors that name the steps:
 

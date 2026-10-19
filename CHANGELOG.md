@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Add notable changes here as you make them. On release, rename this section to the new version with a date and start a new `[Unreleased]` above it.
 
+## [0.6a1] — 2026-10-19
+
+The pin on `aip-spec` moves to its `v0.6a1` release: format `0.6a1` is `0.6a0` plus the `type_mismatch` validator rule (a consumed key carries its producer's type), and a `0.6a0` skill still validates with one warning (`docs/upgrading.md`). `install.sh` installs the `v0.6a1` tags of both repos by default, and `aip --version` prints `aip 0.6a1 format 0.6a1`. The rest of this release is the Neo4j work below.
+
 ### Added
 - **Four structural governance queries (Neo4j only).** `GET /governance` grows `empty-results` (end steps that read only start inputs, so the result the caller gets holds nothing a step produced), `unused-data` (keys a step produces or a decision answers that no step reads and the result does not return), `cycles` (each control-flow cycle with the router value that continues it and the keys its steps re-produce every time round), and `repeated-cycles` (runs in the window that went round a cycle more than `repeats` times, a new query parameter, default 1, also on `aip governance --repeats` and `Client.governance(repeats=)`). They read the control flow and the data flow as one graph, which is why the filesystem backend declines them with 501 as it does `untaken-branches`; the console lists and renders them with no change.
 

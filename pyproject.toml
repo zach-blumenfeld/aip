@@ -1,12 +1,12 @@
 [project]
 name = "aip"
-version = "0.6a0"
+version = "0.6a1"
 description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a0",
+    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",

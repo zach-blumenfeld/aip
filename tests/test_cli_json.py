@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-from aip_spec import example_dir
+from aip_spec import FORMAT_VERSION, example_dir
 
 from aip.client.cli import main
 from aip.client.runner import RunFile, run_path
@@ -333,7 +333,7 @@ class Validation(unittest.TestCase):
             shutil.copytree(EXAMPLE, skill)
             md = skill / "SKILL.md"
             md.write_text(md.read_text().replace(runtime_text().strip(), runtime_text("0.5a1").strip())
-                          .replace('aip-version: "0.6a0"', 'aip-version: "0.5a1"'))
+                          .replace(f'aip-version: "{FORMAT_VERSION}"', 'aip-version: "0.5a1"'))
             out, err = io.StringIO(), io.StringIO()
             with mock.patch("sys.stdout", new=out), mock.patch("sys.stderr", new=err):
                 code = aip_spec(["validate", str(skill)])

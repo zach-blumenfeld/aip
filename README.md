@@ -97,15 +97,15 @@ curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/main/insta
 Prefer Python tooling:
 
 ```bash
-uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a0   # `aip-spec`, the validator the skill calls
-uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a0"      # `aip` with `aip server`; pulls aip-spec in
+uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1   # `aip-spec`, the validator the skill calls
+uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1"      # `aip` with `aip server`; pulls aip-spec in
 aip skill install                   # both skills, every detected agent
 aip skill install claude-code       # one agent;  aip skill list  shows them
 aip skill install --path ./.claude/skills    # a project-local skills directory
 aip skill remove
 ```
 
-Coming from 0.5a1: skills need three edits to validate under 0.6a0, listed in [`docs/upgrading.md`](docs/upgrading.md).
+Coming from 0.5a1: skills need three edits to validate under 0.6a0, listed in [`docs/upgrading.md`](docs/upgrading.md). A 0.6a0 skill validates under 0.6a1 with one warning; regenerating its runtime block clears it.
 
 Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
 
@@ -376,7 +376,7 @@ The design behind the client-server architecture is [`docs/server-design.md`](do
 
 ### Bumping the AIP format version
 
-The format version (currently `0.6a0`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
+The format version (currently `0.6a1`) is referenced in both repos, and the spec is tagged first, always, because the pin here names the tag. In [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), in order:
 
 1. `FORMAT_VERSION` in `src/aip_spec/models.py` and `version` in `pyproject.toml`.
 2. `src/aip_spec/runtime.md` — the block's heading carries the version; if the text changes, keep the previous text as `runtime-<old>.md` and add `<old>` to `LEGACY_VERSIONS`.
