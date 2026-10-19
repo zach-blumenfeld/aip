@@ -379,10 +379,19 @@ class FilesystemGovernance:
                 continue
             yield entry_name, revision, self.catalog._manifest(entry_name, revision).get("procedure", {})
 
+    def queries(self) -> List[JSON]:
+        return governance.listing()
+
+    def store(self, name: str, description: str, cypher: str) -> JSON:
+        raise NotSupported("the filesystem backend keeps no queries of its own; it has no query language to run them in")
+
+    def remove(self, name: str) -> None:
+        raise NotSupported("the filesystem backend keeps no queries of its own")
+
     def query(self, query: str, name: str | None = None, window: int = governance.DEFAULT_WINDOW,
               limit: int = governance.DEFAULT_LIMIT, repeats: int = governance.DEFAULT_REPEATS) -> List[JSON]:
         if query not in governance.QUERIES:
-            raise NotFound(f"no governance query {query!r}")
+            raise NotFound(governance.NOT_FOUND.format(name=query))
         if query == "overridden-decisions":
             return governance.overridden_decisions(self._window(name, window), limit)
         if query == "manual-decisions":

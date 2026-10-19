@@ -60,7 +60,11 @@ filtered to what each name resolves to, and an exact name match is boosted on to
 Governance (`queries`, one Cypher statement per name in `aip.server.governance.QUERIES`)
 runs over the last `window` runs; `missing-fields` and the structural queries (`empty-results`,
 `unused-data`, `cycles`) are given the resolved revision ids and read the projection alone, and
-`repeated-cycles` matches each run's `FOLLOWED_BY` chain against the procedure's cycles.
+`repeated-cycles` matches each run's `FOLLOWED_BY` chain against the procedure's cycles. Stored
+queries live in the same database as `(:GovernanceQuery {name, description, cypher, created_at,
+updated_at})`; `store` checks the name and EXPLAINs the Cypher before keeping it, and `query` runs
+a stored one in a read-only transaction with a timeout, so it can read anything and write nothing,
+and converts the rows' graph and temporal values to JSON.
 
 Materialisation: `folder(name, revision)` rebuilds the skill under
 `<cache>/<name>@<revision>/<name>/` (default `~/.cache/aip`, `AIP_CACHE_DIR` overrides)
@@ -83,8 +87,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from aip.server.backend import NotFound, StaleRun, split_ref
-from aip.server.governance import DEFAULT_REPEATS, MISSING_FIELDS, QUERIES, STRUCTURAL, attribution, model_answers
+from aip.server.backend import InvalidQuery, NotFound, QueryFailed, StaleRun, split_ref
+from aip.server.governance import (DEFAULT_REPEATS, MISSING_FIELDS, NOT_FOUND, QUERIES, STORED_NAME_PATTERN,
+                                   STORED_QUERY_TIMEOUT, STRUCTURAL, attribution, listing, model_answers)
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
 
@@ -93,7 +98,7 @@ JSON = Dict[str, Any]
 STEP_LABELS = {"decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
                "router": "Router", "end": "End"}
 AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Data", "Question", "Run", "StepRun", "Answer",
-              "Input")   # Input: the pre-0.6a1 data node, kept so `clear` empties older databases too
+              "GovernanceQuery", "Input")   # Input: the pre-0.6a1 data node, kept so `clear` empties older databases too
 QUESTION_TYPES = {"noul": "boolean", "choice": "string", "score": "integer"}   # the state type an answer lands as
 
 FULLTEXT_INDEX = "aip_skill_text"
@@ -136,6 +141,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT aip_data_key IF NOT EXISTS FOR (d:Data) REQUIRE d.key IS UNIQUE",
     "CREATE CONSTRAINT aip_question_key IF NOT EXISTS FOR (q:Question) REQUIRE q.key IS UNIQUE",
     "CREATE CONSTRAINT aip_run_id IF NOT EXISTS FOR (r:Run) REQUIRE r.id IS UNIQUE",
+    "CREATE CONSTRAINT aip_governance_query_name IF NOT EXISTS FOR (q:GovernanceQuery) REQUIRE q.name IS UNIQUE",
     "CREATE INDEX aip_skill_name IF NOT EXISTS FOR (s:Skill) ON (s.name)",
     "CREATE INDEX aip_run_name IF NOT EXISTS FOR (r:Run) ON (r.name)",
 ]
@@ -489,6 +495,22 @@ LIMIT $limit
 }
 assert set(queries) == set(QUERIES)
 
+# ------------------------------------------------------------------- stored queries
+
+LIST_STORED = """
+MATCH (q:GovernanceQuery)
+RETURN q.name AS query, q.description AS description, q.cypher AS cypher,
+       toString(q.created_at) AS created_at, toString(q.updated_at) AS updated_at
+ORDER BY q.name
+"""
+GET_STORED = "MATCH (q:GovernanceQuery {name: $name}) RETURN q.cypher AS cypher, q.description AS description"
+STORE_QUERY = """
+MERGE (q:GovernanceQuery {name: $name})
+ON CREATE SET q.created_at = datetime($now)
+SET q.description = $description, q.cypher = $cypher, q.updated_at = datetime($now)
+"""
+REMOVE_STORED = "MATCH (q:GovernanceQuery {name: $name}) DELETE q RETURN count(q) AS removed"
+
 CLEAR = "MATCH (n) WHERE " + " OR ".join(f"n:{label}" for label in AIP_LABELS) + " DETACH DELETE n"
 
 
@@ -521,6 +543,28 @@ def _dump(value: Any) -> str | None:
 
 def _load(text: str | None) -> Any:
     return None if text is None else json.loads(text)
+
+
+def _message(exc: Exception) -> str:
+    """The database's own message for a driver error, without the code wrapper."""
+    return getattr(exc, "message", None) or str(exc).splitlines()[0]
+
+
+def _jsonable(value: Any) -> Any:
+    """A query result value as JSON: `Record.data()` has already turned nodes into property maps,
+    relationships into (start, type, end) tuples and paths into lists; this handles what it leaves,
+    temporal values (ISO strings), points (their coordinates), and anything else by its string."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "iso_format"):
+        return value.iso_format()
+    if hasattr(value, "srid") and hasattr(value, "x"):
+        return {"srid": value.srid, "coordinates": list(value)}
+    return str(value)
 
 
 def data_flow(skill: SkillRecord) -> tuple[List[JSON], List[JSON], List[JSON]]:
@@ -875,10 +919,52 @@ class Neo4jGovernance:
         self.database = database
         self.catalog = catalog
 
+    def _read(self, cypher: str, **params) -> List[JSON]:
+        records, _, _ = self.driver.execute_query(cypher, database_=self.database, **params)
+        return [r.data() for r in records]
+
+    def queries(self) -> List[JSON]:
+        return listing(self._read(LIST_STORED))
+
+    def stored(self, name: str) -> JSON:
+        """A stored query with its Cypher and timestamps; NotFound otherwise."""
+        rows = [r for r in self._read(LIST_STORED) if r["query"] == name]
+        if not rows:
+            raise NotFound(NOT_FOUND.format(name=name))
+        return {**rows[0], "builtin": False}
+
+    def store(self, name: str, description: str, cypher: str) -> JSON:
+        if not re.fullmatch(STORED_NAME_PATTERN, name or ""):
+            raise InvalidQuery(f"a query name is lowercase letters, digits and hyphens, like `slow-steps`; got {name!r}")
+        if name in queries:
+            raise InvalidQuery(f"{name!r} is a built-in query; pick another name")
+        if not (cypher or "").strip():
+            raise InvalidQuery("the query has no Cypher")
+        try:   # EXPLAIN plans without running: a syntax or semantic error surfaces here, and nothing executes
+            self.driver.execute_query("EXPLAIN " + cypher, database_=self.database, routing_="r", **self._params())
+        except Exception as exc:
+            raise InvalidQuery(f"the database rejects the Cypher: {_message(exc)}") from exc
+        self.driver.execute_query(STORE_QUERY, name=name, description=description or "", cypher=cypher,
+                                  now=_now(), database_=self.database)
+        return {"query": name, "description": description or "", "builtin": False}
+
+    def remove(self, name: str) -> None:
+        if name in queries:
+            raise InvalidQuery(f"{name!r} is a built-in query and cannot be removed")
+        rows = self._read(REMOVE_STORED, name=name)
+        if not rows or not rows[0]["removed"]:
+            raise NotFound(NOT_FOUND.format(name=name))
+
+    @staticmethod
+    def _params(name: str | None = None, window: int = 100, limit: int = 50, repeats: int = DEFAULT_REPEATS,
+                ids: List[str] | None = None) -> JSON:
+        return {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats),
+                "ids": ids or [], "fields": list(MISSING_FIELDS)}
+
     def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50,
               repeats: int = DEFAULT_REPEATS) -> List[JSON]:
         if query not in queries:
-            raise NotFound(f"no governance query {query!r}")
+            return self._run_stored(query, name, window, limit, repeats)
         params: JSON = {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats)}
         if query == "missing-fields" or query in STRUCTURAL:
             params["ids"] = self.catalog.resolved_ids(name)
@@ -891,6 +977,26 @@ class Neo4jGovernance:
                 row["last_error"] = last.get("error")
                 row["exit_code"], row["stderr"] = last.get("exit_code"), last.get("stderr")
         return rows
+
+    def _run_stored(self, name: str, skill: str | None, window: int, limit: int, repeats: int) -> List[JSON]:
+        """A stored query in a read-only transaction with a timeout: the database refuses any write in
+        it and stops it when it runs too long, whatever the Cypher says."""
+        from neo4j import unit_of_work
+
+        rows = self._read(GET_STORED, name=name)
+        if not rows:
+            raise NotFound(NOT_FOUND.format(name=name))
+        params = self._params(skill, window, limit, repeats, self.catalog.resolved_ids(skill))
+
+        @unit_of_work(timeout=STORED_QUERY_TIMEOUT)
+        def run(tx):
+            return [r.data() for r in tx.run(rows[0]["cypher"], **params)]
+
+        try:
+            with self.driver.session(database=self.database) as session:
+                return [_jsonable(r) for r in session.execute_read(run)]
+        except Exception as exc:
+            raise QueryFailed(f"stored query {name!r} failed: {_message(exc)}") from exc
 
 
 class Neo4jBackend:

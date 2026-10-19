@@ -27,9 +27,13 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   with a `Deprecation` header and append to the run named by their `run_id`; an execution
   step answers 409 `runs_on_client` (open the run with `POST /runs`), a decision 422
   `no_decision_model` (answer it through `answer`).
-- **governance**: `/governance` lists the named corpus queries of `aip.server.governance`;
-  `/governance/{query}?name=&window=&limit=&repeats=` answers one through the backend's `.governance`
-  (501 when it has none or declines the query).
+- **governance**: `/governance` lists the named corpus queries of `aip.server.governance` and the
+  queries stored on the backend (`builtin: false`); `/governance/{query}?name=&window=&limit=&repeats=`
+  answers one through the backend's `.governance` (501 when it has none or declines the query).
+  `PUT /governance/{query}` with `{description, cypher}` stores a query of your own and
+  `DELETE /governance/{query}` removes it (publish scope; 501 on a backend with no query language,
+  422 `invalid_query` for a bad name or Cypher the database rejects, 422 `query_failed` when a
+  stored query tries to write, times out, or raises when run).
 
 The server serves no UI: the console (formerly inspector) is its own npm package and calls
 this API like any other client, from its own origin. So the server answers CORS for pages served
@@ -65,8 +69,8 @@ from pydantic import BaseModel, Field
 from aip.model import Decision, Execution, describe_next, engine
 from aip.model.engine import Advance, Cursor
 from aip.model.types import InputValidationError, OutputValidationError, StepError, example_input
-from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
-from aip.server.governance import DEFAULT_LIMIT, DEFAULT_REPEATS, DEFAULT_WINDOW, QUERIES
+from aip.server.backend import InvalidQuery, NotFound, NotSupported, QueryFailed, StaleRun, split_ref
+from aip.server.governance import DEFAULT_LIMIT, DEFAULT_REPEATS, DEFAULT_WINDOW, QUERIES, listing
 from aip.server.records import MANIFEST, SkillRecord, snapshot
 
 JSON = Dict[str, Any]
@@ -131,6 +135,11 @@ class RevisionBody(BaseModel):
     revision: str | None = None
 
 
+class StoredQueryBody(BaseModel):
+    description: str = ""
+    cypher: str
+
+
 class RunBody(BaseModel):
     name: str
     revision: str | None = None
@@ -167,7 +176,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
 
     app = FastAPI(title="aip server", version="0.5a0", docs_url=None, redoc_url=None)
     app.add_middleware(CORSMiddleware, allow_origins=list(allow_origins or []), allow_origin_regex=LOOPBACK_ORIGINS,
-                       allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+                       allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
     # ------------------------------------------------------------------ errors
 
@@ -186,6 +195,14 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
     @app.exception_handler(StaleRun)
     async def _stale(_: Request, exc: StaleRun):
         return JSONResponse(ApiError(409, "stale_run", str(exc)).body(), status_code=409)
+
+    @app.exception_handler(InvalidQuery)
+    async def _invalid_query(_: Request, exc: InvalidQuery):
+        return JSONResponse(ApiError(422, "invalid_query", str(exc)).body(), status_code=422)
+
+    @app.exception_handler(QueryFailed)
+    async def _query_failed(_: Request, exc: QueryFailed):
+        return JSONResponse(ApiError(422, "query_failed", str(exc)).body(), status_code=422)
 
     @app.exception_handler(InputValidationError)
     @app.exception_handler(OutputValidationError)
@@ -529,20 +546,35 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
 
     # --------------------------------------------------------------- governance
 
+    def require_governance():
+        if governance is None:
+            raise ApiError(501, "not_supported", "this server does not answer governance queries")
+        return governance
+
     @app.get("/governance", dependencies=[require(READ)])
     def list_governance() -> List[JSON]:
-        return [{"query": q, "description": d, "path": f"/governance/{q}"} for q, d in QUERIES.items()]
+        rows = governance.queries() if governance is not None and hasattr(governance, "queries") else listing()
+        return [{**row, "path": f"/governance/{row['query']}"} for row in rows]
 
     @app.get("/governance/{query}", dependencies=[require(READ)])
     def governance_query(query: str, name: str | None = Query(None),
                          window: int = Query(DEFAULT_WINDOW, ge=1, le=100000),
                          limit: int = Query(DEFAULT_LIMIT, ge=1, le=10000),
                          repeats: int = Query(DEFAULT_REPEATS, ge=1, le=100000)) -> List[JSON]:
-        if query not in QUERIES:
+        if query not in QUERIES and governance is None:
             raise ApiError(404, "not_found", f"no governance query {query!r}; GET /governance lists them")
-        if governance is None:
-            raise ApiError(501, "not_supported", "this server does not answer governance queries")
-        return governance.query(query, name=name, window=window, limit=limit, repeats=repeats)
+        return require_governance().query(query, name=name, window=window, limit=limit, repeats=repeats)
+
+    @app.put("/governance/{query}", dependencies=[require(PUBLISH)])
+    def store_governance_query(query: str, body: StoredQueryBody) -> JSON:
+        """Keep a query of your own under this name (replacing one of that name). It runs read-only."""
+        row = require_governance().store(query, body.description, body.cypher)
+        return {**row, "path": f"/governance/{query}"}
+
+    @app.delete("/governance/{query}", dependencies=[require(PUBLISH)])
+    def remove_governance_query(query: str) -> JSON:
+        require_governance().remove(query)
+        return {"query": query, "removed": True}
 
     app.state.backend = backend
     return app

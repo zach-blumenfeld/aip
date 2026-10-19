@@ -15,7 +15,9 @@ from pathlib import Path
 import pytest
 from aip_spec import FORMAT_VERSION, example_dir
 
-from aip.server.backend import CatalogBackend, GovernanceBackend, NotFound, NotSupported, RunBackend, StaleRun
+from aip.server.backend import (CatalogBackend, GovernanceBackend, InvalidQuery, NotFound, NotSupported, QueryFailed,
+                                RunBackend, StaleRun)
+from aip.server.governance import QUERIES
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import materialize, snapshot
 from aip.spec import load_skill
@@ -567,6 +569,66 @@ def test_governance_repeated_cycles(backend, catalog, runs, governance, tmp_path
     assert governance.query("repeated-cycles", window=1) == [
         {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
     assert once != twice
+
+
+def test_governance_stored_queries(backend, catalog, runs, governance, example):
+    """A query of your own: listed after the built-ins, run read-only with the same parameters, replaced
+    by name, refused when malformed, and never able to write."""
+    rev = catalog.publish(example)
+    rid = seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    builtins = [{"query": q, "description": d, "builtin": True} for q, d in QUERIES.items()]
+    if isinstance(backend, FilesystemBackend):
+        assert governance.queries() == builtins
+        with pytest.raises(NotSupported):
+            governance.store("steps-by-kind", "", "MATCH (n) RETURN count(n)")
+        with pytest.raises(NotSupported):
+            governance.remove("steps-by-kind")
+        return
+    assert governance.queries() == builtins
+    cypher = ("MATCH (s:Skill)-[:HAS_PROCEDURE]->()-[:HAS_STEP]->(st) WHERE s.id IN $ids "
+              "RETURN st.kind AS kind, count(*) AS steps ORDER BY kind LIMIT $limit")
+    row = governance.store("steps-by-kind", "How many steps of each kind the resolved revisions have.", cypher)
+    assert row == {"query": "steps-by-kind", "description": "How many steps of each kind the resolved revisions have.",
+                   "builtin": False}
+    assert governance.queries() == builtins + [row]
+    assert governance.query("steps-by-kind") == [{"kind": k, "steps": 1}
+                                                 for k in ("client_task", "decision", "end", "execution", "router")]
+    assert governance.query("steps-by-kind", name="nope") == []          # $ids follows the name filter
+    assert governance.query("steps-by-kind", limit=2) == [{"kind": "client_task", "steps": 1}, {"kind": "decision", "steps": 1}]
+    # run data is reachable and temporal values come back as ISO strings
+    governance.store("recent-runs", "", "MATCH (r:Run) RETURN r.id AS run_id, r.started_at AS started ORDER BY started DESC LIMIT $limit")
+    rows = governance.query("recent-runs")
+    assert rows[0]["run_id"] == rid and isinstance(rows[0]["started"], str) and "T" in rows[0]["started"]
+    # storing under the same name replaces the Cypher
+    governance.store("recent-runs", "count", "MATCH (r:Run) RETURN count(r) AS runs")
+    assert governance.query("recent-runs") == [{"runs": 1}]
+    assert [q["query"] for q in governance.queries()][-2:] == ["recent-runs", "steps-by-kind"]
+    # refusals: a bad name, a built-in name, Cypher the database rejects
+    with pytest.raises(InvalidQuery):
+        governance.store("Steps By Kind", "", cypher)
+    with pytest.raises(InvalidQuery):
+        governance.store("cycles", "", cypher)
+    with pytest.raises(InvalidQuery, match="rejects the Cypher"):
+        governance.store("broken", "", "MATCH (n RETURN n")
+    assert [q["query"] for q in governance.queries() if not q["builtin"]] == ["recent-runs", "steps-by-kind"]
+    # a write never happens: refused when stored or, if EXPLAIN lets it through, when run in read mode
+    try:
+        governance.store("wipe", "", "MATCH (r:Run) DETACH DELETE r RETURN count(r) AS gone")
+    except InvalidQuery:
+        pass
+    else:
+        with pytest.raises(QueryFailed):
+            governance.query("wipe")
+    assert runs.get(rid).id == rid
+    with pytest.raises(NotFound):
+        governance.query("no-such-query")
+    with pytest.raises(InvalidQuery):
+        governance.remove("cycles")
+    governance.remove("steps-by-kind")
+    with pytest.raises(NotFound):
+        governance.remove("steps-by-kind")
+    with pytest.raises(NotFound):
+        governance.query("steps-by-kind")
 
 
 def test_governance_untaken_branches(backend, catalog, runs, governance, example):

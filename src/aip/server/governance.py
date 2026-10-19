@@ -38,6 +38,15 @@ Decisions are resolved by clients, and each decision entry in a run's history ca
 The filesystem backend answers by scanning run files with the helpers here; the Neo4j backend
 projects the same facts at append time (`Answer` nodes) and runs Cypher
 (`aip.server.backends.neo4j.queries`). Both give the same rows for the same history.
+
+Stored queries. The Neo4j backend also keeps queries of its own: `PUT /governance/{name}` with a
+description and Cypher adds one, `DELETE /governance/{name}` removes it, and `GET /governance`
+lists them after the built-ins with `builtin: false`. A stored query runs like a built-in one,
+with the same parameters available to it (`$name`, `$window`, `$limit`, `$repeats`, and `$ids`,
+the resolved revision ids), in a read-only transaction the database enforces, with a timeout
+(`STORED_QUERY_TIMEOUT`), and its rows are returned as the Cypher shapes them. The name must be
+kebab-case (`STORED_NAME_PATTERN`) and not one of the built-ins. The filesystem backend has no
+query language to keep one in and declines with 501.
 """
 
 from __future__ import annotations
@@ -66,6 +75,16 @@ MISSING_FIELDS = ("do_not_use_when", "anti_patterns")
 DEFAULT_WINDOW = 100
 DEFAULT_LIMIT = 50
 DEFAULT_REPEATS = 1
+STORED_QUERY_TIMEOUT = 30.0                       # seconds a stored query may run
+STORED_NAME_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"  # like a step name: `slow-steps`
+NOT_FOUND = "no governance query {name!r}; GET /governance lists them"
+
+
+def listing(stored: Iterable[JSON] = ()) -> List[JSON]:
+    """The rows of `GET /governance`: the built-ins, then the stored queries as given."""
+    rows = [{"query": q, "description": d, "builtin": True} for q, d in QUERIES.items()]
+    rows += [{"query": r["query"], "description": r.get("description") or "", "builtin": False} for r in stored]
+    return rows
 
 
 # ------------------------------------------------------------------- one run's history
@@ -172,5 +191,6 @@ def missing_fields(procedures: Iterable[Tuple[str, str, JSON]], limit: int = DEF
     return rows[:limit]
 
 
-__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "MISSING_FIELDS", "QUERIES", "STRUCTURAL", "attribution", "failing_scripts",
+__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "MISSING_FIELDS", "NOT_FOUND", "QUERIES",
+           "STORED_NAME_PATTERN", "STORED_QUERY_TIMEOUT", "STRUCTURAL", "listing", "attribution", "failing_scripts",
            "is_script_attempt", "manual_decisions", "missing_fields", "model_answers", "overridden_decisions"]

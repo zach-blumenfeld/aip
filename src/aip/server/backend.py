@@ -38,6 +38,16 @@ class StaleRun(Exception):
     (409 over HTTP)."""
 
 
+class InvalidQuery(ValueError):
+    """A stored governance query that cannot be kept: a built-in name, a bad name, or Cypher the database
+    rejects (422 over HTTP)."""
+
+
+class QueryFailed(Exception):
+    """A stored governance query that the database refused to run: it tried to write, timed out, or raised
+    (422 over HTTP, with the database's message)."""
+
+
 def split_ref(ref: str) -> tuple[str, str | None]:
     """`"name"` -> (name, None); `"name@rev"` -> (name, "rev"); `"name@latest"` -> (name, "latest")."""
     name, sep, rev = ref.partition("@")
@@ -104,8 +114,19 @@ class RunBackend(Protocol):
 
 @runtime_checkable
 class GovernanceBackend(Protocol):
+    def queries(self) -> List[JSON]:
+        """Every query this backend answers, built-in first: `{query, description, builtin}`."""
+
     def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50,
               repeats: int = 1) -> List[JSON]:
-        """Rows for one of `aip.server.governance.QUERIES` over the last `window` runs (filtered to
-        `name` when given; `repeats` is the threshold of `repeated-cycles`); raises NotFound for an
-        unknown query and NotSupported for one this backend declines."""
+        """Rows for one of `aip.server.governance.QUERIES`, or a stored query, over the last `window`
+        runs (filtered to `name` when given; `repeats` is the threshold of `repeated-cycles`); raises
+        NotFound for an unknown query and NotSupported for one this backend declines."""
+
+    def store(self, name: str, description: str, cypher: str) -> JSON:
+        """Keep a query under `name` (replacing one of that name) and return its listing row; raises
+        InvalidQuery for a built-in or malformed name or Cypher the database rejects, NotSupported on a
+        backend with no query language."""
+
+    def remove(self, name: str) -> None:
+        """Forget a stored query; raises NotFound when there is none, InvalidQuery for a built-in name."""

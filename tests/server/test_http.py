@@ -480,6 +480,12 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
                                              "missing-fields", "untaken-branches", "empty-results", "unused-data",
                                              "cycles", "repeated-cycles"]
     assert listing[0]["path"] == "/governance/overridden-decisions" and listing[0]["description"]
+    assert all(q["builtin"] is True for q in listing)
+    # queries of your own need a backend with a query language; the filesystem one declines
+    r = api.put("/governance/steps-by-kind", json={"description": "", "cypher": "MATCH (n) RETURN count(n) AS n"})
+    assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    assert api.delete("/governance/steps-by-kind").status_code == 501
+    assert api.put("/governance/steps-by-kind", json={"description": "no cypher"}).status_code == 422
     for query in ("overridden-decisions", "manual-decisions", "failing-scripts", "missing-fields"):
         assert api.get(f"/governance/{query}").json() == []
     for query in ("untaken-branches", "empty-results", "unused-data", "cycles", "repeated-cycles"):
