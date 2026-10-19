@@ -465,22 +465,25 @@ billing-support diff as the example. Tag aip-spec `v0.6a0`, bump aip's URL, tag 
 
 Test: README quickstart executed top to bottom on a clean checkout; all three test suites green.
 
-### - [ ] C2: harness follow-ups (in `~/dev/aip-skillbench`, its own branch)
+### - [x] C2: harness follow-ups (in `~/dev/aip-skillbench`, its own branch)
 
-BLOCKED: the `ANTHROPIC_API_KEY` in aip-skillbench's `.env` is rejected (401 "Invalid API key",
-checked against `/v1/models`), and both the re-authoring (`convert`, an Opus session) and the
-proof trial run on it. Done so far, aip-skillbench branch `aip-0.6a0` commit `3d22d8d`:
-`bootstrap` defaults to aip `v0.6a0` and aip-spec `v0.6a0`, and `bootstrap --force` passes on the
-laptop (host CLIs report `aip 0.6a0 format 0.6a0`; wheels and skills under `build/` are 0.6a0).
-`--decision-model` now puts `TYPESAFE_API_KEY` in the agent's environment; the server gets only
-`AIP_STEP_TIMEOUT`, and the patch refuses a model key for it. The authoring prompt describes the
-0.6a0 contract. The five packs (report section 5: mars-clouds-clustering, travel-planning,
-data-to-d3, fix-build-google-auto, drone-planning-control) and exoplanet-detection-period, which
-the proof trial needs, are not re-authored, so `AIP_REF.json` still records 0.5a1, the format
-the committed packs are. To finish, with a working key: `uv run aip-skillbench batch-convert
---from curated --single --force --yes --concurrency 6 --author-model claude-opus-5-5` with
-`--task` for those six, commit the packs with the new `AIP_REF.json`, then `eval --task
-exoplanet-detection-period --mode aip-runtime --model claude-haiku-5-5` and check `config.json`.
+Done 2026-10-19 on aip-skillbench branch `aip-0.6a0` (`3d22d8d`, then `72e2588`): `bootstrap`
+defaults to aip `v0.6a0` and aip-spec `v0.6a0` and passes; `--decision-model` puts
+`TYPESAFE_API_KEY` in the solver's environment, the server gets only `AIP_STEP_TIMEOUT`, and the
+patch refuses a model key for it; the authoring prompt describes the 0.6a0 contract. Four packs
+were re-authored under the new rules with `batch-convert --from curated --single` (dialogue-parser,
+drone-planning-control, spring-boot-jakarta-migration, exoplanet-detection-period; all validate as
+0.6a0) and left uncommitted with the regenerated `AIP_REF.json`, since the next campaign re-authors
+the whole cohort. The report's five are a pack-content matter, not a 0.6a0 one; the campaign-28
+losses that 0.6a0 addresses are dialogue-parser's resume and drone's root-owned files (see
+`scratch/campaign-28-what-0.6a0-fixes.md` in aip-skillbench). Two things the move surfaced in the
+harness, both fixed: the leakage audit flagged the author reading its own run file under
+`~/.aip/runs` (the authoring session now sets `AIP_HOME` inside its workspace, and the audit
+allows the client's home run directory), and Haiku 5.5 rejects the ACP agent's thinking parameter
+unless the solver gets `MAX_THINKING_TOKENS=0`, as campaign 28 did. Proof: one aip-runtime trial
+of exoplanet-detection-period with claude-haiku-5-5 passed (reward 1.0, 10 tool calls: `aip run`,
+two decision pauses and one client_task pause resumed to done), and its `config.json` carries no
+key for the server.
 
 The compile step emits `outputs` and `requires`; `AIP_REF.json` pins 0.6a0; the five skills
 from the campaign-28 report are re-authored under the new rules; `--decision-model` puts the key
