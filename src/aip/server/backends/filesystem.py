@@ -380,7 +380,7 @@ class FilesystemGovernance:
             yield entry_name, revision, self.catalog._manifest(entry_name, revision).get("procedure", {})
 
     def query(self, query: str, name: str | None = None, window: int = governance.DEFAULT_WINDOW,
-              limit: int = governance.DEFAULT_LIMIT) -> List[JSON]:
+              limit: int = governance.DEFAULT_LIMIT, repeats: int = governance.DEFAULT_REPEATS) -> List[JSON]:
         if query not in governance.QUERIES:
             raise NotFound(f"no governance query {query!r}")
         if query == "overridden-decisions":

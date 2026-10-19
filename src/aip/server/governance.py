@@ -1,7 +1,10 @@
 """Governance (design §7 and §10.5): the corpus questions a server answers over its catalog and runs.
 
-Five named queries, served as `GET /governance/{query}` with `name` (optional filter), `window`
-(the last N runs considered), and `limit` (rows returned); each returns a list of flat rows.
+Nine named queries, served as `GET /governance/{query}` with `name` (optional filter), `window`
+(the last N runs considered), `limit` (rows returned), and `repeats` (for `repeated-cycles`); each
+returns a list of flat rows. Five are about runs, how the procedures behave in use; four are about
+the procedures' structure, what the control flow and the data flow say when read as one graph,
+and those four are answered by the graph backend only.
 
 Decisions are resolved by clients, and each decision entry in a run's history carries its
 `attribution`: `{"resolver": "typesafe"|"manual", "model", "confidence", "reviewed"}`, plus
@@ -19,6 +22,18 @@ Decisions are resolved by clients, and each decision entry in a run's history ca
 - `untaken-branches`: router branches no windowed run followed, for revisions that ran at all.
   The filesystem backend declines this one (`NotSupported`, 501 over HTTP); the Neo4j backend
   answers it from the graph.
+- `empty-results`: resolved revisions whose end step reads only start inputs, so the result the
+  caller gets back holds nothing any step produced; every step's work is a side effect or a
+  history entry. Graph only.
+- `unused-data`: keys a step produces (an output, or a decision's answer) that no step reads and
+  the end step does not return. An output may be a receipt kept for the ledger; an unread answer
+  is a model call per run that changes nothing. Graph only.
+- `cycles`: the control-flow cycles of each resolved revision, with the router value that keeps
+  each going and the keys its steps re-produce every time round. A loop cannot read anything
+  produced later in itself (the state rules forbid it), so what it carries is exactly those keys.
+  Graph only.
+- `repeated-cycles`: runs in the window that went round a cycle more than `repeats` times
+  (default 1), by the router at the cycle, since the format has no iteration bound. Graph only.
 
 The filesystem backend answers by scanning run files with the helpers here; the Neo4j backend
 projects the same facts at append time (`Answer` nodes) and runs Cypher
@@ -39,12 +54,18 @@ QUERIES: Dict[str, str] = {
     "failing-scripts": "Execution steps that failed in the last N runs, most failures first, with the latest error.",
     "missing-fields": "Names whose resolved revision has an empty do_not_use_when or anti_patterns.",
     "untaken-branches": "Router branches no run in the last N took (graph backends only).",
+    "empty-results": "Procedures whose result holds nothing any step produced: the end step reads only start inputs (graph backends only).",
+    "unused-data": "Keys a step produces or a decision answers that no step reads and the result does not return (graph backends only).",
+    "cycles": "Control-flow cycles, with the branch value that continues each and the keys it re-produces every time round (graph backends only).",
+    "repeated-cycles": "Runs in the last N that went round a cycle more than `repeats` times (graph backends only).",
 }
+STRUCTURAL = ("empty-results", "unused-data", "cycles")     # over the catalog's resolved revisions, no runs involved
 
 MISSING_FIELDS = ("do_not_use_when", "anti_patterns")
 
 DEFAULT_WINDOW = 100
 DEFAULT_LIMIT = 50
+DEFAULT_REPEATS = 1
 
 
 # ------------------------------------------------------------------- one run's history
@@ -151,5 +172,5 @@ def missing_fields(procedures: Iterable[Tuple[str, str, JSON]], limit: int = DEF
     return rows[:limit]
 
 
-__all__ = ["DEFAULT_LIMIT", "DEFAULT_WINDOW", "MISSING_FIELDS", "QUERIES", "attribution", "failing_scripts",
+__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "MISSING_FIELDS", "QUERIES", "STRUCTURAL", "attribution", "failing_scripts",
            "is_script_attempt", "manual_decisions", "missing_fields", "model_answers", "overridden_decisions"]

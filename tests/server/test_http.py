@@ -477,12 +477,15 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     publish(api)
     listing = api.get("/governance").json()
     assert [q["query"] for q in listing] == ["overridden-decisions", "manual-decisions", "failing-scripts",
-                                             "missing-fields", "untaken-branches"]
+                                             "missing-fields", "untaken-branches", "empty-results", "unused-data",
+                                             "cycles", "repeated-cycles"]
     assert listing[0]["path"] == "/governance/overridden-decisions" and listing[0]["description"]
     for query in ("overridden-decisions", "manual-decisions", "failing-scripts", "missing-fields"):
         assert api.get(f"/governance/{query}").json() == []
-    r = api.get("/governance/untaken-branches")
-    assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    for query in ("untaken-branches", "empty-results", "unused-data", "cycles", "repeated-cycles"):
+        r = api.get(f"/governance/{query}")
+        assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    assert api.get("/governance/repeated-cycles", params={"repeats": 0}).status_code == 422
     r = api.get("/governance/nope")
     assert r.status_code == 404 and "GET /governance" in r.json()["error"]["message"]
     assert api.get("/governance/failing-scripts", params={"window": 0}).status_code == 422

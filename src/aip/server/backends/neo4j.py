@@ -58,7 +58,9 @@ and `Procedure.triggers` (the `trigger_when` list joined). Hits are summed per r
 filtered to what each name resolves to, and an exact name match is boosted on top.
 
 Governance (`queries`, one Cypher statement per name in `aip.server.governance.QUERIES`)
-runs over the last `window` runs; `missing-fields` is given the resolved revision ids.
+runs over the last `window` runs; `missing-fields` and the structural queries (`empty-results`,
+`unused-data`, `cycles`) are given the resolved revision ids and read the projection alone, and
+`repeated-cycles` matches each run's `FOLLOWED_BY` chain against the procedure's cycles.
 
 Materialisation: `folder(name, revision)` rebuilds the skill under
 `<cache>/<name>@<revision>/<name>/` (default `~/.cache/aip`, `AIP_CACHE_DIR` overrides)
@@ -82,7 +84,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from aip.server.backend import NotFound, StaleRun, split_ref
-from aip.server.governance import MISSING_FIELDS, QUERIES, attribution, model_answers
+from aip.server.governance import DEFAULT_REPEATS, MISSING_FIELDS, QUERIES, STRUCTURAL, attribution, model_answers
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
 
@@ -426,6 +428,49 @@ WITH n, s, [f IN $fields WHERE size(coalesce(p[f], [])) = 0] AS missing
 WHERE size(missing) > 0
 RETURN n.name AS name, s.revision AS revision, missing
 ORDER BY name
+LIMIT $limit
+""",
+    "empty-results": """
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)-[:ENDS_AT]->(end:Step)
+WHERE s.id IN $ids
+OPTIONAL MATCH (d:Data)-[:FEEDS]->(end) WHERE NOT (p)-[:SUPPLIES]->(d)
+WITH s, p, end, collect(d.name) AS produced
+WHERE produced = []
+OPTIONAL MATCH (p)-[:SUPPLIES]->(x:Data)-[:FEEDS]->(end)
+RETURN s.name AS name, s.revision AS revision, end.name AS step, collect(x.name) AS result
+ORDER BY name
+LIMIT $limit
+""",
+    "unused-data": """
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(src:Step)-[:PRODUCES]->(d:Data)
+WHERE s.id IN $ids AND NOT (d)-[:FEEDS]->()
+RETURN s.name AS name, s.revision AS revision, src.name AS step,
+       CASE WHEN src:Decision THEN 'answer' ELSE 'output' END AS kind, d.name AS key, d.type AS type
+ORDER BY name, step, key
+LIMIT $limit
+""",
+    "cycles": """
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(first:Step)
+WHERE s.id IN $ids
+MATCH cycle = (first)-[:NEXT|THEN*]->(first)
+WHERE all(n IN nodes(cycle) WHERE n.order >= first.order)
+WITH DISTINCT s, [n IN nodes(cycle)[..-1] | n.name] AS steps,
+     [r IN relationships(cycle) WHERE type(r) = 'THEN' | r.value] AS taken_when, nodes(cycle)[..-1] AS members
+UNWIND members AS m
+OPTIONAL MATCH (m)-[:PRODUCES]->(d:Data)
+WITH s, steps, taken_when, [k IN collect(DISTINCT d.name) WHERE k IS NOT NULL] AS reproduces
+RETURN s.name AS name, s.revision AS revision, steps, taken_when, reproduces
+ORDER BY name, steps
+LIMIT $limit
+""",
+    "repeated-cycles": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:OF_STEP]->(router:Step:Router)
+WHERE (router)-[:NEXT|THEN*]->(router)
+WITH r, router, count(sr) AS visits
+WHERE visits - 1 > $repeats
+RETURN r.name AS name, r.revision AS revision, r.id AS run_id, r.status AS status, router.name AS router,
+       visits - 1 AS repeats
+ORDER BY repeats DESC, name, run_id
 LIMIT $limit
 """,
     "untaken-branches": _WINDOW + """
@@ -830,11 +875,12 @@ class Neo4jGovernance:
         self.database = database
         self.catalog = catalog
 
-    def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50) -> List[JSON]:
+    def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50,
+              repeats: int = DEFAULT_REPEATS) -> List[JSON]:
         if query not in queries:
             raise NotFound(f"no governance query {query!r}")
-        params: JSON = {"name": name, "window": int(window), "limit": int(limit)}
-        if query == "missing-fields":
+        params: JSON = {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats)}
+        if query == "missing-fields" or query in STRUCTURAL:
             params["ids"] = self.catalog.resolved_ids(name)
             params["fields"] = list(MISSING_FIELDS)
         records, _, _ = self.driver.execute_query(queries[query], database_=self.database, **params)

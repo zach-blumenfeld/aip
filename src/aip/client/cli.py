@@ -426,10 +426,12 @@ def governance_command(argv: list[str]) -> int:
     parser.add_argument("--name", default=None, help="only this skill")
     parser.add_argument("--window", type=int, default=None, help="how many recent runs to look at")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--repeats", type=int, default=None, help="repeated-cycles: more than this many times round")
     args = parser.parse_args(argv)
 
     def go() -> int:
-        rows = _client().governance(args.query, name=args.name, window=args.window, limit=args.limit)
+        rows = _client().governance(args.query, name=args.name, window=args.window, limit=args.limit,
+                                    repeats=args.repeats)
         if args.query is None:
             width = max((len(q.query) for q in rows), default=0)
             for q in rows:

@@ -590,12 +590,13 @@ class Client:
     # ------------------------------------------------------------------- governance
 
     def governance(self, query: str | None = None, *, name: str | None = None, window: int | None = None,
-                   limit: int | None = None) -> List[Any]:
-        """With no query, the queries the server answers (`GovernanceQuery`); with one, its rows."""
+                   limit: int | None = None, repeats: int | None = None) -> List[Any]:
+        """With no query, the queries the server answers (`GovernanceQuery`); with one, its rows
+        (`repeats` is the threshold of `repeated-cycles`)."""
         server = self._server()
         if query is None:
             return [_record(GovernanceQuery, q) for q in server.get("/governance")]
-        return server.get(f"/governance/{query}", name=name, window=window, limit=limit)
+        return server.get(f"/governance/{query}", name=name, window=window, limit=limit, repeats=repeats)
 
 
 # --------------------------------------------------------------------------- config

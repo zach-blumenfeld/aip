@@ -7,6 +7,7 @@ as needed), wiping every AIP node before each case, and is skipped without it.
 
 import hashlib
 import os
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -394,6 +395,46 @@ def end(**state) -> dict:
     return {"step": "end", "kind": "end", "input": {"message": "I was charged twice!", **state}, "result": state}
 
 
+LOOP_NAME = "billing-support-loop"
+
+
+def loop_example(tmp_path: Path):
+    """The example with a loop: `reply` hands its draft to a `check` decision whose router sends a bad
+    draft back to `reply`. Valid 0.6a0: the loop re-produces `reply` and `ok` each time round."""
+    folder = tmp_path / LOOP_NAME
+    shutil.copytree(EXAMPLE, folder)
+    text = (folder / "SKILL.md").read_text().replace("name: billing-support\n", f"name: {LOOP_NAME}\n", 1)
+    m = re.search(r"(  - name: reply\n(?:.*\n)*?    inputs_to: )end\n", text)
+    text = text[:m.start()] + m.group(1) + "check\n" + text[m.end():]
+    check = (
+        "\n  - name: check\n    kind: decision\n    description: Is the drafted reply acceptable?\n"
+        "    inputs:\n      - name: reply\n        type: string\n"
+        "    questions:\n      ok:\n        type: noul\n        instructions: Is the reply polite and consistent with the policy?\n"
+        "    inputs_to: ok-route\n\n"
+        "  - name: ok-route\n    kind: router\n    description: Send the reply, or draft it again.\n"
+        "    branch_on: ok\n    branches:\n      \"true\": end\n      \"false\": reply\n")
+    m = re.search(r"\n  - name: end\n", text)
+    (folder / "SKILL.md").write_text(text[:m.start()] + check + text[m.start():])
+    return snapshot(folder)
+
+
+def loop_run(runs, revision: str, drafts: int) -> str:
+    """A calm run of the loop example that redrafts `drafts - 1` times before the check passes."""
+    msg, manual = "Was my March invoice a duplicate?", {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    entries = [{"step": "triage", "kind": "decision", "input": {"message": msg}, "result": {"answers": {"billing": True, "tone": "calm"}},
+                "attribution": manual},
+               {"step": "by-tone", "kind": "router", "input": {"tone": "calm"}, "result": {"to": "reply"}}]
+    for i in range(drafts):
+        ok = i == drafts - 1
+        entries += [{"step": "reply", "kind": "client_task", "input": {"message": msg, "tone": "calm"},
+                     "result": {"task": "...", "references": [], "answer": {"reply": f"draft {i}"}}},
+                    {"step": "check", "kind": "decision", "input": {"reply": f"draft {i}"}, "result": {"answers": {"ok": ok}},
+                     "attribution": manual},
+                    {"step": "ok-route", "kind": "router", "input": {"ok": ok}, "result": {"to": "end" if ok else "reply"}}]
+    entries.append({"step": "end", "kind": "end", "input": {"message": msg}, "result": {"message": msg}})
+    return seed(runs, revision, *entries, name=LOOP_NAME)
+
+
 def seed(runs, revision: str, *entries: dict, status: str = "done", name: str = "billing-support") -> str:
     rid = runs.create(name, revision)
     for i, entry in enumerate(entries):
@@ -479,6 +520,53 @@ def test_governance_missing_fields(catalog, governance, example, tmp_path):
     assert governance.query("missing-fields", name="billing-support") == []
     catalog.retire("bare-support", rev)                                       # nothing live, nothing to report
     assert governance.query("missing-fields") == []
+
+
+def test_governance_structure(backend, catalog, governance, example, tmp_path):
+    """The three structural queries read the projection alone: the example's result is only its start input,
+    three of its keys are never read, and only the loop variant has a cycle."""
+    rev = catalog.publish(example)
+    loop = loop_example(tmp_path)
+    loop_rev = catalog.publish(loop)
+    if isinstance(backend, FilesystemBackend):
+        for query in ("empty-results", "unused-data", "cycles"):
+            with pytest.raises(NotSupported):
+                governance.query(query)
+        return
+    assert governance.query("empty-results") == [
+        {"name": "billing-support", "revision": rev, "step": "end", "result": ["message"]},
+        {"name": LOOP_NAME, "revision": loop_rev, "step": "end", "result": ["message"]}]
+    assert governance.query("unused-data", name="billing-support") == [
+        {"name": "billing-support", "revision": rev, "step": "escalate", "kind": "output", "key": "queue", "type": "string"},
+        {"name": "billing-support", "revision": rev, "step": "escalate", "kind": "output", "key": "ticket_id", "type": "integer"},
+        {"name": "billing-support", "revision": rev, "step": "reply", "kind": "output", "key": "reply", "type": "string"},
+        {"name": "billing-support", "revision": rev, "step": "triage", "kind": "answer", "key": "billing", "type": "boolean"}]
+    # in the loop variant the check reads `reply`, so only three keys are unread
+    assert [r["key"] for r in governance.query("unused-data", name=LOOP_NAME)] == ["queue", "ticket_id", "billing"]
+    assert governance.query("cycles") == [
+        {"name": LOOP_NAME, "revision": loop_rev, "steps": ["reply", "check", "ok-route"], "taken_when": ["false"],
+         "reproduces": ["reply", "ok"]}]
+    assert governance.query("cycles", name="billing-support") == []
+    # retired revisions drop out of the structural queries: they cover what each name resolves to
+    catalog.retire(LOOP_NAME, loop_rev)
+    assert governance.query("cycles") == []
+
+
+def test_governance_repeated_cycles(backend, catalog, runs, governance, tmp_path):
+    loop = loop_example(tmp_path)
+    rev = catalog.publish(loop)
+    once = loop_run(runs, rev, drafts=1)          # straight through: no repeat
+    twice = loop_run(runs, rev, drafts=3)         # two redrafts
+    if isinstance(backend, FilesystemBackend):
+        with pytest.raises(NotSupported):
+            governance.query("repeated-cycles")
+        return
+    assert governance.query("repeated-cycles") == [
+        {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
+    assert governance.query("repeated-cycles", repeats=2) == []
+    assert governance.query("repeated-cycles", window=1) == [
+        {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
+    assert once != twice
 
 
 def test_governance_untaken_branches(backend, catalog, runs, governance, example):

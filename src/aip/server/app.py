@@ -28,7 +28,7 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   step answers 409 `runs_on_client` (open the run with `POST /runs`), a decision 422
   `no_decision_model` (answer it through `answer`).
 - **governance**: `/governance` lists the named corpus queries of `aip.server.governance`;
-  `/governance/{query}?name=&window=&limit=` answers one through the backend's `.governance`
+  `/governance/{query}?name=&window=&limit=&repeats=` answers one through the backend's `.governance`
   (501 when it has none or declines the query).
 
 The server serves no UI: the console (formerly inspector) is its own npm package and calls
@@ -66,7 +66,7 @@ from aip.model import Decision, Execution, describe_next, engine
 from aip.model.engine import Advance, Cursor
 from aip.model.types import InputValidationError, OutputValidationError, StepError, example_input
 from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
-from aip.server.governance import DEFAULT_LIMIT, DEFAULT_WINDOW, QUERIES
+from aip.server.governance import DEFAULT_LIMIT, DEFAULT_REPEATS, DEFAULT_WINDOW, QUERIES
 from aip.server.records import MANIFEST, SkillRecord, snapshot
 
 JSON = Dict[str, Any]
@@ -536,12 +536,13 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
     @app.get("/governance/{query}", dependencies=[require(READ)])
     def governance_query(query: str, name: str | None = Query(None),
                          window: int = Query(DEFAULT_WINDOW, ge=1, le=100000),
-                         limit: int = Query(DEFAULT_LIMIT, ge=1, le=10000)) -> List[JSON]:
+                         limit: int = Query(DEFAULT_LIMIT, ge=1, le=10000),
+                         repeats: int = Query(DEFAULT_REPEATS, ge=1, le=100000)) -> List[JSON]:
         if query not in QUERIES:
             raise ApiError(404, "not_found", f"no governance query {query!r}; GET /governance lists them")
         if governance is None:
             raise ApiError(501, "not_supported", "this server does not answer governance queries")
-        return governance.query(query, name=name, window=window, limit=limit)
+        return governance.query(query, name=name, window=window, limit=limit, repeats=repeats)
 
     app.state.backend = backend
     return app
