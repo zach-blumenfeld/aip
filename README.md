@@ -277,8 +277,8 @@ The agent asks you to pick a name, scaffolds `./<name>/` with your document unde
 ```bash
 aip validate ./<name>                    # the same checks, any time
 aip info ./<name>                        # what it does, the input it expects, how it flows
-aip run ./<name> --interactive           # run it locally, answering on the terminal
-aip publish ./<name>                     # onto the server; refresh the console
+aip run ./<name> --interactive           # try running locally first: no server, answers on the terminal
+aip publish ./<name>                     # then onto the server, where agents find it; refresh the console
 ```
 
 Edit, validate, publish again: the same name gets a new revision, and the console's diff shows what changed. Pin a revision when the catalog should resolve to it regardless of what is published later.
@@ -358,20 +358,21 @@ The file has two tables. `[server]` is the listener and tokens; `[backend]` pick
 
 **Scripts and trust.** A procedure's execution steps are scripts, and they run on the client, in the `aip` process's user account, never on the server: `aip run <name>` fetches the revision's `scripts/` and `assets/` into `~/.aip/cache/<name>@<revision>/`, checks each file against the server's manifest, and runs the script with whatever that user can read, write, or reach. `aip` does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters. The server runs no user code and holds no model key, so publishing no longer means code execution on the server; it still decides what every client runs, so keep it on localhost or behind a token.
 
-## Loading Skills into Neo4j
+## Publishing, Fetching, and Revisions
 
-The Neo4j driver ships with the `server` extra the installer uses; in a clone, `uv sync --extra neo4j` adds it.
+An AIP skill is an Agent Skills folder: `SKILL.md`, `source/`, and any `scripts/`, `references/`, and `assets/`. That folder is the whole procedure, so moving it to and from a server is a file transfer, not a translation:
 
 ```bash
-export NEO4J_URI=neo4j://localhost:7687 NEO4J_USERNAME=neo4j NEO4J_PASSWORD=...
-aip db load <path/to/skill-folder>                     # validates, then writes one revision
-aip db list                                            # every skill and revision in the database
-aip db export <name> --out ./restored                  # rebuilds <name>/ byte for byte and verifies hashes
+aip publish ./<name>                         # validate, upload every file, print <name>@<revision>
+aip get <name>[@<revision>] --out ./restored # the folder back, byte for byte, hashes verified, validated
+aip list                                     # every name with the revision it resolves to
 ```
 
-Each load is lossless: every file under the skill folder is stored as a `File` node with its exact bytes, mode, and sha256, so `export` reproduces a folder that validates and runs identically. Alongside the files, the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Data`, and `Question` nodes: `NEXT` edges (and a router's `THEN {value}` edges) are the control flow, `PRODUCES` and `FEEDS` (one `Data` node per key, since every key has one producer) are the data flow, `SUPPLIES` marks the start inputs, `ASKS` and `YIELDS` tie a question to the key its answer lands under, and `USES` points at the `File` nodes a step runs, renders, or may load; the `requires` block sits on the `Procedure` node. Skills are keyed `name@revision`, where the revision is a hash of the files: reloading unchanged content is a no-op, changed content adds a revision, and many skills coexist in one database. A `Name` node groups the revisions of one skill and carries its pin; `Run` and `StepRun` nodes record executions, linked `FOLLOWED_BY` in order and `OF_STEP` to the step they ran.
+The mapping is lossless. The server stores every file with its exact bytes, mode, and sha256, and `aip get` rebuilds a folder that validates and runs identically to the one published. The same commands work on either backend.
 
-`aip db` is a thin shim over the server's Neo4j backend (`aip.server.backends.neo4j`), which also serves the catalog, a full-text search index over names, descriptions, purposes, and triggers, and a hash-verified materialisation cache under `~/.cache/aip/` (`AIP_CACHE_DIR` overrides) that the server loads procedures from. The filesystem backend (`aip.server.backends.filesystem`) offers the same contract over a plain directory.
+A revision is the hash of the files. Publishing a folder again with no changes is a no-op; publishing a changed folder adds a revision under the same name and the catalog resolves the name to it. Earlier revisions stay, so a run is always recorded against the exact bytes that ran, and `aip get <name>@<revision>` returns any of them. `aip pin <name> <revision>` makes the name resolve to a chosen revision regardless of what is published later; `aip retire <name>@<revision>` removes one from the catalog without deleting its record.
+
+On the Neo4j backend each revision is also a graph: the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Data`, and `Question` nodes: `NEXT` edges (and a router's `THEN {value}` edges) are the control flow, `PRODUCES` and `FEEDS` (one `Data` node per key, since every key has one producer) are the data flow, `SUPPLIES` marks the start inputs, `ASKS` and `YIELDS` tie a question to the key its answer lands under, and `USES` points at the `File` nodes a step runs, renders, or may load; the `requires` block sits on the `Procedure` node. A `Name` node groups the revisions of one skill and carries its pin; `Run` and `StepRun` nodes record executions, linked `FOLLOWED_BY` in order and `OF_STEP` to the step they ran. The backend (`aip.server.backends.neo4j`) also serves the catalog, a full-text search index over names, descriptions, purposes, and triggers, and a hash-verified materialisation cache under `~/.cache/aip/` (`AIP_CACHE_DIR` overrides) that the server loads procedures from. The filesystem backend (`aip.server.backends.filesystem`) offers the same contract over a plain directory.
 
 ## Development & Contributing
 
