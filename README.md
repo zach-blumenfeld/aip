@@ -31,7 +31,7 @@ Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% ov
 
 AIP is two pieces:
 
-1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec).
+1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [aip-spec](https://github.com/zach-blumenfeld/aip-spec).
 2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, validates every step's input and output, and follows routers; the `aip` client runs the scripts next to the data and answers decisions with a structured decision model, and the agent or person behind it handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
 
 ## How It Works
@@ -117,6 +117,17 @@ Use the **largest frontier model available** when using the AIP skill. The work 
 
 For *consuming* the resulting skill, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
 
+
+## Project Structure
+
+The code is split across three repositories:
+
+| repository | what it holds | install |
+|---|---|---|
+| [aip-spec](https://github.com/zach-blumenfeld/aip-spec) | the format: pydantic models, JSON Schema, the runtime block, the `aip-spec` validator CLI, and the `aip` authoring skill | `uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1` |
+| [aip](https://github.com/zach-blumenfeld/aip) (this repo) | the runtime: `aip` CLI and Python SDK, `aip server`, the Neo4j backend, and the `aip-runtime` skill | `uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1"` |
+| [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
+
 ## End-to-End Walkthrough
 
 ### Prerequisites
@@ -177,7 +188,7 @@ aip publish billing-support                    # validates, uploads, prints bill
 
 ### 3. The console
 
-The console (formerly inspector) is a separate npm package; the server serves no UI. In another
+The console is a separate npm package from its own repository, [aip-console](https://github.com/zach-blumenfeld/aip-console); the server serves no UI. In another
 terminal, start it against the server and open the URL it prints:
 
 ```bash
@@ -279,11 +290,11 @@ The AIP skill exposes two top-level procedures:
 1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into an execution graph validated against the AIP procedure schema, runs it, and tests it. Details in [`SKILL.md` § Authoring an Agent Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#authoring-an-agent-skill) in the spec repo.
 2. **Validate an AIP skill** — run `aip-spec validate` (or `aip validate`, the same checks) directly, or let the agent run it as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#validating-an-aip-skill).
 
-The authoring skill lives in [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec); `aip skill install` writes the copy bundled in that package.
+The authoring skill lives in [aip-spec](https://github.com/zach-blumenfeld/aip-spec); `aip skill install` writes the copy bundled in that package.
 
 ## AIP Skill Spec
 
-The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#aip-specification) in the spec repo, [zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is the fixed AIP runtime block followed by exactly one fenced YAML block, so every skill carries its own execution semantics and any agent can run it with no aip tooling present, and adds one frontmatter key, `metadata.aip-version`.
+The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#aip-specification) in the spec repo, [aip-spec](https://github.com/zach-blumenfeld/aip-spec). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is the fixed AIP runtime block followed by exactly one fenced YAML block, so every skill carries its own execution semantics and any agent can run it with no aip tooling present, and adds one frontmatter key, `metadata.aip-version`.
 
 ## The Procedure Format
 
@@ -329,7 +340,7 @@ aip governance [<query>]                               # the governance queries,
 
 Every one of these is a thin wrapper over the Python SDK, `aip.Client` ([`docs/sdk.md`](docs/sdk.md)): `aip.Client().run("billing-support", {...})` returns the same pause or done the CLI prints, as typed objects, and shares its run files.
 
-The web client, the console (formerly inspector; [aip-inspector](https://github.com/zach-blumenfeld/aip-inspector)),
+The web client, the console ([aip-console](https://github.com/zach-blumenfeld/aip-console), formerly aip-inspector),
 is its own npm package: `npx aip-console --server URL` serves the catalog, source, run console, history and
 governance views from a local Node process, and its page calls the server directly (the server answers CORS for
 loopback origins; `aip server --allow-origin ORIGIN` adds others). The server serves no UI. The console checks
