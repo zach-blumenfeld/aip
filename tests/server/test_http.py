@@ -1,17 +1,17 @@
 """HTTP API tests (design §4.2) over the filesystem backend through FastAPI's test client.
 
 Publish, search, info, files (manifest, one file, hash-verified tar), pin and retire, the
-bearer-token scopes, and a full traversal of `billing-support` through `/peek`, `/step`,
-and `/answer` reproducing the `running.md` worked example: the angry branch runs the
-script on the server, the calm branch pauses as a client task, and every step lands in
-the run the server records.
+bearer-token scopes, and a full traversal of `billing-support` through the deprecated
+`/peek`, `/step`, and `/answer`: the angry branch stops at the script (scripts run on the
+client, so `/step` refuses it), the calm branch pauses as a client task, and every step lands
+in the run the server records. The
+run endpoints that replace them (`POST /runs`, `POST /runs/{id}/result`) are in `test_runs.py`.
 """
 
 import hashlib
 import io
 import json
 import os
-import re
 import tarfile
 from pathlib import Path
 from unittest import mock
@@ -129,6 +129,11 @@ def test_publish_search_info_and_listing(api, example):
     assert len(info["trigger_when"]) == 2 and len(info["do_not_use_when"]) == 1
     assert [s["name"] for s in info["step_details"]] == ["triage", "by-tone", "escalate", "reply", "end"]
     assert {"router": "by-tone", "value": "angry", "to": "escalate"} in info["branches"]
+    # what the console draws the data flow and the environment from
+    assert [(o["step"], o["name"], o["type"]) for o in info["outputs"]] == [
+        ("escalate", "ticket_id", "integer"), ("escalate", "queue", "string"), ("reply", "reply", "string")]
+    assert info["requires"] == {"interpreter": {"name": "python", "version": "3.10"}, "packages": [], "tools": []}
+    assert next(s for s in info["step_details"] if s["name"] == "escalate")["command"] is None
     assert {f["path"] for f in info["files"]} == {f.path for f in example.files}
     assert api.get("/catalog/billing-support@0000000000000000").status_code == 404
 
@@ -253,18 +258,15 @@ def test_capabilities(backend, no_key):
     publish(TestClient(create_app(backend)))
     plain = TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json()
     assert plain == {"name": "billing-support", "revision": snapshot(EXAMPLE).revision,
-                     "decision_model": False, "executes_scripts": True, "persists_runs": True,
-                     "governance": True}
-    with_model = TestClient(create_app(backend, client=FakeJev(0.9))).get("/procedures/billing-support/capabilities").json()
-    assert with_model["decision_model"] is True
-    with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):
-        assert TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json()["decision_model"]
+                     "executes_scripts": False, "persists_runs": True, "governance": True}
+    with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):           # a key here changes nothing
+        assert TestClient(create_app(backend)).get("/procedures/billing-support/capabilities").json() == plain
     assert TestClient(create_app(backend)).get("/procedures/nope/capabilities").status_code == 404
 
 
-def test_manual_traversal_angry_branch_runs_the_script_on_the_server(api, example):
+def test_manual_traversal_angry_branch_stops_at_the_script(api, example):
     """running.md, "Without a decision model": the client answers triage itself, the router
-    sends `angry` to the script, which runs here, and `end` closes the run."""
+    sends `angry` to the script, which the deprecated `/step` refuses: scripts run on the client."""
     publish(api)
     start = {"message": "I was charged twice!"}
 
@@ -285,81 +287,60 @@ def test_manual_traversal_angry_branch_runs_the_script_on_the_server(api, exampl
     first = r.json()
     assert (first["ran"], first["kind"], first["review"]) == ("triage", "decision", [])
     assert first["suggested"] == {"message": "I was charged twice!", "billing": True, "tone": "angry"}
-    assert first["result"]["answers"]["tone"] == {"type": "choice", "manual": "angry"}
+    assert first["result"]["answers"] == {"billing": True, "tone": "angry"}
     assert first["next"]["kind"] == "router" and set(first["next"]["branches"]) == {"angry", "calm"}
-    assert first["history"][0]["manual"] is True
+    assert first["history"][0]["attribution"] == {"resolver": "manual", "model": None, "confidence": None,
+                                                  "reviewed": False}
     assert first["run_id"] and first["name"] == "billing-support" and first["revision"] == example.revision
     run_id = first["run_id"]
 
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "running" and [e["step"] for e in run["history"]] == ["triage"]
 
-    # the router is walked server-side, then the script opens the ticket
+    # the router is walked server-side, and the next step is the script: not here
     r = api.post("/procedures/billing-support/step",
                  json={"after": "triage", "payload": first["suggested"], "history": first["history"], "run_id": run_id})
-    assert r.status_code == 200, r.text
-    second = r.json()
-    assert (second["ran"], second["kind"]) == ("escalate", "execution")
-    assert second["result"]["queue"] == "tier2" and isinstance(second["result"]["ticket_id"], int)
-    assert second["suggested"]["ticket_id"] == second["result"]["ticket_id"]
-    assert second["next"] == {"step": "end", "kind": "end", "inputs": {"message": "string"}}
-    assert [h["step"] for h in second["history"]] == ["triage", "by-tone", "escalate"]
-    assert second["history"][1] == {"step": "by-tone", "kind": "router", "input": {"tone": "angry"},
-                                    "result": {"to": "escalate"}}
-    assert second["run_id"] == run_id
+    assert r.status_code == 409, r.text
+    assert (r.json()["error"]["kind"], r.json()["error"]["location"]) == ("runs_on_client", "escalate")
+    assert "POST /runs" in r.json()["error"]["message"]
+    assert [e["step"] for e in api.get(f"/runs/{run_id}").json()["history"]] == ["triage"]   # nothing ran
 
-    r = api.post("/procedures/billing-support/step",
-                 json={"after": "escalate", "payload": second["suggested"], "history": second["history"],
-                       "run_id": run_id})
-    assert r.status_code == 200, r.text
-    last = r.json()
-    assert last["next"] is None and last["kind"] == "end"
-    assert last["result"] == second["suggested"]
-    assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "escalate", "end"]
-
-    run = api.get(f"/runs/{run_id}").json()
-    assert run["status"] == "done" and run["pause"] is None
-    assert run["history"] == last["history"]
-    assert (run["name"], run["revision"]) == ("billing-support", example.revision)
     listing = api.get("/runs").json()
     assert [r["run_id"] for r in listing] == [run_id]
-    assert listing[0]["status"] == "done" and listing[0]["steps"] == 4
+    assert listing[0]["status"] == "running" and listing[0]["steps"] == 1
     assert api.get("/runs", params={"status": "paused"}).json() == []
-    assert api.get("/runs", params={"name": "billing-support", "status": "done"}).json()[0]["run_id"] == run_id
+    assert api.get("/runs", params={"name": "billing-support", "status": "running"}).json()[0]["run_id"] == run_id
 
 
-def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend, no_key, example):
-    """running.md, "With a decision model": tone comes back at 0.55 < 0.6 so the response carries a
-    review; the client overrides to calm, the router sends it to the client task, the client
-    does the task and `end` accepts the reply as an extra key."""
-    api = TestClient(create_app(backend, client=FakeJev(0.55, 0.97)), raise_server_exceptions=False)
+def test_client_resolved_traversal_calm_branch_pauses_as_a_client_task(backend, no_key, example):
+    """running.md, "With a decision model": the server never calls one, even with a key in its
+    environment; the client's model proposed angry at 0.55 < 0.6, the agent reviewed it to calm,
+    and the client posts the answers with that attribution through `/answer`. The router sends
+    calm to the client task, the client does the task, and `end` accepts the reply."""
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
     publish(api)
     start = {"message": "I was charged twice!"}
 
-    r = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []})
-    assert r.status_code == 200, r.text
-    first = r.json()
-    assert first["ran"] == "triage" and first["suggested"]["tone"] == "angry" and first["suggested"]["billing"] is True
-    assert first["review"] == [{"question": "tone", "type": "choice", "confidence": 0.55,
-                                "probabilities": {"angry": 0.55, "calm": 0.45}, "reason": "confidence below 0.6"}]
-    assert first["result"]["answers"]["billing"]["noul"] == 0.97
-    run_id = first["run_id"]
-    run = api.get(f"/runs/{run_id}").json()
-    assert run["status"] == "paused"
-    assert run["pause"]["kind"] == "review" and run["pause"]["step"] == "triage"
-    assert run["pause"]["expects"] == {"message": "string", "tone": "string"}
-    assert api.get("/runs", params={"status": "paused"}).json()[0]["run_id"] == run_id
+    with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "k"}):
+        r = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []})
+    assert r.status_code == 422 and r.json()["error"]["kind"] == "no_decision_model"
 
-    # a threshold override for this call passes the same answer through without review
-    r = api.post("/procedures/billing-support/step",
-                 json={"after": None, "payload": start, "history": [], "thresholds": {"tone": 0.5}})
-    assert r.status_code == 200 and r.json()["review"] == []
-    assert r.json()["run_id"] != run_id                                              # a second run
+    attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55},
+                   "reviewed": True, "proposed": {"billing": True, "tone": "angry"}}
+    r = api.post("/procedures/billing-support/answer",
+                 json={"after": None, "payload": start, "history": [], "answers": {"billing": True, "tone": "calm"},
+                       "attribution": attribution})
+    assert r.status_code == 200, r.text
+    assert r.headers["deprecation"] == "true" and "/runs" in r.headers["link"]
+    first = r.json()
+    assert first["ran"] == "triage" and first["suggested"]["tone"] == "calm" and first["review"] == []
+    assert first["history"][0]["attribution"] == attribution
+    run_id = first["run_id"]
+    assert api.get(f"/runs/{run_id}").json()["status"] == "running"
 
     # the client overrides tone -> calm; the router sends it to the client task
     r = api.post("/procedures/billing-support/step",
-                 json={"after": "triage", "payload": {**first["suggested"], "tone": "calm"},
-                       "history": first["history"], "run_id": run_id})
+                 json={"after": "triage", "payload": first["suggested"], "history": first["history"], "run_id": run_id})
     assert r.status_code == 200, r.text
     second = r.json()
     assert (second["ran"], second["kind"]) == ("reply", "client_task")
@@ -372,7 +353,7 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
                                     "result": {"to": "reply"}}
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "paused" and run["pause"]["kind"] == "client_task"
-    assert run["pause"]["step"] == "reply" and run["pause"]["expects"] == {"message": "string"}
+    assert run["pause"]["step"] == "reply" and run["pause"]["answer_with"] == {"reply": "string"}
     assert "Duplicate charges" in run["pause"]["task"]
 
     reply = "Sorry about the duplicate charge. A full refund is on its way within 5 business days."
@@ -381,11 +362,12 @@ def test_model_traversal_review_then_calm_branch_pauses_as_a_client_task(backend
                        "history": second["history"], "run_id": run_id})
     assert r.status_code == 200, r.text
     last = r.json()
-    assert last["next"] is None and last["result"]["reply"] == reply and last["result"]["tone"] == "calm"
+    assert last["next"] is None and last["result"] == {"message": "I was charged twice!"}
+    assert last["history"][2]["input"] == {"message": "I was charged twice!", "tone": "calm"}
     assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "reply", "end"]
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "done" and run["pause"] is None and len(run["history"]) == 4
-    assert run["history"][0]["result"]["answers"]["tone"]["probabilities"] == {"angry": 0.55, "calm": 0.45}
+    assert run["history"][0]["attribution"]["proposed"]["tone"] == "angry"
 
 
 def test_execution_errors(api, example):
@@ -427,14 +409,16 @@ def test_execution_errors(api, example):
 
 def test_runs_endpoints(api, example):
     publish(api)
-    r = api.post("/runs", json={"name": "billing-support"})
+    r = api.post("/runs", json={"name": "billing-support", "input": {"message": "hi"}})
     assert r.status_code == 201
     run_id = r.json()["run_id"]
     assert r.json()["revision"] == example.revision
     run = api.get(f"/runs/{run_id}").json()
-    assert run["status"] == "running" and run["history"] == [] and run["pause"] is None
-    assert api.post("/runs", json={"name": "nope"}).status_code == 404
-    assert api.post("/runs", json={"name": "billing-support", "revision": "0000000000000000"}).status_code == 404
+    assert run["status"] == "paused" and run["history"] == [] and run["pause"]["kind"] == "decision"
+    assert run["state"] == {"message": "hi"} and run["after"] is None
+    assert api.post("/runs", json={"name": "nope", "input": {}}).status_code == 404
+    assert api.post("/runs", json={"name": "billing-support", "revision": "0000000000000000",
+                                   "input": {}}).status_code == 404
 
     # a client that brought its own run id continues that run
     r = api.post("/procedures/billing-support/answer",
@@ -451,7 +435,8 @@ def test_runs_answer_501_without_a_run_backend(backend, no_key):
 
     api = TestClient(create_app(CatalogOnly()))
     publish(api)
-    for r in (api.get("/runs"), api.get("/runs/x"), api.post("/runs", json={"name": "billing-support"})):
+    for r in (api.get("/runs"), api.get("/runs/x"), api.post("/runs/x/result"),
+              api.post("/runs", json={"name": "billing-support", "input": {"message": "hi"}})):
         assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
     assert api.get("/procedures/billing-support/capabilities").json()["persists_runs"] is False
     r = api.post("/procedures/billing-support/answer",
@@ -475,76 +460,87 @@ def broken_variant(tmp_path: Path, name: str = "broken-support") -> Path:
     return copy
 
 
-def test_governance_thresholds_endpoints_merge_under_the_request(backend, no_key, example):
-    app = create_app(backend, client=FakeJev(0.55, 0.97), tokens={"rw": {"read", "publish"}, "ro": {"read"}})
-    api = TestClient(app, client=("203.0.113.7", 40000), headers={"Authorization": "Bearer rw"})
+def test_thresholds_are_the_authors_alone(backend, no_key, example):
+    """No per-name overrides: the endpoint is gone and `info` reports each question's threshold as
+    SKILL.md sets it."""
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
     publish(api)
-    start = {"message": "I was charged twice!"}
-    body = {"after": None, "payload": start, "history": []}
-
-    assert api.get("/catalog/billing-support/thresholds").json() == {"name": "billing-support", "thresholds": {}}
-    assert api.get("/catalog/billing-support").json()["thresholds"] == {}
-    assert api.post("/procedures/billing-support/step", json=body).json()["review"] != []   # author's 0.6
-
-    r = api.post("/catalog/billing-support/thresholds", json={"thresholds": {"tone": 0.5}})
-    assert r.status_code == 200 and r.json() == {"name": "billing-support", "thresholds": {"tone": 0.5}}
-    assert api.get("/catalog/billing-support/thresholds").json()["thresholds"] == {"tone": 0.5}
-    assert api.get("/catalog/billing-support").json()["thresholds"] == {"tone": 0.5}
-    assert api.post("/procedures/billing-support/step", json=body).json()["review"] == []    # stored 0.5 passes 0.55
-    r = api.post("/procedures/billing-support/step", json={**body, "thresholds": {"tone": 0.7}})
-    assert r.json()["review"][0]["reason"] == "confidence below 0.7"                          # the request wins
-
-    r = api.post("/catalog/billing-support/thresholds", json={"thresholds": {"tone": 1.5}})
-    assert r.status_code == 422 and r.json()["error"]["kind"] == "invalid_request"
-    assert api.post("/catalog/nope/thresholds", json={"thresholds": {"tone": 0.5}}).status_code == 404
-    assert api.get("/catalog/nope/thresholds").status_code == 404
-    r = api.post("/catalog/billing-support/thresholds", json={"thresholds": {}}, headers={"Authorization": "Bearer ro"})
-    assert r.status_code == 403
-    assert api.get("/catalog/billing-support/thresholds", headers={"Authorization": "Bearer ro"}).status_code == 200
-    assert api.post("/catalog/billing-support/thresholds", json={"thresholds": {}}).json()["thresholds"] == {}
-    assert api.post("/procedures/billing-support/step", json=body).json()["review"] != []
+    assert api.get("/catalog/billing-support/thresholds").status_code == 404
+    assert api.post("/catalog/billing-support/thresholds", json={"thresholds": {"tone": 0.5}}).status_code in (404, 405)
+    info = api.get("/catalog/billing-support").json()
+    assert "thresholds" not in info
+    assert {q["name"]: q["threshold"] for q in info["questions"]}["tone"] == 0.6
 
 
 def test_governance_queries_over_http(backend, no_key, example, tmp_path):
-    api = TestClient(create_app(backend, client=FakeJev(0.55, 0.97)), raise_server_exceptions=False)
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
     publish(api)
     listing = api.get("/governance").json()
-    assert [q["query"] for q in listing] == ["overridden-decisions", "failing-scripts", "missing-fields",
-                                             "untaken-branches"]
+    assert [q["query"] for q in listing] == ["overridden-decisions", "manual-decisions", "failing-scripts",
+                                             "missing-fields", "untaken-branches", "empty-results", "unused-data",
+                                             "cycles", "repeated-cycles"]
     assert listing[0]["path"] == "/governance/overridden-decisions" and listing[0]["description"]
-    for query in ("overridden-decisions", "failing-scripts", "missing-fields"):
-        assert api.get(f"/governance/{query}").json() == []
-    r = api.get("/governance/untaken-branches")
+    assert all(q["builtin"] is True for q in listing)
+    # queries of your own need a backend with a query language; the filesystem one declines
+    r = api.put("/governance/steps-by-kind", json={"description": "", "cypher": "MATCH (n) RETURN count(n) AS n"})
     assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    assert api.delete("/governance/steps-by-kind").status_code == 501
+    assert api.put("/governance/steps-by-kind", json={"description": "no cypher"}).status_code == 422
+    for query in ("overridden-decisions", "manual-decisions", "failing-scripts", "missing-fields"):
+        assert api.get(f"/governance/{query}").json() == []
+    for query in ("untaken-branches", "empty-results", "unused-data", "cycles", "repeated-cycles"):
+        r = api.get(f"/governance/{query}")
+        assert r.status_code == 501 and r.json()["error"]["kind"] == "not_supported"
+    assert api.get("/governance/repeated-cycles", params={"repeats": 0}).status_code == 422
     r = api.get("/governance/nope")
     assert r.status_code == 404 and "GET /governance" in r.json()["error"]["message"]
     assert api.get("/governance/failing-scripts", params={"window": 0}).status_code == 422
 
-    # the client overrides tone after the review: one overridden decision
+    # the client's model proposed angry; the agent overrode tone at review: one overridden decision
     start = {"message": "I was charged twice!"}
-    first = api.post("/procedures/billing-support/step", json={"after": None, "payload": start, "history": []}).json()
-    assert first["review"] and first["suggested"]["tone"] == "angry"
-    r = api.post("/procedures/billing-support/step",
-                 json={"after": "triage", "payload": {**first["suggested"], "tone": "calm"},
-                       "history": first["history"], "run_id": first["run_id"]})
-    assert r.status_code == 200 and r.json()["ran"] == "reply"
+    reviewed = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55},
+                "reviewed": True, "proposed": {"billing": True, "tone": "angry"}}
+    opened = api.post("/runs", json={"name": "billing-support", "input": start}).json()
+    assert opened["paused"] == "decision" and opened["thresholds"] == {"billing": 0.15, "tone": 0.6}
+    r = api.post(f"/runs/{opened['run_id']}/result",
+                 json={"answer": {"billing": True, "tone": "calm"}, "attribution": reviewed})
+    assert r.status_code == 200 and r.json()["step"] == "reply"
     assert api.get("/governance/overridden-decisions").json() == [
-        {"name": "billing-support", "step": "triage", "question": "tone", "decided": 1, "overridden": 1, "rate": 1.0}]
+        {"name": "billing-support", "step": "triage", "question": "tone", "resolver": "typesafe", "decided": 1,
+         "overridden": 1, "rate": 1.0}]
     assert api.get("/governance/overridden-decisions", params={"name": "other"}).json() == []
+    assert api.get("/governance/manual-decisions").json() == []
 
-    # a script that exits non-zero: the run ends in error, recorded against the step that raised
+    # an attribution that does not fit is refused and changes nothing
+    second = api.post("/runs", json={"name": "billing-support", "input": start}).json()
+    r = api.post(f"/runs/{second['run_id']}/result",
+                 json={"answer": {"billing": True, "tone": "calm"}, "attribution": {"resolver": "oracle"}})
+    assert r.status_code == 422 and r.json()["error"]["kind"] == "invalid_output"
+    assert r.json()["error"]["invalid"] == ["attribution"]
+    assert api.get(f"/runs/{second['run_id']}").json()["pause"]["kind"] == "decision"
+    # answered with no model (no attribution posted means manual)
+    r = api.post(f"/runs/{second['run_id']}/result", json={"answer": {"billing": True, "tone": "calm"}})
+    assert r.status_code == 200
+    assert api.get("/governance/manual-decisions").json() == [
+        {"name": "billing-support", "step": "triage", "decided": 2, "manual": 1, "rate": 0.5}]
+
+    # a script that exits non-zero on the client: the run ends in error, recorded against the step
     r = publish(api, broken_variant(tmp_path))
     assert r.status_code == 201, r.text
-    body = {"after": "triage", "payload": {**start, "billing": True, "tone": "angry"}, "history": []}
-    r = api.post("/procedures/broken-support/step", json=body)
-    assert r.status_code == 500, r.text
-    err = r.json()["error"]
-    assert err["kind"] == "step_failed" and err["location"] == "escalate" and "boom" in err["message"]
-    run = api.get(f"/runs/{err['run_id']}").json()
-    assert run["status"] == "error" and run["name"] == "broken-support"
+    opened = api.post("/runs", json={"name": "broken-support", "input": start}).json()
+    assert opened["paused"] == "decision"
+    step = api.post(f"/runs/{opened['run_id']}/result", json={"answer": {"billing": True, "tone": "angry"}}).json()
+    assert (step["paused"], step["step"]) == ("execute", "escalate")
+    failure = {"error": "script_failed", "exit_code": 2, "stderr": "boom"}
+    err = api.post(f"/runs/{opened['run_id']}/result", json={"answer": failure}).json()
+    assert err["error"] == "script_failed" and err["step"] == "escalate" and "boom" in err["message"]
+    assert err["script"] == "scripts/escalate.py" and err["exit_code"] == 2 and err["stderr"] == "boom"
+    run = api.get(f"/runs/{opened['run_id']}").json()
+    assert run["status"] == "failed" and run["name"] == "broken-support"
     assert run["history"][-1]["step"] == "escalate" and run["history"][-1]["kind"] == "error"
     assert run["history"][-1]["step_kind"] == "execution"
-    assert api.post("/procedures/broken-support/step", json=body).status_code == 500
+    assert api.post(f"/runs/{opened['run_id']}/result").json()["paused"] == "execute"   # retry
+    assert api.post(f"/runs/{opened['run_id']}/result", json={"answer": failure}).json()["error"] == "script_failed"
 
     rows = api.get("/governance/failing-scripts").json()
     assert len(rows) == 1
@@ -553,7 +549,7 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     assert "boom" in rows[0]["last_error"]
     assert api.get("/governance/failing-scripts", params={"name": "billing-support"}).json() == []
     assert api.get("/governance/missing-fields").json() == []
-    assert api.get("/runs", params={"status": "error"}).json()[0]["name"] == "broken-support"
+    assert api.get("/runs", params={"status": "failed"}).json()[0]["name"] == "broken-support"
 
 
 def test_governance_answers_501_without_a_governance_backend(backend, no_key):
@@ -654,65 +650,32 @@ def test_cli_catalog_commands(api, example, tmp_path, capsys):
             main(["search", "refund"])
 
 
-# ----------------------------------------------------------------------- inspector
+# ----------------------------------------------------------------------- no UI
 
 
-def test_inspector_mount(backend, no_key, tmp_path):
-    """`--inspector`: the built bundle at /inspector/, the packaged one by default, 404 with the fix when absent."""
-    from aip.server.app import INSPECTOR_DIR
+def test_the_server_serves_no_ui(backend, no_key):
+    """The console (formerly inspector) ships on its own: nothing at /inspector, and no flag for it."""
+    import aip.server
 
-    bundle = tmp_path / "dist"
-    (bundle / "assets").mkdir(parents=True)
-    (bundle / "index.html").write_text('<!doctype html><div id="root"></div><script src="/inspector/assets/a.js"></script>')
-    (bundle / "assets" / "a.js").write_text("console.log('hi')")
-    api = TestClient(create_app(backend, inspector=bundle), raise_server_exceptions=False)
-    page = api.get("/inspector/")
-    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
-    assert '<div id="root">' in page.text
-    assert api.get("/inspector", follow_redirects=False).status_code == 307
-    assert api.get("/inspector").text == page.text                                        # follows to the page
-    asset = api.get("/inspector/assets/a.js")
-    assert asset.status_code == 200 and "javascript" in asset.headers["content-type"]
-    assert api.get("/inspector/assets/missing.js").status_code == 404
-    assert api.get("/catalog").json() == []                                               # the API is untouched
-
-    # No bundle: a clear 404 in the error envelope, naming the directory and the command that fills it.
-    api = TestClient(create_app(backend, inspector=tmp_path / "empty"), raise_server_exceptions=False)
-    for path in ("/inspector", "/inspector/", "/inspector/assets/a.js"):
-        res = api.get(path)
-        assert res.status_code == 404, path
-        err = res.json()["error"]
-        assert err["kind"] == "not_found" and "npm run build && npm run sync" in err["message"]
-        assert str(tmp_path / "empty") in err["message"]
-
-    # Not asked for: nothing at /inspector at all.
-    api = TestClient(create_app(backend), raise_server_exceptions=False)
-    assert api.get("/inspector/").status_code == 404
-
-    # The bundle shipped in the package is what `aip server --inspector` serves by default.
-    assert (INSPECTOR_DIR / "index.html").is_file(), f"no inspector bundle in {INSPECTOR_DIR}: run `npm run sync` in aip-inspector"
-    api = TestClient(create_app(backend, inspector=INSPECTOR_DIR), raise_server_exceptions=False)
-    page = api.get("/inspector/")
-    assert page.status_code == 200 and "/inspector/assets/" in page.text
-    for src in re.findall(r'(?:src|href)="(/inspector/assets/[^"]+)"', page.text):
-        assert api.get(src).status_code == 200, src
-
-
-def test_server_command_inspector_flag(backend, no_key, tmp_path, monkeypatch):
-    """`aip server --inspector [DIR]` passes the packaged dir, a given dir, or nothing to create_app."""
     from aip.client import cli
-    from aip.server import app as app_module
 
-    seen = []
+    api = TestClient(create_app(backend), raise_server_exceptions=False)
+    for path in ("/inspector", "/inspector/", "/inspector/index.html"):
+        assert api.get(path).status_code == 404, path
+    assert not (Path(aip.server.__file__).parent / "inspector").exists()
+    with pytest.raises(SystemExit):
+        cli.main(["server", "--inspector"])
 
-    def fake_create_app(backend, **kwargs):
-        seen.append(kwargs.get("inspector"))
-        return object()
 
-    monkeypatch.setattr(app_module, "create_app", fake_create_app)
-    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
-    root = str(tmp_path / "root")
-    assert cli.main(["server", "--root", root]) == 0
-    assert cli.main(["server", "--root", root, "--inspector"]) == 0
-    assert cli.main(["server", "--root", root, "--inspector", str(tmp_path / "dist")]) == 0
-    assert seen == [None, app_module.INSPECTOR_DIR, tmp_path / "dist"]
+def test_cors_answers_loopback_pages_and_allowed_origins(backend, no_key):
+    """The console serves its page from its own loopback port and calls the server directly."""
+    api = TestClient(create_app(backend, allow_origins=["https://console.example.com"]), raise_server_exceptions=False)
+    preflight = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type"}
+    for origin in ("http://localhost:5174", "http://127.0.0.1:9000", "https://console.example.com"):
+        r = api.options("/runs", headers={"Origin": origin, **preflight})
+        assert r.status_code == 200 and r.headers["access-control-allow-origin"] == origin, origin
+        assert api.get("/catalog", headers={"Origin": origin}).headers["access-control-allow-origin"] == origin
+    for origin in ("https://evil.example.com", "http://localhost.evil.com"):
+        r = api.options("/runs", headers={"Origin": origin, **preflight})
+        assert "access-control-allow-origin" not in r.headers, origin
+        assert "access-control-allow-origin" not in api.get("/catalog", headers={"Origin": origin}).headers

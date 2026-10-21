@@ -7,6 +7,7 @@ as needed), wiping every AIP node before each case, and is skipped without it.
 
 import hashlib
 import os
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -14,7 +15,9 @@ from pathlib import Path
 import pytest
 from aip_spec import FORMAT_VERSION, example_dir
 
-from aip.server.backend import CatalogBackend, GovernanceBackend, NotFound, NotSupported, RunBackend
+from aip.server.backend import (CatalogBackend, GovernanceBackend, InvalidQuery, NotFound, NotSupported, QueryFailed,
+                                RunBackend, StaleRun)
+from aip.server.governance import QUERIES
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import materialize, snapshot
 from aip.spec import load_skill
@@ -328,6 +331,26 @@ def test_runs_create_append_get_list(runs):
         runs.append("nope", {}, status="done", pause=None)
 
 
+def test_runs_hold_state_and_refuse_a_stale_append(runs):
+    rid = runs.create("billing-support", "abc123")
+    assert runs.get(rid).version == 0 and runs.get(rid).state == {}
+    assert runs.append(rid, None, "paused", {"kind": "decision", "step": "triage"}, expected=0,
+                       state={"message": "hi"}, after=None) == 1
+    run = runs.get(rid)
+    assert (run.version, run.status, run.history, run.state, run.after) == (1, "paused", [], {"message": "hi"}, None)
+
+    assert runs.append(rid, {"step": "triage", "kind": "decision"}, "running", None, expected=1) == 2
+    with pytest.raises(StaleRun):                                  # another write got there first
+        runs.append(rid, {"step": "triage", "kind": "decision"}, "running", None, expected=1)
+    assert runs.append(rid, {"step": "by-tone", "kind": "router"}, "paused", {"kind": "client_task"},
+                       expected=2, state={"message": "hi", "tone": "calm"}, after="triage") == 3
+    run = runs.get(rid)
+    assert [e["step"] for e in run.history] == ["triage", "by-tone"]
+    assert (run.version, run.state, run.after) == (3, {"message": "hi", "tone": "calm"}, "triage")
+    assert runs.append(rid, None, "paused", {"kind": "client_task"}) == 4    # no `expected`: unchecked
+    assert runs.get(rid).state == {"message": "hi", "tone": "calm"}         # no `state`: kept
+
+
 # -------------------------------------------------------------------- governance
 
 
@@ -336,18 +359,20 @@ def governance(backend) -> GovernanceBackend:
     return backend.governance
 
 
-def decision(tone_p: float, billing_p: float = 0.97, message: str = "I was charged twice!", manual=None) -> dict:
-    """A triage history entry as the server records it: model-answered, or manual when `manual` is given."""
-    if manual is not None:
-        return {"step": "triage", "kind": "decision", "input": {"message": message}, "manual": True,
-                "result": {"answers": {"billing": {"type": "noul", "manual": manual["billing"]},
-                                       "tone": {"type": "choice", "manual": manual["tone"]}}}}
-    return {"step": "triage", "kind": "decision", "input": {"message": message},
-            "result": {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
-                       "answers": {"billing": {"type": "noul", "noul": billing_p},
-                                   "tone": {"type": "choice", "choice": "angry" if tone_p >= 0.5 else "calm",
-                                            "confidence": max(tone_p, round(1 - tone_p, 6)),
-                                            "probabilities": {"angry": tone_p, "calm": round(1 - tone_p, 6)}}}}}
+def decision(billing: bool = True, tone: str = "angry", proposed: dict | None = None, manual: bool = False,
+             message: str = "I was charged twice!") -> dict:
+    """A triage history entry as the server records it: the answers the client posted and their
+    attribution, model-resolved (reviewed when `proposed`, the model's answers, is given) or manual."""
+    answers = {"billing": billing, "tone": tone}
+    if manual:
+        attribution = {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    else:
+        attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.9},
+                       "reviewed": proposed is not None}
+        if proposed is not None:
+            attribution["proposed"] = proposed
+    return {"step": "triage", "kind": "decision", "input": {"message": message}, "result": {"answers": answers},
+            "attribution": attribution}
 
 
 def route(tone: str) -> dict:
@@ -355,11 +380,11 @@ def route(tone: str) -> dict:
             "result": {"to": "escalate" if tone == "angry" else "reply"}}
 
 
-def escalate(message="I was charged twice!", billing=True, failed: str | None = None) -> dict:
+def escalate(message="I was charged twice!", billing=True, failed: str | None = None, **detail) -> dict:
     state = {"message": message, "billing": billing, "tone": "angry"}
     if failed is not None:
         return {"step": "escalate", "kind": "error", "step_kind": "execution", "input": state,
-                "result": {"error": failed}}
+                "result": {"error": failed, **detail}}
     return {"step": "escalate", "kind": "execution", "input": state, "result": {"ticket_id": "T-1"}}
 
 
@@ -370,6 +395,46 @@ def reply(message="I was charged twice!", billing=True) -> dict:
 
 def end(**state) -> dict:
     return {"step": "end", "kind": "end", "input": {"message": "I was charged twice!", **state}, "result": state}
+
+
+LOOP_NAME = "billing-support-loop"
+
+
+def loop_example(tmp_path: Path):
+    """The example with a loop: `reply` hands its draft to a `check` decision whose router sends a bad
+    draft back to `reply`. Valid 0.6a0: the loop re-produces `reply` and `ok` each time round."""
+    folder = tmp_path / LOOP_NAME
+    shutil.copytree(EXAMPLE, folder)
+    text = (folder / "SKILL.md").read_text().replace("name: billing-support\n", f"name: {LOOP_NAME}\n", 1)
+    m = re.search(r"(  - name: reply\n(?:.*\n)*?    inputs_to: )end\n", text)
+    text = text[:m.start()] + m.group(1) + "check\n" + text[m.end():]
+    check = (
+        "\n  - name: check\n    kind: decision\n    description: Is the drafted reply acceptable?\n"
+        "    inputs:\n      - name: reply\n        type: string\n"
+        "    questions:\n      ok:\n        type: noul\n        instructions: Is the reply polite and consistent with the policy?\n"
+        "    inputs_to: ok-route\n\n"
+        "  - name: ok-route\n    kind: router\n    description: Send the reply, or draft it again.\n"
+        "    branch_on: ok\n    branches:\n      \"true\": end\n      \"false\": reply\n")
+    m = re.search(r"\n  - name: end\n", text)
+    (folder / "SKILL.md").write_text(text[:m.start()] + check + text[m.start():])
+    return snapshot(folder)
+
+
+def loop_run(runs, revision: str, drafts: int) -> str:
+    """A calm run of the loop example that redrafts `drafts - 1` times before the check passes."""
+    msg, manual = "Was my March invoice a duplicate?", {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    entries = [{"step": "triage", "kind": "decision", "input": {"message": msg}, "result": {"answers": {"billing": True, "tone": "calm"}},
+                "attribution": manual},
+               {"step": "by-tone", "kind": "router", "input": {"tone": "calm"}, "result": {"to": "reply"}}]
+    for i in range(drafts):
+        ok = i == drafts - 1
+        entries += [{"step": "reply", "kind": "client_task", "input": {"message": msg, "tone": "calm"},
+                     "result": {"task": "...", "references": [], "answer": {"reply": f"draft {i}"}}},
+                    {"step": "check", "kind": "decision", "input": {"reply": f"draft {i}"}, "result": {"answers": {"ok": ok}},
+                     "attribution": manual},
+                    {"step": "ok-route", "kind": "router", "input": {"ok": ok}, "result": {"to": "end" if ok else "reply"}}]
+    entries.append({"step": "end", "kind": "end", "input": {"message": msg}, "result": {"message": msg}})
+    return seed(runs, revision, *entries, name=LOOP_NAME)
 
 
 def seed(runs, revision: str, *entries: dict, status: str = "done", name: str = "billing-support") -> str:
@@ -386,57 +451,54 @@ def test_governance_backend_satisfies_protocol(governance):
         governance.query("nope")
 
 
-def test_thresholds_round_trip(catalog, example):
-    catalog.publish(example)
-    assert catalog.thresholds("billing-support") == {}
-    catalog.set_thresholds("billing-support", {"tone": 0.5, "billing": 0.2})
-    assert catalog.thresholds("billing-support") == {"tone": 0.5, "billing": 0.2}
-    catalog.set_thresholds("billing-support", {})
-    assert catalog.thresholds("billing-support") == {}
-    with pytest.raises(NotFound):
-        catalog.thresholds("nope")
-    with pytest.raises(NotFound):
-        catalog.set_thresholds("nope", {"tone": 0.5})
-
-
 def test_governance_overridden_decisions(catalog, runs, governance, example):
     rev = catalog.publish(example)
     assert governance.query("overridden-decisions") == []
     # kept as the model said: angry -> escalate
-    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    # tone overridden to calm at the router
-    seed(runs, rev, decision(0.55), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
-    # billing overridden at the step after the router (the router input carries only `tone`)
-    seed(runs, rev, decision(0.3), route("calm"), reply(billing=False), end(billing=False, tone="calm", reply="..."))
+    seed(runs, rev, decision(), route("angry"), escalate(), end())
+    # tone overridden to calm at review
+    seed(runs, rev, decision(tone="calm", proposed={"billing": True, "tone": "angry"}), route("calm"), reply(), end())
+    # billing overridden at review
+    seed(runs, rev, decision(billing=False, tone="calm", proposed={"billing": True, "tone": "calm"}), route("calm"),
+         reply(billing=False), end())
     # a manual decision has no model answer to override
-    seed(runs, rev, decision(0, manual={"billing": True, "tone": "calm"}), route("calm"), reply())
-    # paused at the review and never continued: nothing settled, nothing counted
-    seed(runs, rev, decision(0.52), status="paused")
+    seed(runs, rev, decision(tone="calm", manual=True), route("calm"), reply())
+    # reviewed and accepted as proposed
+    seed(runs, rev, decision(proposed={"billing": True, "tone": "angry"}), route("angry"), status="running")
 
     rows = governance.query("overridden-decisions")
     assert rows == [
-        {"name": "billing-support", "step": "triage", "question": "billing", "decided": 3, "overridden": 1, "rate": 1 / 3},
-        {"name": "billing-support", "step": "triage", "question": "tone", "decided": 3, "overridden": 1, "rate": 1 / 3},
+        {"name": "billing-support", "step": "triage", "question": "billing", "resolver": "typesafe", "decided": 4,
+         "overridden": 1, "rate": 0.25},
+        {"name": "billing-support", "step": "triage", "question": "tone", "resolver": "typesafe", "decided": 4,
+         "overridden": 1, "rate": 0.25},
     ]
     assert governance.query("overridden-decisions", name="other") == []
-    assert governance.query("overridden-decisions", window=2) == []          # the newest two runs settled nothing
+    assert governance.query("overridden-decisions", window=2) == []          # the newest two runs overrode nothing
     assert [r["question"] for r in governance.query("overridden-decisions", limit=1)] == ["billing"]
+
+    assert governance.query("manual-decisions") == [
+        {"name": "billing-support", "step": "triage", "decided": 5, "manual": 1, "rate": 0.2}]
+    assert governance.query("manual-decisions", window=1) == []               # the newest run used the model
+    assert governance.query("manual-decisions", name="other") == []
 
 
 def test_governance_failing_scripts(catalog, runs, governance, example):
     rev = catalog.publish(example)
     assert governance.query("failing-scripts") == []
-    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    seed(runs, rev, decision(0.9), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
+    seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
          status="error")
-    seed(runs, rev, decision(0.9), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2"),
+    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2",
+                                                         exit_code=2, stderr="queue down"),
          status="error")
-    seed(runs, rev, decision(0.3), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+    seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
 
     rows = governance.query("failing-scripts")
     assert rows == [{"name": "billing-support", "step": "escalate", "script": "scripts/escalate.py",
                      "ran": 3, "failed": 2, "rate": 2 / 3,
-                     "last_error": "RuntimeError: Script scripts/escalate.py exited with 2"}]
+                     "last_error": "RuntimeError: Script scripts/escalate.py exited with 2",
+                     "exit_code": 2, "stderr": "queue down"}]
     assert governance.query("failing-scripts", window=1) == []                # the newest run took the calm branch
     assert governance.query("failing-scripts", window=2)[0]["ran"] == 1
     assert governance.query("failing-scripts", name="other") == []
@@ -449,7 +511,7 @@ def test_governance_missing_fields(catalog, governance, example, tmp_path):
     md = tmp_path / "bare-support" / "SKILL.md"
     text = md.read_text()
     head, _, tail = text.partition("do_not_use_when:\n")
-    text = head + tail[tail.index("\nsteps:") + 1:]
+    text = head + tail[tail.index("\nrequires:") + 1:]
     text = text[:text.index("anti_patterns:")].rstrip() + "\n```\n"
     md.write_text(text)
     bare = snapshot(tmp_path / "bare-support")
@@ -462,9 +524,116 @@ def test_governance_missing_fields(catalog, governance, example, tmp_path):
     assert governance.query("missing-fields") == []
 
 
+def test_governance_structure(backend, catalog, governance, example, tmp_path):
+    """The three structural queries read the projection alone: the example's result is only its start input,
+    three of its keys are never read, and only the loop variant has a cycle."""
+    rev = catalog.publish(example)
+    loop = loop_example(tmp_path)
+    loop_rev = catalog.publish(loop)
+    if isinstance(backend, FilesystemBackend):
+        for query in ("empty-results", "unused-data", "cycles"):
+            with pytest.raises(NotSupported):
+                governance.query(query)
+        return
+    assert governance.query("empty-results") == [
+        {"name": "billing-support", "revision": rev, "step": "end", "result": ["message"]},
+        {"name": LOOP_NAME, "revision": loop_rev, "step": "end", "result": ["message"]}]
+    assert governance.query("unused-data", name="billing-support") == [
+        {"name": "billing-support", "revision": rev, "step": "escalate", "kind": "output", "key": "queue", "type": "string"},
+        {"name": "billing-support", "revision": rev, "step": "escalate", "kind": "output", "key": "ticket_id", "type": "integer"},
+        {"name": "billing-support", "revision": rev, "step": "reply", "kind": "output", "key": "reply", "type": "string"},
+        {"name": "billing-support", "revision": rev, "step": "triage", "kind": "answer", "key": "billing", "type": "boolean"}]
+    # in the loop variant the check reads `reply`, so only three keys are unread
+    assert [r["key"] for r in governance.query("unused-data", name=LOOP_NAME)] == ["queue", "ticket_id", "billing"]
+    assert governance.query("cycles") == [
+        {"name": LOOP_NAME, "revision": loop_rev, "steps": ["reply", "check", "ok-route"], "taken_when": ["false"],
+         "reproduces": ["reply", "ok"]}]
+    assert governance.query("cycles", name="billing-support") == []
+    # retired revisions drop out of the structural queries: they cover what each name resolves to
+    catalog.retire(LOOP_NAME, loop_rev)
+    assert governance.query("cycles") == []
+
+
+def test_governance_repeated_cycles(backend, catalog, runs, governance, tmp_path):
+    loop = loop_example(tmp_path)
+    rev = catalog.publish(loop)
+    once = loop_run(runs, rev, drafts=1)          # straight through: no repeat
+    twice = loop_run(runs, rev, drafts=3)         # two redrafts
+    if isinstance(backend, FilesystemBackend):
+        with pytest.raises(NotSupported):
+            governance.query("repeated-cycles")
+        return
+    assert governance.query("repeated-cycles") == [
+        {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
+    assert governance.query("repeated-cycles", repeats=2) == []
+    assert governance.query("repeated-cycles", window=1) == [
+        {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
+    assert once != twice
+
+
+def test_governance_stored_queries(backend, catalog, runs, governance, example):
+    """A query of your own: listed after the built-ins, run read-only with the same parameters, replaced
+    by name, refused when malformed, and never able to write."""
+    rev = catalog.publish(example)
+    rid = seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    builtins = [{"query": q, "description": d, "builtin": True} for q, d in QUERIES.items()]
+    if isinstance(backend, FilesystemBackend):
+        assert governance.queries() == builtins
+        with pytest.raises(NotSupported):
+            governance.store("steps-by-kind", "", "MATCH (n) RETURN count(n)")
+        with pytest.raises(NotSupported):
+            governance.remove("steps-by-kind")
+        return
+    assert governance.queries() == builtins
+    cypher = ("MATCH (s:Skill)-[:HAS_PROCEDURE]->()-[:HAS_STEP]->(st) WHERE s.id IN $ids "
+              "RETURN st.kind AS kind, count(*) AS steps ORDER BY kind LIMIT $limit")
+    row = governance.store("steps-by-kind", "How many steps of each kind the resolved revisions have.", cypher)
+    assert row == {"query": "steps-by-kind", "description": "How many steps of each kind the resolved revisions have.",
+                   "builtin": False}
+    assert governance.queries() == builtins + [row]
+    assert governance.query("steps-by-kind") == [{"kind": k, "steps": 1}
+                                                 for k in ("client_task", "decision", "end", "execution", "router")]
+    assert governance.query("steps-by-kind", name="nope") == []          # $ids follows the name filter
+    assert governance.query("steps-by-kind", limit=2) == [{"kind": "client_task", "steps": 1}, {"kind": "decision", "steps": 1}]
+    # run data is reachable and temporal values come back as ISO strings
+    governance.store("recent-runs", "", "MATCH (r:Run) RETURN r.id AS run_id, r.started_at AS started ORDER BY started DESC LIMIT $limit")
+    rows = governance.query("recent-runs")
+    assert rows[0]["run_id"] == rid and isinstance(rows[0]["started"], str) and "T" in rows[0]["started"]
+    # storing under the same name replaces the Cypher
+    governance.store("recent-runs", "count", "MATCH (r:Run) RETURN count(r) AS runs")
+    assert governance.query("recent-runs") == [{"runs": 1}]
+    assert [q["query"] for q in governance.queries()][-2:] == ["recent-runs", "steps-by-kind"]
+    # refusals: a bad name, a built-in name, Cypher the database rejects
+    with pytest.raises(InvalidQuery):
+        governance.store("Steps By Kind", "", cypher)
+    with pytest.raises(InvalidQuery):
+        governance.store("cycles", "", cypher)
+    with pytest.raises(InvalidQuery, match="rejects the Cypher"):
+        governance.store("broken", "", "MATCH (n RETURN n")
+    assert [q["query"] for q in governance.queries() if not q["builtin"]] == ["recent-runs", "steps-by-kind"]
+    # a write never happens: refused when stored or, if EXPLAIN lets it through, when run in read mode
+    try:
+        governance.store("wipe", "", "MATCH (r:Run) DETACH DELETE r RETURN count(r) AS gone")
+    except InvalidQuery:
+        pass
+    else:
+        with pytest.raises(QueryFailed):
+            governance.query("wipe")
+    assert runs.get(rid).id == rid
+    with pytest.raises(NotFound):
+        governance.query("no-such-query")
+    with pytest.raises(InvalidQuery):
+        governance.remove("cycles")
+    governance.remove("steps-by-kind")
+    with pytest.raises(NotFound):
+        governance.remove("steps-by-kind")
+    with pytest.raises(NotFound):
+        governance.query("steps-by-kind")
+
+
 def test_governance_untaken_branches(backend, catalog, runs, governance, example):
     rev = catalog.publish(example)
-    seed(runs, rev, decision(0.9), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
+    seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
     if isinstance(backend, FilesystemBackend):
         with pytest.raises(NotSupported):
             governance.query("untaken-branches")
@@ -472,7 +641,7 @@ def test_governance_untaken_branches(backend, catalog, runs, governance, example
     assert governance.query("untaken-branches") == [
         {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "calm", "to": "reply",
          "runs": 1, "router_runs": 1}]
-    seed(runs, rev, decision(0.3), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
+    seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
     assert governance.query("untaken-branches") == []
     assert governance.query("untaken-branches", window=1) == [
         {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "angry", "to": "escalate",
@@ -542,10 +711,55 @@ class TestNeo4j:
             name="billing-support", id=example.id, database_=neo4j.conn.database)
         steps = {r["step"]: (r["kind"], sorted(r["files"]), set(r["labels"])) for r in rows}
         assert [r["step"] for r in rows] == ["triage", "by-tone", "escalate", "reply", "end"]
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (:Procedure {key: $id})-[:STARTS_AT]->(a)-[e:NEXT|THEN*]->(z:Step:End) "
+            "RETURN [x IN e | type(x) + coalesce(':' + x.value, '')] AS edges ORDER BY edges",
+            id=example.id, database_=neo4j.conn.database)
+        assert [r["edges"] for r in rows] == [["NEXT", "THEN:angry", "NEXT"], ["NEXT", "THEN:calm", "NEXT"]]
         assert steps["escalate"] == ("execution", ["assets/config.json", "scripts/escalate.py"],
                                      {"Step", "Execution"})
         assert steps["by-tone"][0] == "router" and "Router" in steps["by-tone"][2]
         assert steps["reply"][1] == ["assets/policy.md", "assets/reply.md", "references/help.md"]
+
+    def test_projection_carries_the_data_flow(self, neo4j, example):
+        neo4j.catalog.publish(example)
+        db = neo4j.conn.database
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (d:Data {skill_id: $id}) "
+            "OPTIONAL MATCH (p:Step)-[:PRODUCES]->(d) "
+            "OPTIONAL MATCH (d)-[:FEEDS]->(c:Step) "
+            "OPTIONAL MATCH (proc:Procedure)-[:SUPPLIES]->(d) "
+            "RETURN d.name AS name, d.type AS type, p.name AS producer, collect(DISTINCT c.name) AS consumers, "
+            "       proc IS NOT NULL AS start ORDER BY name",
+            id=example.id, database_=db)
+        flow = {r["name"]: r.data() for r in rows}
+        assert set(flow) == {"message", "billing", "tone", "ticket_id", "queue", "reply"}
+        # a start input: supplied by the procedure, produced by no step, read by the start step and the end
+        assert flow["message"]["start"] and flow["message"]["producer"] is None
+        assert {"triage", "end"} <= set(flow["message"]["consumers"])
+        # a decision's answer: produced by the decision, typed as the question collapses, fed to the router
+        assert (flow["tone"]["producer"], flow["tone"]["type"], flow["tone"]["start"]) == ("triage", "string", False)
+        assert "by-tone" in flow["tone"]["consumers"] and flow["billing"]["type"] == "boolean"
+        # an output nothing reads: produced, never fed
+        assert flow["ticket_id"]["producer"] == "escalate" and flow["ticket_id"]["type"] == "integer"
+        assert flow["ticket_id"]["consumers"] == [] and flow["reply"]["producer"] == "reply"
+        # lineage is one direction: start input -> decision -> answer -> router
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH path = (:Procedure {key: $id})-[:SUPPLIES]->(:Data {name: 'message'})-[:FEEDS]->(:Step {name: 'triage'})"
+            "-[:PRODUCES]->(:Data {name: 'tone'})-[:FEEDS]->(:Step {name: 'by-tone'}) RETURN count(path) AS n",
+            id=example.id, database_=db)
+        assert rows[0]["n"] == 1
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (q:Question {skill_id: $id, name: 'tone'})-[:YIELDS]->(d:Data) RETURN d.name AS name",
+            id=example.id, database_=db)
+        assert [r["name"] for r in rows] == ["tone"]
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (p:Procedure {key: $id}) RETURN p.interpreter AS interpreter, p.interpreter_version AS version, "
+            "p.packages AS packages, p.tools AS tools", id=example.id, database_=db)
+        assert rows[0].data() == {"interpreter": "python", "version": "3.10", "packages": [], "tools": []}
+        rows, _, _ = neo4j.driver.execute_query("MATCH (i:Input {skill_id: $id}) RETURN count(i) AS n",
+                                                id=example.id, database_=db)
+        assert rows[0]["n"] == 0
 
     def test_runs_link_to_the_steps_they_executed(self, neo4j, example):
         rev = neo4j.catalog.publish(example)
@@ -556,7 +770,7 @@ class TestNeo4j:
                           status="done", pause=None)
         rows, _, _ = neo4j.driver.execute_query(
             "MATCH (r:Run {id: $id})-[:OF_SKILL]->(s:Skill) "
-            "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:NEXT]->(b:StepRun) "
+            "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:FOLLOWED_BY]->(b:StepRun) "
             "MATCH (a)-[:OF_STEP]->(sa:Step), (b)-[:OF_STEP]->(sb:Step) "
             "RETURN s.id AS skill, a.step AS first, sa.key AS first_key, b.step AS second, a.input AS input",
             id=rid, database_=neo4j.conn.database)

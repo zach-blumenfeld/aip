@@ -12,122 +12,132 @@ flowchart LR
     end
     subgraph aip["aip package"]
         spec["aip.spec<br/>ProcedureSpec models<br/>validate · load"]
-        model["aip.model<br/>Procedure.run<br/>steps · routing · validation"]
+        model["aip.model<br/>engine · Procedure.run<br/>steps · routing · validation"]
         backend["aip.client.backend<br/>LocalBackend · HttpBackend"]
+        resolver["aip.client.resolver<br/>decisions · thresholds · review"]
         runner["aip.client.runner<br/>loop · pause · resume"]
         cli["aip run / aip resume"]
     end
     jev["TypeSafe System One<br/>(TYPESAFE_API_KEY)"]
     client["client<br/>agent or person"]
-    runfile[(".aip/runs/*.json")]
+    runfile[("~/.aip/runs/&lt;run-id&gt;.json")]
 
     md --> spec --> model
     res --> model
-    model <--> jev
     model --> backend --> runner --> cli
+    backend --> resolver <--> jev
     runner <--> client
     runner --> runfile
 ```
 
 - **`aip_spec`** (the `aip-spec` package) parses `SKILL.md` and validates the frontmatter, the YAML against the format models, and the graph; **`aip.spec.loader`** builds the runtime `Procedure` from the result.
-- **`aip.model`** is the engine. `Procedure.run(after, payload, history, thresholds)` is the whole server operation: resolve routers on the client's input, validate it against the receiving step's `inputs`, run the step, append a history entry, describe what comes next.
-- **`aip.client.backend`** is the seam between runner and engine. `LocalBackend` calls `Procedure.run` in-process; `HttpBackend` posts the same arguments to an AIP server (see [With a server](#with-a-server)). The runner is written against the interface, so it is the same loop either way.
-- **`aip.client.runner`** is the client. It follows the engine's suggested input from step to step and stops when a decision belongs to the client.
+- **`aip.model`** is the engine. `Procedure.run(after, payload, history)` is one step: check the state holds the outputs of the step the client just answered, resolve routers on it, validate it against the receiving step's `inputs`, run the step on just those keys, check its result against its declared `outputs`, merge them into the state, append a history entry, describe what comes next. At `end` the result is the state projected to the end step's `inputs`. `aip.model.engine` is the loop over it: `start(procedure, input)` and `submit(procedure, cursor, answer)` step a run until it pauses, ends, or fails, where the cursor is the run's `after`, full state, history, and pause.
+- **`aip.client.backend`** is where the loop runs. `LocalBackend` runs it in-process and keeps the cursor in the run file; `HttpBackend` asks an AIP server to run it (`POST /runs`, `POST /runs/{id}/result`), and the server keeps the cursor (see [With a server](#with-a-server)). The runner is written against the two calls, so it is the same either way.
+- **`aip.client.resolver`** answers decisions for the client. The loop stops at every decision; with a TypeSafe key on this machine (`TYPESAFE_API_KEY`, else `aip config --decision-model KEY`) the resolver asks the model, applies the author's thresholds that came with the step, and either hands the answers back with their attribution or turns the stop into a `review` pause. Without a key the decision pause goes to the agent. Neither the engine nor the server ever calls a model.
+- **`aip.client.runner`** is the client. It opens the run, answers its pauses (from the answer file, or the terminal with `--interactive`), writes the run file, and prints one JSON object for how it stopped ([`docs/cli-json.md`](cli-json.md)).
 
-## The step protocol
+## The loop
 
-Every call, local or over HTTP, has the same shape.
-
-Request:
-
-| field        | meaning                                                                 |
-|--------------|-------------------------------------------------------------------------|
-| `after`      | the step the client just completed; `null` to start                      |
-| `payload`    | the client's input for whatever comes next                              |
-| `history`    | everything so far; the server appends, the client carries it            |
-| `thresholds` | optional per-question overrides for this call                           |
-
-Response:
-
-| field       | meaning                                                                                      |
-|-------------|----------------------------------------------------------------------------------------------|
-| `ran`       | the step that ran (routers are walked on the way and recorded in history, never "ran")      |
-| `kind`      | `decision`, `execution`, `client_task`, or `end`                                             |
-| `result`    | the step's raw output                                                                        |
-| `suggested` | the server's proposed input for the next step; the client may post it as-is or override it   |
-| `review`    | decision answers under their threshold, with the distribution; empty means safe to pass through |
-| `next`      | what receives the next input: a step with its `inputs`, or a router expanded into branches   |
-| `history`   | the carried-in history plus this step's `{step, kind, input, result}` entry                  |
-
-The server is stateless. State lives in the request and response, and the client carries it.
-
-## The runner loop
+`Procedure.run` takes the step the client just completed (`after`, `null` to start), the run's full state, and the history, and returns the step that ran, its result, the state with its outputs merged in (`suggested`, internal), what comes next, and the history with this step's `{step, kind, input, result}` entry. The engine loops over it:
 
 ```
-payload = start input
-after   = null
+cursor = {after: null, state: start input, history: [], pause: null}
 loop:
-    node = what receives payload after `after`   (routers resolved on payload)
-    if node is a decision and no decision model is available:
-        PAUSE decision                             -> client answers the questions
-    response = run(after, payload, history, thresholds)
-    if response.next is null:                      DONE, print final state
-    if response.kind == client_task:               PAUSE client_task -> client produces next input
-    if response.review is non-empty:               PAUSE review      -> client confirms or overrides
-    after, payload, history = response.ran, response.suggested, response.history
+    node = what receives the state after `after`   (routers resolved on the state)
+    if node is a decision:
+        STOP decision                              -> the client resolves it (below)
+    if node is an execution step:
+        STOP execute                               -> the client runs the script and reports
+    response = Procedure.run(after, state, history)   (a failure: ERROR, below)
+    if response.next is null:                      DONE, the end step's state
+    if response.kind == client_task:               PAUSE client_task -> client does the task
+                                                   (its history entry is written with the answer)
+    after, state, history = response.ran, response.suggested, response.history
 ```
 
-A pause writes the run file, prints a JSON block, and exits with code **3**. `aip resume <run-file> --input answer.json` merges the answer over `suggested` and re-enters the loop at `after`. With `--interactive`, a pause becomes terminal prompts instead and nothing is written.
+At a decision the client resolves (`aip.client.resolver`):
 
-| exit code | meaning                                    |
-|-----------|--------------------------------------------|
-| 0         | done; final state printed as JSON          |
-| 1         | error (invalid skill, bad input, script failure) |
-| 3         | paused; run file written, resume command printed |
+```
+if a decision model is configured on this client:
+    answers = model(questions, state)              (history too, if the step asks)
+    if every answer clears its threshold:          submit answers, attribution {typesafe, reviewed: false}
+    else:                                          PAUSE review      -> agent confirms or overrides
+                                                   submit answers, attribution {typesafe, reviewed: true, proposed}
+else:                                              PAUSE decision    -> agent answers the questions
+                                                   submit answers, attribution {manual}
+```
+
+A pause is stored on the cursor (a review only in the client's run file: the loop still waits at the decision); an answer is merged over the cursor's state and the loop re-enters at `after`. A paused step has no history entry until it is answered: a decision's entry records the answers and their attribution, a client task's the task it was given and the answer (`{"task", "references", "answer": {...}}`). Thresholds are the author's, from SKILL.md, and nothing else.
+
+Every stop prints one JSON object and, unless it is an error before any step ran, writes the run file: the shapes, field by field, are in [`docs/cli-json.md`](cli-json.md). A pause carries only the paused step's declared inputs as `state`. `aip resume <run-id> --input answer.json` sends the answer to the run, which merges it over the state it holds and re-enters the loop at `after`. With `--interactive`, a pause becomes terminal prompts instead. `--progress` adds one JSON line per completed step before the final object; `--debug` puts the traceback of a failure on stderr.
+
+| exit code | printed                                                        |
+|-----------|----------------------------------------------------------------|
+| 0         | `{"paused": ...}`: the client must answer                      |
+| 0         | `{"done": true, ...}`: the end step's state                    |
+| 1         | `{"error": <kind>, ...}`: `script_failed`, `timeout`, `invalid_input`, `invalid_output`, `requires_unmet`, or `server` |
+
+A step that fails while running (a script exits non-zero, times out, or returns keys it did not declare) leaves the run file at the state before it; `aip resume <run-id>` with no input retries it. So does `requires_unmet`: before the first script runs, the machine that runs it is checked against the skill's `requires` block, and every missing interpreter version, package, or tool is named at once. An answer that does not fit its pause leaves the pause in place, to be answered again.
 
 ### Pause kinds
 
 | `paused`      | when                                               | what the client posts on resume                                   |
 |---------------|----------------------------------------------------|-------------------------------------------------------------------|
-| `decision`    | `TYPESAFE_API_KEY` is unset and a decision is next | one collapsed answer per question: `true`/`false`, a label, or a level |
-| `review`      | a decision answered below its threshold            | any keys to override in `suggested`; usually the flagged question |
-| `client_task` | the step handed work to the client                 | the keys in `expects` (the next step's `inputs`); extra keys pass through |
+| `decision`    | a decision is next and this client has no decision model | one collapsed answer per question: `true`/`false`, a label, or a level |
+| `review`      | this client's model answered a question below its threshold | only the questions to override among `proposed_answers`; `{}` accepts |
+| `client_task` | the step handed work to the client                 | the keys in `answer_with` (the step's declared `outputs`), with their types |
 
-With a key set, decisions run against the model and only low-confidence answers pause. Without one, the client answers every decision itself, and history records those entries with `"manual": true`.
+With a key set, decisions run against the model and only low-confidence answers pause. Without one, the agent answers every decision itself. Either way the decision's history entry records its `attribution`: `{"resolver": "typesafe"|"manual", "model", "confidence": {question: float}|null, "reviewed"}`, plus `proposed`, the model's answers, when a review was answered.
 
 ## Files
 
-`aip run` writes exactly one file, and only on a pause: the run file, at `.aip/runs/<skill>-<timestamp>.json` unless `--run-file` says otherwise. It holds everything needed to continue:
+`aip run` writes exactly one file: the run file, at `~/.aip/runs/<run-id>.json` unless `--run-file` names a path (`AIP_HOME` moves `~/.aip`). Every outcome prints the `run_id`, and `aip resume <run-id>` finds the file from any directory; `aip resume <path>` works too. A local run's id is generated when it starts; a served run's is the server's, assigned when the run opens. It is written at every pause, at an error once a step has run, and at done. A local run's file holds everything needed to continue, and at done its `history` is the run's whole ledger:
 
 ```json
 {
-  "skill_dir": "billing-support",
+  "skill_dir": "/home/you/work/billing-support",
   "after": null,
-  "suggested": { "message": "I was charged twice!" },
+  "state": { "message": "I was charged twice!" },
   "history": [],
   "pause": {
     "kind": "decision",
     "step": "triage",
     "questions": { "billing": { "type": "noul", "instructions": "..." },
                    "tone":    { "type": "choice", "instructions": "...", "criteria": { "angry": "...", "calm": "..." } } },
-    "expects": { "message": "string" }
+    "state": { "message": "I was charged twice!" },
+    "thresholds": { "billing": 0.15, "tone": 0.6 }
   },
-  "thresholds": {},
-  "created": 1790293854.39,
-  "server": null,
-  "name": null,
-  "revision": null,
-  "run_id": null
+  "run_id": "4f1c9a2e7b3d5068",
+  "workdir": "/home/you/work",
+  "created": 1790293854.39
 }
 ```
 
-The last four are set when the run is on a server (below): the URL, the exact `name` and `revision` the run is pinned to, and the server's `run_id` once a step has run. `aip resume` rebuilds the right backend from them, so a run file is self-contained either way.
+`skill_dir` is absolute, so the run resumes from anywhere. `workdir` is the run's working directory (the directory `aip run` started in, or `--workdir`): scripts get it as `AIP_WORKDIR` and read and write the run's files there, whichever directory `resume` is called from. `state` is the run's full state; the pause's `state` is the slice the paused step declared. A decision pause also keeps the author's `thresholds` (not printed). `pause.kind` is also `error` (with the failing `step`, retried by a bare `resume`) or `done` (with the result as `state`).
 
-`.aip/` is gitignored. Nothing else is written: the skill folder is read-only to the runner, state travels in memory and in the run file, and scripts write only what they choose to.
+A served run's file is only a handle, since the server holds the state and the history:
+
+```json
+{
+  "pause": { "kind": "client_task", "step": "reply", "task": "...", "state": { "message": "...", "tone": "calm" },
+             "references": [ ... ], "answer_with": { "reply": "string" } },
+  "run_id": "4f1c9a2e7b3d5068",
+  "server": "http://localhost:8000",
+  "name": "billing-support",
+  "revision": "3f9c2a7d1e5b8c04",
+  "version": 3,
+  "workdir": "/home/you/work",
+  "created": 1790293854.39
+}
+```
+
+`aip resume` rebuilds the right backend from it and posts only the answer, with the pause's `step` and the run's `version` so a run that moved on since is refused rather than answered twice.
+
+Nothing else is written by the runner: the skill folder is read-only to it, state lives in the run file (locally) or on the server, and scripts write only what they choose to, under `AIP_WORKDIR` by convention. A served run also keeps the revision's `scripts/` and `assets/` in `~/.aip/cache/<name>@<revision>/` (below).
 
 ## Worked example: `billing-support`
 
-The example skill ships with the `aip-spec` package; `aip-spec example billing-support --out .` writes it to `./billing-support`, which the commands below run.
+The example skill ships with the `aip-spec` package; `aip-spec example billing-support --out .` writes it to `./billing-support`, which the commands below run with no server: `./billing-support` is a folder, so the run is local. The outputs are recorded from the CLI, with the run id and home directory replaced by the sample ones the other docs use.
 
 The graph: `triage` (decision: is it billing, what is the tone) → `by-tone` (router) → `escalate` (script opens a ticket) or `reply` (client drafts a reply against the policy) → `end`.
 
@@ -135,7 +145,7 @@ The graph: `triage` (decision: is it billing, what is the tone) → `by-tone` (r
 
 ```bash
 $ echo '{"message": "I was charged twice!"}' > start.json
-$ aip run billing-support --input start.json --run-file run.json
+$ aip run ./billing-support --input start.json
 {
   "paused": "decision",
   "step": "triage",
@@ -147,97 +157,115 @@ $ aip run billing-support --input start.json --run-file run.json
                  "criteria": { "angry": "Frustrated, demanding, or threatening to leave.",
                                "calm": "Neutral or polite, asking a question." } }
   },
-  "expects": { "message": "string" },
-  "suggested": { "message": "I was charged twice!" },
-  "resume": "aip resume run.json --input <answer.json>",
-  "run_file": "run.json"
-}
-$ echo $?
-3
-```
-
-The client answers and resumes. The router sends `angry` to the script, which runs for real:
-
-```bash
-$ echo '{"billing": true, "tone": "angry"}' > answers.json
-$ aip resume run.json --input answers.json
-{
-  "done": true,
-  "state": { "message": "I was charged twice!", "billing": true, "tone": "angry",
-             "ticket_id": 45067, "queue": "tier2" },
-  "history": [
-    { "step": "triage",   "kind": "decision",  "input": { "message": "..." },
-      "result": { "answers": { "billing": { "type": "noul", "manual": true },
-                               "tone":    { "type": "choice", "manual": "angry" } } },
-      "manual": true },
-    { "step": "by-tone",  "kind": "router",    "input": { "tone": "angry" }, "result": { "to": "escalate" } },
-    { "step": "escalate", "kind": "execution", "input": { "..." : "..." },
-      "result": { "message": "...", "ticket_id": 45067, "queue": "tier2" } },
-    { "step": "end",      "kind": "end",       "input": { "..." : "..." }, "result": { "..." : "..." } }
-  ]
+  "state": { "message": "I was charged twice!" },
+  "run_id": "4f1c9a2e7b3d5068",
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 $ echo $?
 0
 ```
 
+The client answers and resumes by run id, from any directory. The router sends `angry` to the script, which runs for real, on this machine:
+
+```bash
+$ echo '{"billing": true, "tone": "angry"}' > answers.json
+$ aip resume 4f1c9a2e7b3d5068 --input answers.json --progress
+{"event": "step", "step": "triage", "kind": "decision", "resolver": "manual"}
+{"event": "step", "step": "by-tone", "kind": "router", "to": "escalate"}
+{"event": "step", "step": "escalate", "kind": "execution", "seconds": 0.013}
+{"done": true, "run_id": "4f1c9a2e7b3d5068", "state": {"message": "I was charged twice!"}, "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
+```
+
+The ticket is in the run file's `history`, the run's ledger (`aip runs 4f1c9a2e7b3d5068` prints it):
+
+```json
+[
+  { "step": "triage",   "kind": "decision",  "input": { "message": "..." },
+    "result": { "answers": { "billing": true, "tone": "angry" } },
+    "attribution": { "resolver": "manual", "model": null, "confidence": null, "reviewed": false } },
+  { "step": "by-tone",  "kind": "router",    "input": { "tone": "angry" }, "result": { "to": "escalate" } },
+  { "step": "escalate", "kind": "execution", "input": { "message": "...", "tone": "angry" },
+    "result": { "ticket_id": 54926, "queue": "tier2" }, "seconds": 0.013, "host": "laptop.local" },
+  { "step": "end",      "kind": "end",       "input": { "message": "..." }, "result": { "message": "..." } }
+]
+```
+
 ### With a decision model
 
-Same start, `TYPESAFE_API_KEY` set. The model answers `billing` at 0.97 and `tone` as `angry` at 0.55 confidence, under the step's threshold of 0.6, so the run pauses for review instead of routing:
+Same start, with a key on this machine (`TYPESAFE_API_KEY`, or `aip config --decision-model KEY`). The model answers `billing` at 0.97 and `tone` as `angry` at 0.55 confidence, under the step's threshold of 0.6, so the run pauses for review instead of routing:
 
 ```json
 {
   "paused": "review",
   "step": "triage",
+  "state": { "message": "I was charged twice!" },
+  "proposed_answers": { "billing": true, "tone": "angry" },
   "review": [
     { "question": "tone", "type": "choice", "confidence": 0.55,
       "probabilities": { "angry": 0.55, "calm": 0.45 }, "reason": "confidence below 0.6" }
   ],
-  "expects": { "message": "string", "tone": "string" },
-  "suggested": { "message": "I was charged twice!", "billing": true, "tone": "angry" },
-  "resume": "aip resume run.json --input <answer.json>",
-  "run_file": "run.json"
+  "run_id": "7d20b9e4c1a65f38",
+  "run_file": "/home/you/.aip/runs/7d20b9e4c1a65f38.json"
 }
 ```
 
-The client reads the message, disagrees with the model, and overrides. The router now sends `calm` to the client task, which pauses again with the rendered template, the policy injected from `assets/policy.md`, and the reference the client may load on demand:
+Nothing is recorded yet. The client reads the message, disagrees with the model, and overrides; the decision is recorded with `"resolver": "typesafe"`, `"reviewed": true`, and the model's `proposed` answers. The router now sends `calm` to the client task, which pauses again with the template rendered from the step's inputs, the policy injected from `assets/policy.md`, and the reference the client may load on demand:
 
 ```bash
 $ echo '{"tone": "calm"}' > override.json
-$ aip resume run.json --input override.json
+$ aip resume 7d20b9e4c1a65f38 --input override.json
 {
   "paused": "client_task",
   "step": "reply",
-  "task": "...# Draft a reply\n\nWrite a short, calm reply to the customer below. Apply the policy exactly...\n\nCustomer message:\nI was charged twice!\n\nPolicy:\n# Refund policy\n\n- Duplicate charges are refunded in full within 5 business days.\n...",
+  "task": "# Draft a reply\n\nWrite a short, calm reply to the customer below. Apply the policy exactly...\n\nCustomer message:\nI was charged twice!\n\nPolicy:\n# Refund policy\n\n- Duplicate charges are refunded in full within 5 business days.\n...",
+  "state": { "message": "I was charged twice!", "tone": "calm" },
   "references": [
     { "uri": "billing-support/references/help.md",
       "description": "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days." }
   ],
-  "expects": { "message": "string" },
-  "suggested": { "message": "I was charged twice!", "billing": true, "tone": "calm" },
-  "resume": "aip resume run.json --input <answer.json>",
-  "run_file": "run.json"
+  "answer_with": { "reply": "string" },
+  "run_id": "7d20b9e4c1a65f38",
+  "run_file": "/home/you/.aip/runs/7d20b9e4c1a65f38.json"
 }
 ```
 
-The client does the task and posts its output. `end` declares only `message`, so `reply` rides along as an extra key:
+The client does the task and answers with the step's declared outputs. `end` declares only `message`, so that is the run's result; the reply is recorded in the history, on the `reply` entry written when the answer was accepted, `{"step": "reply", "kind": "client_task", "input": {"message": ..., "tone": "calm"}, "result": {"task": ..., "references": [...], "answer": {"reply": "Sorry about ..."}}}`:
 
 ```bash
 $ echo '{"reply": "Sorry about the duplicate charge. A full refund is on its way within 5 business days."}' > reply.json
-$ aip resume run.json --input reply.json
+$ aip resume 7d20b9e4c1a65f38 --input reply.json
 {
   "done": true,
-  "state": { "message": "I was charged twice!", "billing": true, "tone": "calm",
-             "reply": "Sorry about the duplicate charge. A full refund is on its way within 5 business days." },
-  "history": [ "triage", "by-tone", "reply", "end" ]
+  "run_id": "7d20b9e4c1a65f38",
+  "state": { "message": "I was charged twice!" },
+  "run_file": "/home/you/.aip/runs/7d20b9e4c1a65f38.json"
 }
 ```
 
-(History abbreviated; each entry carries the full `input` and `result` as in the first run, including the model's probabilities for `triage` and the client's override at `by-tone`.)
+### When a script fails
+
+If `escalate.py` exits 1 with `ticket service unreachable` on stderr, the angry branch stops at it:
+
+```json
+{
+  "error": "script_failed",
+  "step": "escalate",
+  "message": "Script scripts/escalate.py exited with 1:\nticket service unreachable",
+  "script": "scripts/escalate.py",
+  "exit_code": 1,
+  "stderr": "ticket service unreachable",
+  "run_id": "c3e81f0a9b247d56",
+  "resumable": true,
+  "run_file": "/home/you/.aip/runs/c3e81f0a9b247d56.json"
+}
+```
+
+The run file now holds the state before `escalate` (the message and both answers). Once the cause is fixed, `aip resume c3e81f0a9b247d56` with no input runs `escalate` again and continues.
 
 ### Interactive
 
 ```bash
-$ aip run billing-support --interactive
+$ aip run ./billing-support --interactive
 message (string): I was charged twice!
 
 tone: confidence below 0.6  (model says "angry")
@@ -246,15 +274,15 @@ tone: confidence below 0.6  (model says "angry")
 
 # Draft a reply
 ...
-message (string) ["I was charged twice!"]:
+reply (string): Sorry about the duplicate charge. A full refund is on its way within 5 business days.
 { "done": true, ... }
 ```
 
-Same loop, same engine; prompts replace the run file.
+Same loop, same engine; prompts replace the pauses.
 
 ## With a server
 
-Nothing changes in the protocol. `aip server` exposes `Procedure.run` over HTTP for every published skill (`docs/server-design.md`), executes scripts with its own interpreter, holds the decision-model key, and records each run. The client points at it once:
+The same loop runs on the server, which holds the run. `aip server` runs the engine for every published skill (`docs/server-design.md`), and keeps each run's state and history in its run backend. It never runs a script and holds no decision-model key: execution steps run on the client, next to its data, and the client resolves decisions with its own key (`docs/client-execution.md`). The client points at it once:
 
 ```
 $ export AIP_SERVER=http://localhost:8000            # or: aip config --server http://localhost:8000 [--token T]
@@ -263,12 +291,73 @@ $ aip publish billing-support                        # validate locally, upload,
 billing-support@3f9c2a7d1e5b8c04
 $ aip search "refund"                                # ranked by the server
 billing-support@3f9c2a7d1e5b8c04  0.812  Triage an inbound billing message ...
+$ mkdir elsewhere && cd elsewhere                    # a path that exists always runs locally, so leave ./billing-support
 $ aip info billing-support --example-input > start.json
-$ aip run billing-support --input start.json         # same pause, same resume command
+$ aip run billing-support --input start.json         # the published revision: same pause; `run_id` is the server's
 ```
 
-`aip run <name>` uses `HttpBackend`, which posts the same `after`, `payload`, `history`, and `thresholds` to `/procedures/<name>@<revision>/step` (and `/answer` for a manual decision) that `LocalBackend` passes to `Procedure.run`. The first call pins the name to one revision for the whole run. Pauses are identical; the run file additionally carries `server`, `name`, `revision`, and `run_id`, and `GET /runs/<run_id>` on the server shows the same history the client printed. A folder path (`aip run ./billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.
+`aip run <name>` uses `HttpBackend`, which makes two calls:
 
-The server also keeps per-question threshold overrides per name (`GET|POST /catalog/<name>/thresholds`, body `{"thresholds": {"tone": 0.5}}`); a `step` merges them over the author's defaults and under the request's own `thresholds`, so a run's `--threshold` still wins for that call. Over its run history it answers four governance questions, `GET /governance/<query>` with `name`, `window` (the last N runs), and `limit`: `overridden-decisions` (model answers the client changed before continuing), `failing-scripts` (execution steps that raised, with the latest error), `missing-fields` (resolved revisions without `do_not_use_when` or `anti_patterns`), and `untaken-branches` (router branches no run followed; Neo4j only, 501 on the filesystem backend). `GET /governance` lists them.
+| call | body | reply |
+|---|---|---|
+| `POST /runs` | `{"name", "revision"?, "input"}` | 201: where the run stopped |
+| `POST /runs/{id}/result` | `{"answer"?, "attribution"?, "step"?, "version"?}`; no `answer` (or no body) retries a failed step | 200: where the run stopped |
+
+At an execution step the run stops and the reply is the step to perform, which the CLI never prints:
+
+```json
+{ "paused": "execute", "step": "escalate", "script": "scripts/escalate.py", "command": null,
+  "stdin": { "state": { "message": "...", "tone": "angry" }, "assets": { "config": "..." }, "expects": { ... } },
+  "timeout": 60.0, "requires": { "interpreter": "python", "version": "3.10", "packages": [], "tools": [] },
+  "run_id": "4f1c9a2e7b3d5068", "name": "billing-support", "revision": "3f9c2a7d1e5b8c04", "version": 2, "steps": [ ... ] }
+```
+
+`HttpBackend` fetches the revision's `scripts/` and `assets/` (never `SKILL.md`) into `~/.aip/cache/<name>@<revision>/`, each file checked against the sha256 in the server's manifest (`GET /catalog/<ref>/files`) and the cache re-verified before each run; checks `requires` against this machine; runs the script from its folder in the cache with `stdin` on stdin and the run's `workdir` as `AIP_WORKDIR`; and posts the report as the `answer`: `{"output": {...}, "seconds": 0.04}`, or a failure, `{"error": "script_failed", "exit_code": 2, "stderr": "..."}`, `{"error": "timeout", "seconds": 60}`, or `{"error": "requires_unmet", "missing": [...]}`, each with `host`, the client machine's name. The server checks the output against the step's declared outputs and records it, or records the failure, with the `host` on the history entry, so `failing-scripts` still sees every client's exit code and stderr. If the scripts cannot be fetched, the run waits at the step and `aip resume` tries again.
+
+At a decision the reply is the decision pause with the author's `thresholds` (and the run's `history` when the step sets `history: true`); `HttpBackend` resolves it as above and posts the answers with their `attribution`, or keeps a review in the run file until the agent answers it. With no `attribution` the answer is recorded as manual. The server checks the answers against the question types and the attribution's shape (a 422 `invalid_output` naming `attribution` when it does not fit) and records both.
+
+Where the run stopped is the CLI's paused, done or error object (a decision pause also carries the author's `thresholds`) plus `run_id`, `name`, `revision`, the run's `version`, and `steps`, the `--progress` line of each step the call completed; an error carries `resumable: true`. A step that fails is a 200 with the error object: the run recorded it, with status `failed` and the state before the step. A start input or an answer that does not fit is a 422 in the error envelope and changes nothing (no run is opened; the pause stands). A post whose `step` or `version` is not the run's current one, or that lost a race with another post, is a 409 `stale_run`. Each call loads the run from the backend, steps it, and stores what changed with a version check, so nothing per run is held in the server process and any replica over the same backend can answer any call.
+
+The server resolves the name to one revision when the run opens, and the run stays on it. `GET /runs/<run_id>` shows the run's `state`, `history`, `status`, `pause` and `version`: for the same inputs, the same state and history a local run writes to its run file. `/procedures/<name>/peek|step|answer`, where the client carried the state and history itself, still answer for one version, with a `Deprecation` header; `step` refuses an execution step (409 `runs_on_client`) and a decision (422 `no_decision_model`; `answer` takes the answers and an optional `attribution`). A folder path (`aip run ./billing-support`) still runs locally and never touches the server; `aip get <name>` downloads a published revision losslessly when you want the folder.
+
+Decision thresholds are the author's, from SKILL.md: there is no per-name override and no run flag, so a run's behaviour is fixed by its revision. Over its catalog and run history the server answers nine governance questions, `GET /governance/<query>` with `name`, `window` (the last N runs), `limit`, and `repeats`: five about runs, `overridden-decisions` (per question and resolver, model answers the agent changed at review), `manual-decisions` (per decision step, how many were answered with no model), `failing-scripts` (execution steps that raised, with the latest error and the `exit_code` and `stderr` its client reported), `missing-fields` (resolved revisions without `do_not_use_when` or `anti_patterns`), and `untaken-branches` (router branches no run followed); and four about structure, read off the control flow and the data flow as one graph, `empty-results` (end steps that read only start inputs, so the result holds nothing a step produced), `unused-data` (produced keys and decision answers no step reads), `cycles` (each control-flow cycle with the branch value that continues it and the keys it re-produces), and `repeated-cycles` (runs that went round a cycle more than `repeats` times). The last five are Neo4j only, 501 on the filesystem backend. `GET /governance` lists them. On the Neo4j backend you can also keep queries of your own: `PUT /governance/<name>` with `{"description", "cypher"}` stores one (`aip governance` and the console then list it with `builtin: false`), it runs with the same parameters (`$name`, `$window`, `$limit`, `$repeats`, `$ids` for the resolved revisions) in a read-only transaction with a timeout, so it can read the whole graph and write nothing, and `DELETE /governance/<name>` removes it.
 
 An agent that has never seen a procedure needs one page to do all of this: the `aip-runtime` Agent Skill (`skills/aip-runtime/SKILL.md`, shipped in the package; `aip runtime --skill --out <skills dir>` writes it). It says to search first, read `info`, run, and answer the pauses, and not to do the steps by hand. [`docs/examples/aip-runtime-session.md`](examples/aip-runtime-session.md) is a transcript of a fresh agent completing `billing-support` with only that skill and `AIP_SERVER` set.
+
+### A served run, request by request
+
+The angry branch of the worked example against a server, as `HttpBackend` sends it (recorded with `curl` against `aip server --backend filesystem`; the `questions` are as above, and ids are the samples). Open the run with the start input; the server walks to the first stop, the decision, and sends the questions with the author's thresholds:
+
+```
+POST /runs  {"name": "billing-support", "input": {"message": "I was charged twice!"}}
+201 {"paused": "decision", "step": "triage", "questions": {...}, "state": {"message": "I was charged twice!"},
+     "thresholds": {"billing": 0.15, "tone": 0.6},
+     "run_id": "4f1c9a2e7b3d5068", "name": "billing-support", "revision": "3f9c2a7d1e5b8c04", "version": 1, "steps": []}
+```
+
+Post the answers with their attribution, naming the step and version they answer. The server checks them against the question types, records them, routes, and stops at the script, which is the client's to run:
+
+```
+POST /runs/4f1c9a2e7b3d5068/result
+     {"step": "triage", "version": 1, "answer": {"billing": true, "tone": "angry"},
+      "attribution": {"resolver": "manual", "model": null, "confidence": null, "reviewed": false}}
+200 {"paused": "execute", "step": "escalate", "script": "scripts/escalate.py", "command": null,
+     "stdin": {"state": {"message": "I was charged twice!", "tone": "angry"}, "currentState": {...},
+               "assets": {"config": "{\"queue\": \"tier2\", \"sla_hours\": 4}\n"},
+               "expects": {"step": "end", "kind": "end", "inputs": {"message": "string"}}},
+     "timeout": 60.0, "requires": {"interpreter": "python", "version": "3.10", "packages": [], "tools": []},
+     "run_id": "4f1c9a2e7b3d5068", ..., "version": 2,
+     "steps": [{"event": "step", "step": "triage", "kind": "decision", "resolver": "manual"}]}
+```
+
+Run the script from the cache, then post its report. The server checks the output against `escalate`'s declared outputs, records it with the host, and walks to the end:
+
+```
+POST /runs/4f1c9a2e7b3d5068/result
+     {"step": "escalate", "version": 2, "answer": {"output": {"ticket_id": 54926, "queue": "tier2"}, "seconds": 0.013, "host": "laptop.local"}}
+200 {"done": true, "state": {"message": "I was charged twice!"}, "run_id": "4f1c9a2e7b3d5068", ..., "version": 5,
+     "steps": [{"event": "step", "step": "by-tone", "kind": "router", "to": "escalate"},
+               {"event": "step", "step": "escalate", "kind": "execution", "seconds": 0.013}]}
+```
+
+`GET /runs/4f1c9a2e7b3d5068` then has `status: done` and the same four history entries a local run writes to its run file (the router's is recorded when the run moves past it, so it arrives with the script's report). The client sent the message once, at the start, and never held the run's state. The calm branch is the same with a `client_task` stop in place of `execute`: its reply is `{"paused": "client_task", ...}` as the CLI prints it, and the answer is the post's `answer`, `{"reply": "..."}`, with no attribution.

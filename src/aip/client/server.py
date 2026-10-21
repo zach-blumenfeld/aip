@@ -19,6 +19,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
+from aip.errors import AipError
+
 JSON = Dict[str, Any]
 MANIFEST = ".aip-manifest.json"
 
@@ -71,12 +73,12 @@ def configured() -> "Server | None":
 # -------------------------------------------------------------------------- errors
 
 
-class ServerError(Exception):
+class ServerError(AipError):
     """A failed call: the server's error envelope, or no server to speak of."""
 
     def __init__(self, status: int, kind: str, message: str, location: str | None = None, **extra: Any):
-        super().__init__(message)
-        self.status, self.kind, self.message, self.location, self.extra = status, kind, message, location, extra
+        super().__init__(message, kind)
+        self.status, self.location, self.extra = status, location, extra
 
     def __str__(self) -> str:
         where = f" at {self.location}" if self.location else ""

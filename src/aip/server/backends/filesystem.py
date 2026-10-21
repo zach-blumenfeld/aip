@@ -1,17 +1,20 @@
 """The filesystem backend (design §5.2): a root directory and nothing else.
 
     <root>/
-    ├── catalog.json                 names -> {pinned, thresholds, revisions: [{revision, published_at, retired}]}
+    ├── catalog.json                 names -> {pinned, revisions: [{revision, published_at, retired}]}
     ├── catalog.lock                 flock target; catalog.json is the only file ever rewritten
     ├── skills/<name>/<revision>/    one revision
     │   ├── .aip-manifest.json       the record minus file bytes: manifest (path, size, sha256, mode)
     │   │                            plus the projection rows, so `get` never re-parses the skill
     │   └── <name>/                  the skill folder exactly as published, nothing else in it;
     │                                also the executable copy (the loader checks the folder name)
-    └── runs/<run_id>.jsonl          first line the run header, one JSON line per history entry
+    └── runs/<run_id>.jsonl          first line the run header, then one JSON line per append: the
+                                     entry (if any), status, pause, and (when it changed) state and after
 
 Writes are atomic per file (temp name, then rename); a revision directory is built
-beside its final name and renamed into place. Search is weighted BM25 with Porter stemming
+beside its final name and renamed into place. A run's version is its number of appends; an
+append holds an exclusive lock on the run file while it checks the version and writes, so
+any number of server processes over one root can share runs. Search is weighted BM25 with Porter stemming
 (`aip.server.search`) over an in-memory index of every name's resolved revision, rebuilt
 on publish, pin, and retire. Governance queries scan the run files with the helpers in
 `aip.server.governance`; `untaken-branches` is declined (`NotSupported`).
@@ -33,7 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 from aip.server import governance
-from aip.server.backend import NotFound, NotSupported, split_ref
+from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
 from aip.server.search import BM25Index
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, materialize)
@@ -251,15 +254,6 @@ class FilesystemCatalog:
     def resolve(self, ref: str) -> tuple[str, str]:
         return self._resolve_in(self._read_catalog(), ref)
 
-    def thresholds(self, name: str) -> Dict[str, float]:
-        return dict(self._entry(self._read_catalog(), name).get("thresholds") or {})
-
-    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
-        with self._locked():
-            catalog = self._read_catalog()
-            self._entry(catalog, name)["thresholds"] = {q: float(v) for q, v in thresholds.items()}
-            self._write_catalog(catalog)
-
     # ------------------------------------------------------------------ search
 
     def _reindex(self) -> None:
@@ -306,24 +300,38 @@ class FilesystemRuns:
         _write_atomic(self.runs_dir / f"{run_id}.jsonl", json.dumps(header) + "\n")
         return run_id
 
-    def append(self, run_id: str, entry: JSON, status: str, pause: JSON | None) -> None:
+    def append(self, run_id: str, entry: JSON | None, status: str, pause: JSON | None, *,
+               expected: int | None = None, state: JSON | None = None, after: str | None = None) -> int:
         path = self._path(run_id)
-        line = json.dumps({"entry": entry, "status": status, "pause": pause, "at": _now()}) + "\n"
-        with open(path, "a") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
+        row: JSON = {"entry": entry, "status": status, "pause": pause, "at": _now()}
+        if state is not None:
+            row.update(state=state, after=after)
+        with open(path, "r+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                version = sum(1 for line in fh.read().splitlines() if line.strip()) - 1
+                if expected is not None and expected != version:
+                    raise StaleRun(f"run {run_id!r} is at version {version}, not {expected}")
+                fh.seek(0, os.SEEK_END)
+                fh.write(json.dumps(row) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        return version + 1
 
     def get(self, run_id: str) -> RunRecord:
         header, *rows = self._lines(self._path(run_id))
         last = rows[-1] if rows else None
+        cursor = next((r for r in reversed(rows) if "state" in r), {})
         return RunRecord(
             id=header["id"], name=header["name"], revision=header["revision"],
             status=last["status"] if last else header["status"],
             started_at=header["started_at"],
             updated_at=last["at"] if last else header["started_at"],
             pause=last["pause"] if last else None,
-            history=[r["entry"] for r in rows],
+            history=[r["entry"] for r in rows if r.get("entry") is not None],
+            state=cursor.get("state", {}), after=cursor.get("after"), version=len(rows),
         )
 
     def list(self, name: str | None = None, status: str | None = None, limit: int = 50) -> List[RunSummary]:
@@ -371,12 +379,23 @@ class FilesystemGovernance:
                 continue
             yield entry_name, revision, self.catalog._manifest(entry_name, revision).get("procedure", {})
 
+    def queries(self) -> List[JSON]:
+        return governance.listing()
+
+    def store(self, name: str, description: str, cypher: str) -> JSON:
+        raise NotSupported("the filesystem backend keeps no queries of its own; it has no query language to run them in")
+
+    def remove(self, name: str) -> None:
+        raise NotSupported("the filesystem backend keeps no queries of its own")
+
     def query(self, query: str, name: str | None = None, window: int = governance.DEFAULT_WINDOW,
-              limit: int = governance.DEFAULT_LIMIT) -> List[JSON]:
+              limit: int = governance.DEFAULT_LIMIT, repeats: int = governance.DEFAULT_REPEATS) -> List[JSON]:
         if query not in governance.QUERIES:
-            raise NotFound(f"no governance query {query!r}")
+            raise NotFound(governance.NOT_FOUND.format(name=query))
         if query == "overridden-decisions":
             return governance.overridden_decisions(self._window(name, window), limit)
+        if query == "manual-decisions":
+            return governance.manual_decisions(self._window(name, window), limit)
         if query == "failing-scripts":
             return governance.failing_scripts(self._window(name, window), self._script_of, limit)
         if query == "missing-fields":

@@ -1,27 +1,44 @@
-"""The HTTP server (design §4.2): one API over either backend; the server executes scripts.
+"""The HTTP server (design §4.2): one API over either backend; the server holds every run.
 
 `create_app(backend)` returns a FastAPI application. `backend` is anything with a
 `.catalog` (`CatalogBackend`) and, optionally, a `.runs` (`RunBackend`); the filesystem
 and Neo4j backends both qualify. Every endpoint is one of three kinds:
 
 - **catalog**: `/catalog`, `/catalog/search`, `/catalog/{ref}`, `/catalog/{ref}/files`,
-  `/catalog/{ref}/files/{path}`, `POST /catalog`, `POST /catalog/{name}/pin|retire`, and
-  `GET|POST /catalog/{name}/thresholds` for the per-question overrides a `step` merges under
-  the request's own `thresholds` (design §7).
-- **execution**: `/procedures/{ref}/peek|step|answer|capabilities`, one per method of
-  the client's `Backend` protocol. The procedure is loaded from the backend's folder for
-  that revision (`catalog.folder`), cached per revision, and `Procedure.run` does the
-  work; scripts run here, with this process's interpreter and privileges.
-- **runs**: `/runs`, `/runs/{id}`; `step` and `answer` append to the run named by their
-  `run_id` (creating one when absent). Without a `RunBackend` these answer 501.
-- **governance**: `/governance` lists the named corpus queries of `aip.server.governance`;
-  `/governance/{query}?name=&window=&limit=` answers one through the backend's `.governance`
-  (501 when it has none or declines the query).
+  `/catalog/{ref}/files/{path}`, `POST /catalog`, `POST /catalog/{name}/pin|retire`.
+  Decision thresholds are the author's, from SKILL.md, and nothing else.
+- **runs**: `POST /runs` opens a run on a start input and replies with where it stopped;
+  `POST /runs/{id}/result` carries one thing to it (the answer to its pause, or nothing to
+  retry a failed step); `GET /runs`, `GET /runs/{id}`. Each call loads the run from the
+  `RunBackend`, steps it with `aip.model.engine`, and stores what changed with a version
+  check, so nothing per run stays in this process and any replica can answer any call; a
+  write that lost a race answers 409. Without a `RunBackend` these answer 501.
+  The server never runs a script and never calls a decision model. At a decision the run stops
+  and the reply is the decision pause with the author's `thresholds`; the client resolves it
+  and posts the answers with their `attribution` (`{"resolver": "typesafe"|"manual", "model",
+  "confidence", "reviewed"}`, plus `proposed` when reviewed; omitted means manual), which is
+  checked against the questions and recorded in the history. At an execution step the run
+  stops and the reply is the step to perform (`{"paused": "execute", "step", "script", "command", "stdin", "timeout",
+  "requires"}`); the client runs it next to its data and posts the report as the `answer`
+  (`{"output": {...}, "seconds"}`, or a failure with exit code and stderr, a timeout, or the
+  unmet requirements), which is validated against the step's outputs and recorded.
+- **execution** (deprecated, one version): `/procedures/{ref}/peek|step|answer|capabilities`,
+  where the client carries the state and history on every call. `step` and `answer` reply
+  with a `Deprecation` header and append to the run named by their `run_id`; an execution
+  step answers 409 `runs_on_client` (open the run with `POST /runs`), a decision 422
+  `no_decision_model` (answer it through `answer`).
+- **governance**: `/governance` lists the named corpus queries of `aip.server.governance` and the
+  queries stored on the backend (`builtin: false`); `/governance/{query}?name=&window=&limit=&repeats=`
+  answers one through the backend's `.governance` (501 when it has none or declines the query).
+  `PUT /governance/{query}` with `{description, cypher}` stores a query of your own and
+  `DELETE /governance/{query}` removes it (publish scope; 501 on a backend with no query language,
+  422 `invalid_query` for a bad name or Cypher the database rejects, 422 `query_failed` when a
+  stored query tries to write, times out, or raises when run).
 
-- **inspector** (optional): with `inspector=<dir>`, the built `aip-inspector` bundle in that
-  directory is served at `/inspector/` (`index.html` at the root, hashed assets beside it).
-  `INSPECTOR_DIR` is where the package ships it; `npm run build && npm run sync` in the
-  inspector repo refreshes it. A missing bundle answers 404 with instructions, not a crash.
+The server serves no UI: the console (formerly inspector) is its own npm package and calls
+this API like any other client, from its own origin. So the server answers CORS for pages served
+from a loopback origin (`http://localhost:<port>`, `127.0.0.1`, `[::1]`), where the console runs,
+and for any origin in `allow_origins`; a page from anywhere else on the web cannot read it.
 
 `ref` is `name`, `name@<revision>`, or `name@latest`, resolved by the catalog.
 
@@ -36,7 +53,6 @@ import base64
 import io
 import json
 import mimetypes
-import os
 import shutil
 import tarfile
 import tempfile
@@ -46,14 +62,15 @@ from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from aip.model import Decision, describe_next
-from aip.model.types import InputValidationError, example_input
-from aip.server.backend import NotFound, NotSupported, split_ref
-from aip.server.governance import DEFAULT_LIMIT, DEFAULT_WINDOW, QUERIES
+from aip.model import Decision, Execution, describe_next, engine
+from aip.model.engine import Advance, Cursor
+from aip.model.types import InputValidationError, OutputValidationError, StepError, example_input
+from aip.server.backend import InvalidQuery, NotFound, NotSupported, QueryFailed, StaleRun, split_ref
+from aip.server.governance import DEFAULT_LIMIT, DEFAULT_REPEATS, DEFAULT_WINDOW, QUERIES, listing
 from aip.server.records import MANIFEST, SkillRecord, snapshot
 
 JSON = Dict[str, Any]
@@ -62,8 +79,11 @@ READ, PUBLISH = "read", "publish"
 ALL_SCOPES = frozenset({READ, PUBLISH})
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
-# The inspector bundle the package ships (design §10): `aip server --inspector` serves it.
-INSPECTOR_DIR = Path(__file__).parent / "inspector"
+# Pages the server answers CORS for without being told: the console runs on the user's machine.
+LOOPBACK_ORIGINS = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
+
+# On the replies of `/procedures/{ref}/step|answer`, which go once `POST /runs` has had a version.
+DEPRECATED = {"Deprecation": "true", "Link": '</runs>; rel="successor-version"'}
 
 
 class ApiError(Exception):
@@ -91,13 +111,13 @@ class PeekBody(BaseModel):
 
 class StepBody(PeekBody):
     history: List[JSON] = Field(default_factory=list)
-    thresholds: Dict[str, float] | None = None
     run_id: str | None = None
 
 
 class AnswerBody(PeekBody):
     history: List[JSON] = Field(default_factory=list)
     answers: JSON
+    attribution: JSON | None = None
     run_id: str | None = None
 
 
@@ -115,28 +135,37 @@ class RevisionBody(BaseModel):
     revision: str | None = None
 
 
+class StoredQueryBody(BaseModel):
+    description: str = ""
+    cypher: str
+
+
 class RunBody(BaseModel):
     name: str
     revision: str | None = None
+    input: JSON
 
 
-class ThresholdsBody(BaseModel):
-    thresholds: Dict[str, float]
+class ResultBody(BaseModel):
+    """One thing for a run. `answer` answers its pause or reports its script (omit it to retry a failed step), with
+    `attribution` at a decision (omit it for a manual answer); `step` and `version` are what the client last saw,
+    and a run that has moved on answers 409."""
+    answer: JSON | None = None
+    attribution: JSON | None = None
+    step: str | None = None
+    version: int | None = None
 
 
 # ------------------------------------------------------------------------------- app
 
 
-def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: Any = None,
-               python: Path | None = None, localhost_open: bool = True,
-               inspector: Path | None = None) -> FastAPI:
+def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
+               localhost_open: bool = True, allow_origins: List[str] | None = None) -> FastAPI:
     """Build the server over `backend`.
 
     tokens:          bearer token -> scopes (`read`, `publish`); empty or None means no auth
-    client:          an injected decision-model client (tests); otherwise TYPESAFE_API_KEY decides
-    python:          interpreter for scripts; default this process's own
     localhost_open:  a loopback client needs no token even when tokens are configured
-    inspector:       serve the inspector bundle in this directory at /inspector/ (None: do not)
+    allow_origins:   origins besides loopback ones whose pages may call this server (CORS)
     """
     catalog = backend.catalog
     runs = getattr(backend, "runs", None)
@@ -146,6 +175,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     lock = threading.Lock()
 
     app = FastAPI(title="aip server", version="0.5a0", docs_url=None, redoc_url=None)
+    app.add_middleware(CORSMiddleware, allow_origins=list(allow_origins or []), allow_origin_regex=LOOPBACK_ORIGINS,
+                       allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
     # ------------------------------------------------------------------ errors
 
@@ -161,10 +192,23 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     async def _not_supported(_: Request, exc: NotSupported):
         return JSONResponse(ApiError(501, "not_supported", str(exc)).body(), status_code=501)
 
+    @app.exception_handler(StaleRun)
+    async def _stale(_: Request, exc: StaleRun):
+        return JSONResponse(ApiError(409, "stale_run", str(exc)).body(), status_code=409)
+
+    @app.exception_handler(InvalidQuery)
+    async def _invalid_query(_: Request, exc: InvalidQuery):
+        return JSONResponse(ApiError(422, "invalid_query", str(exc)).body(), status_code=422)
+
+    @app.exception_handler(QueryFailed)
+    async def _query_failed(_: Request, exc: QueryFailed):
+        return JSONResponse(ApiError(422, "query_failed", str(exc)).body(), status_code=422)
+
     @app.exception_handler(InputValidationError)
-    async def _invalid_input(_: Request, exc: InputValidationError):
-        return JSONResponse(ApiError(422, "invalid_input", str(exc), location=exc.step, errors=exc.errors).body(),
-                            status_code=422)
+    @app.exception_handler(OutputValidationError)
+    async def _invalid_keys(_: Request, exc: InputValidationError | OutputValidationError):
+        return JSONResponse(ApiError(422, exc.kind, str(exc), location=exc.step, errors=exc.errors,
+                                     **exc.fields()).body(), status_code=422)
 
     @app.exception_handler(RequestValidationError)
     async def _invalid_request(_: Request, exc: RequestValidationError):
@@ -210,11 +254,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             if key not in procedures:
                 from aip.spec.loader import load_procedure
 
-                procedures[key] = load_procedure(catalog.folder(name, revision), client=client, python=python)
+                procedures[key] = load_procedure(catalog.folder(name, revision))
             return procedures[key]
-
-    def has_decision_model() -> bool:
-        return client is not None or bool(os.environ.get("TYPESAFE_API_KEY"))
 
     def require_runs():
         if runs is None:
@@ -229,9 +270,11 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             run_id = runs.create(name, revision)
         new_entries = response["history"][carried:]
         status, pause = run_status(response)
+        state = response["result"] if response["next"] is None else response["suggested"]
         for i, entry in enumerate(new_entries):
             last = i == len(new_entries) - 1
-            runs.append(run_id, entry, status if last else "running", pause if last else None)
+            runs.append(run_id, entry, status if last else "running", pause if last else None,
+                        **({"state": state, "after": response["ran"]} if last else {}))
         return run_id
 
     def record_failure(run_id: str | None, name: str, revision: str, node: Any, payload: JSON,
@@ -243,12 +286,21 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         try:
             if run_id is None:
                 run_id = runs.create(name, revision)
+            detail = exc.fields() if isinstance(exc, StepError) else {}
             runs.append(run_id, {"step": getattr(node, "name", None), "kind": "error",
                                  "step_kind": getattr(node, "kind", None), "input": payload,
-                                 "result": {"error": f"{type(exc).__name__}: {exc}"}}, "error", None)
+                                 "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}, "failed", None)
         except Exception:  # the failure itself is what the client needs to hear about
             pass
         return run_id
+
+    def failed_step(body: StepBody | AnswerBody, name: str, revision: str, node: Any, exc: Exception) -> None:
+        """Record a step that failed while running and raise its error: the failure's own kind and
+        detail (`script_failed` with exit code and stderr, `timeout`, `invalid_output`), else `step_failed`."""
+        failed = record_failure(body.run_id, name, revision, node, body.payload, exc)
+        kind, detail = (exc.kind, exc.fields()) if isinstance(exc, StepError) else ("step_failed", {})
+        raise ApiError(500, kind, f"{type(exc).__name__}: {exc}", location=getattr(node, "name", body.after),
+                       **detail, **({"run_id": failed} if failed is not None else {})) from exc
 
     def execute(ref: str, body: StepBody | AnswerBody, answers: JSON | None) -> JSON:
         name, revision = resolve(ref)
@@ -259,29 +311,60 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         try:
             if answers is None:
                 node, _ = proc.resolve(body.after, body.payload)
-                if isinstance(node, Decision) and not has_decision_model():
+                if isinstance(node, Execution):
+                    raise ApiError(409, "runs_on_client",
+                                   f"step {node.name!r} is an execution step and scripts run on the client; "
+                                   "open the run with POST /runs", location=node.name)
+                if isinstance(node, Decision):
                     raise ApiError(422, "no_decision_model",
-                                   f"step {node.name!r} is a decision and this server has no decision model; "
+                                   f"step {node.name!r} is a decision and decisions are resolved by the client; "
                                    "answer its questions through /answer", location=node.name)
-                thresholds = {**catalog.thresholds(name), **(body.thresholds or {})}
-                response = proc.run(body.after, body.payload, body.history, thresholds or None).to_dict()
+                response = proc.run(body.after, body.payload, body.history).to_dict()
             else:
                 node, entries = proc.resolve(body.after, body.payload)
                 if not isinstance(node, Decision):
                     raise ApiError(422, "not_a_decision", f"the step after {body.after!r} is not a decision",
                                    location=getattr(node, "name", None))
-                response = node.accept_manual(body.payload, [*body.history, *entries], answers).to_dict()
+                response = node.accept_answers(body.payload, [*body.history, *entries], answers,
+                                               body.attribution).to_dict()
         except (ApiError, NotFound, InputValidationError):
             raise
+        except OutputValidationError as exc:
+            if exc.script is None:                # an answer that does not fit: nothing ran
+                raise
+            failed_step(body, name, revision, node, exc)
         except KeyError as exc:
             raise ApiError(422, "invalid_request", str(exc)) from exc
         except Exception as exc:
-            failed = record_failure(body.run_id, name, revision, node, body.payload, exc)
-            raise ApiError(500, "step_failed", f"{type(exc).__name__}: {exc}",
-                           location=getattr(node, "name", body.after),
-                           **({"run_id": failed} if failed is not None else {})) from exc
+            failed_step(body, name, revision, node, exc)
         run_id = record_run(body.run_id, name, revision, len(body.history), response)
         return {**response, "run_id": run_id, "name": name, "revision": revision}
+
+    def store(run_id: str, version: int, advance: Advance) -> int:
+        """Append what one call did, every write checked against the version before it: the new
+        history entries, a failure's entry, then the run's status, pause, state and `after`."""
+        cursor = advance.cursor
+        entries = [*advance.entries, *([advance.failure] if advance.failure is not None else [])]
+        for entry in entries[:-1]:
+            version = runs.append(run_id, entry, "running", None, expected=version)
+        return runs.append(run_id, entries[-1] if entries else None, cursor.status, cursor.pause,
+                           expected=version, state=cursor.state, after=cursor.after)
+
+    def reply(run_id: str, name: str, revision: str, version: int, advance: Advance) -> JSON:
+        """Where the run stopped: the paused, done, or error object the CLI prints (a decision pause
+        also carries its `thresholds`), the run's id and version, and the `--progress` lines of
+        the steps this call completed."""
+        out = {**advance.outcome(), "run_id": run_id, "name": name, "revision": revision, "version": version,
+               "steps": advance.lines}
+        if advance.error is not None:
+            out["resumable"] = True
+        return out
+
+    def rejected(advance: Advance, status: int) -> ApiError:
+        """A call that changed nothing: a start input or an answer that does not fit."""
+        error = dict(advance.error)
+        kind, message, step = error.pop("error"), error.pop("message"), error.pop("step")
+        return ApiError(status, kind, message, location=step, **error)
 
     # ------------------------------------------------------------------ catalog
 
@@ -350,9 +433,9 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
             "aip_version": record.aip_version, "published_at": record.published_at, "retired": record.retired,
             **{k: record.procedure.get(k) for k in ("purpose", "trigger_when", "do_not_use_when", "anti_patterns")},
             "example_input": example_input(described["start"]["inputs"]),
-            "thresholds": catalog.thresholds(name),
             "step_details": record.steps, "edges": record.edges, "branches": record.branches,
-            "inputs": record.inputs, "questions": record.questions, "resources": record.resources,
+            "inputs": record.inputs, "outputs": record.outputs, "requires": record.procedure.get("requires"),
+            "questions": record.questions, "resources": record.resources,
             "files": [f.manifest_entry() for f in record.files],
         }
 
@@ -386,25 +469,12 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         catalog.retire(name, body.revision)
         return {"name": name, "retired": body.revision}
 
-    @app.get("/catalog/{name}/thresholds", dependencies=[require(READ)])
-    def get_thresholds(name: str) -> JSON:
-        return {"name": name, "thresholds": catalog.thresholds(name)}
-
-    @app.post("/catalog/{name}/thresholds", dependencies=[require(PUBLISH)])
-    def set_thresholds(name: str, body: ThresholdsBody) -> JSON:
-        bad = {q: v for q, v in body.thresholds.items() if not 0.0 <= v <= 1.0}
-        if bad:
-            raise ApiError(422, "invalid_request", f"thresholds must be between 0 and 1: {bad}")
-        catalog.set_thresholds(name, body.thresholds)
-        return {"name": name, "thresholds": catalog.thresholds(name)}
-
     # ---------------------------------------------------------------- execution
 
     @app.get("/procedures/{ref}/capabilities", dependencies=[require(READ)])
     def capabilities(ref: str) -> JSON:
         name, revision = resolve(ref)
-        return {"name": name, "revision": revision, "decision_model": has_decision_model(),
-                "executes_scripts": True, "persists_runs": runs is not None, "governance": governance is not None}
+        return {"name": name, "revision": revision, "executes_scripts": False, "persists_runs": runs is not None, "governance": governance is not None}
 
     @app.post("/procedures/{ref}/peek", dependencies=[require(READ)])
     def peek(ref: str, body: PeekBody) -> JSON | None:
@@ -416,19 +486,49 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
         return describe_next(node)
 
     @app.post("/procedures/{ref}/step", dependencies=[require(READ)])
-    def step(ref: str, body: StepBody) -> JSON:
+    def step(ref: str, body: StepBody, response: Response) -> JSON:
+        response.headers.update(DEPRECATED)
         return execute(ref, body, None)
 
     @app.post("/procedures/{ref}/answer", dependencies=[require(READ)])
-    def answer(ref: str, body: AnswerBody) -> JSON:
+    def answer(ref: str, body: AnswerBody, response: Response) -> JSON:
+        response.headers.update(DEPRECATED)
         return execute(ref, body, body.answers)
 
     # --------------------------------------------------------------------- runs
 
     @app.post("/runs", dependencies=[require(READ)], status_code=201)
-    def create_run(body: RunBody) -> JSON:
+    def open_run(body: RunBody) -> JSON:
+        """Open a run on the start input and step it until it stops. A start input the first step
+        rejects is a 422 and opens nothing."""
+        require_runs()
         name, revision = resolve(body.name if body.revision is None else f"{body.name}@{body.revision}")
-        return {"run_id": require_runs().create(name, revision), "name": name, "revision": revision}
+        advance = engine.start(procedure(name, revision), body.input, scripts=False)
+        if advance.cursor is None:
+            raise rejected(advance, 422)
+        run_id = runs.create(name, revision)
+        return reply(run_id, name, revision, store(run_id, 0, advance), advance)
+
+    @app.post("/runs/{run_id}/result", dependencies=[require(READ)])
+    def post_result(run_id: str, body: ResultBody | None = None) -> JSON:
+        """Carry one thing to a run: the answer to its pause, the report of the script it waits at,
+        or nothing (retry a failed step). 409 when the run has moved past what the client saw
+        (`step`, `version`) or another call wrote first; 422 when the answer does not fit (the
+        run stays)."""
+        body = body or ResultBody()
+        run = require_runs().get(run_id)
+        if body.version is not None and body.version != run.version:
+            raise ApiError(409, "stale_run", f"run {run_id!r} is at version {run.version}, not {body.version}")
+        pending = (run.pause or {}).get("step")
+        if body.step is not None and body.step != pending:
+            raise ApiError(409, "stale_run", f"run {run_id!r} is not waiting on step {body.step!r} "
+                                             f"(status {run.status}, step {pending!r})")
+        cursor = Cursor(run.after, run.state, [e for e in run.history if e.get("kind") != "error"], run.pause)
+        advance = engine.submit(procedure(run.name, run.revision), cursor, body.answer, scripts=False,
+                                attribution=body.attribution)
+        if advance.kept:
+            raise rejected(advance, 422 if advance.error["error"] in ("invalid_input", "invalid_output") else 409)
+        return reply(run_id, run.name, run.revision, store(run_id, run.version, advance), advance)
 
     @app.get("/runs", dependencies=[require(READ)])
     def list_runs(name: str | None = Query(None), status: str | None = Query(None),
@@ -441,55 +541,43 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None, client: 
     def get_run(run_id: str) -> JSON:
         r = require_runs().get(run_id)
         return {"run_id": r.id, "name": r.name, "revision": r.revision, "status": r.status,
-                "started_at": r.started_at, "updated_at": r.updated_at, "pause": r.pause, "history": r.history}
+                "started_at": r.started_at, "updated_at": r.updated_at, "version": r.version,
+                "after": r.after, "pause": r.pause, "state": r.state, "history": r.history}
 
     # --------------------------------------------------------------- governance
 
+    def require_governance():
+        if governance is None:
+            raise ApiError(501, "not_supported", "this server does not answer governance queries")
+        return governance
+
     @app.get("/governance", dependencies=[require(READ)])
     def list_governance() -> List[JSON]:
-        return [{"query": q, "description": d, "path": f"/governance/{q}"} for q, d in QUERIES.items()]
+        rows = governance.queries() if governance is not None and hasattr(governance, "queries") else listing()
+        return [{**row, "path": f"/governance/{row['query']}"} for row in rows]
 
     @app.get("/governance/{query}", dependencies=[require(READ)])
     def governance_query(query: str, name: str | None = Query(None),
                          window: int = Query(DEFAULT_WINDOW, ge=1, le=100000),
-                         limit: int = Query(DEFAULT_LIMIT, ge=1, le=10000)) -> List[JSON]:
-        if query not in QUERIES:
+                         limit: int = Query(DEFAULT_LIMIT, ge=1, le=10000),
+                         repeats: int = Query(DEFAULT_REPEATS, ge=1, le=100000)) -> List[JSON]:
+        if query not in QUERIES and governance is None:
             raise ApiError(404, "not_found", f"no governance query {query!r}; GET /governance lists them")
-        if governance is None:
-            raise ApiError(501, "not_supported", "this server does not answer governance queries")
-        return governance.query(query, name=name, window=window, limit=limit)
+        return require_governance().query(query, name=name, window=window, limit=limit, repeats=repeats)
 
-    # --------------------------------------------------------------- inspector
+    @app.put("/governance/{query}", dependencies=[require(PUBLISH)])
+    def store_governance_query(query: str, body: StoredQueryBody) -> JSON:
+        """Keep a query of your own under this name (replacing one of that name). It runs read-only."""
+        row = require_governance().store(query, body.description, body.cypher)
+        return {**row, "path": f"/governance/{query}"}
 
-    if inspector is not None:
-        mount_inspector(app, inspector)
+    @app.delete("/governance/{query}", dependencies=[require(PUBLISH)])
+    def remove_governance_query(query: str) -> JSON:
+        require_governance().remove(query)
+        return {"query": query, "removed": True}
 
     app.state.backend = backend
     return app
-
-
-def mount_inspector(app: FastAPI, bundle: Path) -> bool:
-    """Serve the built inspector in `bundle` at /inspector/; a missing bundle 404s with the fix.
-
-    The bundle is unauthenticated static HTML, JS and CSS: the API calls it makes carry the
-    token the user enters on its Server page, so the read scope still gates everything it shows.
-    Returns whether the bundle was found.
-    """
-    present = (bundle / "index.html").is_file()
-    if present:
-        @app.get("/inspector", include_in_schema=False)
-        def inspector_root() -> RedirectResponse:
-            return RedirectResponse("/inspector/", status_code=307)
-
-        app.mount("/inspector", StaticFiles(directory=bundle, html=True), name="inspector")
-    else:
-        @app.get("/inspector", include_in_schema=False)
-        @app.get("/inspector/{path:path}", include_in_schema=False)
-        def inspector_missing(path: str = "") -> JSONResponse:
-            raise ApiError(404, "not_found", f"the inspector bundle is not installed: no index.html in {bundle}. "
-                                             "Build it in the aip-inspector repo with `npm run build && npm run sync` "
-                                             "(or pass --inspector DIR with a built bundle).")
-    return present
 
 
 # --------------------------------------------------------------------------- helpers
@@ -497,19 +585,14 @@ def mount_inspector(app: FastAPI, bundle: Path) -> bool:
 
 def run_status(response: JSON) -> tuple[str, JSON | None]:
     """The run status and pause block a step response implies: done at the end, paused when the
-    client must act (a client task, or answers to review), running otherwise."""
-    from aip.client.runner import _expects
+    client must act (a client task, or answers to review), running otherwise. The pause block
+    is the client's (`aip.model.engine.pause_of`)."""
+    from aip.model.engine import pause_of
 
     if response["next"] is None:
         return "done", None
-    if response["kind"] == "client_task":
-        return "paused", {"kind": "client_task", "step": response["ran"], "task": response["result"].get("task"),
-                          "references": response["result"].get("references", []),
-                          "expects": _expects(response["next"])}
-    if response["review"]:
-        return "paused", {"kind": "review", "step": response["ran"], "review": response["review"],
-                          "expects": _expects(response["next"])}
-    return "running", None
+    pause = pause_of(response)
+    return ("running", None) if pause is None else ("paused", pause)
 
 
 def tar_of(record: SkillRecord) -> bytes:

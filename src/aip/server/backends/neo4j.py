@@ -2,31 +2,52 @@
 
 Graph per skill revision, as the 0.4 `aip db` projection wrote it:
 
-    (:Name {name, pinned, thresholds})-[:HAS_REVISION]->(:Skill {id: name@revision, name, revision, description,
+    (:Name {name, pinned})-[:HAS_REVISION]->(:Skill {id: name@revision, name, revision, description,
                                                      aip_version, frontmatter, manifest, root_name,
                                                      directories, published_at, retired})
     (:Skill)-[:HAS_FILE]->(:File {key, path, size, sha256, mode, encoding, content})
-    (:Skill)-[:HAS_PROCEDURE]->(:Procedure {key, purpose, trigger_when, triggers, ...})
+    (:Skill)-[:HAS_PROCEDURE]->(:Procedure {key, purpose, trigger_when, triggers, do_not_use_when, anti_patterns,
+                                            interpreter, interpreter_version, packages, tools})
     (:Procedure)-[:HAS_STEP {order}]->(:Step:<Kind> {key, name, kind, order, ...})
     (:Procedure)-[:STARTS_AT|ENDS_AT]->(:Step)
-    (:Step)-[:INPUTS_TO]->(:Step)        (:Step)-[:BRANCH {value}]->(:Step)
-    (:Step)-[:DECLARES_INPUT]->(:Input)  (:Step)-[:ASKS]->(:Question)
+    (:Step)-[:NEXT]->(:Step)             (:Step:Router)-[:THEN {value}]->(:Step)     control flow
+    (:Step)-[:PRODUCES {order}]->(:Data {key, name, type, description})              data flow
+    (:Data)-[:FEEDS {order, description}]->(:Step)
+    (:Procedure)-[:SUPPLIES]->(:Data)    (:Step)-[:ASKS]->(:Question)-[:YIELDS]->(:Data)
     (:Step)-[:USES {role, description}]->(:File)
+
+Control flow is `NEXT` from a decision, execution, or client_task step to the one that follows it, and
+`THEN {value}` from a router, one edge per branch, so `-[:NEXT|THEN*]->` from `STARTS_AT` walks the whole
+procedure. A run's `StepRun` chain is `FOLLOWED_BY`, one path through those edges, joined to them by `OF_STEP`.
+Control flow and data flow are separate edge sets over the same `Step` nodes. The data flow is
+the 0.6a0 state contract as a graph: one `Data` node per key per revision, since every key has
+exactly one producer and is never overwritten. `PRODUCES` comes from the execution or
+client_task step that declares the key in `outputs`, or from the decision whose question it
+answers (that question also `YIELDS` it); a start input, which the client supplies, is
+`SUPPLIES`d by the procedure and has no producer. `FEEDS` goes to every step that declares the
+key in `inputs`, to the router that branches on it, and to the end step, whose inputs are the
+result. The node carries the producer's type and description; a `FEEDS` edge carries the
+consumer's own description when it gives one. So `(a)-[:PRODUCES]->(:Data)-[:FEEDS]->(b)` is
+one hop of lineage, and a variable-length `PRODUCES|FEEDS` path follows a value end to end.
+(Revisions written before 0.6a1 have `Input` nodes on `DECLARES_INPUT` edges, `INPUTS_TO` and `BRANCH`
+for the control flow, and `NEXT` between their step runs.)
 
 and per run:
 
-    (:Run {id, name, revision, status, started_at, updated_at, pause})-[:OF_SKILL]->(:Skill)
-    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, manual, review, entry, at})
-    (:StepRun)-[:NEXT]->(:StepRun)       (:StepRun)-[:OF_STEP]->(:Step)
-    (:StepRun)-[:ANSWERED]->(:Answer {question, type, value, accepted, overridden})-[:OF_QUESTION]->(:Question)
+    (:Run {id, name, revision, status, started_at, updated_at, pause, state, after, version})-[:OF_SKILL]->(:Skill)
+    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, resolver, review, entry, at})
+    (:StepRun)-[:FOLLOWED_BY]->(:StepRun)   (:StepRun)-[:OF_STEP]->(:Step)
+    (:StepRun)-[:ANSWERED]->(:Answer {question, resolver, model, value, accepted, reviewed, overridden})
+              -[:OF_QUESTION]->(:Question)
 
-`Answer` nodes are the governance projection of a model-answered decision: `value` is the
-collapsed answer (JSON-encoded), and `accepted` is filled in by the first later step run
-whose input carries the question's key, with `overridden` set when the two differ; this is
-what `aip.server.governance.overrides` computes from a history, written at append time so
-the override query is plain Cypher. An error entry's `step` is the step that failed and
-`step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Name.thresholds`
-holds the per-question threshold overrides (design §7) as JSON.
+A decision step run's `resolver` is its attribution's (`typesafe` or `manual`). `Answer` nodes
+are the governance projection of a model-answered decision, one per question: `value` is what
+the model proposed and `accepted` what the run recorded (both JSON-encoded), `overridden`
+when the agent changed it at review; this is what `aip.server.governance.model_answers`
+computes from a history entry, written at append time so the decision queries are plain Cypher. An error entry's `step` is the step that failed and
+`step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Run.state` is the
+run's full state (JSON) and `Run.version` its number of appends: an append takes the run's
+write lock, checks the version it was given, and bumps it, in one transaction.
 
 `Skill.manifest` is the record minus file bytes (what the filesystem backend keeps in
 `.aip-manifest.json`), so `get` returns exactly what was published without re-deriving
@@ -37,7 +58,13 @@ and `Procedure.triggers` (the `trigger_when` list joined). Hits are summed per r
 filtered to what each name resolves to, and an exact name match is boosted on top.
 
 Governance (`queries`, one Cypher statement per name in `aip.server.governance.QUERIES`)
-runs over the last `window` runs; `missing-fields` is given the resolved revision ids.
+runs over the last `window` runs; `missing-fields` and the structural queries (`empty-results`,
+`unused-data`, `cycles`) are given the resolved revision ids and read the projection alone, and
+`repeated-cycles` matches each run's `FOLLOWED_BY` chain against the procedure's cycles. Stored
+queries live in the same database as `(:GovernanceQuery {name, description, cypher, created_at,
+updated_at})`; `store` checks the name and EXPLAINs the Cypher before keeping it, and `query` runs
+a stored one in a read-only transaction with a timeout, so it can read anything and write nothing,
+and converts the rows' graph and temporal values to JSON.
 
 Materialisation: `folder(name, revision)` rebuilds the skill under
 `<cache>/<name>@<revision>/<name>/` (default `~/.cache/aip`, `AIP_CACHE_DIR` overrides)
@@ -60,8 +87,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from aip.server.backend import NotFound, split_ref
-from aip.server.governance import MISSING_FIELDS, QUERIES, collapsed_answers
+from aip.server.backend import InvalidQuery, NotFound, QueryFailed, StaleRun, split_ref
+from aip.server.governance import (DEFAULT_REPEATS, MISSING_FIELDS, NOT_FOUND, QUERIES, STORED_NAME_PATTERN,
+                                   STORED_QUERY_TIMEOUT, STRUCTURAL, attribution, listing, model_answers)
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
 
@@ -69,7 +97,9 @@ JSON = Dict[str, Any]
 
 STEP_LABELS = {"decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
                "router": "Router", "end": "End"}
-AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Input", "Question", "Run", "StepRun", "Answer")
+AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Data", "Question", "Run", "StepRun", "Answer",
+              "GovernanceQuery", "Input")   # Input: the pre-0.6a1 data node, kept so `clear` empties older databases too
+QUESTION_TYPES = {"noul": "boolean", "choice": "string", "score": "integer"}   # the state type an answer lands as
 
 FULLTEXT_INDEX = "aip_skill_text"
 NAME_BOOST = 1000.0
@@ -108,9 +138,10 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT aip_file_key IF NOT EXISTS FOR (f:File) REQUIRE f.key IS UNIQUE",
     "CREATE CONSTRAINT aip_procedure_key IF NOT EXISTS FOR (p:Procedure) REQUIRE p.key IS UNIQUE",
     "CREATE CONSTRAINT aip_step_key IF NOT EXISTS FOR (s:Step) REQUIRE s.key IS UNIQUE",
-    "CREATE CONSTRAINT aip_input_key IF NOT EXISTS FOR (i:Input) REQUIRE i.key IS UNIQUE",
+    "CREATE CONSTRAINT aip_data_key IF NOT EXISTS FOR (d:Data) REQUIRE d.key IS UNIQUE",
     "CREATE CONSTRAINT aip_question_key IF NOT EXISTS FOR (q:Question) REQUIRE q.key IS UNIQUE",
     "CREATE CONSTRAINT aip_run_id IF NOT EXISTS FOR (r:Run) REQUIRE r.id IS UNIQUE",
+    "CREATE CONSTRAINT aip_governance_query_name IF NOT EXISTS FOR (q:GovernanceQuery) REQUIRE q.name IS UNIQUE",
     "CREATE INDEX aip_skill_name IF NOT EXISTS FOR (s:Skill) ON (s.name)",
     "CREATE INDEX aip_run_name IF NOT EXISTS FOR (r:Run) ON (r.name)",
 ]
@@ -157,7 +188,9 @@ CREATE (s)-[:HAS_FILE]->(x)
 CREATE_PROCEDURE = """
 MATCH (s:Skill {id: $id})
 CREATE (p:Procedure {key: $id, skill_id: $id, purpose: $p.purpose, trigger_when: $p.trigger_when,
-                     triggers: $triggers, do_not_use_when: $p.do_not_use_when, anti_patterns: $p.anti_patterns})
+                     triggers: $triggers, do_not_use_when: $p.do_not_use_when, anti_patterns: $p.anti_patterns,
+                     interpreter: $requires.interpreter, interpreter_version: $requires.version,
+                     packages: $requires.packages, tools: $requires.tools})
 CREATE (s)-[:HAS_PROCEDURE]->(p)
 """
 
@@ -184,21 +217,38 @@ CREATE (p)-[:ENDS_AT]->(z)
 CREATE_EDGES = """
 UNWIND $edges AS e
 MATCH (a:Step {key: $id + ':' + e.from}), (b:Step {key: $id + ':' + e.to})
-CREATE (a)-[:INPUTS_TO]->(b)
+CREATE (a)-[:NEXT]->(b)
 """
 
 CREATE_BRANCHES = """
 UNWIND $branches AS b
 MATCH (r:Step {key: $id + ':' + b.router}), (t:Step {key: $id + ':' + b.to})
-CREATE (r)-[:BRANCH {value: b.value}]->(t)
+CREATE (r)-[:THEN {value: b.value}]->(t)
 """
 
-CREATE_INPUTS = """
-UNWIND $inputs AS i
-MATCH (st:Step {key: $id + ':' + i.step})
-CREATE (n:Input {key: $id + ':' + i.step + ':' + i.name, skill_id: $id, name: i.name, type: i.type,
-                 description: i.description, order: i.order})
-CREATE (st)-[:DECLARES_INPUT]->(n)
+CREATE_DATA = """
+MATCH (p:Procedure {key: $id})
+UNWIND $data AS d
+CREATE (n:Data {key: $id + ':' + d.name, skill_id: $id, name: d.name, type: d.type, description: d.description})
+FOREACH (_ IN CASE WHEN d.start THEN [1] ELSE [] END | CREATE (p)-[:SUPPLIES]->(n))
+"""
+
+CREATE_PRODUCES = """
+UNWIND $produces AS e
+MATCH (st:Step {key: $id + ':' + e.step}), (d:Data {key: $id + ':' + e.name})
+CREATE (st)-[:PRODUCES {order: e.order}]->(d)
+"""
+
+CREATE_FEEDS = """
+UNWIND $feeds AS e
+MATCH (st:Step {key: $id + ':' + e.step}), (d:Data {key: $id + ':' + e.name})
+CREATE (d)-[:FEEDS {order: e.order, description: e.description}]->(st)
+"""
+
+CREATE_YIELDS = """
+UNWIND $questions AS q
+MATCH (qn:Question {key: $id + ':' + q.step + ':' + q.name}), (d:Data {key: $id + ':' + q.name})
+CREATE (qn)-[:YIELDS]->(d)
 """
 
 CREATE_QUESTIONS = """
@@ -266,9 +316,6 @@ RETURN s.name AS name, s.revision AS revision, s.description AS description, sco
 
 SET_PIN = "MATCH (n:Name {name: $name}) SET n.pinned = $revision"
 
-GET_THRESHOLDS = "MATCH (n:Name {name: $name}) RETURN n.thresholds AS thresholds"
-SET_THRESHOLDS = "MATCH (n:Name {name: $name}) SET n.thresholds = $thresholds"
-
 RETIRE = """
 MATCH (n:Name {name: $name})-[:HAS_REVISION]->(s:Skill {revision: $revision})
 SET s.retired = true
@@ -278,43 +325,43 @@ RETURN s.id AS id
 
 CREATE_RUN = """
 CREATE (r:Run {id: $id, name: $name, revision: $revision, status: 'running',
-               started_at: datetime($now), updated_at: datetime($now), pause: NULL})
+               started_at: datetime($now), updated_at: datetime($now), pause: NULL, version: 0})
 WITH r
 OPTIONAL MATCH (s:Skill {id: $name + '@' + $revision})
 FOREACH (_ IN CASE WHEN s IS NULL THEN [] ELSE [1] END | CREATE (r)-[:OF_SKILL]->(s))
 RETURN r.id AS id
 """
 
-RUN_EXISTS = "MATCH (r:Run {id: $id}) RETURN r.id AS id"
+# Setting a property takes the run's write lock, so the version read here holds until commit.
+LOCK_RUN = "MATCH (r:Run {id: $id}) SET r.version = coalesce(r.version, 0) RETURN r.version AS version"
+
+SET_RUN = """
+MATCH (r:Run {id: $id})
+SET r.status = $status, r.pause = $pause, r.updated_at = datetime($now), r.version = $version
+FOREACH (_ IN CASE WHEN $has_state THEN [1] ELSE [] END | SET r.state = $state, r.after = $after)
+"""
 
 APPEND_STEP_RUN = """
 MATCH (r:Run {id: $id})
 OPTIONAL MATCH (r)-[:STEP_RUN]->(prev:StepRun)
 WITH r, prev ORDER BY prev.order DESC LIMIT 1
 CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kind, step_kind: $step_kind,
-                    input: $input, result: $result, manual: $manual, review: $review, entry: $entry,
+                    input: $input, result: $result, resolver: $resolver, review: $review, entry: $entry,
                     at: datetime($now)})
 CREATE (r)-[:STEP_RUN]->(sr)
-FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:NEXT]->(sr))
-SET r.status = $status, r.pause = $pause, r.updated_at = datetime($now)
+FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:FOLLOWED_BY]->(sr))
 WITH r, sr
 OPTIONAL MATCH (st:Step {key: r.name + '@' + r.revision + ':' + $step})
 FOREACH (_ IN CASE WHEN st IS NULL THEN [] ELSE [1] END | CREATE (sr)-[:OF_STEP]->(st))
 RETURN sr.order AS order
 """
 
-# The new entry's input settles every still-open model answer in the run whose question it carries.
-SETTLE_ANSWERS = """
-MATCH (r:Run {id: $id})-[:STEP_RUN]->(:StepRun)-[:ANSWERED]->(a:Answer)
-WHERE a.accepted IS NULL AND a.question IN keys($inputs)
-SET a.accepted = $inputs[a.question], a.overridden = $inputs[a.question] <> a.value
-"""
-
 CREATE_ANSWERS = """
 MATCH (r:Run {id: $id})-[:STEP_RUN]->(sr:StepRun {order: $order})
 OPTIONAL MATCH (sr)-[:OF_STEP]->(st:Step)
 UNWIND $answers AS a
-CREATE (sr)-[:ANSWERED]->(x:Answer {question: a.question, type: a.type, value: a.value})
+CREATE (sr)-[:ANSWERED]->(x:Answer {question: a.question, resolver: a.resolver, model: a.model, value: a.value,
+                                    accepted: a.accepted, reviewed: a.reviewed, overridden: a.overridden})
 WITH x, st, a
 OPTIONAL MATCH (st)-[:ASKS]->(q:Question {name: a.question})
 FOREACH (_ IN CASE WHEN q IS NULL THEN [] ELSE [1] END | CREATE (x)-[:OF_QUESTION]->(q))
@@ -326,7 +373,7 @@ OPTIONAL MATCH (r)-[:STEP_RUN]->(sr:StepRun)
 WITH r, sr ORDER BY sr.order
 RETURN r.id AS id, r.name AS name, r.revision AS revision, r.status AS status,
        toString(r.started_at) AS started_at, toString(r.updated_at) AS updated_at, r.pause AS pause,
-       collect(sr.entry) AS history
+       r.state AS state, r.after AS after, coalesce(r.version, 0) AS version, collect(sr.entry) AS history
 """
 
 LIST_RUNS = """
@@ -351,12 +398,20 @@ WITH r ORDER BY r.started_at DESC, r.id DESC LIMIT $window
 queries: Dict[str, str] = {
     "overridden-decisions": _WINDOW + """
 MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:ANSWERED]->(a:Answer)
-WHERE a.accepted IS NOT NULL
-WITH r.name AS name, sr.step AS step, a.question AS question, count(a) AS decided,
+WITH r.name AS name, sr.step AS step, a.question AS question, a.resolver AS resolver, count(a) AS decided,
      sum(CASE WHEN a.overridden THEN 1 ELSE 0 END) AS overridden
 WHERE overridden > 0
-RETURN name, step, question, decided, overridden, toFloat(overridden) / decided AS rate
+RETURN name, step, question, resolver, decided, overridden, toFloat(overridden) / decided AS rate
 ORDER BY overridden DESC, rate DESC, name, step, question
+LIMIT $limit
+""",
+    "manual-decisions": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun {kind: 'decision'})
+WITH r.name AS name, sr.step AS step, count(sr) AS decided,
+     sum(CASE WHEN coalesce(sr.resolver, 'manual') = 'manual' THEN 1 ELSE 0 END) AS manual
+WHERE manual > 0
+RETURN name, step, decided, manual, toFloat(manual) / decided AS rate
+ORDER BY manual DESC, rate DESC, name, step
 LIMIT $limit
 """,
     "failing-scripts": _WINDOW + """
@@ -381,12 +436,55 @@ RETURN n.name AS name, s.revision AS revision, missing
 ORDER BY name
 LIMIT $limit
 """,
+    "empty-results": """
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)-[:ENDS_AT]->(end:Step)
+WHERE s.id IN $ids
+OPTIONAL MATCH (d:Data)-[:FEEDS]->(end) WHERE NOT (p)-[:SUPPLIES]->(d)
+WITH s, p, end, collect(d.name) AS produced
+WHERE produced = []
+OPTIONAL MATCH (p)-[:SUPPLIES]->(x:Data)-[:FEEDS]->(end)
+RETURN s.name AS name, s.revision AS revision, end.name AS step, collect(x.name) AS result
+ORDER BY name
+LIMIT $limit
+""",
+    "unused-data": """
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(src:Step)-[:PRODUCES]->(d:Data)
+WHERE s.id IN $ids AND NOT (d)-[:FEEDS]->()
+RETURN s.name AS name, s.revision AS revision, src.name AS step,
+       CASE WHEN src:Decision THEN 'answer' ELSE 'output' END AS kind, d.name AS key, d.type AS type
+ORDER BY name, step, key
+LIMIT $limit
+""",
+    "cycles": """
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(first:Step)
+WHERE s.id IN $ids
+MATCH cycle = (first)-[:NEXT|THEN*]->(first)
+WHERE all(n IN nodes(cycle) WHERE n.order >= first.order)
+WITH DISTINCT s, [n IN nodes(cycle)[..-1] | n.name] AS steps,
+     [r IN relationships(cycle) WHERE type(r) = 'THEN' | r.value] AS taken_when, nodes(cycle)[..-1] AS members
+UNWIND members AS m
+OPTIONAL MATCH (m)-[:PRODUCES]->(d:Data)
+WITH s, steps, taken_when, [k IN collect(DISTINCT d.name) WHERE k IS NOT NULL] AS reproduces
+RETURN s.name AS name, s.revision AS revision, steps, taken_when, reproduces
+ORDER BY name, steps
+LIMIT $limit
+""",
+    "repeated-cycles": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:OF_STEP]->(router:Step:Router)
+WHERE (router)-[:NEXT|THEN*]->(router)
+WITH r, router, count(sr) AS visits
+WHERE visits - 1 > $repeats
+RETURN r.name AS name, r.revision AS revision, r.id AS run_id, r.status AS status, router.name AS router,
+       visits - 1 AS repeats
+ORDER BY repeats DESC, name, run_id
+LIMIT $limit
+""",
     "untaken-branches": _WINDOW + """
 MATCH (r)-[:OF_SKILL]->(s:Skill)
 WITH s, collect(r) AS runs
-MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(router:Step:Router)-[b:BRANCH]->(target:Step)
+MATCH (s)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(router:Step:Router)-[b:THEN]->(target:Step)
 OPTIONAL MATCH (run:Run)-[:STEP_RUN]->(rs:StepRun)-[:OF_STEP]->(router) WHERE run IN runs
-OPTIONAL MATCH (rs)-[:NEXT]->(nxt:StepRun)-[:OF_STEP]->(target)
+OPTIONAL MATCH (rs)-[:FOLLOWED_BY]->(nxt:StepRun)-[:OF_STEP]->(target)
 WITH s, router, b, target, size(runs) AS runs, count(DISTINCT rs) AS router_runs, count(nxt) AS taken
 WHERE taken = 0
 RETURN s.name AS name, s.revision AS revision, router.name AS router, b.value AS value, target.name AS to,
@@ -396,6 +494,22 @@ LIMIT $limit
 """,
 }
 assert set(queries) == set(QUERIES)
+
+# ------------------------------------------------------------------- stored queries
+
+LIST_STORED = """
+MATCH (q:GovernanceQuery)
+RETURN q.name AS query, q.description AS description, q.cypher AS cypher,
+       toString(q.created_at) AS created_at, toString(q.updated_at) AS updated_at
+ORDER BY q.name
+"""
+GET_STORED = "MATCH (q:GovernanceQuery {name: $name}) RETURN q.cypher AS cypher, q.description AS description"
+STORE_QUERY = """
+MERGE (q:GovernanceQuery {name: $name})
+ON CREATE SET q.created_at = datetime($now)
+SET q.description = $description, q.cypher = $cypher, q.updated_at = datetime($now)
+"""
+REMOVE_STORED = "MATCH (q:GovernanceQuery {name: $name}) DELETE q RETURN count(q) AS removed"
 
 CLEAR = "MATCH (n) WHERE " + " OR ".join(f"n:{label}" for label in AIP_LABELS) + " DETACH DELETE n"
 
@@ -431,6 +545,63 @@ def _load(text: str | None) -> Any:
     return None if text is None else json.loads(text)
 
 
+def _message(exc: Exception) -> str:
+    """The database's own message for a driver error, without the code wrapper."""
+    return getattr(exc, "message", None) or str(exc).splitlines()[0]
+
+
+def _jsonable(value: Any) -> Any:
+    """A query result value as JSON: `Record.data()` has already turned nodes into property maps,
+    relationships into (start, type, end) tuples and paths into lists; this handles what it leaves,
+    temporal values (ISO strings), points (their coordinates), and anything else by its string."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "iso_format"):
+        return value.iso_format()
+    if hasattr(value, "srid") and hasattr(value, "x"):
+        return {"srid": value.srid, "coordinates": list(value)}
+    return str(value)
+
+
+def data_flow(skill: SkillRecord) -> tuple[List[JSON], List[JSON], List[JSON]]:
+    """The `Data` rows and the `PRODUCES` and `FEEDS` edges of a revision, from the record's rows.
+
+    A key is declared once, by its producer (an output, or a question's collapsed answer) or,
+    for a start input, by the start step; every consumer adds a `FEEDS` edge. A key nothing
+    produces (the validator rejects it, so only in older records) still gets a node from its
+    first consumer, so the graph never has a dangling edge."""
+    start = skill.procedure["start"]
+    data: Dict[str, JSON] = {}
+    produces: List[JSON] = []
+    feeds: List[JSON] = []
+
+    def declare(name: str, type_: str | None, description: str | None, start_input: bool = False) -> None:
+        row = data.setdefault(name, {"name": name, "type": type_, "description": description, "start": False})
+        row["start"] = row["start"] or start_input
+
+    for i in skill.inputs:
+        if i["step"] == start:
+            declare(i["name"], i["type"], i["description"], start_input=True)
+    for o in skill.outputs:
+        declare(o["name"], o["type"], o["description"])
+        produces.append({"step": o["step"], "name": o["name"], "order": o["order"]})
+    for q in skill.questions:
+        declare(q["name"], QUESTION_TYPES.get(q["type"], "string"), q["instructions"])
+        produces.append({"step": q["step"], "name": q["name"], "order": q["order"]})
+    for i in skill.inputs:
+        declare(i["name"], i["type"], i["description"])
+        feeds.append({"step": i["step"], "name": i["name"], "order": i["order"], "description": i["description"]})
+    for st in skill.steps:
+        if st["kind"] == "router":
+            declare(st["branch_on"], None, None)
+            feeds.append({"step": st["name"], "name": st["branch_on"], "order": 0, "description": None})
+    return list(data.values()), produces, feeds
+
+
 def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
     """Create one revision's whole graph inside an open write transaction."""
     sid = skill.id
@@ -441,8 +612,12 @@ def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
             "manifest": json.dumps(manifest), "root_name": skill.root_name}
     tx.run(CREATE_SKILL, skill=node, directories=skill.directories, published_at=published_at)
     tx.run(CREATE_FILES, id=sid, files=[f.to_json() for f in skill.files])
+    requires = skill.procedure.get("requires") or {}
     tx.run(CREATE_PROCEDURE, id=sid, p=skill.procedure,
-           triggers="\n".join(skill.procedure.get("trigger_when") or []))
+           triggers="\n".join(skill.procedure.get("trigger_when") or []),
+           requires={"interpreter": (requires.get("interpreter") or {}).get("name"),
+                     "version": (requires.get("interpreter") or {}).get("version"),
+                     "packages": requires.get("packages"), "tools": requires.get("tools")})
     for kind, query in CREATE_STEPS.items():
         rows = [{"name": s["name"], "kind": s["kind"], "order": s["order"], "description": s["description"],
                  "props": _step_props(s)} for s in skill.steps if s["kind"] == kind]
@@ -451,8 +626,12 @@ def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
     tx.run(MARK_ENDPOINTS, id=sid, start=skill.procedure["start"], end=skill.procedure["end"])
     tx.run(CREATE_EDGES, id=sid, edges=skill.edges)
     tx.run(CREATE_BRANCHES, id=sid, branches=skill.branches)
-    tx.run(CREATE_INPUTS, id=sid, inputs=skill.inputs)
     tx.run(CREATE_QUESTIONS, id=sid, questions=skill.questions)
+    data, produces, feeds = data_flow(skill)
+    tx.run(CREATE_DATA, id=sid, data=data)
+    tx.run(CREATE_PRODUCES, id=sid, produces=produces)
+    tx.run(CREATE_FEEDS, id=sid, feeds=feeds)
+    tx.run(CREATE_YIELDS, id=sid, questions=skill.questions)
     tx.run(CREATE_RESOURCES, id=sid, resources=skill.resources)
 
 
@@ -622,17 +801,6 @@ class Neo4jCatalog:
         name, rev = split_ref(ref)
         return name, self._resolve_entry(self._entry(name), rev)
 
-    def thresholds(self, name: str) -> Dict[str, float]:
-        self._entry(name)
-        rows = self._read(GET_THRESHOLDS, name=name)
-        return dict(_load(rows[0]["thresholds"]) or {}) if rows else {}
-
-    def set_thresholds(self, name: str, thresholds: Dict[str, float]) -> None:
-        self._entry(name)
-        self.driver.execute_query(SET_THRESHOLDS, name=name,
-                                  thresholds=_dump({q: float(v) for q, v in thresholds.items()}),
-                                  database_=self.database)
-
     def resolved_ids(self, name: str | None = None) -> List[str]:
         """`name@revision` for what every name (or one) resolves to; names with nothing live are skipped."""
         out = []
@@ -695,30 +863,34 @@ class Neo4jRuns:
                                   database_=self.database)
         return run_id
 
-    def append(self, run_id: str, entry: JSON, status: str, pause: JSON | None) -> None:
-        params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
-                  "step_kind": entry.get("step_kind"),
-                  "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
-                  "manual": bool(entry.get("manual", False)), "review": _dump(entry.get("review")),
-                  "entry": json.dumps(entry, sort_keys=True), "status": status, "pause": _dump(pause),
-                  "now": _now()}
-        payload = entry.get("input")
-        inputs = {k: _dump(v) for k, v in payload.items()} if isinstance(payload, dict) else {}
-        answers = (entry.get("result") or {}).get("answers") or {}
-        collapsed = [{"question": q, "type": answers[q].get("type"), "value": _dump(v)}
-                     for q, v in collapsed_answers(entry).items()]
+    def append(self, run_id: str, entry: JSON | None, status: str, pause: JSON | None, *,
+               expected: int | None = None, state: JSON | None = None, after: str | None = None) -> int:
+        now = _now()
+        if entry is not None:
+            params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
+                      "step_kind": entry.get("step_kind"),
+                      "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
+                      "resolver": (attribution(entry) or {}).get("resolver"), "review": _dump(entry.get("review")),
+                      "entry": json.dumps(entry, sort_keys=True), "now": now}
+            answers = [{**a, "value": _dump(a["value"]), "accepted": _dump(a["accepted"])} for a in model_answers(entry)]
 
         def tx_fn(tx):
-            if tx.run(RUN_EXISTS, id=run_id).single() is None:
+            row = tx.run(LOCK_RUN, id=run_id).single()
+            if row is None:
                 raise NotFound(f"no run {run_id!r}")
-            if inputs:
-                tx.run(SETTLE_ANSWERS, id=run_id, inputs=inputs).consume()
-            order = tx.run(APPEND_STEP_RUN, **params).single()["order"]
-            if collapsed:
-                tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=collapsed).consume()
+            version = int(row["version"])
+            if expected is not None and expected != version:
+                raise StaleRun(f"run {run_id!r} is at version {version}, not {expected}")
+            if entry is not None:
+                order = tx.run(APPEND_STEP_RUN, **params).single()["order"]
+                if answers:
+                    tx.run(CREATE_ANSWERS, id=run_id, order=order, answers=answers).consume()
+            tx.run(SET_RUN, id=run_id, status=status, pause=_dump(pause), now=now, version=version + 1,
+                   has_state=state is not None, state=_dump(state), after=after).consume()
+            return version + 1
 
         with self.driver.session(database=self.database) as session:
-            session.execute_write(tx_fn)
+            return session.execute_write(tx_fn)
 
     def get(self, run_id: str) -> RunRecord:
         rows = self._read(FETCH_RUN, id=run_id)
@@ -727,7 +899,8 @@ class Neo4jRuns:
         row = rows[0]
         return RunRecord(id=row["id"], name=row["name"], revision=row["revision"], status=row["status"],
                          started_at=row["started_at"], updated_at=row["updated_at"], pause=_load(row["pause"]),
-                         history=[_load(e) for e in row["history"] if e is not None])
+                         history=[_load(e) for e in row["history"] if e is not None],
+                         state=_load(row["state"]) or {}, after=row["after"], version=int(row["version"]))
 
     def list(self, name: str | None = None, status: str | None = None, limit: int = 50) -> List[RunSummary]:
         return [RunSummary(id=r["id"], name=r["name"], revision=r["revision"], status=r["status"],
@@ -746,19 +919,84 @@ class Neo4jGovernance:
         self.database = database
         self.catalog = catalog
 
-    def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50) -> List[JSON]:
+    def _read(self, cypher: str, **params) -> List[JSON]:
+        records, _, _ = self.driver.execute_query(cypher, database_=self.database, **params)
+        return [r.data() for r in records]
+
+    def queries(self) -> List[JSON]:
+        return listing(self._read(LIST_STORED))
+
+    def stored(self, name: str) -> JSON:
+        """A stored query with its Cypher and timestamps; NotFound otherwise."""
+        rows = [r for r in self._read(LIST_STORED) if r["query"] == name]
+        if not rows:
+            raise NotFound(NOT_FOUND.format(name=name))
+        return {**rows[0], "builtin": False}
+
+    def store(self, name: str, description: str, cypher: str) -> JSON:
+        if not re.fullmatch(STORED_NAME_PATTERN, name or ""):
+            raise InvalidQuery(f"a query name is lowercase letters, digits and hyphens, like `slow-steps`; got {name!r}")
+        if name in queries:
+            raise InvalidQuery(f"{name!r} is a built-in query; pick another name")
+        if not (cypher or "").strip():
+            raise InvalidQuery("the query has no Cypher")
+        try:   # EXPLAIN plans without running: a syntax or semantic error surfaces here, and nothing executes
+            self.driver.execute_query("EXPLAIN " + cypher, database_=self.database, routing_="r", **self._params())
+        except Exception as exc:
+            raise InvalidQuery(f"the database rejects the Cypher: {_message(exc)}") from exc
+        self.driver.execute_query(STORE_QUERY, name=name, description=description or "", cypher=cypher,
+                                  now=_now(), database_=self.database)
+        return {"query": name, "description": description or "", "builtin": False}
+
+    def remove(self, name: str) -> None:
+        if name in queries:
+            raise InvalidQuery(f"{name!r} is a built-in query and cannot be removed")
+        rows = self._read(REMOVE_STORED, name=name)
+        if not rows or not rows[0]["removed"]:
+            raise NotFound(NOT_FOUND.format(name=name))
+
+    @staticmethod
+    def _params(name: str | None = None, window: int = 100, limit: int = 50, repeats: int = DEFAULT_REPEATS,
+                ids: List[str] | None = None) -> JSON:
+        return {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats),
+                "ids": ids or [], "fields": list(MISSING_FIELDS)}
+
+    def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50,
+              repeats: int = DEFAULT_REPEATS) -> List[JSON]:
         if query not in queries:
-            raise NotFound(f"no governance query {query!r}")
-        params: JSON = {"name": name, "window": int(window), "limit": int(limit)}
-        if query == "missing-fields":
+            return self._run_stored(query, name, window, limit, repeats)
+        params: JSON = {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats)}
+        if query == "missing-fields" or query in STRUCTURAL:
             params["ids"] = self.catalog.resolved_ids(name)
             params["fields"] = list(MISSING_FIELDS)
         records, _, _ = self.driver.execute_query(queries[query], database_=self.database, **params)
         rows = [r.data() for r in records]
         if query == "failing-scripts":
             for row in rows:
-                row["last_error"] = (_load(row["last_error"]) or {}).get("error")
+                last = _load(row["last_error"]) or {}
+                row["last_error"] = last.get("error")
+                row["exit_code"], row["stderr"] = last.get("exit_code"), last.get("stderr")
         return rows
+
+    def _run_stored(self, name: str, skill: str | None, window: int, limit: int, repeats: int) -> List[JSON]:
+        """A stored query in a read-only transaction with a timeout: the database refuses any write in
+        it and stops it when it runs too long, whatever the Cypher says."""
+        from neo4j import unit_of_work
+
+        rows = self._read(GET_STORED, name=name)
+        if not rows:
+            raise NotFound(NOT_FOUND.format(name=name))
+        params = self._params(skill, window, limit, repeats, self.catalog.resolved_ids(skill))
+
+        @unit_of_work(timeout=STORED_QUERY_TIMEOUT)
+        def run(tx):
+            return [r.data() for r in tx.run(rows[0]["cypher"], **params)]
+
+        try:
+            with self.driver.session(database=self.database) as session:
+                return [_jsonable(r) for r in session.execute_read(run)]
+        except Exception as exc:
+            raise QueryFailed(f"stored query {name!r} failed: {_message(exc)}") from exc
 
 
 class Neo4jBackend:

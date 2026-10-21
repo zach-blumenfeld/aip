@@ -66,24 +66,27 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
                     inputs=inputs(step.inputs),
                     questions={name: sdk[q.type](**q.model_dump(exclude={"type"}, exclude_none=True)) for name, q in step.questions.items()},
                     thresholds=dict(step.thresholds),
+                    history=step.history,
                     client=client,
                 )
             case spec.ExecutionStep():
                 nodes[step.name] = model.Execution(
                     name=step.name,
                     inputs=inputs(step.inputs),
+                    outputs=inputs(step.outputs),
                     script=model.Script(aip_id, _split(step.script)[1]),
                     assets=[asset(a) for a in step.assets],
                     timeout=step.timeout if step.timeout is not None else default_step_timeout(),
+                    command=list(step.command) if step.command else None,
                 )
             case spec.ClientTaskStep():
                 nodes[step.name] = model.ClientTask(
                     name=step.name,
                     inputs=inputs(step.inputs),
+                    outputs=inputs(step.outputs),
                     template=asset(step.template),
                     assets=[asset(a) for a in step.assets],
                     references=[model.Reference(aip_id, _split(r.path)[1], r.description) for r in step.references],
-                    include_framing=step.framing,
                 )
             case spec.RouterStep():
                 nodes[step.name] = model.Router(name=step.name, branch_on=step.branch_on, branches={})
@@ -98,8 +101,13 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
         elif not isinstance(step, spec.EndStep):
             node.inputsTo = nodes[step.inputs_to]
 
+    declared = loaded.spec.requires
+    requires = declared and model.Requires(
+        interpreter=declared.interpreter.name, version=declared.interpreter.version,
+        packages=list(declared.packages), tools=list(declared.tools))
     return model.Procedure(
         meta=meta,
+        requires=requires,
         start=nodes[loaded.spec.start.name],
         loader=model.ResourceLoader(loaded.skill_dir.resolve().parent),
         python=python,

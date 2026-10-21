@@ -1,205 +1,233 @@
 """Drive a procedure from the command line: run, pause, resume.
 
-The runner is the client. It posts each step's input, follows `suggested` when nothing
-needs a human or agent decision, and pauses when something does:
+A run stops one of three ways, and the runner prints one JSON object for each; the shapes
+are a contract, documented in `docs/cli-json.md`:
 
-- `client_task`: the step handed work to the client; the next input must be produced
-- `review`: a decision answered below its threshold; the client confirms or overrides
-- `decision`: no decision model is available; the client answers the questions itself
+- **paused**: the client must answer. `client_task` (do the step's work), `decision` (no
+  decision model on this client: answer the questions), `review` (this client's decision model
+  answered a question under its threshold: confirm or override). Each pause carries only the paused step's declared inputs
+  as `state`; the answer is merged over the state the run file holds.
+- **done**: the end step was reached; `state` is the end step's inputs.
+- **error**: a step failed. The run file keeps the state before the failing step, and
+  `resume` with no input retries it. A bad answer to a pause leaves the pause in place.
 
-A pause writes a run file and exits with PAUSED. `resume` continues from it. In
-interactive mode a pause becomes prompts on the terminal instead.
+The loop itself is `aip.model.engine`, run by the backend: in this process for a skill folder,
+on the server for a published name. The SDK's `Driver` (`aip.sdk`) turns each stop into a
+result and writes the run file; the runner prints it, and in interactive mode answers pauses
+from the terminal.
+
+Every outcome but an error before anything ran writes the run file. A local run's file holds
+the whole run, and at done the whole history, its ledger; a served run's holds only the run
+id, server, revision, version and pending pause, since the server holds the rest. Run files
+live under the user's home, at `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it), so
+`aip resume <run-id>` works from any directory; a served run is keyed by the id the server
+assigned, a local run by a generated one. With `progress`, one JSON line per completed step
+is printed before the final object. In interactive mode a pause becomes prompts instead.
 """
 
 import json
+import os
+import re
 import sys
 import time
+import traceback
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, ClassVar, Dict, List
 
 from aip.client.backend import Backend
+from aip.model.engine import ERROR_KINDS
 
 JSON = Dict[str, Any]
 
 EXIT_DONE = 0
+EXIT_PAUSED = 0
 EXIT_ERROR = 1
-EXIT_PAUSED = 3
+
+RUN_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def aip_home() -> Path:
+    """`AIP_HOME`, else `~/.aip`: where run files live."""
+    override = os.environ.get("AIP_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".aip"
+
+
+def run_path(run_id: str) -> Path:
+    """The run file of `run_id` under `aip_home()`."""
+    if not RUN_ID.fullmatch(run_id):
+        raise ValueError(f"not a run id: {run_id!r}")
+    return aip_home() / "runs" / f"{run_id}.json"
+
+
+def new_run_id() -> str:
+    """A local run's id, the same shape the server's run backends assign."""
+    return uuid.uuid4().hex[:16]
 
 
 @dataclass
 class RunFile:
-    """Everything needed to continue a paused run."""
-    skill_dir: str
-    after: str | None            # the step whose output the next input answers (None = start)
-    suggested: JSON              # the server's proposed next input; resume input is merged over it
-    history: List[JSON]
-    pause: JSON                  # {"kind": "client_task"|"review"|"decision", ...details}
-    thresholds: Dict[str, float] = field(default_factory=dict)
-    created: float = field(default_factory=time.time)
-    # set when the run is on a server: `resume` rebuilds an HttpBackend from these
+    """Everything needed to continue a run. A local run's file holds the whole run (`skill_dir`,
+    `after`, `state`, `history`); a served run's only a handle (`server`, `name`, `revision`,
+    `version`): the server holds the rest. Both hold `run_id`, the run's working directory
+    (`workdir`, where its scripts read and write files), and the pending `pause`
+    (`{"kind": "client_task"|"review"|"decision"|"error"|"done", "step", ...}`). Unset fields
+    are left out of the file."""
+    pause: JSON
+    run_id: str | None = None
+    skill_dir: str | None = None
+    after: str | None = None              # the step whose output the next input answers (None = start)
+    state: JSON | None = None             # the run's full state; an answer is merged over it
+    history: List[JSON] | None = None
     server: str | None = None
     name: str | None = None
     revision: str | None = None
-    run_id: str | None = None
+    version: int | None = None            # the server's version of the run, sent back with the answer
+    workdir: str | None = None            # where the run's scripts read and write files (AIP_WORKDIR)
+    created: float = field(default_factory=time.time)
+
+    LOCAL: ClassVar = ("skill_dir", "after", "state", "history")
 
     def save(self, path: Path) -> Path:
+        data = {k: v for k, v in asdict(self).items()
+                if v is not None or (k in self.LOCAL and self.server is None)}
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(self), indent=2) + "\n")
+        path.write_text(json.dumps(data, indent=2) + "\n")
         return path
 
     @classmethod
     def load(cls, path: Path) -> "RunFile":
-        return cls(**json.loads(Path(path).read_text()))
+        data = json.loads(Path(path).read_text())
+        if "suggested" in data:                  # written before 0.6a0
+            data["state"] = data.pop("suggested")
+        data.pop("thresholds", None)             # before B1: thresholds are the author's alone now
+        return cls(**data)
 
 
-def backend_for(run: RunFile, token: str | None = None, session: Any = None) -> Backend:
-    """The backend a run file was written against: the server it names, else the local folder."""
+def backend_for(run: RunFile, token: str | None = None, session: Any = None, client: Any = None) -> Backend:
+    """The backend a run file was written against: the server it names, else the local folder.
+    `client` is an injected decision-model client (tests); otherwise the configured key decides."""
     if run.server:
         from aip.client.backend import HttpBackend
 
-        ref = f"{run.name}@{run.revision}" if run.revision else (run.name or run.skill_dir)
-        return HttpBackend(run.server, token, ref, run_id=run.run_id, session=session)
+        return HttpBackend(run.server, token, f"{run.name}@{run.revision}", session=session, workdir=run.workdir,
+                           client=client)
     from aip.client.backend import LocalBackend
 
-    return LocalBackend(Path(run.skill_dir))
+    return LocalBackend(Path(run.skill_dir), client=client, workdir=run.workdir)
 
 
 @dataclass
 class Outcome:
     code: int
-    payload: JSON                # final state when done, the pause block when paused
+    payload: JSON                # final state when done, the pause block when paused, the error object
     run_file: Path | None = None
 
 
 Prompter = Callable[[str], str]
 
 
+def error_object(exc: BaseException) -> JSON:
+    """The error object's kind, step, message and per-kind detail, for a local or a server failure."""
+    from aip.client.server import ServerError
+    from aip.model.engine import error_object as step_error
+
+    if isinstance(exc, ServerError):
+        if exc.kind in ERROR_KINDS:
+            detail = {k: v for k, v in exc.extra.items() if k not in ("run_id", "errors", "resumable")}
+            return {"error": exc.kind, "step": exc.location, "message": exc.message, **detail}
+        return {"error": "server", "step": exc.location, "message": str(exc), "status": exc.status}
+    return step_error(exc)
+
+
 class Runner:
-    def __init__(self, backend: Backend, skill_dir: Path, run_file: Path | None = None,
-                 interactive: bool = False, prompter: Prompter = input, out=None):
+    """The CLI's face on a run: prints what the SDK's `Driver` returns (`docs/cli-json.md`), and in
+    interactive mode answers each pause on the terminal instead."""
+
+    def __init__(self, backend: Backend | None, run_file: Path | None = None,
+                 interactive: bool = False, prompter: Prompter = input, out=None,
+                 progress: bool = False, debug: bool = False, run_id: str | None = None):
+        """`run_file` is an explicit path; without one the run file is `run_path(<run id>)`.
+        `run_id` is a resumed run's id. `backend` may be None when only `show` is used."""
         self.backend = backend
-        self.skill_dir = Path(skill_dir)
-        self.run_file = run_file or self._default_run_file()
+        self.run_file = run_file
+        self.run_id = run_id
         self.interactive = interactive
         self.prompt = prompter
         self.out = out or sys.stdout
-
-    def _default_run_file(self) -> Path:
-        return Path(".aip") / "runs" / f"{self.skill_dir.resolve().name}-{int(time.time())}.json"
+        self.progress = progress
+        self.debug = debug
 
     # ------------------------------------------------------------------ entry points
 
-    def start(self, payload: JSON | None, thresholds: Dict[str, float] | None = None) -> Outcome:
-        if payload is None:
-            start = self.backend.describe()["start"]
-            if not self.interactive:
-                return self._error(f"no input given; start step {start['step']!r} expects {start['inputs']}")
-            payload = self._prompt_inputs(start["inputs"], {})
-        return self._drive(after=None, payload=payload, history=[], thresholds=thresholds or {})
+    def start(self, payload: JSON | None) -> Outcome:
+        from aip.sdk import Driver
+
+        def go(on_step, on_pause):
+            driver = Driver(self.backend, self.run_file, on_step, on_pause)
+            return driver.start(self.start_input(driver.start_step()) if payload is None and self.interactive
+                                else payload)
+        return self.show(go)
 
     def resume(self, run: RunFile, payload: JSON | None) -> Outcome:
-        kind = run.pause["kind"]
-        if kind == "decision":
-            answers = payload if payload is not None else (
-                self._prompt_answers(run.pause["questions"]) if self.interactive else None)
-            if answers is None:
-                return self._error("resume needs answers for the paused decision")
-            response = self.backend.answer_decision(run.after, run.suggested, run.history, answers)
-            return self._after_response(response, run.thresholds)
-        merged = {**run.suggested, **(payload or {})}
-        if payload is None and self.interactive:
-            merged = self._prompt_inputs(run.pause["expects"], run.suggested)
-        elif payload is None:
-            return self._error("resume needs an input for the paused step")
-        return self._drive(after=run.after, payload=merged, history=run.history, thresholds=run.thresholds)
+        from aip.sdk import Driver
 
-    # ------------------------------------------------------------------------- loop
+        if payload is None and self.interactive and run.pause["kind"] not in ("error", "done"):
+            payload = self.ask(run.pause)
+        return self.show(lambda on_step, on_pause: Driver(self.backend, self.run_file, on_step, on_pause,
+                                                          run_id=run.run_id).resume(run, payload))
 
-    def _drive(self, after: str | None, payload: JSON, history: List[JSON], thresholds: Dict[str, float]) -> Outcome:
-        while True:
-            node = self.backend.peek(after, payload)
-            if node is not None and node["kind"] == "decision" and not self.backend.has_decision_model():
-                pause = {"kind": "decision", "step": node["step"], "questions": node["questions"],
-                         "expects": node["inputs"]}
-                if self.interactive:
-                    answers = self._prompt_answers(node["questions"])
-                    response = self.backend.answer_decision(after, payload, history, answers)
-                else:
-                    return self._pause(self._run_file(after, payload, history, pause, thresholds))
-            else:
-                response = self.backend.run(after, payload, history, thresholds)
-            outcome = self._continue(response, thresholds)
-            if outcome is not None:
-                return outcome
-            after, payload, history = response["ran"], response["suggested"], response["history"]
+    def start_input(self, start: JSON) -> JSON:
+        """The start input, prompted on the terminal from the start step's description."""
+        return self._prompt_inputs(start["inputs"])
 
-    def _continue(self, response: JSON, thresholds: Dict[str, float]) -> Outcome | None:
-        """Decide what to do with a step response. None means keep going with `suggested`."""
-        history = response["history"]
-        if response["next"] is None:
-            self.out.write(json.dumps({"done": True, "state": response["result"], "history": history}, indent=2) + "\n")
-            return Outcome(EXIT_DONE, response["result"])
+    def show(self, call: Callable[[Callable, Callable | None], Any]) -> Outcome:
+        """Run `call(on_step, on_pause)`, an SDK call that returns a `Paused` or `Done` or raises
+        a `RunError`, and print what it stopped at: one object, after the `--progress` lines."""
+        from aip.sdk import Done, RunError
 
-        if response["kind"] == "client_task":
-            pause = {"kind": "client_task", "step": response["ran"], "task": response["result"]["task"],
-                     "references": response["result"]["references"], "expects": _expects(response["next"])}
-            if self.interactive:
-                self.out.write("\n" + response["result"]["task"] + "\n\n")
-                payload = self._prompt_inputs(pause["expects"], response["suggested"])
-                return self._drive_from(response, payload, thresholds)
-            return self._pause(self._run_file(response["ran"], response["suggested"], history, pause, thresholds))
+        try:
+            result = call(self._line, (lambda paused: self.ask(paused.to_json())) if self.interactive else None)
+        except RunError as exc:
+            if exc.cause is not None and self.debug:
+                traceback.print_exception(exc.cause, file=sys.stderr)
+            block = exc.to_json()
+            self._print(block)
+            return Outcome(EXIT_ERROR, block, exc.run_file)
+        if isinstance(result, Done):
+            self._print(result.to_json())
+            return Outcome(EXIT_DONE, result.state, result.run_file)
+        block = result.to_json()
+        if not self.interactive:
+            self._print(block)
+        return Outcome(EXIT_PAUSED, block, result.run_file)
 
-        if response["review"]:
-            pause = {"kind": "review", "step": response["ran"], "review": response["review"],
-                     "expects": _expects(response["next"])}
-            if self.interactive:
-                payload = self._prompt_review(response["review"], response["suggested"])
-                return self._drive_from(response, payload, thresholds)
-            return self._pause(self._run_file(response["ran"], response["suggested"], history, pause, thresholds))
-        return None
+    def _print(self, obj: JSON) -> None:
+        self.out.write((json.dumps(obj) if self.progress else json.dumps(obj, indent=2)) + "\n")
 
-    def _drive_from(self, response: JSON, payload: JSON, thresholds: Dict[str, float]) -> Outcome:
-        return self._drive(after=response["ran"], payload=payload, history=response["history"], thresholds=thresholds)
-
-    def _after_response(self, response: JSON, thresholds: Dict[str, float]) -> Outcome:
-        """Continue a run from a response obtained outside the loop (a resumed manual decision)."""
-        outcome = self._continue(response, thresholds)
-        if outcome is not None:
-            return outcome
-        return self._drive_from(response, response["suggested"], thresholds)
-
-    # ---------------------------------------------------------------------- outcomes
-
-    def _run_file(self, after: str | None, suggested: JSON, history: List[JSON], pause: JSON,
-                  thresholds: Dict[str, float]) -> RunFile:
-        fields = getattr(self.backend, "run_file_fields", lambda: {})()
-        return RunFile(str(self.skill_dir), after, suggested, history, pause, thresholds, **fields)
-
-    def _pause(self, run: RunFile) -> Outcome:
-        path = run.save(self.run_file)
-        block = {"paused": run.pause["kind"], "step": run.pause["step"], **{k: v for k, v in run.pause.items() if k not in ("kind", "step")},
-                 "suggested": run.suggested, "resume": f"aip resume {path} --input <answer.json>", "run_file": str(path)}
-        self.out.write(json.dumps(block, indent=2) + "\n")
-        return Outcome(EXIT_PAUSED, block, path)
-
-    def _error(self, message: str) -> Outcome:
-        print(f"aip: {message}", file=sys.stderr)
-        return Outcome(EXIT_ERROR, {"error": message})
+    def _line(self, line: JSON) -> None:
+        if self.progress:
+            self.out.write(json.dumps(line) + "\n")
 
     # ------------------------------------------------------------------- interactive
 
-    def _prompt_inputs(self, expects: JSON, suggested: JSON) -> JSON:
-        """One prompt per declared input, typed from the vocabulary, prefilled from `suggested`."""
-        result = dict(suggested)
+    def ask(self, pause: JSON) -> JSON:
+        """The answer to a pause (a run file's, or the printed object), from the terminal."""
+        kind = pause.get("kind") or pause.get("paused")
+        if kind == "decision":
+            return self._prompt_answers(pause["questions"])
+        if kind == "client_task":
+            self.out.write("\n" + pause["task"] + "\n\n")
+            return self._prompt_inputs(pause["answer_with"])
+        return self._prompt_review(pause["review"], pause["proposed_answers"])
+
+    def _prompt_inputs(self, expects: JSON) -> JSON:
+        """One prompt per declared key, typed from the vocabulary."""
+        result: JSON = {}
         for name, dtype in expects.items():
-            default = suggested.get(name)
-            hint = f" [{json.dumps(default)}]" if default is not None else ""
             while True:
-                raw = self.prompt(f"{name} ({dtype}){hint}: ").strip()
-                if not raw and default is not None:
-                    result[name] = default
-                    break
+                raw = self.prompt(f"{name} ({dtype}): ").strip()
                 try:
                     result[name] = _coerce(raw, dtype)
                     break
@@ -232,31 +260,20 @@ class Runner:
                 answers[name] = level
         return answers
 
-    def _prompt_review(self, review: List[JSON], suggested: JSON) -> JSON:
-        payload = dict(suggested)
+    def _prompt_review(self, review: List[JSON], proposed: JSON) -> JSON:
+        """Only the overrides: an empty answer keeps the model's."""
+        overrides: JSON = {}
         for item in review:
             name = item["question"]
-            self.out.write(f"\n{name}: {item['reason']}  (model says {json.dumps(suggested.get(name))})\n")
+            self.out.write(f"\n{name}: {item['reason']}  (model says {json.dumps(proposed.get(name))})\n")
             if "probabilities" in item:
                 self.out.write("  " + json.dumps(item["probabilities"]) + "\n")
-            raw = self.prompt(f"  keep {json.dumps(suggested.get(name))}? enter to keep, or a new value: ").strip()
+            raw = self.prompt(f"  keep {json.dumps(proposed.get(name))}? enter to keep, or a new value: ").strip()
             if raw:
-                current = suggested.get(name)
+                current = proposed.get(name)
                 dtype = "boolean" if isinstance(current, bool) else "integer" if isinstance(current, int) else "string"
-                payload[name] = _coerce(raw, dtype)
-        return payload
-
-
-def _expects(next_node: JSON | None) -> JSON:
-    """The input keys the client must produce for what comes next. A router's are the union of its branches'."""
-    if next_node is None:
-        return {}
-    if next_node["kind"] == "router":
-        merged: JSON = {}
-        for branch in next_node["branches"].values():
-            merged.update(_expects(branch))
-        return merged
-    return dict(next_node.get("inputs", {}))
+                overrides[name] = _coerce(raw, dtype)
+        return overrides
 
 
 def _coerce(raw: str, dtype: str) -> Any:
