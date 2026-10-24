@@ -30,23 +30,38 @@ An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-
 Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
 
 
+### Steps and State
+
+A procedure's body is a YAML graph of typed steps, validated against the AIP schema. There are five step kinds:
+
+| kind | what it does |
+|---|---|
+| `execution` | runs a script and adds its result to the state |
+| `decision` | asks typed questions about the state (yes/no, a choice, a score); each answer becomes a value in the state |
+| `client_task` | hands work to the client, with a rendered template and the outputs it must produce |
+| `router` | branches on a value in the state |
+| `end` | declares which keys are the procedure's result |
+
+The state is the one JSON object a run carries. Each step declares the keys it reads as `inputs` and the keys it adds as `outputs`, with their types.
+
 ### Procedure Distillation
 
-While procedures may be written by hand, the recommended workflow is to draft initial versions with AI-assistance, and iterate from there....
-ATTN: Fill this in - brief using descriptions from AIP Spec.  Goals is to communicate that domain kjowledge mentioned above can come from anywhere whether it lives in runbooks, SOPs, post-mortems, or decision logs, or other skills or some database somewhere, etc. please reference the aip-sec repo to write this well
+Procedures can be written by hand, but the recommended workflow is to distill them from material that already exists. Most domain know-how is already written somewhere; just not in an executable form. It sits in runbooks and SOPs, policy documents, post-mortems and incident reviews, decision logs and design deliberations, existing freeform Agent Skills, wiki pages, ticket threads, etc. 
+
+The `aip` authoring skill, which ships with [aip-spec](https://github.com/zach-blumenfeld/aip-spec), takes that material in whatever form it comes and compiles it, with a frontier model, into a step graph: each piece of know-how becomes a typed step, a question with a confidence threshold, a router branch, a script, or a task handed to the client. The skill then runs `aip-spec validate` until the graph passes and walks the source line by line to confirm that nothing actionable was dropped; rules, thresholds, lookups, and branching are never allowed to fall away, and anything left out on purpose is recorded with its rationale. The original material ships inside the skill under `source/`, so every procedure can be read against what it was compiled from, and compiled again when the source changes. Step 6 of the [walkthrough](#6-compile-and-publish-your-own-skill) does this end to end.
 
 ### Runtime Protocol
-ATTN: Fill this in -  use the AIP Design below, keep in mind that client-server is not the only way to run this....see more below
+
+The runtime protocol is how a procedure gets executed. It defines the step types, the state that flows between steps, and the pauses where a client must act. AIP enforces this at three levels:
+
+1. **In the skill itself.** Every AIP skill carries a fixed runtime block in its body, so any agent can follow the protocol itself, with no AIP tooling present, just as it would any Agent Skill.
+2. **Locally.** The `aip` command runs a skill folder with an engine that enforces the protocol: it walks the graph, checks each step's inputs and outputs against their declared types, runs scripts, answers decisions, and follows routers.
+3. **Client-server.** An `aip` server holds a catalog of published procedures and drives each run with the same engine, recording every step for auditing. Clients, whether an agent, an application, or a person, search the catalog, start runs, and act at pauses. Scripts run on the client, next to the data, never on the server.
+
+In every mode the client only has to act at a pause: a task to perform, a decision the procedure's author marked as needing confirmation, or questions to answer when no decision model is configured.
 
 ## Research & Evidence
 Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills ([Evidence So Far](#evidence-so-far)).
-
-## AIP Design
-ATTN: Provided we do the above right, this section can go away
-AIP is two pieces:
-
-1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [aip-spec](https://github.com/zach-blumenfeld/aip-spec).
-2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, validates every step's input and output, and follows routers; the `aip` client runs the scripts next to the data and answers decisions with a structured decision model, and the agent or person behind it handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
 
 ## How It Works
 
