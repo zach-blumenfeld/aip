@@ -5,30 +5,44 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>Graph Procedures for Predictability & Governance</em></p>
+      <p><em>The open protocol for governed agent workflows</em></p>
     </td>
   </tr>
 </table>
 
 ## What Is AIP?
+Agent Instruction Protocol (AIP) is an open protocol for creating and running governed agent workflows.
 
-Agent Instruction Protocol (AIP) is a protocol that uses graphs to represent and run procedures.
+AIP is used to distill domain knowledge into procedures that even small, inexpensive agents follow step by step, with explicit control flow and optional server-side recording for auditing every run.
 
-A **procedure** is an instance of step-by-step know-how: an executable workflow that guides an agent on how to perform a task using tools and logical sequences.
+As an open protocol, AIP works with any model, agent harness, or orchestration stack. It was designed for agentic AI, but an AIP client can be any application or a human operator.
 
-Two protocols cover parts of this today. 
+Two open standards cover parts of this today. [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) decouples tools, data, and other assets into a service any agent can call. [Agent Skills](https://agentskills.io/) represent procedural knowledge in a portable form that humans can read and maintain.
 
-1. **Model Context Protocol (MCP)** _decouples tools, resources, and other assets_ into a portable service any agent can call. 
-2. **Agent Skills** _represent procedural knowledge_ in a portable way that humans can read and maintain. 
+AIP fills the gap between them. It builds on Agent Skills, so a procedure stays a portable, human-readable skill, and adds what Skills lack: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
 
-AIP seeks to accomplish both these goals with a single unified protocol, built to give teams running autonomous agents _**predictability, governance, portability, and cost savings**_. 
+## Key Concepts
 
-By treating procedures as first-class citizens, AIP provides a client-server architecture for not just calling individual tools but sequenced workflows of tools and steps, with typed I/O contracts, that can be distributed, executed by economical AI models, and governed by humans on the backend.
+### Procedures
 
+An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-shaped workflow that guides an agent on how to perform a task using tools and logical sequences.
+
+Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
+
+
+### Procedure Distillation
+
+While procedures may be written by hand, the recommended workflow is to draft initial versions with AI-assistance, and iterate from there....
+ATTN: Fill this in - brief using descriptions from AIP Spec.  Goals is to communicate that domain kjowledge mentioned above can come from anywhere whether it lives in runbooks, SOPs, post-mortems, or decision logs, or other skills or some database somewhere, etc. please reference the aip-sec repo to write this well
+
+### Runtime Protocol
+ATTN: Fill this in -  use the AIP Design below, keep in mind that client-server is not the only way to run this....see more below
+
+## Research & Evidence
 Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills ([Evidence So Far](#evidence-so-far)).
 
 ## AIP Design
-
+ATTN: Provided we do the above right, this section can go away
 AIP is two pieces:
 
 1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [aip-spec](https://github.com/zach-blumenfeld/aip-spec).
