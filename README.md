@@ -21,6 +21,9 @@ Two open standards cover parts of this today. [Model Context Protocol (MCP)](htt
 
 AIP fills the gap between them. It builds on Agent Skills, so a procedure stays a portable, human-readable skill, and adds what Skills lack: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
 
+Ex of an AIP procedure with historic runs visualized in the AIP console:
+<img src="img/aip-console-example.png" alt="Alt text">
+
 ## Key Concepts
 
 ### Procedures
@@ -29,6 +32,9 @@ An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-
 
 Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
 
+ex of a procedure graph for marketing emails visualized in the aip console:
+
+<img src="img/aip-console-example-email-blast.png" alt="Alt text">
 
 ### Steps and State
 
