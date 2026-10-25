@@ -5,34 +5,79 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>Graph Procedures for Predictability & Governance</em></p>
+      <p><em>The open protocol for governed agent workflows</em></p>
     </td>
   </tr>
 </table>
 
 ## What Is AIP?
+Agent Instruction Protocol (AIP) is an open protocol for creating and running governed agent workflows.
 
-Agent Instruction Protocol (AIP) is a protocol that uses graphs to represent and run procedures.
+AIP is used to distill domain knowledge into procedures that even small, inexpensive agents follow step by step, with explicit control flow and optional server-side recording for auditing every run.
 
-A **procedure** is an instance of step-by-step know-how: an executable workflow that guides an agent on how to perform a task using tools and logical sequences.
+As an open protocol, AIP works with any model, agent harness, or orchestration stack. It was designed for agentic AI, but an AIP client can be any application or a human operator.
 
-Two protocols cover parts of this today. 
+Two open standards cover parts of this today. [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) decouples tools, data, and other assets into a service any agent can call. [Agent Skills](https://agentskills.io/) represent procedural knowledge in a portable form that humans can read and maintain.
 
-1. **Model Context Protocol (MCP)** _decouples tools, resources, and other assets_ into a portable service any agent can call. 
-2. **Agent Skills** _represent procedural knowledge_ in a portable way that humans can read and maintain. 
+AIP fills the gap between them. It builds on Agent Skills, so a procedure stays a portable, human-readable skill, and adds what Skills lack: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
 
-AIP seeks to accomplish both these goals with a single unified protocol, built to give teams running autonomous agents _**predictability, governance, portability, and cost savings**_. 
+Ex of an AIP procedure for marketing emails with historic runs. Visualized in the AIP console:\
+<img src="img/aip-console-example2.png" alt="Alt text">
 
-By treating procedures as first-class citizens, AIP provides a client-server architecture for not just calling individual tools but sequenced workflows of tools and steps, with typed I/O contracts, that can be distributed, executed by economical AI models, and governed by humans on the backend.
+## Contents
 
-Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills ([Evidence So Far](#evidence-so-far)).
+- [Key Concepts](#key-concepts)
+- [How It Works](#how-it-works)
+- [Research and Evidence So Far](#research-and-evidence-so-far)
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [End-to-End Walkthrough](#end-to-end-walkthrough)
+- [Reference](#reference)
+- [Development & Contributing](#development--contributing)
 
-## AIP Design
+## Key Concepts
 
-AIP is two pieces:
+### Procedures
 
-1. **A spec.** A serialized representation of procedures, for information exchange and for distillation: compiling memory, documents, and other data into portable procedures that can be run by any agent. The AIP spec is an extension of the [Agent Skills spec](https://agentskills.io/home) and an AIP skill can be used exactly like an Agent Skill. The freeform markdown body is replaced with a fenced YAML block validated against a [JSON Schema](https://json-schema.org/): typed steps with inputs and edges, decisions with named questions, scripts, tasks for the client, and routers. The spec lives in [aip-spec](https://github.com/zach-blumenfeld/aip-spec).
-2. **A runtime protocol.** A client-server architecture for executing procedures that uses the graph topology to enforce sequencing and typed I/O between steps. The server walks the graph, validates every step's input and output, and follows routers; the `aip` client runs the scripts next to the data and answers decisions with a structured decision model, and the agent or person behind it handles only the pauses. Published procedures are content-hashed revisions in a catalog the server searches, and every run is recorded against the revision that ran. The runtime is this repository.
+An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-shaped workflow that guides an agent on how to perform a task using tools and logical sequences.
+
+Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
+
+Ex of the marketing email procedure in its serialized agent skill format:
+
+<img src="img/aip-skill-example2.png" alt="Alt text">
+
+### Steps and State
+
+A procedure's body is a YAML graph of typed steps, validated against the AIP schema. There are five step kinds:
+
+| kind | what it does |
+|---|---|
+| `execution` | runs a script and adds its result to the state |
+| `decision` | asks typed questions about the state (yes/no, a choice, a score); each answer becomes a value in the state |
+| `client_task` | hands work to the client, with a rendered template and the outputs it must produce |
+| `router` | branches on a value in the state |
+| `end` | declares which keys are the procedure's result |
+
+The state is the one JSON object a run carries. Each step declares the keys it reads as `inputs` and the keys it adds as `outputs`, with their types.
+
+### Procedure Distillation
+
+Procedures can be written by hand, but the recommended workflow is to distill them from material that already exists. Most domain know-how is already written somewhere; just not in an executable form. It sits in runbooks and SOPs, policy documents, post-mortems and incident reviews, decision logs and design deliberations, existing freeform Agent Skills, wiki pages, ticket threads, etc. 
+
+The `aip` authoring skill, which ships with [aip-spec](https://github.com/zach-blumenfeld/aip-spec), takes that material in whatever form it comes and compiles it, with a frontier model, into a step graph: each piece of know-how becomes a typed step, a question with a confidence threshold, a router branch, a script, or a task handed to the client. The skill then runs `aip-spec validate` until the graph passes and walks the source line by line to confirm that nothing actionable was dropped; rules, thresholds, lookups, and branching are never allowed to fall away, and anything left out on purpose is recorded with its rationale. The original material ships inside the skill under `source/`, so every procedure can be read against what it was compiled from, and compiled again when the source changes. Step 6 of the [walkthrough](#6-compile-and-publish-your-own-skill) does this end to end.
+
+<img src="img/aip-authoring.png" alt="Alt text">
+
+### Runtime Protocol
+
+The runtime protocol is how a procedure gets executed. It defines the step types, the state that flows between steps, and the pauses where a client must act. AIP enforces this at three levels:
+
+1. **In the skill itself.** Every AIP skill carries a fixed runtime block in its body, so any agent can follow the protocol itself, with no AIP tooling present, just as it would any Agent Skill.
+2. **Locally.** The `aip` command runs a skill folder with an engine that enforces the protocol: it walks the graph, checks each step's inputs and outputs against their declared types, runs scripts, answers decisions, and follows routers.
+3. **Client-server.** An `aip` server holds a catalog of published procedures and drives each run with the same engine, recording every step for auditing. Clients, whether an agent, an application, or a person, search the catalog, start runs, and act at pauses. Scripts run on the client, next to the data, never on the server.
+
+In every mode the client only has to act at a pause: a task to perform, a decision the procedure's author marked as needing confirmation, or questions to answer when no decision model is configured.
 
 ## How It Works
 
@@ -69,7 +114,9 @@ flowchart LR
 
 The agent never decides anything the procedure can decide. It starts a run, and the server walks the graph: it validates each step's input and follows routers, while the `aip` client runs the scripts and asks the decision model. It stops only at a pause the agent must handle: a task to perform, a decision answered below its threshold to confirm or override, or, with no decision model configured, the questions themselves. Every step, answer, and pause is recorded against the revision that ran, which is what the history and governance views read.
 
-## Evidence So Far
+## Research and Evidence So Far
+
+Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills.
 
 Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](https://arxiv.org/pdf/2606.04781), published at a VLDB 2026 workshop, measured the previous format (`0.3a3`, skills as structured YAML loaded into context, before the server existed) on a stratified core of 24 [SkillsBench](https://www.skillsbench.ai) tasks. Each task's human-curated skill was converted to AIP once by Claude Opus; Claude Sonnet 4.6 then solved the task with either the original or the conversion, five trials per task.
 
@@ -79,44 +126,6 @@ Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](
 | The same skill converted to AIP | **63.3%** | **0.668** |
 
 Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. The format has moved on since (typed step kinds, declared inputs and outputs, a decision model with thresholds, the runtime block, and a server that holds each run while the client runs its scripts and decisions); measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
-
-## Install
-
-One line installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) (the format and its validator), and both Agent Skills, `aip` (authoring and validating AIP skills) and `aip-runtime` (running published procedures), into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie):
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash    # aip + aip-spec + both skills
-```
-
-Only the format, no runtime (author and validate skills, nothing to run them against):
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/main/install.sh | bash   # aip-spec + the aip skill
-```
-
-Prefer Python tooling:
-
-```bash
-uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1   # `aip-spec`, the validator the skill calls
-uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1"      # `aip` with `aip server`; pulls aip-spec in
-aip skill install                   # both skills, every detected agent
-aip skill install claude-code       # one agent;  aip skill list  shows them
-aip skill install --path ./.claude/skills    # a project-local skills directory
-aip skill remove
-```
-
-Coming from 0.5a1: skills need three edits to validate under 0.6a0, listed in [`docs/upgrading.md`](docs/upgrading.md). A 0.6a0 skill validates under 0.6a1 with one warning; regenerating its runtime block clears it.
-
-Once installed, ask your agent something like *"author an AIP procedure skill for X"* or *"validate this AIP skill folder."* The skill walks the rest of the conversation. With `AIP_SERVER` set, the `aip-runtime` skill has the agent search the catalog and run a matching procedure instead of doing the steps by hand.
-
-The [End-to-End Walkthrough](#end-to-end-walkthrough) below takes a fresh machine through install, a Neo4j-backed server with the console, an agent run, and authoring a skill.
-
-### Model Recommendation for Co-Authoring
-
-Use the **largest frontier model available** when using the AIP skill. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
-
-For *consuming* the resulting skill, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
-
 
 ## Project Structure
 
@@ -128,7 +137,77 @@ The code is split across three repositories:
 | [aip](https://github.com/zach-blumenfeld/aip) (this repo) | the runtime: `aip` CLI and Python SDK, `aip server`, the Neo4j backend, and the `aip-runtime` skill | `uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1"` |
 | [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
 
+## Quick Start
+Minimal prerequisites. 
+
+**1. Install.** One line installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), and both Agent Skills, `aip` for authoring and `aip-runtime` for running, into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). Open a new terminal afterwards if `aip` is not found.
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
+```
+
+**2. Run the example locally.** The bundled `billing-support` skill triages a customer message. With no decision model configured you answer its questions on the terminal; the run then either runs its escalation script or pauses with a task for you.
+
+```bash
+aip-spec example billing-support --out .     # writes ./billing-support
+aip info ./billing-support                   # what it does, the input it expects, how it flows
+aip run ./billing-support --interactive
+```
+
+**3. Start a server and publish.** The filesystem backend is a directory and needs nothing else. Leave the server running in one terminal and publish from another.
+
+```bash
+aip server --backend filesystem              # terminal 1, http://localhost:8000
+```
+
+```bash
+aip config --server http://localhost:8000    # terminal 2: where the client sends requests
+aip publish ./billing-support                # validates, uploads, prints billing-support@<revision>
+aip search "refund"
+aip run billing-support --interactive        # the same run, now recorded on the server
+```
+
+**4. Let an agent run it.** The installer put the `aip-runtime` skill into your agent, and `aip config` pointed the `aip` command at your server. In Claude Code, ask:
+
+```
+A customer wrote: "I was charged twice! Refund me today or I'm gone." Handle it.
+```
+
+The agent searches the catalog, finds `billing-support`, starts the run, and handles each pause instead of improvising the steps.
+
+**5. Author your own.** Put a runbook, SOP, playbook, or existing `SKILL.md` in a folder and, in Claude Code, ask:
+
+```
+Author an AIP skill from ./refund-runbook.md
+```
+
+The `aip` skill compiles it into a procedure, validates it, and checks nothing was dropped. Then `aip publish ./<name>` puts it on the server. Use the largest model you have for this step; see below.
+
+Optional: `aip config --decision-model KEY` with a [TypeSafe](https://typesafe.ai) key has a decision model answer the questions in steps 2 to 4, pausing only when an answer falls under the author's threshold. The [End-to-End Walkthrough](#end-to-end-walkthrough) repeats these steps on a Neo4j-backed server with the web console and shows the procedure and run graphs in Cypher.
+
+### Other ways to install
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/main/install.sh | bash   # format only: aip-spec + the aip skill, nothing to run against
+uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1                      # Python tooling: `aip-spec`
+uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1"           # `aip` with `aip server`; pulls aip-spec in
+aip skill install                   # both skills, every detected agent
+aip skill install claude-code       # one agent;  aip skill list  shows them
+aip skill install --path ./.claude/skills    # a project-local skills directory
+aip skill remove
+```
+
+Coming from 0.5a1: skills need three edits to validate under 0.6a0, listed in [`docs/upgrading.md`](docs/upgrading.md). A 0.6a0 skill validates under 0.6a1 with one warning; regenerating its runtime block clears it.
+
+### Model Recommendation for Co-Authoring
+
+Use the **largest frontier model available** when using the AIP skill. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
+
+For *consuming* the resulting skill, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
+
 ## End-to-End Walkthrough
+
+Extended example with Neo4j backend for deeper audit and governance. 
 
 ### Prerequisites
 
@@ -283,37 +362,18 @@ aip publish ./<name>                     # then onto the server, where agents fi
 
 Edit, validate, publish again: the same name gets a new revision, and the console's diff shows what changed. Pin a revision when the catalog should resolve to it regardless of what is published later.
 
-## Procedures
+## Reference
 
-The AIP skill exposes two top-level procedures:
+The pieces behind the walkthrough, for looking things up rather than reading through: the two Agent Skills the installer writes, the `aip` command and the Python SDK under it, and how a skill folder becomes a published revision.
 
-1. **Author an AIP skill** — bring source material (or describe verbally); the agent compiles it into an execution graph validated against the AIP procedure schema, runs it, and tests it. Details in [`SKILL.md` § Authoring an Agent Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#authoring-an-agent-skill) in the spec repo.
-2. **Validate an AIP skill** — run `aip-spec validate` (or `aip validate`, the same checks) directly, or let the agent run it as part of authoring. Details in [`SKILL.md` § Validating an AIP Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#validating-an-aip-skill).
+### The Two Agent Skills
 
-The authoring skill lives in [aip-spec](https://github.com/zach-blumenfeld/aip-spec); `aip skill install` writes the copy bundled in that package.
+The installer puts two Agent Skills into your agent, both written by `aip skill install`:
 
-## AIP Skill Spec
+1. **`aip`**, the authoring skill, from [aip-spec](https://github.com/zach-blumenfeld/aip-spec). Bring source material (or describe it); the agent compiles it into a procedure, validates it against the schema, runs it, and tests it. It also validates an existing skill folder on request, with `aip-spec validate` (or `aip validate`, the same checks). Details in [`SKILL.md` § Authoring an Agent Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#authoring-an-agent-skill) and [§ Validating an AIP Skill](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#validating-an-aip-skill).
+2. **`aip-runtime`**, the running skill, from this repo ([`skills/aip-runtime/SKILL.md`](skills/aip-runtime/SKILL.md)). The one page an agent reads to search the catalog and run a published procedure through the `aip` client instead of doing the steps by hand. `aip runtime --skill --out <skills dir>` writes it alone.
 
-The format of an AIP skill is defined in [`SKILL.md` § AIP Specification](https://github.com/zach-blumenfeld/aip-spec/blob/main/SKILL.md#aip-specification) in the spec repo, [aip-spec](https://github.com/zach-blumenfeld/aip-spec). It follows the Agent Skills directory layout, requires a `source/` directory holding the human-readable material the skill was compiled from, requires a body that is the fixed AIP runtime block followed by exactly one fenced YAML block, so every skill carries its own execution semantics and any agent can run it with no aip tooling present, and adds one frontmatter key, `metadata.aip-version`.
-
-## The Procedure Format
-
-There is one format, and it lives in [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec): the pydantic models in `src/aip_spec/models.py`, the JSON Schema generated from them at [`assets/procedure.schema.json`](https://github.com/zach-blumenfeld/aip-spec/blob/main/assets/procedure.schema.json) for editors and non-Python consumers, and the runtime block every authored skill carries at the top of its body (`aip-spec runtime` or `aip runtime` prints it; the validator rejects a skill whose block is missing or edited). Steps are typed by `kind`: `decision`, `execution`, `client_task`, `router`, and `end`. The `billing-support` example ships in that package: `aip-spec example billing-support --out .` copies it out.
-
-This package depends on `aip-spec` and adds the runtime: `aip.spec.loader` builds the executable `Procedure` from a validated folder, and `aip.spec` re-exports the format so `from aip.spec import ProcedureSpec` keeps working. For the server case, it also ships the `aip-runtime` meta-skill ([`skills/aip-runtime/SKILL.md`](skills/aip-runtime/SKILL.md)), the one page an agent reads to find and run published procedures through the client; `aip skill install` writes it beside the authoring skill, and `aip runtime --skill --out <skills dir>` writes it alone.
-
-## Validation
-
-```bash
-aip-spec validate <path/to/skill-folder>             # what the authoring skill runs
-aip validate <path/to/skill-folder>                  # the same checks, from this package
-```
-
-Both run the checks in `aip_spec`: frontmatter (Agent Skills rules plus `metadata.aip-version`), folder structure (`source/` present), body shape, the YAML against the format models, and graph checks the models cannot express: unique step names, a runnable start, exactly one end, every edge resolving, every step reachable from the start and able to reach the end, unique input names, thresholds naming real questions, every key a step reads produced on every path to it (or a start input) and produced exactly once, `outputs` on every client task, a `requires` block when there are scripts, and every referenced asset, reference, and script present on disk.
-
-Output is JSON Lines on stderr (`path`, `kind`, `message`, optional `location`, optional `severity`) and a one-line human summary on stdout. Exit 0 on success, 1 on any error.
-
-## Running a Skill
+### Running a Skill
 
 ```bash
 aip info <path/to/skill-folder>                       # what it does, the input it expects, how it flows
@@ -348,7 +408,7 @@ loopback origins; `aip server --allow-origin ORIGIN` adds others). The server se
 
 `aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when this client has no decision-model key, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; every outcome prints a `run_id`, the run file is `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it, `--run-file` picks a path), `aip resume <run-id> --input answer.json` continues from any directory, and `aip resume <run-id>` with no input retries a failed step. `--progress` adds a JSON line per completed step and `--debug` a traceback on failure. Decision thresholds are the author's, from SKILL.md; nothing at run time overrides them. On a server, the server holds the run's state and history and the run file is only a handle.
 
-### Configuring the server
+#### Configuring the server
 
 `aip server --init` writes `~/.config/aip/server.toml`, every setting commented, and `aip server` reads it from there. The file is also looked for as `--config FILE`, `$AIP_SERVER_CONFIG`, and `./aip-server.toml`, in that order, the first found wins; `--example-config` prints the same template. Precedence, highest first: flags, the environment (a `./.env` or `--env-file` is loaded into it without overriding anything already set), the file, defaults. The filesystem catalog lives in `~/.local/share/aip/server` unless `root` says otherwise. The startup log names what it loaded and the backend.
 
@@ -358,7 +418,7 @@ The file has two tables. `[server]` is the listener and tokens; `[backend]` pick
 
 **Scripts and trust.** A procedure's execution steps are scripts, and they run on the client, in the `aip` process's user account, never on the server: `aip run <name>` fetches the revision's `scripts/` and `assets/` into `~/.aip/cache/<name>@<revision>/`, checks each file against the server's manifest, and runs the script with whatever that user can read, write, or reach. `aip` does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters. The server runs no user code and holds no model key, so publishing no longer means code execution on the server; it still decides what every client runs, so keep it on localhost or behind a token.
 
-## Publishing, Fetching, and Revisions
+### Publishing, Fetching, and Revisions
 
 An AIP skill is an Agent Skills folder: `SKILL.md`, `source/`, and any `scripts/`, `references/`, and `assets/`. That folder is the whole procedure, so moving it to and from a server is a file transfer, not a translation:
 
