@@ -21,8 +21,8 @@ Two open standards cover parts of this today. [Model Context Protocol (MCP)](htt
 
 AIP fills the gap between them. It builds on Agent Skills, so a procedure stays a portable, human-readable skill, and adds what Skills lack: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
 
-Ex of an AIP procedure with historic runs visualized in the AIP console:
-<img src="img/aip-console-example.png" alt="Alt text">
+Ex of an AIP procedure for marketing emails with historic runs. Visualized in the AIP console:\
+<img src="img/aip-console-example2.png" alt="Alt text">
 
 ## Key Concepts
 
@@ -32,9 +32,9 @@ An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-
 
 Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec) for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
 
-ex of a procedure graph for marketing emails visualized in the aip console:
+Ex of the marketing email procedure in its serialized agent skill format:
 
-<img src="img/aip-console-example-email-blast.png" alt="Alt text">
+<img src="img/aip-skill-example2.png" alt="Alt text">
 
 ### Steps and State
 
@@ -56,6 +56,7 @@ Procedures can be written by hand, but the recommended workflow is to distill th
 
 The `aip` authoring skill, which ships with [aip-spec](https://github.com/zach-blumenfeld/aip-spec), takes that material in whatever form it comes and compiles it, with a frontier model, into a step graph: each piece of know-how becomes a typed step, a question with a confidence threshold, a router branch, a script, or a task handed to the client. The skill then runs `aip-spec validate` until the graph passes and walks the source line by line to confirm that nothing actionable was dropped; rules, thresholds, lookups, and branching are never allowed to fall away, and anything left out on purpose is recorded with its rationale. The original material ships inside the skill under `source/`, so every procedure can be read against what it was compiled from, and compiled again when the source changes. Step 6 of the [walkthrough](#6-compile-and-publish-your-own-skill) does this end to end.
 
+<img src="img/aip-authoring.png" alt="Alt text">
 ### Runtime Protocol
 
 The runtime protocol is how a procedure gets executed. It defines the step types, the state that flows between steps, and the pauses where a client must act. AIP enforces this at three levels:
