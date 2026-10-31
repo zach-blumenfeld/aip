@@ -15,6 +15,7 @@ import type { ZipFile } from "../zip";
 import { QUESTION_TYPES, type Draft, type Step } from "./draft";
 import { lint, PLACEHOLDER_MARKER } from "./lint";
 import { skillMdToDraft } from "./serialize";
+import { NOTES_PATH, README_PATH, STUDIO_NOTE } from "./scaffold";
 
 export type CheckName = "validate" | "adherence" | "contract" | "completeness";
 
@@ -343,7 +344,9 @@ export function completeness(result: Draft, files: ZipFile[]): CheckResult {
   const failures: string[] = [];
   const texts: Record<string, string> = {};
   for (const f of files) texts[f.path] = textOf(f);
-  for (const [path, text] of Object.entries(texts)) if (text.includes(PLACEHOLDER_MARKER)) failures.push(`\`${path}\` still holds the placeholder marker \`${PLACEHOLDER_MARKER}\``);
+  // The Studio's own notes name the marker; Accept drops them, so they are not the agent's to finish.
+  const notes = (path: string) => (path === README_PATH || path === NOTES_PATH) && texts[path].includes(STUDIO_NOTE);
+  for (const [path, text] of Object.entries(texts)) if (!notes(path) && text.includes(PLACEHOLDER_MARKER)) failures.push(`\`${path}\` still holds the placeholder marker \`${PLACEHOLDER_MARKER}\``);
 
   const named = new Set<string>();
   for (const s of result.steps) {

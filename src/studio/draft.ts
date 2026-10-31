@@ -89,6 +89,9 @@ export interface Draft {
   files?: StoredFile[];
   /** The agent prompt as edited for this draft (S6a); unset is the shipped default. */
   agentPrompt?: string;
+  /** The folder handed to an agent (S6b): where the scaffold was written, and the hash of it as written, so the
+   *  Studio checks only once the agent has changed something. */
+  handoff?: { name: string; dir: string; baseline: string | null };
 }
 
 /** A file kept with a draft, base64 so the draft stays JSON for localStorage. */

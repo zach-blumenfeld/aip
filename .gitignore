@@ -8,3 +8,4 @@ scratch/
 .idea/
 .claude
 *.tsbuildinfo
+examples/studio/*.zip

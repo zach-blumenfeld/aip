@@ -257,7 +257,6 @@ tr[data-retired] td { opacity: 0.6; }
 .studio-drafts .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0; }
 .studio-drafts .danger { color: #b00020; }
 .studio-agent { margin: 0.5rem 0 0.75rem; }
-.studio-agent textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.9rem; }
-.studio-agent .agent-contract { white-space: pre-wrap; font-size: 0.8rem; max-height: 20rem; overflow: auto; }
+.studio-agent textarea.agent-prompt { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.9rem; }
 .studio-agent .agent-checks { list-style: none; padding-left: 0; }
 .studio-agent .agent-checks > li { margin: 0.35rem 0; }

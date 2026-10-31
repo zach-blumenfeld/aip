@@ -53,6 +53,17 @@ reported for `failing-scripts`), plus a form to keep a query of your own on the 
 server stores and runs read-only and lists beside the built-ins, and `#/server` (the console's server, and a
 bearer token for this tab).
 
+## Studio
+
+`#/studio` builds a procedure in the browser: steps, edges, typed inputs and outputs, with lint on every edit.
+It exports a skill zip with a placeholder for each script and template. **Complete with an agent** writes the
+scaffold to `<workdir>/studio/<name>/` and gives you one prompt to paste into your coding agent. The Studio watches
+the folder, validates the agent's work with `aip-spec` (on the PATH, or `--aip-spec PATH`), checks it against your
+design, runs its scripts, and only then lets you accept it.
+
+The walkthrough is in [docs/studio.md](docs/studio.md). Example designs to import are in
+[examples/studio/](examples/studio).
+
 ## Developing
 
 ```

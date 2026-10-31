@@ -19,17 +19,20 @@
 //   POST /console/validate     {name, files}           `aip-spec validate` on those files: {status, valid, issues}
 //   POST /console/probe        {name, files, script, stdin, timeout}
 //                                                      runs one Python script of those files: {code, stdout, stderr, ...}
-// The last two are the Studio's checks of an agent's fill-in (docs/STUDIO-PLAN.md, S6a). Each writes the files to a
-// fresh temporary folder `<name>/` and removes it after. `files` is [{path, mode, b64}]. Without `aip-spec` the
-// validate endpoint answers 503 `aip_spec_missing` saying how to install it.
+//   POST /console/handoff      {name, files}           writes the scaffold to <workdir>/studio/<name>/ for an agent: {dir}
+//   POST /console/handoff/read {name}                  that folder's files and a hash of them: {dir, files, hash}
+// These are the Studio's agent fill-in (docs/STUDIO-PLAN.md, S6). validate and probe write the files to a fresh
+// temporary folder `<name>/` and remove it after. `files` is [{path, mode, b64}]. Without `aip-spec` the validate
+// endpoint answers 503 `aip_spec_missing` saying how to install it. A handoff never deletes: a folder already at
+// the path is moved to <workdir>/studio/.previous/ first.
 //
 // An event stream sends `event: session` (its id) first, then one `data:` event per line the CLI
 // printed (step lines, then the final pause, done or error object), then `event: exit` with the
 // exit code, signal and stderr. Closing the stream kills the subprocess too.
 
 import { spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -242,24 +245,77 @@ const PROBE_LIMIT = 1024 * 1024;
 /** `files` ([{path, mode, b64}]) written under a fresh temporary `<name>/`; the caller removes `root`. Throws on a
  *  path that would leave the folder. */
 function writeSkill(name, files) {
-  if (!Array.isArray(files) || files.length === 0) throw new Error("files must be a non-empty list");
   const folder = typeof name === "string" && SKILL_NAME.test(name) ? name : "skill";
   const root = mkdtempSync(path.join(tmpdir(), "aip-console-check-"));
   const dir = path.join(root, folder);
   try {
-    for (const f of files) {
-      const rel = `${f?.path ?? ""}`;
-      if (!rel || rel.startsWith("/") || rel.split("/").some((p) => p === "" || p === "." || p === "..")) throw new Error(`unsafe path ${rel}`);
-      const file = path.join(dir, rel);
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, Buffer.from(`${f.b64 ?? ""}`, "base64"));
-      chmodSync(file, Number.isInteger(f.mode) ? f.mode & 0o777 : 0o644);
-    }
+    writeFiles(dir, files);
   } catch (e) {
     rmSync(root, { recursive: true, force: true });
     throw e;
   }
   return { root, dir };
+}
+
+/** `files` written under `dir`; throws on a path that would leave it. */
+function writeFiles(dir, files) {
+  if (!Array.isArray(files) || files.length === 0) throw new Error("files must be a non-empty list");
+  for (const f of files) {
+    const rel = `${f?.path ?? ""}`;
+    if (!rel || rel.startsWith("/") || rel.split("/").some((p) => p === "" || p === "." || p === "..")) throw new Error(`unsafe path ${rel}`);
+    const file = path.join(dir, rel);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, Buffer.from(`${f.b64 ?? ""}`, "base64"));
+    chmodSync(file, Number.isInteger(f.mode) ? f.mode & 0o777 : 0o644);
+  }
+}
+
+// What a skill folder's snapshot leaves out (as zip.ts does): tool droppings, not the skill's files.
+const SKIP_DIRS = new Set([".git", "__pycache__", ".aip", "__MACOSX", "node_modules", ".venv"]);
+const SKIP_FILES = new Set([".DS_Store", ".aip-manifest.json"]);
+const HANDOFF_LIMIT = 3 * 1024 * 1024;
+
+/** The folder a handoff of skill `name` lives in. */
+function handoffDir(setup, name) {
+  if (typeof name !== "string" || !SKILL_NAME.test(name)) throw new Error("name must be the skill's kebab-case name");
+  return path.join(setup.workdir, "studio", name);
+}
+
+/** The scaffold written to <workdir>/studio/<name>/ for an agent to edit in place. What was there is moved aside. */
+function handoff(setup, body) {
+  const dir = handoffDir(setup, body.name);
+  let previous = null;
+  if (existsSync(dir)) {
+    previous = path.join(setup.workdir, "studio", ".previous", `${body.name}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+    mkdirSync(path.dirname(previous), { recursive: true });
+    renameSync(dir, previous);
+  }
+  writeFiles(dir, body.files);
+  return { dir, previous };
+}
+
+/** The handoff folder's files (regular files only, no links), and a hash of paths, modes and bytes so the page can
+ *  tell when the agent has changed something. */
+function readHandoff(setup, body) {
+  const dir = handoffDir(setup, body.name);
+  if (!existsSync(dir)) return { dir, files: [], hash: null, missing: true };
+  const files = [];
+  let total = 0;
+  const walk = (rel) => {
+    for (const item of readdirSync(path.join(dir, rel)).sort()) {
+      const sub = rel ? `${rel}/${item}` : item;
+      const st = lstatSync(path.join(dir, sub));
+      if (st.isDirectory()) { if (!SKIP_DIRS.has(item)) walk(sub); continue; }
+      if (!st.isFile() || SKIP_FILES.has(item) || item.endsWith(".pyc")) continue;
+      total += st.size;
+      if (total > HANDOFF_LIMIT) throw new Error(`the folder holds more than ${HANDOFF_LIMIT / 1024 / 1024} MB`);
+      files.push({ path: sub, mode: st.mode & 0o777, b64: readFileSync(path.join(dir, sub)).toString("base64") });
+    }
+  };
+  walk("");
+  const hash = createHash("sha256");
+  for (const f of files) hash.update(`${f.path}\0${f.mode}\0${f.b64}\0`);
+  return { dir, files, hash: hash.digest("hex") };
 }
 
 /** Whether `aip-spec` runs here; a working one is remembered, a missing one is looked for again next time. */
@@ -270,7 +326,7 @@ function aipSpecProblem(setup) {
   if (!out.error && out.status === 0) { specChecked = true; return null; }
   return `The Studio checks an agent's result with the real validator, and \`${setup.aipSpec}\` could not be run ` +
          `(${out.error ? out.error.code ?? out.error.message : `exit ${out.status}`}). Install it with ` +
-         "`uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git`, or point --aip-spec (or AIP_SPEC_BIN) at one.";
+         "`uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1`, or point --aip-spec (or AIP_SPEC_BIN) at one.";
 }
 
 /** `aip-spec validate` on the files: its exit status and the issues it printed on stderr, one JSON object a line. */
@@ -381,6 +437,8 @@ function handler(setup, port) {
         if (missing) return problem(res, 503, "aip_spec_missing", missing);
         return json(res, 200, validate(setup, body));
       }
+      if (route === "POST /console/handoff") return json(res, 200, handoff(setup, await readJson(req)));
+      if (route === "POST /console/handoff/read") return json(res, 200, readHandoff(setup, await readJson(req)));
       if (route === "POST /console/probe") {
         const body = await readJson(req);
         return json(res, 200, await probe(setup, body));

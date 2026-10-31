@@ -4,6 +4,7 @@
 
 import { MissingValidator, type Runner } from "../studio/agentCheck";
 import { store } from "../studio/import";
+import type { ZipFile } from "../zip";
 
 /** `GET /console/config`. */
 export interface ConsoleConfig {
@@ -189,4 +190,19 @@ function post(path: string, body: unknown): Promise<Response> {
 
 async function errorText(res: Response): Promise<string> {
   try { return ((await res.json()) as { error: { message: string } }).error.message; } catch { return `${res.status} ${res.statusText}`; }
+}
+
+/** The scaffold written to `<workdir>/studio/<name>/` for an agent to edit in place. */
+export async function writeHandoff(name: string, files: ZipFile[]): Promise<{ dir: string; previous: string | null }> {
+  const res = await post("/console/handoff", { name, files: files.map(store) });
+  if (!res.ok) throw new Error(await errorText(res));
+  return (await res.json()) as { dir: string; previous: string | null };
+}
+
+/** The handoff folder as it is now; `hash` changes whenever a file does. */
+export async function readHandoff(name: string): Promise<{ dir: string; files: ZipFile[]; hash: string | null; missing?: boolean }> {
+  const res = await post("/console/handoff/read", { name });
+  if (!res.ok) throw new Error(await errorText(res));
+  const body = (await res.json()) as { dir: string; files: { path: string; mode: number; b64: string }[]; hash: string | null; missing?: boolean };
+  return { ...body, files: body.files.map((f) => ({ path: f.path, mode: f.mode, bytes: Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0)) })) };
 }

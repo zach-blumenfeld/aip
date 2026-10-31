@@ -8,7 +8,7 @@ import { emptyProse } from "./agentCheck";
 import type { Placeholder } from "./scaffold";
 import { PLACEHOLDER_MARKER } from "./lint";
 
-export const DEFAULT_AGENT_PROMPT = `You are finishing an AIP skill scaffold that a person designed in the AIP console's Studio. The zip you were given is the skill folder: SKILL.md (frontmatter, the AIP runtime block, and the procedure as a fenced YAML block), plus placeholder files under scripts/, assets/ and references/.
+export const DEFAULT_AGENT_PROMPT = `You are finishing an AIP skill that a person designed in the AIP console's Studio. The skill folder is given below: SKILL.md (frontmatter, the AIP runtime block, and the procedure as a fenced YAML block), plus placeholder files under scripts/, assets/ and references/. Edit the files there, in place. Do not move, copy or zip the folder.
 
 Your job:
 
@@ -16,16 +16,16 @@ Your job:
 2. Fill in the prose fields listed below as empty (step descriptions, question instructions and criteria text, empty \`trigger_when\` entries), in SKILL.md's YAML block. Fill only those.
 3. Change nothing else. The graph, the step names and kinds, the edges and branches, every input and output name and type, the question names and types, the file paths, \`requires\`, and every field the person already wrote are frozen. If the design looks wrong, say so in your reply instead of changing it.
 4. Run \`aip-spec validate <the skill folder>\` and fix what it reports until it prints VALID. Then run each script yourself with a sample stdin (the contract is below) and check it prints exactly its declared outputs.
-5. Return the folder as a zip in the same layout: one top-level folder named after the skill, SKILL.md inside it.
 
-The console checks your result itself: it validates it, compares SKILL.md to the design, runs every script with synthetic inputs, and rejects the whole result if any of it fails.`;
+The Studio is watching the folder. Each time your files settle it validates them, compares SKILL.md to the design, and runs every script with synthetic inputs; the person accepts your work only when all of that passes.`;
 
 const io = (items: Step["inputs"]) => (items.length ? items.map((i) => `${i.name}: ${i.type}`).join(", ") : "(none)");
 
 /** The frozen contract, from the Draft: every step with what may not change, the files to write, the empty prose. */
-export function contract(draft: Draft, placeholders: Placeholder[]): string {
+export function contract(draft: Draft, placeholders: Placeholder[], dir?: string): string {
   const name = (id: string | undefined) => draft.steps.find((s) => s.id === id)?.name ?? "(unset)";
-  const lines = [`## The design (frozen)`, "", `Skill \`${draft.name}\`. Steps, in order; the first is the start:`, ""];
+  const lines = dir ? ["## The skill folder", "", `\`${dir}\``, ""] : [];
+  lines.push(`## The design (frozen)`, "", `Skill \`${draft.name}\`. Steps, in order; the first is the start:`, "");
   for (const s of draft.steps) {
     lines.push(`- \`${s.name}\` (${s.kind})`);
     if (s.kind === "router") {
@@ -68,7 +68,8 @@ export function contract(draft: Draft, placeholders: Placeholder[]): string {
   return lines.join("\n");
 }
 
-/** The prompt as it is copied or sent: the instructions (the draft's edit, else the default), then the contract. */
-export function fullPrompt(draft: Draft, placeholders: Placeholder[]): string {
-  return `${(draft.agentPrompt ?? DEFAULT_AGENT_PROMPT).trim()}\n\n${contract(draft, placeholders)}\n`;
+/** The prompt as it is copied: the instructions (the draft's edit, else the default), then the folder and the
+ *  contract, which an edit to the instructions cannot drop. */
+export function fullPrompt(draft: Draft, placeholders: Placeholder[], dir: string): string {
+  return `${(draft.agentPrompt ?? DEFAULT_AGENT_PROMPT).trim()}\n\n${contract(draft, placeholders, dir)}\n`;
 }

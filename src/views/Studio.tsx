@@ -261,7 +261,7 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
           {agent && (
             <AgentPanel draft={draft} files={files} issues={issues} onClose={() => setAgent(false)}
               onPick={(r) => select(r.stepId ?? null, r.field)}
-              onPrompt={(text) => edit((d) => { if (text === undefined) delete d.agentPrompt; else d.agentPrompt = text; })}
+              onChange={edit}
               onAccept={commit} />
           )}
           {draft.steps.length === 0 ? (
