@@ -268,7 +268,9 @@ tier, applies one autofix, and asserts the issue clears.
 
 Depends on S3 (placeholders, zip) and S4 (import). Two parts, each a green commit.
 
-### S6a: prompt, checks, copy and import (no spawning)
+### - [x] S6a: prompt, checks, copy and import (no spawning)
+
+Done 2026-10-31, commit a3472da: the gate, info panel, editable prompt with a generated frozen contract, and import of an agent's zip checked by `POST /console/validate` (real aip-spec, refused without it), adherence, `POST /console/probe` with outputs fed forward, template fields and completeness; Accept only when all pass. The prompt is `agentPrompt.ts` (a string export, like the runtime block), the `{key}` check covers templates only (the runtime never renders a reference), and I/O and reference descriptions are frozen per the agent-scope decision. S6's heading stays open until S6b.
 
 - **Gate** (`src/studio/agentGate.ts`): the button is enabled only when `purpose`, the skill `description`,
   `trigger_when`, and every step's I/O are filled in and `lint` reports no `error` tier issues.
@@ -329,7 +331,7 @@ What this does not prove: decisions need a decision model and client tasks need 
 full `aip run` is not part of the check. State that in the info panel so "operational" is not
 over-read.
 
-### S6b: spawn a configured agent
+### - [ ] S6b: spawn a configured agent
 
 - Agents are configured in the console's process only: repeated `--agent name='command with
   {prompt} or {prompt_file}'` flags, or `~/.config/aip-console/agents.json`. Presets are offered as
