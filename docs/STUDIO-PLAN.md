@@ -215,7 +215,9 @@ Done 2026-10-31, commit eb4cc57: `src/studio/scaffold.ts` derives a working Pyth
 Proof: e2e exports a scaffold, unzips it with `unpackSkill`, validates it with the CLI, and asserts
 the file tree (SKILL.md, one script per execution step, one template per client task).
 
-## - [ ] S4: Import and draft management
+## - [x] S4: Import and draft management
+
+Done 2026-10-31, commit 54ced43: import from a catalog revision ("edit in Studio") or a zip into a new draft that carries every other file, an export that writes edits into the imported SKILL.md text (`patch.ts`) so one edited description is a one-line diff, a format-version banner with aip-spec's message, and several drafts in localStorage (new, rename, switch, delete, reset). An imported `source/README.md` is kept, so the Studio's notes go to `source/STUDIO.md` instead.
 
 - Import from a catalog revision: reuse `src/api/client.ts` to fetch the manifest and files, same as
   the download in `Zip.tsx`; from a zip: `unpackSkill`. Parse `SKILL.md` with `skillMdToDraft`. An
