@@ -5,6 +5,7 @@ import type { ValidationIssue } from "../api/types";
 import { navigate } from "../router";
 import type { Draft } from "../studio/draft";
 import { buildScaffold, packScaffold } from "../studio/scaffold";
+import type { ZipFile } from "../zip";
 import { describe } from "./Source";
 import { Issues, save, stashPublished } from "./Zip";
 
@@ -16,8 +17,8 @@ type Phase =
 /** The export: the linter's verdict on what the zip will hold, then a download (never blocked) and, with a server
  *  behind the console, a publish to the catalog, which the server refuses while errors remain, so the button
  *  says why instead. */
-export function ExportPanel({ draft, onClose }: { draft: Draft; onClose: () => void }) {
-  const scaffold = useMemo(() => buildScaffold(draft), [draft]);
+export function ExportPanel({ draft, files, onClose }: { draft: Draft; files: ZipFile[]; onClose: () => void }) {
+  const scaffold = useMemo(() => buildScaffold(draft, files), [draft, files]);
   const [phase, setPhase] = useState<Phase>({ at: "idle" });
   const count = (tier: string) => scaffold.issues.filter((i) => i.tier === tier).length;
   const errors = count("error");

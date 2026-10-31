@@ -1,26 +1,39 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DirectionToggle, StepGraph, useDirection } from "./StepGraph";
-import { DATA_TYPES, QUESTION_TYPES, RUNNABLE_KINDS, type Draft, type IOItem, type Question, type Step, type StepKind } from "../studio/draft";
+import { DATA_TYPES, emptyDraft, FORMAT_VERSION, QUESTION_TYPES, RUNNABLE_KINDS, type Draft, type IOItem, type Question, type Step, type StepKind } from "../studio/draft";
 import { KINDS, addStepAfter, addStepOnBranch, declareOutput, declareStartInput, deleteStep, flowOf, graphOf, label, possibleValues, prefillBranches, renameStep, setStart } from "../studio/edit";
+import { carried, importSkill, versionMessage } from "../studio/import";
 import { availableKeys, lint, type AvailableKey, type Issue, type Tier } from "../studio/lint";
 import { fileTexts } from "../studio/scaffold";
-import { loadDraft, saveDraft } from "../studio/storage";
+import { addDraft, deleteDraft, loadDraft, openShelf, renameDraft, saveDraft, storageAvailable, switchTo, type Shelf } from "../studio/storage";
 import { ExportPanel } from "./StudioExport";
+import { DraftsBar } from "./StudioDrafts";
+import { revisionFiles } from "./Zip";
+import { describe } from "./Source";
+import type { ZipFile } from "../zip";
 
 const STEP_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const TIERS: Tier[] = ["error", "unfinished", "warning"];
 
 /** The Studio: the step graph of a Draft on the left, a side panel for the selected step (or the procedure) on
- *  the right, and the linter's verdict under the graph. Every edit is autosaved to localStorage. */
-export function Studio() {
-  const [draft, setDraft] = useState<Draft>(loadDraft);
+ *  the right, and the linter's verdict under the graph. Every edit is autosaved to localStorage, one key per draft.
+ *  `importRef` opens a catalog revision as a new draft, `fresh` a blank one. */
+export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boolean }) {
+  const [initial] = useState(openShelf);
+  const [shelf, setShelf] = useState<Shelf>(initial.shelf);
+  const [draft, setDraft] = useState<Draft>(initial.draft);
+  const [storageOk] = useState(storageAvailable);
+  const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [direction, setDirection] = useDirection();
   const [showFlow, setShowFlow] = useState(false);
-  const [saved, setSaved] = useState<"saved" | "unsaved" | "no-storage">("saved");
+  const [saved, setSaved] = useState<"saved" | "unsaved" | "no-storage">(storageOk ? "saved" : "no-storage");
   const [focus, setFocus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const latest = useRef(draft);
+  const currentId = useRef(shelf.current);
+  const shelfRef = useRef(shelf);
+  shelfRef.current = shelf;
   const dirty = useRef(false);
 
   const edit = (change: (d: Draft) => void) => {
@@ -31,7 +44,7 @@ export function Studio() {
   const flush = () => {
     if (!dirty.current) return;
     dirty.current = false;
-    setSaved(saveDraft(latest.current) ? "saved" : "no-storage");
+    setSaved(saveDraft(currentId.current, latest.current) ? "saved" : "no-storage");
   };
   useEffect(() => {
     if (latest.current === draft) return;
@@ -46,8 +59,48 @@ export function Studio() {
     return () => { window.removeEventListener("pagehide", flush); flush(); };
   }, []);
 
-  // Every file a step names is still a placeholder until S4 carries real ones, so the linter sees what the export will hold.
-  const issues = useMemo(() => lint(draft, { files: fileTexts(draft) }), [draft]);
+  /** Show another draft: the open one is saved first, and the new one is not marked as changed. */
+  const show = (next: Shelf, d: Draft) => {
+    flush();
+    currentId.current = next.current;
+    latest.current = d;
+    setShelf(next);
+    setDraft(d);
+    setSelected(null);
+    setExporting(false);
+  };
+  const open = (d: Draft, name: string) => { flush(); show(addDraft(shelfRef.current, d, name), d); };
+
+  // A link from elsewhere (a procedure page, the catalog) opens a new draft once, then the hash goes back to #/studio
+  // so a reload does not open another.
+  const handled = useRef<string | null>(null);
+  useEffect(() => {
+    const key = importRef ? `import:${importRef}` : fresh ? "new" : null;
+    if (!key || handled.current === key) return;
+    handled.current = key;
+    history.replaceState(null, "", "#/studio");
+    if (fresh) { open(emptyDraft(), "untitled draft"); setNotice(null); return; }
+    importFrom(importRef!);
+  }, [importRef, fresh]);
+
+  function importFrom(ref: string) {
+    setNotice({ error: false, text: `importing ${ref}…` });
+    revisionFiles(ref).then(
+      (files) => importFiles(files, ref),
+      (e) => setNotice({ error: true, text: `Could not import ${ref}: ${describe(e)}` }),
+    );
+  }
+  function importFiles(files: ZipFile[], from: string) {
+    try {
+      open(importSkill(files), from);
+      setNotice({ error: false, text: `Imported ${from} as a new draft.` });
+    } catch (e) {
+      setNotice({ error: true, text: `Could not import ${from}: ${describe(e)}` });
+    }
+  }
+
+  const files = useMemo(() => carried(draft), [draft.files]);
+  const issues = useMemo(() => lint(draft, { files: fileTexts(draft, files) }), [draft, files]);
   const marks = useMemo(() => {
     const m = new Map<string, Tier>();
     for (const i of issues) {
@@ -91,6 +144,28 @@ export function Studio() {
           ({saved === "saved" ? "saved" : saved === "unsaved" ? "saving…" : "this browser will not keep it: storage is unavailable"})
         </span>.
       </p>
+      {!storageOk && (
+        <p className="error" role="alert" data-testid="storage-notice">
+          This browser does not let the page keep anything, so drafts last only until the page is closed or reloaded. Export the scaffold to keep your work.
+        </p>
+      )}
+      <DraftsBar shelf={shelf}
+        onSwitch={(id) => { flush(); const d = loadDraft(id); if (d) show(switchTo(shelf, id), d); }}
+        onNew={() => open(emptyDraft(), "untitled draft")}
+        onRename={(label) => setShelf(renameDraft(shelf, shelf.current, label))}
+        onDelete={() => { const r = deleteDraft(shelf, shelf.current); dirty.current = false; show(r.shelf, r.draft); }}
+        onReset={() => setDraft(emptyDraft())}
+        onImport={importFiles}
+        onImportError={(text) => setNotice({ error: true, text })}
+        onImportRef={importFrom} />
+      {notice && <p className={notice.error ? "error" : "muted"} role={notice.error ? "alert" : "status"} data-testid="studio-notice">{notice.text}</p>}
+      {versionMessage(draft.aipVersion) && (
+        <div className="published-note" data-testid="version-banner">
+          <p>This skill is written in format <code>{draft.aipVersion}</code>; the Studio edits format <code>{FORMAT_VERSION}</code>. aip-spec says:</p>
+          <p className="muted">{versionMessage(draft.aipVersion)}</p>
+          <p>The export stamps <code>{FORMAT_VERSION}</code> and writes the {FORMAT_VERSION} runtime block.</p>
+        </div>
+      )}
       <div className="studio-grid">
         <section>
           <div className="studio-bar">
@@ -101,7 +176,7 @@ export function Studio() {
             <button onClick={() => select(null)}>procedure settings</button>
             <button onClick={() => setExporting((x) => !x)} aria-expanded={exporting} data-testid="studio-export">Export scaffold…</button>
           </div>
-          {exporting && <ExportPanel draft={draft} onClose={() => setExporting(false)} />}
+          {exporting && <ExportPanel draft={draft} files={files} onClose={() => setExporting(false)} />}
           {draft.steps.length === 0 ? (
             <div className="studio-panel" data-testid="studio-empty">
               <h2>Start with the first step</h2>

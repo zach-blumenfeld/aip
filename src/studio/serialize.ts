@@ -4,6 +4,7 @@
 
 import { parse, stringify } from "yaml";
 import { emptyDraft, FORMAT_VERSION, UNRESOLVED, type Branch, type Draft, type IOItem, type Question, type Requires, type Step, type StepKind } from "./draft";
+import { patchYaml } from "./patch";
 import { RUNTIME_BLOCK } from "./runtime-0.6a1";
 
 const FRONTMATTER = /^---\s*\n(.*?)\n---\s*\n?(.*)$/s;
@@ -18,7 +19,7 @@ export function draftToSkillMd(draft: Draft): string {
   if (draft.compatibility !== undefined) front.compatibility = draft.compatibility;
   if (draft.license !== undefined) front.license = draft.license;
   if (draft.allowedTools !== undefined) front["allowed-tools"] = draft.allowedTools;
-  front.metadata = { "aip-version": FORMAT_VERSION };
+  front.metadata = { ...draft.metadata, "aip-version": FORMAT_VERSION };
 
   const nameOf = new Map(draft.steps.map((s) => [s.id, s.name]));
   const target = (id: string | undefined) => (id === undefined ? undefined : id.startsWith(UNRESOLVED) ? id.slice(UNRESOLVED.length) : nameOf.get(id) ?? id);
@@ -29,8 +30,10 @@ export function draftToSkillMd(draft: Draft): string {
   body.steps = draft.steps.map((s) => stepOut(s, target));
   if (draft.antiPatterns.length) body.anti_patterns = draft.antiPatterns;
 
-  const fm = stringify(front, { lineWidth: 0 });
-  const yaml = stringify(body, { lineWidth: 0 });
+  // An imported draft keeps its own formatting wherever only values changed.
+  const origin = draft.origin ? splitSkillMd(draft.origin) : null;
+  const fm = (origin && patchYaml(origin.front, front)) ?? stringify(front, { lineWidth: 0 });
+  const yaml = (origin?.body !== undefined && patchYaml(origin.body, body)) || stringify(body, { lineWidth: 0 });
   return `---\n${fm}---\n\n${RUNTIME_BLOCK.trim()}\n\n\`\`\`yaml\n${yaml}\`\`\`\n`;
 }
 
@@ -95,15 +98,11 @@ function stepOut(s: Step, target: (id: string | undefined) => string | undefined
 /** The Draft in a SKILL.md, however invalid the skill: only text that is not a SKILL.md at all throws. A key the
  *  Draft has no field for is dropped (the zip's other files are carried separately; see S4). */
 export function skillMdToDraft(text: string): Draft {
-  const match = FRONTMATTER.exec(text);
-  if (!match) throw new Error("SKILL.md must begin with YAML frontmatter delimited by `---`");
-  const front = asObj(parse(match[1]));
-  const after = match[2].trim();
-  const block = RUNTIME_BLOCK.trim();
-  const rest = after.startsWith(block) ? after.slice(block.length) : after;
-  const fences = [...rest.matchAll(FENCE)];
-  if (fences.length === 0) throw new Error("SKILL.md has no fenced YAML block holding the procedure");
-  const body = asObj(parse(fences[0][1]));
+  const parts = splitSkillMd(text);
+  if (!parts) throw new Error("SKILL.md must begin with YAML frontmatter delimited by `---`");
+  if (parts.body === undefined) throw new Error("SKILL.md has no fenced YAML block holding the procedure");
+  const front = asObj(parse(parts.front));
+  const body = asObj(parse(parts.body));
 
   const draft = emptyDraft();
   draft.name = str(front.name);
@@ -111,7 +110,9 @@ export function skillMdToDraft(text: string): Draft {
   if (front.compatibility !== undefined) draft.compatibility = str(front.compatibility);
   if (front.license !== undefined) draft.license = str(front.license);
   if (front["allowed-tools"] !== undefined) draft.allowedTools = str(front["allowed-tools"]);
-  draft.aipVersion = str(asObj(front.metadata)["aip-version"]) || FORMAT_VERSION;
+  const { "aip-version": version, ...metadata } = asObj(front.metadata);
+  draft.aipVersion = str(version) || FORMAT_VERSION;
+  if (Object.keys(metadata).length) draft.metadata = Object.fromEntries(Object.entries(metadata).map(([k, v]) => [k, str(v)]));
 
   draft.purpose = str(body.purpose);
   draft.triggerWhen = strs(body.trigger_when);
@@ -132,6 +133,15 @@ export function skillMdToDraft(text: string): Draft {
   const edge = (name: unknown) => (name === undefined || name === null ? undefined : idOf.get(str(name)) ?? UNRESOLVED + str(name));
   draft.steps = raw.map((s, n) => stepIn(s, ids[n], edge));
   return draft;
+}
+
+/** The frontmatter's YAML and the procedure block's YAML, each ending in a line break; null when there is no
+ *  frontmatter. A runtime block of any format version is skipped: none holds a fence. */
+function splitSkillMd(text: string): { front: string; body?: string } | null {
+  const match = FRONTMATTER.exec(text);
+  if (!match) return null;
+  const fence = [...match[2].matchAll(FENCE)][0];
+  return { front: `${match[1]}\n`, body: fence ? `${fence[1]}\n` : undefined };
 }
 
 function stepIn(s: Obj, id: string, edge: (name: unknown) => string | undefined): Step {

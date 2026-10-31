@@ -50,6 +50,7 @@ export function Catalog() {
                onChange={(e) => setQuery(e.target.value)} autoFocus />
       </form>
       <UploadZip onPublished={() => setVersion((v) => v + 1)} />
+      <p className="muted small"><a href={href({ page: "studio", fresh: true })} data-testid="new-in-studio">New in Studio</a>: build a procedure step by step and export it as a skill zip.</p>
       {error && <p className="error" role="alert">{error}</p>}
       {hits !== null ? (
         hits.length === 0 ? <p className="muted">No procedure matches “{query.trim()}”.</p> : (

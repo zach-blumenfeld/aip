@@ -251,3 +251,7 @@ tr[data-retired] td { opacity: 0.6; }
 .studio-bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0.5rem 0; }
 .studio-export { margin: 0.5rem 0 0.75rem; }
 .studio-export .export-files { margin: 0.3rem 0; padding-left: 1.2rem; font-size: 0.9rem; }
+.studio-drafts { margin: 0.25rem 0 0.5rem; }
+.studio-drafts .studio-bar { gap: 0.5rem; margin: 0.35rem 0; }
+.studio-drafts .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0; }
+.studio-drafts .danger { color: #b00020; }

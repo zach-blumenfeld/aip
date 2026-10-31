@@ -79,7 +79,18 @@ export interface Draft {
   requires?: Requires;
   /** The first step is the start. */
   steps: Step[];
+  // carried from an import (S4)
+  /** `metadata` keys besides `aip-version`, kept as they were. */
+  metadata?: Record<string, string>;
+  /** The SKILL.md the draft was imported from: the export writes its edits into this text, so formatting the
+   *  Studio did not touch stays as it was (patch.ts). */
+  origin?: string;
+  /** The imported skill's other files, emitted as they are. */
+  files?: StoredFile[];
 }
+
+/** A file kept with a draft, base64 so the draft stays JSON for localStorage. */
+export interface StoredFile { path: string; mode: number; b64: string }
 
 /** An id that names no step: what an imported edge to an undeclared step name becomes, so it lints as such. */
 export const UNRESOLVED = "unresolved:";
