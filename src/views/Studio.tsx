@@ -8,6 +8,7 @@ import { autofix } from "../studio/fixes";
 import { fileTexts } from "../studio/scaffold";
 import { addDraft, deleteDraft, loadDraft, openShelf, renameDraft, saveDraft, storageAvailable, switchTo, type Shelf } from "../studio/storage";
 import { ExportPanel } from "./StudioExport";
+import { AgentPanel } from "./StudioAgent";
 import { DraftsBar } from "./StudioDrafts";
 import { revisionFiles } from "./Zip";
 import { describe } from "./Source";
@@ -37,6 +38,7 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
   const [saved, setSaved] = useState<"saved" | "unsaved" | "no-storage">(storageOk ? "saved" : "no-storage");
   const [focus, setFocus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [agent, setAgent] = useState(false);
   const latest = useRef(draft);
   const currentId = useRef(shelf.current);
   const shelfRef = useRef(shelf);
@@ -110,6 +112,7 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
     setDraft(d);
     setSelected(null);
     setExporting(false);
+    setAgent(false);
   };
   const open = (d: Draft, name: string) => { flush(); show(addDraft(shelfRef.current, d, name), d); };
 
@@ -249,11 +252,18 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
             </label>
             <button onClick={() => select(null)}>procedure settings</button>
             <button onClick={() => setExporting((x) => !x)} aria-expanded={exporting} data-testid="studio-export">Export scaffold…</button>
+            <button onClick={() => setAgent((x) => !x)} aria-expanded={agent} data-testid="studio-agent">Complete with an agent…</button>
             <button onClick={undo} disabled={!past.current.length} data-testid="studio-undo" title="Cmd/Ctrl+Z">undo</button>
             <button onClick={redo} disabled={!future.current.length} data-testid="studio-redo" title="Shift+Cmd/Ctrl+Z">redo</button>
           </div>
           <p className="muted small">F8 and Shift+F8: next and previous issue. Outside a field: Delete removes the selected step, Cmd/Ctrl+Z undoes, Shift+Cmd/Ctrl+Z redoes.</p>
           {exporting && <ExportPanel draft={draft} files={files} onClose={() => setExporting(false)} />}
+          {agent && (
+            <AgentPanel draft={draft} files={files} issues={issues} onClose={() => setAgent(false)}
+              onPick={(r) => select(r.stepId ?? null, r.field)}
+              onPrompt={(text) => edit((d) => { if (text === undefined) delete d.agentPrompt; else d.agentPrompt = text; })}
+              onAccept={commit} />
+          )}
           {draft.steps.length === 0 ? (
             <div className="studio-panel" data-testid="studio-empty">
               <h2>Start with the first step</h2>

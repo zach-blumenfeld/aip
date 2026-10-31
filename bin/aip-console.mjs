@@ -2,7 +2,7 @@
 // aip-console (also installed as aip-inspector): serve the console's page from this machine and run
 // procedures through the `aip` CLI.
 //
-//   aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH]
+//   aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH] [--aip-spec PATH]
 //
 // The page calls the AIP server directly for catalog, history and governance; nothing is proxied.
 // Interactive runs go through the CLI, next to the data: the page posts to this process, which
@@ -16,6 +16,12 @@
 //   POST /console/run          {ref, input}            -> event stream of `aip run --progress`
 //   POST /console/resume       {run_id, input?}        -> event stream of `aip resume --progress`
 //   POST /console/cancel       {session}               kills that session's `aip` and its scripts
+//   POST /console/validate     {name, files}           `aip-spec validate` on those files: {status, valid, issues}
+//   POST /console/probe        {name, files, script, stdin, timeout}
+//                                                      runs one Python script of those files: {code, stdout, stderr, ...}
+// The last two are the Studio's checks of an agent's fill-in (docs/STUDIO-PLAN.md, S6a). Each writes the files to a
+// fresh temporary folder `<name>/` and removes it after. `files` is [{path, mode, b64}]. Without `aip-spec` the
+// validate endpoint answers 503 `aip_spec_missing` saying how to install it.
 //
 // An event stream sends `event: session` (its id) first, then one `data:` event per line the CLI
 // printed (step lines, then the final pause, done or error object), then `event: exit` with the
@@ -23,7 +29,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -93,16 +99,18 @@ function configuredServer(bin) {
 
 // ------------------------------------------------------------------ arguments
 
-const USAGE = `usage: aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH]
+const USAGE = `usage: aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH] [--aip-spec PATH]
 
   --server URL   the AIP server the page and the runs use (default: what \`aip config\` names)
   FOLDER         a skill folder instead: runs are local, the catalog, history and governance are hidden
   --port N       where to serve the console (default 4280; 0 picks a free port)
   --workdir DIR  the runs' working directory, where scripts read and write files (default the current one)
-  --aip PATH     the aip CLI to run (default $AIP_BIN, else \`aip\` on PATH); needs ${MINIMUM_AIP} or newer`;
+  --aip PATH     the aip CLI to run (default $AIP_BIN, else \`aip\` on PATH); needs ${MINIMUM_AIP} or newer
+  --aip-spec PATH
+                 the validator the Studio checks an agent's fill-in with (default $AIP_SPEC_BIN, else \`aip-spec\`)`;
 
 function parseArgs(argv) {
-  const args = { port: 4280, workdir: process.cwd(), aip: process.env.AIP_BIN || "aip" };
+  const args = { port: 4280, workdir: process.cwd(), aip: process.env.AIP_BIN || "aip", aipSpec: process.env.AIP_SPEC_BIN || "aip-spec" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = () => {
@@ -113,6 +121,7 @@ function parseArgs(argv) {
     else if (a === "--port") args.port = Number(value());
     else if (a === "--workdir") args.workdir = path.resolve(value());
     else if (a === "--aip") args.aip = value();
+    else if (a === "--aip-spec") args.aipSpec = value();
     else if (a === "-h" || a === "--help") { console.log(USAGE); process.exit(0); }
     else if (a.startsWith("-")) fail(`unknown option ${a}`);
     else if (args.target === undefined) args.target = a;
@@ -225,6 +234,97 @@ function skill(setup, ref) {
   return { info: JSON.parse(info.stdout), example_input: example.status === 0 ? JSON.parse(example.stdout) : {} };
 }
 
+// ------------------------------------------------------------------ the Studio's checks (S6a)
+
+const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const PROBE_LIMIT = 1024 * 1024;
+
+/** `files` ([{path, mode, b64}]) written under a fresh temporary `<name>/`; the caller removes `root`. Throws on a
+ *  path that would leave the folder. */
+function writeSkill(name, files) {
+  if (!Array.isArray(files) || files.length === 0) throw new Error("files must be a non-empty list");
+  const folder = typeof name === "string" && SKILL_NAME.test(name) ? name : "skill";
+  const root = mkdtempSync(path.join(tmpdir(), "aip-console-check-"));
+  const dir = path.join(root, folder);
+  try {
+    for (const f of files) {
+      const rel = `${f?.path ?? ""}`;
+      if (!rel || rel.startsWith("/") || rel.split("/").some((p) => p === "" || p === "." || p === "..")) throw new Error(`unsafe path ${rel}`);
+      const file = path.join(dir, rel);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, Buffer.from(`${f.b64 ?? ""}`, "base64"));
+      chmodSync(file, Number.isInteger(f.mode) ? f.mode & 0o777 : 0o644);
+    }
+  } catch (e) {
+    rmSync(root, { recursive: true, force: true });
+    throw e;
+  }
+  return { root, dir };
+}
+
+/** Whether `aip-spec` runs here; a working one is remembered, a missing one is looked for again next time. */
+let specChecked = false;
+function aipSpecProblem(setup) {
+  if (specChecked) return null;
+  const out = spawnSync(setup.aipSpec, ["--version"], { env: setup.env, encoding: "utf8" });
+  if (!out.error && out.status === 0) { specChecked = true; return null; }
+  return `The Studio checks an agent's result with the real validator, and \`${setup.aipSpec}\` could not be run ` +
+         `(${out.error ? out.error.code ?? out.error.message : `exit ${out.status}`}). Install it with ` +
+         "`uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git`, or point --aip-spec (or AIP_SPEC_BIN) at one.";
+}
+
+/** `aip-spec validate` on the files: its exit status and the issues it printed on stderr, one JSON object a line. */
+function validate(setup, body) {
+  const { root, dir } = writeSkill(body.name, body.files);
+  try {
+    const out = spawnSync(setup.aipSpec, ["validate", dir], { env: setup.env, encoding: "utf8" });
+    const issues = `${out.stderr ?? ""}`.split("\n").filter((l) => l.startsWith("{")).flatMap((l) => {
+      try {
+        const i = JSON.parse(l);
+        return [{ ...i, path: typeof i.path === "string" && i.path.startsWith(dir) ? path.relative(dir, i.path) || "SKILL.md" : i.path }];
+      } catch { return []; }
+    });
+    return { status: out.status, valid: out.status === 0, issues, output: `${out.stdout ?? ""}`.replaceAll(dir, body.name ?? "skill").trim() };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** The program `name` resolves to on PATH, or null. */
+function onPath(name, env) {
+  for (const dir of `${env.PATH ?? ""}`.split(path.delimiter)) {
+    if (dir && existsSync(path.join(dir, name)) && statSync(path.join(dir, name)).isFile()) return path.join(dir, name);
+  }
+  return null;
+}
+
+/** One script of the files run the way aip runs a `python` step: from the skill's folder, `python <script>`, the
+ *  payload on stdin, AIP_WORKDIR an empty folder. Only Python: the Studio's scripts are Python (v1). */
+function probe(setup, body) {
+  const script = `${body.script ?? ""}`;
+  if (!script.startsWith("scripts/")) throw new Error("script must be a path under scripts/");
+  const python = onPath("python", setup.env) ?? onPath("python3", setup.env);
+  if (!python) return Promise.resolve({ code: null, error: "no `python` (or `python3`) on this machine's PATH" });
+  const timeout = Math.min(Math.max(Number(body.timeout) || 30, 1), 120) * 1000;
+  const { root, dir } = writeSkill(body.name, body.files);
+  const work = path.join(root, "work");
+  mkdirSync(work);
+  return new Promise((resolve) => {
+    const child = spawn(python, [script], { cwd: dir, env: { ...setup.env, AIP_WORKDIR: work }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "", stderr = "", timedOut = false;
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (c) => { if (stdout.length < PROBE_LIMIT) stdout += c; });
+    child.stderr.on("data", (c) => { if (stderr.length < STDERR_LIMIT) stderr += c; });
+    const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, timeout);
+    const done = (out) => { clearTimeout(timer); rmSync(root, { recursive: true, force: true }); resolve(out); };
+    child.on("error", (e) => done({ code: null, error: `could not run ${python}: ${e.message}` }));
+    child.on("close", (code, signal) => done({ code, signal, timedOut, stdout, stderr: stderr.slice(0, STDERR_LIMIT) }));
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify(body.stdin ?? {}));
+  });
+}
+
 function handler(setup, port) {
   const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
   return async (req, res) => {
@@ -275,6 +375,16 @@ function handler(setup, port) {
         kill(session);
         return json(res, 200, { cancelled: body.session });
       }
+      if (route === "POST /console/validate") {
+        const body = await readJson(req);
+        const missing = aipSpecProblem(setup);
+        if (missing) return problem(res, 503, "aip_spec_missing", missing);
+        return json(res, 200, validate(setup, body));
+      }
+      if (route === "POST /console/probe") {
+        const body = await readJson(req);
+        return json(res, 200, await probe(setup, body));
+      }
       return problem(res, 404, "not_found", `no endpoint ${route}`);
     } catch (e) {
       return problem(res, 400, "invalid_input", e instanceof Error ? e.message : String(e));
@@ -317,7 +427,7 @@ function main() {
   // workdir reaches the run as `--workdir` (AIP_WORKDIR for its scripts).
   const cwd = mkdtempSync(path.join(tmpdir(), "aip-console-"));
   process.on("exit", () => rmSync(cwd, { recursive: true, force: true }));
-  const setup = { mode, server, folder, workdir: path.resolve(args.workdir), cwd, aip: args.aip, aipVersion: aip, env };
+  const setup = { mode, server, folder, workdir: path.resolve(args.workdir), cwd, aip: args.aip, aipSpec: args.aipSpec, aipVersion: aip, env };
 
   const http = createServer();
   // Loopback only: the page can start runs on this machine.

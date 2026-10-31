@@ -18,7 +18,8 @@ export function importSkill(files: ZipFile[]): Draft {
   return draft;
 }
 
-function studioMade(f: ZipFile): boolean {
+/** A file the Studio writes itself on export: a placeholder, or its notes. */
+export function studioMade(f: ZipFile): boolean {
   const text = new TextDecoder().decode(f.bytes);
   return text.includes(PLACEHOLDER_MARKER) || ((f.path === README_PATH || f.path === NOTES_PATH) && text.includes(STUDIO_NOTE));
 }

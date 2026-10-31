@@ -87,6 +87,8 @@ export interface Draft {
   origin?: string;
   /** The imported skill's other files, emitted as they are. */
   files?: StoredFile[];
+  /** The agent prompt as edited for this draft (S6a); unset is the shipped default. */
+  agentPrompt?: string;
 }
 
 /** A file kept with a draft, base64 so the draft stays JSON for localStorage. */
