@@ -236,7 +236,9 @@ Proof: e2e publishes `billing-support`, imports it into Studio from the catalog,
 description, exports, and asserts the diff against the original is only that line (reuse the line
 diff from `src/diff/lines.ts` in the assertion).
 
-## - [ ] S5: Lint polish and GUI-only rules
+## - [x] S5: Lint polish and GUI-only rules
+
+Done 2026-10-31, commit 533763d: nine Studio-only rules documented in `docs/studio-lint.md` (`loop_without_router` an error masked from parity, `branch_value_not_an_answer` unfinished, the rest warnings), autofix buttons, undo/redo, F8 through the issues and Delete on a step. "A start input nothing consumes" is not a rule, because the start step reads its own inputs (runtime block); billing-support now warns `name_collision` on `reply`.
 
 Rules the spec does not state but a graph builder needs. All are `warning` unless noted.
 
