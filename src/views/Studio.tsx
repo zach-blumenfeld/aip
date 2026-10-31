@@ -4,6 +4,7 @@ import { DATA_TYPES, emptyDraft, FORMAT_VERSION, QUESTION_TYPES, RUNNABLE_KINDS,
 import { KINDS, addStepAfter, addStepOnBranch, declareOutput, declareStartInput, deleteStep, flowOf, graphOf, label, possibleValues, prefillBranches, renameStep, setStart } from "../studio/edit";
 import { carried, importSkill, versionMessage } from "../studio/import";
 import { availableKeys, lint, type AvailableKey, type Issue, type Tier } from "../studio/lint";
+import { autofix } from "../studio/fixes";
 import { fileTexts } from "../studio/scaffold";
 import { addDraft, deleteDraft, loadDraft, openShelf, renameDraft, saveDraft, storageAvailable, switchTo, type Shelf } from "../studio/storage";
 import { ExportPanel } from "./StudioExport";
@@ -14,6 +15,12 @@ import type { ZipFile } from "../zip";
 
 const STEP_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const TIERS: Tier[] = ["error", "unfinished", "warning"];
+/** How many Draft snapshots undo keeps, and how close together keystrokes in one text field fold into one step. */
+const HISTORY = 100;
+const COALESCE_MS = 800;
+
+const typingIn = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+const isText = (t: Element | null) => t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && t.type === "text");
 
 /** The Studio: the step graph of a Draft on the left, a side panel for the selected step (or the procedure) on
  *  the right, and the linter's verdict under the graph. Every edit is autosaved to localStorage, one key per draft.
@@ -36,8 +43,40 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
   shelfRef.current = shelf;
   const dirty = useRef(false);
 
+  // Undo and redo: a bounded list of Draft snapshots. Keystrokes in one text field close together are one step.
+  const cur = useRef(draft);
+  cur.current = draft;
+  const past = useRef<Draft[]>([]);
+  const future = useRef<Draft[]>([]);
+  const lastTyped = useRef<{ at: number; el: Element | null }>({ at: 0, el: null });
+  const commit = (next: Draft) => {
+    const el = document.activeElement;
+    const now = Date.now();
+    const fold = isText(el) && lastTyped.current.el === el && now - lastTyped.current.at < COALESCE_MS;
+    if (!fold) {
+      past.current.push(cur.current);
+      if (past.current.length > HISTORY) past.current.shift();
+    }
+    lastTyped.current = isText(el) ? { at: now, el } : { at: 0, el: null };
+    future.current = [];
+    cur.current = next;
+    setDraft(next);
+  };
+  const travel = (from: { current: Draft[] }, to: { current: Draft[] }) => {
+    const d = from.current.pop();
+    if (!d) return;
+    to.current.push(cur.current);
+    lastTyped.current = { at: 0, el: null };
+    cur.current = d;
+    setDraft(d);
+  };
+  const undo = () => travel(past, future);
+  const redo = () => travel(future, past);
+
   const edit = (change: (d: Draft) => void) => {
-    setDraft((d) => { const c = structuredClone(d); change(c); return c; });
+    const c = structuredClone(cur.current);
+    change(c);
+    commit(c);
   };
 
   // Autosave, debounced; and once more as the page goes away, so a reload right after an edit keeps it.
@@ -64,6 +103,9 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
     flush();
     currentId.current = next.current;
     latest.current = d;
+    cur.current = d;
+    past.current = [];
+    future.current = [];
     setShelf(next);
     setDraft(d);
     setSelected(null);
@@ -100,7 +142,11 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
   }
 
   const files = useMemo(() => carried(draft), [draft.files]);
-  const issues = useMemo(() => lint(draft, { files: fileTexts(draft, files) }), [draft, files]);
+  // In the panel's order, by tier, so F8 walks them as they are listed.
+  const issues = useMemo(() => {
+    const all = lint(draft, { files: fileTexts(draft, files) });
+    return TIERS.flatMap((t) => all.filter((i) => i.tier === t));
+  }, [draft, files]);
   const marks = useMemo(() => {
     const m = new Map<string, Tier>();
     for (const i of issues) {
@@ -115,6 +161,34 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
   const flow = useMemo(() => (showFlow ? flowOf(draft) : undefined), [showFlow, draft]);
   const step = draft.steps.find((s) => s.id === selected);
   const select = (id: string | null, field?: string) => { setSelected(id); setFocus(field ?? null); };
+  const [current, setCurrent] = useState<number | null>(null);
+  const pick = (i: Issue) => { setCurrent(issues.indexOf(i)); select(i.stepId ?? null, i.field); };
+  const removeStep = (id: string) => { commit(deleteStep(cur.current, id)); setSelected(null); };
+
+  // Keyboard: F8 and Shift+F8 walk the issues (from anywhere, like an editor's problem list); outside a form field,
+  // Delete removes the selected step and Cmd/Ctrl+Z undoes, Shift+Cmd/Ctrl+Z or Ctrl+Y redoes.
+  const keys = useRef({ issues, current, selected, pick, removeStep, undo, redo });
+  keys.current = { issues, current, selected, pick, removeStep, undo, redo };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const k = keys.current;
+      if (e.key === "F8") {
+        if (!k.issues.length) return;
+        e.preventDefault();
+        const n = k.issues.length;
+        const at = k.current === null || k.current >= n ? (e.shiftKey ? n - 1 : 0) : (k.current + (e.shiftKey ? n - 1 : 1)) % n;
+        k.pick(k.issues[at]);
+        return;
+      }
+      if (typingIn(e.target)) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) k.redo(); else k.undo(); return; }
+      if (e.ctrlKey && e.key.toLowerCase() === "y") { e.preventDefault(); k.redo(); return; }
+      if (e.key === "Delete" && k.selected) { e.preventDefault(); k.removeStep(k.selected); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Move focus to the field a lint issue names, once the panel it lives in has rendered.
   useEffect(() => {
@@ -126,12 +200,12 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
 
   const add = (after: string | undefined, kind: StepKind) => {
     const r = addStepAfter(draft, after, kind);
-    setDraft(r.draft);
+    commit(r.draft);
     setSelected(r.id);
   };
   const addOnBranch = (router: string, index: number, kind: StepKind) => {
     const r = addStepOnBranch(draft, router, index, kind);
-    setDraft(r.draft);
+    commit(r.draft);
     setSelected(r.id);
   };
 
@@ -154,7 +228,7 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
         onNew={() => open(emptyDraft(), "untitled draft")}
         onRename={(label) => setShelf(renameDraft(shelf, shelf.current, label))}
         onDelete={() => { const r = deleteDraft(shelf, shelf.current); dirty.current = false; show(r.shelf, r.draft); }}
-        onReset={() => setDraft(emptyDraft())}
+        onReset={() => commit(emptyDraft())}
         onImport={importFiles}
         onImportError={(text) => setNotice({ error: true, text })}
         onImportRef={importFrom} />
@@ -175,7 +249,10 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
             </label>
             <button onClick={() => select(null)}>procedure settings</button>
             <button onClick={() => setExporting((x) => !x)} aria-expanded={exporting} data-testid="studio-export">Export scaffold…</button>
+            <button onClick={undo} disabled={!past.current.length} data-testid="studio-undo" title="Cmd/Ctrl+Z">undo</button>
+            <button onClick={redo} disabled={!future.current.length} data-testid="studio-redo" title="Shift+Cmd/Ctrl+Z">redo</button>
           </div>
+          <p className="muted small">F8 and Shift+F8: next and previous issue. Outside a field: Delete removes the selected step, Cmd/Ctrl+Z undoes, Shift+Cmd/Ctrl+Z redoes.</p>
           {exporting && <ExportPanel draft={draft} files={files} onClose={() => setExporting(false)} />}
           {draft.steps.length === 0 ? (
             <div className="studio-panel" data-testid="studio-empty">
@@ -187,15 +264,15 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
             <StepGraph steps={g.steps} edges={g.edges} branches={g.branches} start={g.start} end={g.end}
               direction={direction} flow={flow} onSelect={(id) => select(id)} selected={selected ?? undefined} labels={g.labels} marks={marks} />
           )}
-          <LintPanel issues={issues} draft={draft} onPick={(i) => select(i.stepId ?? null, i.field)} onFix={setDraft} />
+          <LintPanel issues={issues} draft={draft} current={current} onPick={pick} onFix={commit} />
         </section>
         <aside className="studio-panel" data-testid="studio-panel">
           {step
             ? <StepPanel key={step.id} draft={draft} step={step} edit={edit} available={available.get(step.id) ?? []}
                 onAdd={(k) => add(step.id, k)}
-                onDelete={() => { setDraft(deleteStep(draft, step.id)); setSelected(null); }}
-                onStart={() => setDraft(setStart(draft, step.id))}
-                onPrefill={() => setDraft(prefillBranches(draft, step.id))}
+                onDelete={() => removeStep(step.id)}
+                onStart={() => commit(setStart(draft, step.id))}
+                onPrefill={() => commit(prefillBranches(draft, step.id))}
                 onAddOnBranch={(i, k) => addOnBranch(step.id, i, k)} />
             : <ProcedurePanel draft={draft} edit={edit} />}
         </aside>
@@ -206,7 +283,9 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
 
 // ----------------------------------------------------------------------------------------------- lint panel
 
-function LintPanel({ issues, draft, onPick, onFix }: { issues: Issue[]; draft: Draft; onPick: (i: Issue) => void; onFix: (d: Draft) => void }) {
+function LintPanel({ issues, draft, current, onPick, onFix }: {
+  issues: Issue[]; draft: Draft; current: number | null; onPick: (i: Issue) => void; onFix: (d: Draft) => void;
+}) {
   const where = (i: Issue) => {
     const s = draft.steps.find((x) => x.id === i.stepId);
     return s ? `${label(s)}: ` : "";
@@ -222,12 +301,16 @@ function LintPanel({ issues, draft, onPick, onFix }: { issues: Issue[]; draft: D
           <div key={tier} className={`tier-${tier}`} data-testid={`lint-${tier}`}>
             <h3>{tier} ({these.length})</h3>
             <ul>
-              {these.map((i, n) => (
-                <li key={n} data-code={i.code} data-step={i.stepId}>
-                  <button className="linkish" onClick={() => onPick(i)}>{where(i)}{i.message}</button> <code className="muted">{i.code}</code>
-                  {i.code === "unproduced_input" && i.key !== undefined && <Fixes issue={i} draft={draft} onFix={onFix} />}
-                </li>
-              ))}
+              {these.map((i, n) => {
+                const fix = autofix(i, draft);
+                return (
+                  <li key={n} data-code={i.code} data-step={i.stepId} aria-current={issues.indexOf(i) === current || undefined}>
+                    <button className="linkish" onClick={() => onPick(i)}>{where(i)}{i.message}</button> <code className="muted">{i.code}</code>
+                    {i.code === "unproduced_input" && i.key !== undefined && <Fixes issue={i} draft={draft} onFix={onFix} />}
+                    {fix && <>{" "}<button data-testid="lint-autofix" onClick={() => onFix(fix.apply(draft))}>{fix.label}</button></>}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         );

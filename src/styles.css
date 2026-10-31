@@ -248,6 +248,7 @@ tr[data-retired] td { opacity: 0.6; }
 .studio-lint .tier-error h3 { color: #b00020; }
 .studio-lint .tier-unfinished h3 { color: var(--router); }
 .studio-lint .tier-warning h3 { color: var(--data); }
+.studio-lint li[aria-current="true"] { background: var(--fill); outline: 2px solid var(--fill); }
 .studio-bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0.5rem 0; }
 .studio-export { margin: 0.5rem 0 0.75rem; }
 .studio-export .export-files { margin: 0.3rem 0; padding-left: 1.2rem; font-size: 0.9rem; }

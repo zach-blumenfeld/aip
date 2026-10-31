@@ -58,8 +58,13 @@ export function lint(draft: Draft, options: LintOptions = {}): Issue[] {
   schema(draft, err);
   if (draft.steps.length > 0) graph(draft, err);
   unfinished(draft, options, add);
+  if (draft.steps.length > 0) studio(draft, add);
   return issues;
 }
+
+/** Error codes only the Studio reports. Each one comes with an aip-spec error on the same draft (docs/studio-lint.md),
+ *  so the parity test leaves them out of the comparison. */
+export const STUDIO_ONLY_ERRORS = new Set(["loop_without_router"]);
 
 // ------------------------------------------------------------------------------------------ frontmatter
 
@@ -323,7 +328,11 @@ function state(steps: R[], byName: Map<string, R>, err: Err): void {
     const have = available.get(r.name);
     if (have == null) continue;                    // unreachable; reported elsewhere
     for (const k of unique(consumed(r)).filter((k) => !have.has(k))) {
-      err("unproduced_input", `step \`${r.name}\` consumes \`${k}\`, which no step produces on every path to it; declare it on the start step \`${start.name}\` if the client supplies it, or as an \`output\` of an upstream step`, r.s, r.s.kind === "router" ? "branchOn" : "inputs", k);
+      if (r.s.kind === "router") {
+        err("unproduced_input", `router \`${r.name}\` branches on \`${k}\`, which no step produces on every path to it; pick a key that reaches the router, or declare \`${k}\` on the start step \`${start.name}\` or as an \`output\` of an upstream step`, r.s, "branchOn", k);
+        continue;
+      }
+      err("unproduced_input", `step \`${r.name}\` consumes \`${k}\`, which no step produces on every path to it; declare it on the start step \`${start.name}\` if the client supplies it, or as an \`output\` of an upstream step`, r.s, "inputs", k);
     }
   }
 }
@@ -444,5 +453,111 @@ function unfinished(d: Draft, options: LintOptions, add: Add): void {
       seen.add(path);
       if (files[path]?.includes(PLACEHOLDER_MARKER)) todo("placeholder_file", `${label}: \`${path}\` is still a placeholder`, s, field);
     }
+  }
+}
+
+// ------------------------------------------------------------------------------------------ Studio-only rules
+
+/** Rules aip-spec does not state but a graph builder needs (S5). Each code is listed in docs/studio-lint.md. All are
+ *  warnings except `loop_without_router` (an error) and `branch_value_not_an_answer` (unfinished). */
+function studio(d: Draft, add: Add): void {
+  const warn = (code: string, message: string, step?: Step, field?: string) => add("warning", code, message, step, field);
+  const label = (s: Step) => (s.name ? `step \`${s.name}\`` : `an unnamed ${s.kind} step`);
+  const byId = new Map(d.steps.map((s) => [s.id, s]));
+  const steps = resolve(d);
+  const types = typeTable(steps);
+
+  // A runnable chain that comes back to itself with no router on it can never leave.
+  const reported = new Set<string>();
+  for (const s of d.steps) {
+    if (!(RUNNABLE_KINDS as readonly string[]).includes(s.kind) || reported.has(s.id)) continue;
+    const chain: Step[] = [];
+    let cur: Step | undefined = s;
+    while (cur && (RUNNABLE_KINDS as readonly string[]).includes(cur.kind) && chain.length <= d.steps.length) {
+      chain.push(cur);
+      cur = cur.next ? byId.get(cur.next) : undefined;
+      if (cur === s) {
+        chain.forEach((c) => reported.add(c.id));
+        const names = chain.map((c) => `\`${c.name || c.id}\``).join(" → ");
+        add("error", "loop_without_router", `${names} → \`${s.name || s.id}\` is a loop with no router on it, so it can never leave; put a router in the loop with a branch that goes on`, s, "next");
+        break;
+      }
+    }
+  }
+
+  for (const s of d.steps) {
+    if (s.kind === "router") {
+      // Two branches to the same step: one would do.
+      const seen = new Map<string, string>();
+      (s.branches ?? []).forEach((b, i) => {
+        if (!b.target) return;
+        const first = seen.get(b.target);
+        if (first !== undefined) {
+          const to = byId.get(b.target);
+          warn("redundant_branches", `router ${label(s)}: the branches for \`${first}\` and \`${b.value}\` both go to \`${to ? to.name : b.target}\`; a router whose branches agree decides nothing there`, s, `branches[${i}].target`);
+        } else seen.set(b.target, b.value);
+      });
+
+      // A branch value the key can never hold, when the key's producer is known but is not the decision feeding
+      // the router (that case is aip-spec's `unknown_branch_value`).
+      const k = s.branchOn;
+      if (k) {
+        const direct = d.steps.some((f) => f.kind === "decision" && f.next === s.id && (f.questions ?? []).some((q) => q.name === k));
+        const q = d.steps.flatMap((x) => x.questions ?? []).find((x) => x.name === k);
+        const allowed = q
+          ? (q.type === "noul" ? ["true", "false"] : q.type === "choice" ? q.criteria.map((c) => c.label) : q.criteria.map((_, n) => String(n)))
+          : types.get(k)?.[0] === "boolean" ? ["true", "false"] : undefined;
+        if (!direct && allowed) {
+          (s.branches ?? []).forEach((b, i) => {
+            if (b.value && !allowed.includes(b.value)) {
+              add("unfinished", "branch_value_not_an_answer", `router ${label(s)}: \`${k}\` is ${q ? `a ${q.type} question's answer` : "a boolean"}, so it is never \`${b.value}\`; its values are ${allowed.map((a) => `\`${a}\``).join(", ")}`, s, `branches[${i}].value`);
+            }
+          });
+        }
+      }
+    }
+
+    if (s.kind === "decision") {
+      const questions = s.questions ?? [];
+      if (questions.length > 0 && Object.keys(s.thresholds ?? {}).length === 0) {
+        warn("no_thresholds", `${label(s)} sets no review threshold, so no answer is ever flagged for the calling agent to check; set one on the questions where a wrong answer costs most`, s, "questions");
+      }
+      questions.forEach((q, i) => {
+        if (q.type === "choice") {
+          const labels = q.criteria.map((c) => c.label).filter(Boolean);
+          if (labels.length > 0 && labels.every((l) => /^-?[0-9]+(\.[0-9]+)?$/.test(l))) {
+            warn("numeric_choice_labels", `${label(s)}: choice question \`${q.name}\` has only numbers as labels; if the answers are ordered, make it a score question, otherwise give the labels names`, s, `questions[${i}].criteria`);
+          }
+        }
+        if (q.type === "score") {
+          const levels = q.criteria.map((c) => c.trim());
+          const dup = levels.find((l, j) => l && levels.indexOf(l) !== j);
+          if (dup !== undefined) warn("duplicate_score_levels", `${label(s)}: score question \`${q.name}\` describes two levels as \`${dup}\`, so the rubric cannot tell them apart`, s, `questions[${i}].criteria`);
+        }
+      });
+    }
+
+    if (s.kind === "execution" && (s.outputs ?? []).length === 0) {
+      warn("execution_without_outputs", `${label(s)} declares no outputs, so nothing after it can use what its script does`, s, "outputs");
+    }
+  }
+
+  // An output nothing reads, where some step could read it: a dead key. A key produced on only some paths, which
+  // no step after the paths join can take, is left alone; the author cannot fix that by adding an input.
+  const read = new Set(d.steps.flatMap((s) => (s.kind === "router" ? (s.branchOn ? [s.branchOn] : []) : s.inputs.map((i) => i.name))));
+  const reachable = new Set([...availableKeys(d).values()].flatMap((keys) => keys.map((k) => k.name)));
+  for (const s of d.steps) {
+    if (s.kind !== "execution" && s.kind !== "client_task") continue;
+    (s.outputs ?? []).forEach((o, i) => {
+      if (o.name && !read.has(o.name) && reachable.has(o.name)) {
+        warn("dead_key", `${label(s)} outputs \`${o.name}\`, which no step reads; add it to the inputs of the step that needs it (the end, if it is part of the result), or remove it`, s, `outputs[${i}].name`);
+      }
+    });
+  }
+
+  // A step and a key with one name read as each other in a trace.
+  const keys = new Set(d.steps.flatMap((s) => [...s.inputs.map((i) => i.name), ...(s.outputs ?? []).map((o) => o.name), ...(s.questions ?? []).map((q) => q.name)]).filter(Boolean));
+  for (const s of d.steps) {
+    if (s.name && keys.has(s.name)) warn("name_collision", `${label(s)} has the same name as the key \`${s.name}\`; in a trace the step and the key read as each other, so rename one`, s, "name");
   }
 }

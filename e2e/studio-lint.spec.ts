@@ -36,8 +36,14 @@ test("billing-support round-trips through the Draft", () => {
   expect(out.indexOf("# AIP runtime")).toBeGreaterThan(0);
 });
 
-test("billing-support lints clean", () => {
-  expect(lint(skillMdToDraft(billing()))).toEqual([]);
+/** The issues aip-spec's own rules give, without the Studio-only warnings (S5). */
+const strict = (d: Draft) => lint(d).filter((i) => i.tier !== "warning");
+
+test("billing-support lints clean, but for one Studio-only warning", () => {
+  const draft = skillMdToDraft(billing());
+  expect(strict(draft)).toEqual([]);
+  // the step `reply` outputs a key `reply`
+  expect(lint(draft).map((i) => [i.tier, i.code, i.stepId])).toEqual([["warning", "name_collision", step(draft, "reply").id]]);
 });
 
 test("a blank draft: errors for what the spec requires, unfinished for what a template may leave", () => {
@@ -49,7 +55,7 @@ test("a blank draft: errors for what the spec requires, unfinished for what a te
 test("a step's rename moves with its edges", () => {
   const draft = skillMdToDraft(billing());
   step(draft, "reply").name = "draft-reply";
-  expect(lint(draft)).toEqual([]);
+  expect(lint(draft)).toEqual([]);   // and the name no longer collides with the key
   expect(draftToSkillMd(draft)).toContain("calm: draft-reply");
 });
 
@@ -61,7 +67,7 @@ test("unfinished: empty prose, an end with no inputs, a placeholder file, a laun
   step(draft, "end").inputs = [];
   step(draft, "escalate").command = ["bash", "run.sh"];
   draft.requires!.tools = ["bash"];
-  const issues = lint(draft, { files: { "assets/reply.md": `# ${PLACEHOLDER_MARKER}\n`, "assets/policy.md": "real text" } });
+  const issues = lint(draft, { files: { "assets/reply.md": `# ${PLACEHOLDER_MARKER}\n`, "assets/policy.md": "real text" } }).filter((i) => i.tier !== "warning");
   expect(issues.filter((i) => i.tier === "error")).toEqual([]);
   expect(issues.map((i) => i.code).sort()).toEqual(
     ["empty_description", "empty_instructions", "empty_purpose", "end_without_inputs", "non_python_launcher", "placeholder_file"],
@@ -85,7 +91,7 @@ function looped(): Draft {
 
 test("a router loop is valid when its keys are produced before it", () => {
   const draft = looped();
-  expect(lint(draft)).toEqual([]);
+  expect(strict(draft)).toEqual([]);
   expect(body(draftToSkillMd(draft)).steps.find((s: { name: string }) => s.name === "again").branches).toEqual({ true: "end", false: "reply" });
 });
 

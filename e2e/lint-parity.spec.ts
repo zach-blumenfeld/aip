@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Draft, Step } from "../src/studio/draft";
-import { lint } from "../src/studio/lint";
+import { lint, STUDIO_ONLY_ERRORS } from "../src/studio/lint";
 import { RUNTIME_BLOCK } from "../src/studio/runtime-0.6a1";
 import { draftToSkillMd, skillMdToDraft } from "../src/studio/serialize";
 import { FIRST_REVISION_DIR } from "./aip";
@@ -13,7 +13,8 @@ import { aipSpec, specErrors } from "./aip-spec";
 // codes must be equal. Fixtures are billing-support with one thing broken per code, plus the spec's own
 // dialogue-graph fixture. Two differences are by design and masked: `missing_resource` is not a Studio error (a
 // placeholder is `unfinished`), and when the models reject the body (`schema_violation`) aip-spec stops before
-// the graph rules, which the linter still runs.
+// the graph rules, which the linter still runs. Studio-only errors (STUDIO_ONLY_ERRORS) always come with an aip-spec
+// error on the same draft and are left out.
 
 const SCHEMA_STAGE = new Set(["schema_violation", "invalid_name", "invalid_description", "missing_required_frontmatter", "invalid_compatibility"]);
 const SKILL_DIR_ISSUES = new Set(["missing_resource"]);
@@ -87,7 +88,7 @@ function compare(label: string, name: string, text: string, root: string): { lab
   const dir = folder(root, name, text);
   const spec = new Set(specErrors(dir).map((i) => i.kind));
   for (const k of SKILL_DIR_ISSUES) spec.delete(k);
-  let ts = new Set(lint(skillMdToDraft(text)).filter((i) => i.tier === "error").map((i) => i.code));
+  let ts = new Set(lint(skillMdToDraft(text)).filter((i) => i.tier === "error" && !STUDIO_ONLY_ERRORS.has(i.code)).map((i) => i.code));
   // The folder is named for the skill, so `name_mismatch` cannot differ; a skill with no name sits in `unnamed/`.
   if (spec.has("schema_violation")) {
     ts = new Set([...ts].filter((c) => SCHEMA_STAGE.has(c)));
