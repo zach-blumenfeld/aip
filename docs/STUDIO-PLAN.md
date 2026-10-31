@@ -26,18 +26,18 @@ For an agent told "implement the next unchecked Studio milestone":
 
 | Question | Decision |
 |---|---|
-| What does Studio produce? | A skill scaffold zip: `SKILL.md` (frontmatter, runtime block, YAML graph) plus placeholder files under `scripts/`, `assets/`. No write-to-folder in v1. |
+| What does Studio produce? | A skill scaffold zip: `SKILL.md` (frontmatter, runtime block, YAML graph) plus placeholder files under `scripts/`, `assets/`. The only write to disk is the agent handoff folder (S6b). |
 | Where does a design start? | Blank, or imported from a catalog revision or a zip. Autosaved in the browser (`localStorage`); the zip is also a save/restore format. |
 | How is the graph built? | The existing auto-layout graph (`src/graph/layout.ts`, `StepGraph.tsx`) plus a side panel. No free canvas, no dragging wires. Edges are fields (`inputs_to`, router `branches`), so "one outbound edge" is true by construction. |
 | Linter strictness? | Three tiers: **error** (violates the spec), **unfinished** (placeholder or empty, fine for a template), **warning**. Export is never blocked; the zip is flagged draft in its `source/` note when errors remain. |
 | Milestone order | Model and lint first, UI second (below). |
 | Validator placement | A TypeScript port of the spec's graph and state rules, run in the browser on every edit. The real `aip-spec validate` stays the authority: a test (not the UI) runs both over the same fixtures and fails on any disagreement. |
-| Agent fill-in | Added as S6. Local-only for now (hosting for others is later). The agent never judges its own success: the console re-validates and checks adherence to the user's draft. The page can only pick a named agent; commands are configured in the console's process. |
+| Agent fill-in | Added as S6. Local-only for now (hosting for others is later). The agent never judges its own success: the console re-validates and checks adherence to the user's draft. The console never runs the agent: it writes the scaffold to a folder and the user pastes one prompt into their own coding agent (changed 2026-10-31, replacing a spawned agent). |
 | Script language | Python only in v1, enforced: the editor offers only the default launcher or an explicit `python`; a step with any other `command` (typed, or from an imported skill) is an `unfinished` issue and blocks the agent button, so no step can end up with an empty or unrunnable script. Widening this later means adding the launcher's stub, contract probe and agent instructions together. |
 | Requirement: fill-in is complete | **A successful agent fill-in always yields an end-to-end operational, publishable skill.** See "Definition of done" under S6a. Anything short of it is a failed fill-in, never a partial accept. |
 | Agent scope | The agent writes files (scripts, templates, references, assets) and fills **empty** prose fields (step `description`, question `instructions` and `criteria` text, empty `trigger_when` entries). Anything the user already wrote is frozen, as are the graph, I/O, names and types. |
 | No `aip-spec` | S6 checks refuse to run without the real `aip-spec` on the console machine; the TS linter is never final for an agent result. |
-| Agent retries | Default 2 automatic retries, editable in the info panel, capped at 5. |
+| Agent retries | None automatic: the Studio re-checks whenever the folder changes, and the user pastes the failures back to the agent. |
 | Agent prompt | A shipped default, shown in the info panel and editable per run; the edited text is saved with the draft. |
 | Server publish | Verified in `aip/src/aip/server/app.py`: `POST /catalog` runs `validate_skill`, rejects errors with 422 `invalid_skill`, passes warnings. It checks referenced files exist, not their content, so a scaffold with placeholders publishes if the graph is valid. |
 
@@ -264,7 +264,7 @@ Rules the spec does not state but a graph builder needs. All are `warning` unles
 Proof: e2e builds a draft that trips each new rule once, asserts each code appears with the right
 tier, applies one autofix, and asserts the issue clears.
 
-## - [ ] S6: Agent fill-in ("Complete with an agent")
+## - [x] S6: Agent fill-in ("Complete with an agent")
 
 Depends on S3 (placeholders, zip) and S4 (import). Two parts, each a green commit.
 
@@ -331,41 +331,33 @@ What this does not prove: decisions need a decision model and client tasks need 
 full `aip run` is not part of the check. State that in the info panel so "operational" is not
 over-read.
 
-### - [ ] S6b: spawn a configured agent
+### - [x] S6b: hand the folder to the user's agent
 
-- Agents are configured in the console's process only: repeated `--agent name='command with
-  {prompt} or {prompt_file}'` flags, or `~/.config/aip-console/agents.json`. Presets are offered as
-  text to paste, not applied silently: `claude -p {prompt}`, `codex exec {prompt}`,
-  `gemini -p {prompt}`. A command may take the prompt on stdin (`{stdin}`).
-- `GET /console/config` gains `agents: string[]` (names only). The page never sends a command, only
-  a name. With no agents configured the endpoint does not exist and the button's spawn option is
-  hidden; S6a stays available.
-- `POST /console/agent {agent, session}` unpacks the scaffold into a fresh directory under the
-  console's workdir, spawns the command there (detached, same process-group kill as `aip run`), and
-  relays stdout and stderr as server-sent events like the run console. Cancel kills it. Loopback host
-  and same-origin checks are unchanged and not relaxed.
-- After the agent exits the console runs the S6a checks itself. On failure it re-invokes the agent
-  with the failures appended to the prompt, up to the retry count in the info panel (default 2, max 5), then stops
-  and shows what is still wrong. The final result goes through the same diff and Accept/Reject.
-- Never pass the console's bearer token or server credentials in the agent's environment; pass only a
-  minimal environment plus the user's own `PATH` and home.
+Done 2026-10-31, commit dabce90: Start writes the scaffold to `<workdir>/studio/<name>/` (an existing folder is moved to `studio/.previous/`), the panel shows one prompt naming it, and the Studio polls the folder and runs the S6a checks each time it settles; Accept needs every check. Replaces the spawned-agent design at the user's request, and the panel's zip download and import with it.
+
+- `POST /console/handoff {name, files}` writes the scaffold to `<workdir>/studio/<name>/`; a folder already
+  there is moved to `<workdir>/studio/.previous/<name>-<time>/`, never deleted.
+- `POST /console/handoff/read {name}` returns the folder's regular files and a hash of them. The page reads it
+  every second and checks once the hash has moved off the scaffold's and two reads agree.
+- The prompt is the editable instructions, then the folder path and the frozen contract (not editable).
+- The handoff is saved with the draft, so a reload goes on watching. Start over writes a fresh scaffold.
 
 Proof (S6a): e2e asserts a draft with a `bash` execution step keeps the agent button disabled with
 that reason, and a result that leaves one placeholder marker or one empty script cannot be accepted.
 Then e2e builds a complete draft, exports, then imports (1) a hand-made correct result and
 asserts Accept works, (2) a copy with one step renamed and asserts the adherence failure names it,
 (3) a copy whose script prints a wrong key and asserts the contract failure names it.
-Proof (S6b): e2e configures `--agent fake=...` pointing at a small script that fills the
-placeholders, clicks the button, and asserts the checks pass and the diff appears; a second fake that
-breaks the graph is retried and then reported.
+Proof (S6b): e2e clicks Start, asserts the folder and the prompt, then plays the agent by writing into the
+folder: a renamed step, a wrong key, a leftover marker and an empty script each get a failing check, and the
+correct files pass and are accepted. Start again moves the folder to `.previous/`.
 
 ## Out of scope for v1
 
-Free-form canvas and dragging wires; writing scaffolds into a folder on disk; running the scaffold
+Free-form canvas and dragging wires; writing scaffolds into a folder on disk (beyond the agent handoff); running the scaffold
 from Studio; editing script or template file content (placeholders are produced, the user edits them
 in their own editor); multi-user editing; authoring `source/` documents; AI-assisted generation of
 steps or graph structure (S6 fills in files only; the `aip` authoring skill is the tool for graphs);
-hosting the console for other users, which would need auth before agent spawning is exposed.
+spawning an agent from the console; hosting the console for other users.
 
 ## Open items to surface rather than guess
 
