@@ -17,6 +17,7 @@ Add notable changes here as you make them. On release, rename this section to th
 
 ### Changed
 - **One repository.** The `aip-spec` repository is folded in as `packages/aip-spec/`, a uv workspace member, with its history (`git subtree add`). The authoring skill now lives at `skills/aip-compile/` (next to `skills/aip-runtime/`; its `name` is still `aip` until it is renamed), the `billing-support` example at `examples/`, and the format's changelog is merged into this one. The runtime's distribution is renamed from `aip` to `agent-instruction-protocol` (the PyPI name `aip` collides with an existing project); the module and the `aip` command are unchanged, and `aip.__version__` reads the new name. `aip` depends on `aip-spec==<same version>`: both packages always share a version, and the git-URL dependency is gone. The format itself is unchanged: `FORMAT_VERSION` stays `0.6a1` and no authored skill needs editing.
+- **PyPI, and a one-command upgrade.** Both packages publish to PyPI, so `install.sh` installs `aip-spec` and `agent-instruction-protocol[server]` with `uv tool install` by version (`AIP_REF=<version>`, default the release the script ships with) instead of by git tag, and ends by printing both versions and the agents it put the skills into. The README's install commands are the PyPI ones, the aip-spec repository links point into this repository, and `docs/upgrading.md` opens with the 0.6a1 to 0.7.0 step: re-run the installer; anyone who vendored a git URL swaps it for the PyPI name.
 
 ## [0.6a1] — 2026-10-19 (aip)
 

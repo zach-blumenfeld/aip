@@ -1,4 +1,30 @@
-# Upgrading a 0.5a1 skill to 0.6a0
+# Upgrading
+
+## 0.6a1 to 0.7.0
+
+Release 0.7.0 (one repository, PyPI) changes no skill: the format stays `0.6a1`, so a skill that
+validates today validates unchanged. Re-run the installer and nothing else:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
+```
+
+It installs `aip-spec` and `agent-instruction-protocol` (the `aip` command) from PyPI, replacing
+the git-tag installs of 0.6a1, and refreshes both skills in every agent it detects. Both packages
+carry the same version; `aip --version` prints `aip 0.7.0 format 0.6a1`.
+
+If you pinned a git URL yourself, in a `pyproject.toml`, a requirements file, or a `uv tool
+install` line, change it to the PyPI names. The format package was its own repository,
+[zach-blumenfeld/aip-spec](https://github.com/zach-blumenfeld/aip-spec), now archived; it lives at
+`packages/aip-spec/` in this one, and the runtime's distribution is `agent-instruction-protocol`
+(the module and command are still `aip`):
+
+```text
+aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1     ->  aip-spec==0.7.0
+aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1        ->  agent-instruction-protocol[server]==0.7.0
+```
+
+## 0.5a1 to 0.6a0
 
 Format 0.6a1 (2026-10-19) is 0.6a0 with one more validator rule, `type_mismatch` (a consumed key carries its
 producer's type), and a new heading on the runtime block. A 0.6a0 skill validates under 0.6a1 with one
