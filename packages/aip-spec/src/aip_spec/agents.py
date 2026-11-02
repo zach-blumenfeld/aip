@@ -159,6 +159,27 @@ def remove(names: list[str], agent: str | None = None, path: Path | None = None)
     return removed
 
 
+def remove_legacy(names: Sequence[str], agent: str | None = None, path: Path | None = None) -> list[Path]:
+    """Remove a skill's old folders, `names`, wherever `install` writes and `remove` looks: `path`,
+    one agent, or every agent. Only a folder whose `SKILL.md` declares that name goes, so a skill
+    of the user's that happens to share it stays. Idempotent; nothing to do is not an error."""
+    if path is not None or agent is not None:
+        try:
+            dirs = [d for _, d in target_dirs(agent, path)]
+        except NoAgentDetected:
+            dirs = []
+    else:
+        dirs = [a.skills_path() for a in AGENTS.values() if any(a.installed(n) for n in names)]
+    removed = []
+    for skills_dir in dirs:
+        for name in names:
+            target = skills_dir / name
+            if (target / "SKILL.md").is_file() and skill_name(target) == name:
+                shutil.rmtree(target)
+                removed.append(target)
+    return removed
+
+
 def table(names: list[str]) -> str:
     """One row per supported agent: detected, which of `names` are installed, and the path."""
     rows = [("agent", "detected", "installed", "skills directory")]

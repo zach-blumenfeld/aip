@@ -10,8 +10,10 @@ curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh
 ```
 
 It installs `aip-spec` and `agent-instruction-protocol` (the `aip` command) from PyPI, replacing
-the git-tag installs of 0.6a1, and refreshes both skills in every agent it detects. Both packages
-carry the same version; `aip --version` prints `aip 0.7.0 format 0.6a1`.
+the git-tag installs of 0.6a1, and refreshes both skills in every agent it detects. The authoring
+skill is now named `aip-compile` (it was `aip`); `aip skill install` writes `aip-compile/` and removes
+the old `aip/` folder beside it, and says so. Both packages carry the same version; `aip --version`
+prints `aip 0.7.0 format 0.6a1`.
 
 If you pinned a git URL yourself, in a `pyproject.toml`, a requirements file, or a `uv tool
 install` line, change it to the PyPI names. The format package was its own repository,

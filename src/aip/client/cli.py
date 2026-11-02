@@ -85,11 +85,12 @@ def runtime_command(argv: list[str]) -> int:
 
 
 def skill_command(argv: list[str]) -> int:
-    """Install, list, or remove the two AIP skills: the `aip` authoring skill, bundled in
-    `aip-spec`, and the `aip-runtime` meta-skill, bundled here. Agent detection is
-    `aip_spec.agents`, the same catalog `aip-spec skill install` uses."""
+    """Install, list, or remove the two AIP skills: the `aip-compile` authoring skill, bundled
+    in `aip-spec`, and the `aip-runtime` meta-skill, bundled here. Agent detection is
+    `aip_spec.agents`, the same catalog `aip-spec skill install` uses. Both actions also
+    remove the authoring skill's old `aip/` folder where they find one."""
     from aip_spec import agents, skill_dir
-    from aip_spec.resources import SKILL_ENTRIES as AUTHORING_ENTRIES, SKILL_NAME as AUTHORING
+    from aip_spec.resources import LEGACY_SKILL_NAMES, SKILL_ENTRIES as AUTHORING_ENTRIES, SKILL_NAME as AUTHORING
 
     from aip.client import RUNTIME_SKILL, runtime_skill_dir
 
@@ -114,8 +115,10 @@ def skill_command(argv: list[str]) -> int:
             sources = [(skill_dir(), AUTHORING_ENTRIES), (runtime_skill_dir(), ("SKILL.md",))]
             for label, folder in agents.install(sources, args.agent, args.path):
                 print(f"installed {folder.name} -> {folder}  ({label})")
+            for folder in agents.remove_legacy(LEGACY_SKILL_NAMES, args.agent, args.path):
+                print(f"removed {folder}  (the authoring skill's old name; it is {AUTHORING} now)")
             return 0
-        removed = agents.remove(names, args.agent, args.path)
+        removed = agents.remove(names, args.agent, args.path) + agents.remove_legacy(LEGACY_SKILL_NAMES, args.agent, args.path)
         for folder in removed:
             print(f"removed {folder}")
         if not removed:

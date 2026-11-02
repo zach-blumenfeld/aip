@@ -349,7 +349,7 @@ Views, in build order:
    with unreachable branches in practice (never taken in N runs).
 
 Non-goals for the first version: editing procedures in the browser (authoring stays
-with the aip skill), user accounts beyond a shared token, multi-server views.
+with the `aip-compile` skill), user accounts beyond a shared token, multi-server views.
 
 ## 11. Security
 

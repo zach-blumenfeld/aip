@@ -83,7 +83,7 @@ def runtime_command(argv: list[str]) -> int:
 
 def skill_command(argv: list[str]) -> int:
     from aip_spec import agents
-    from aip_spec.resources import SKILL_ENTRIES, SKILL_NAME, skill_dir
+    from aip_spec.resources import LEGACY_SKILL_NAMES, SKILL_ENTRIES, SKILL_NAME, skill_dir
 
     parser = argparse.ArgumentParser(prog="aip-spec skill", description="Install the AIP authoring skill into the agents on this machine.")
     sub = parser.add_subparsers(dest="action", required=True)
@@ -103,8 +103,10 @@ def skill_command(argv: list[str]) -> int:
         if args.action == "install":
             for label, folder in agents.install([(skill_dir(), SKILL_ENTRIES)], args.agent, args.path):
                 print(f"installed {SKILL_NAME} -> {folder}  ({label})")
+            for folder in agents.remove_legacy(LEGACY_SKILL_NAMES, args.agent, args.path):
+                print(f"removed {folder}  (the authoring skill's old name; it is {SKILL_NAME} now)")
             return 0
-        removed = agents.remove([SKILL_NAME], args.agent, args.path)
+        removed = agents.remove([SKILL_NAME], args.agent, args.path) + agents.remove_legacy(LEGACY_SKILL_NAMES, args.agent, args.path)
         for folder in removed:
             print(f"removed {folder}")
         if not removed:

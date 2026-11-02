@@ -529,18 +529,41 @@ class SkillInstall(unittest.TestCase):
         frontmatter = yaml.safe_load((folder / "SKILL.md").read_text().split("---")[1])  # its frontmatter passes
         issues = list(check_frontmatter(frontmatter, folder))
         self.assertEqual(issues, [], [i.to_record() for i in issues])
-        self.assertEqual(frontmatter["name"], "aip")
+        self.assertEqual(frontmatter["name"], "aip-compile")
         self.assertEqual(frontmatter["metadata"]["aip-version"], FORMAT_VERSION)
 
     def test_install_with_path_writes_the_skill_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, out, err = self.run_cli("skill", "install", "--path", tmp)
             self.assertEqual((code, err), (0, ""), out)
-            self.assert_installed_skill(Path(tmp) / "aip")
+            self.assert_installed_skill(Path(tmp) / "aip-compile")
             self.assertEqual(self.run_cli("skill", "install", "--path", tmp)[0], 0, "idempotent")
             code, out, _ = self.run_cli("skill", "remove", "--path", tmp)
             self.assertEqual(code, 0)
-            self.assertFalse((Path(tmp) / "aip").exists())
+            self.assertFalse((Path(tmp) / "aip-compile").exists())
+
+    def test_install_removes_the_skill_under_its_old_name(self):
+        """Up to 0.6a1 the authoring skill was installed as `aip/`; install and remove clean it up,
+        but only when the folder is that skill (its SKILL.md says `name: aip`)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / "aip"
+            old.mkdir()
+            (old / "SKILL.md").write_text("---\nname: aip\ndescription: the old authoring skill\n---\nbody\n")
+            code, out, err = self.run_cli("skill", "install", "--path", tmp)
+            self.assertEqual((code, err), (0, ""), out)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip-compile"])
+            self.assertIn(f"removed {old}", out)
+            self.assertNotIn("removed", self.run_cli("skill", "install", "--path", tmp)[1], "nothing left to remove")
+            # `remove` takes the old folder too, and leaves a user's own skill that shares the name.
+            old.mkdir()
+            (old / "SKILL.md").write_text("---\nname: aip\ndescription: old\n---\nbody\n")
+            code, out, _ = self.run_cli("skill", "remove", "--path", tmp)
+            self.assertEqual(code, 0)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), [])
+            old.mkdir()
+            (old / "SKILL.md").write_text("---\nname: my-own-aip-notes\ndescription: not ours\n---\nbody\n")
+            self.assertEqual(self.run_cli("skill", "install", "--path", tmp)[0], 0)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip", "aip-compile"])
 
     def test_install_into_detected_agents(self):
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": f"{home}/.config"}):
@@ -552,16 +575,16 @@ class SkillInstall(unittest.TestCase):
             code, out, err = self.run_cli("skill", "install")
             self.assertEqual((code, err), (0, ""), out)
             for agent in (".claude", ".cursor"):
-                self.assert_installed_skill(Path(home) / agent / "skills" / "aip")
+                self.assert_installed_skill(Path(home) / agent / "skills" / "aip-compile")
             code, out, _ = self.run_cli("skill", "list")
             rows = {line.split()[0]: line.split()[1:3] for line in out.splitlines()[1:]}
-            self.assertEqual((rows["claude-code"], rows["cursor"], rows["codex"]), (["yes", "aip"], ["yes", "aip"], ["no", "-"]))
+            self.assertEqual((rows["claude-code"], rows["cursor"], rows["codex"]), (["yes", "aip-compile"], ["yes", "aip-compile"], ["no", "-"]))
             code, out, _ = self.run_cli("skill", "remove", "cursor")
             self.assertEqual(code, 0)
-            self.assertFalse((Path(home) / ".cursor" / "skills" / "aip").exists())
-            self.assertTrue((Path(home) / ".claude" / "skills" / "aip").exists())
+            self.assertFalse((Path(home) / ".cursor" / "skills" / "aip-compile").exists())
+            self.assertTrue((Path(home) / ".claude" / "skills" / "aip-compile").exists())
             self.assertEqual(self.run_cli("skill", "remove")[0], 0)
-            self.assertFalse((Path(home) / ".claude" / "skills" / "aip").exists())
+            self.assertFalse((Path(home) / ".claude" / "skills" / "aip-compile").exists())
             self.assertEqual(self.run_cli("skill", "install", "emacs")[0], 1)
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # One-command installer for AIP: the `aip` CLI (run, client, server) and `aip-spec` (the
-# format, its validator), both from PyPI, and both skills, `aip` (authoring) and
+# format, its validator), both from PyPI, and both skills, `aip-compile` (authoring) and
 # `aip-runtime` (running published procedures), installed into every agent detected on
 # this machine.
 #
@@ -40,7 +40,7 @@ hash -r 2>/dev/null || true
 
 # 3. Both skills, into every detected agent (Claude Code, Cursor, …).
 #    Non-fatal: a machine with no agent directory yet should not fail the install.
-info "Installing the aip and aip-runtime skills…"
+info "Installing the aip-compile and aip-runtime skills…"
 skills="$(aip skill install 2>&1)" || {
   printf '%s\n' "$skills" >&2
   warn "skill install skipped: no supported agent detected. Later: 'aip skill install <agent>' (see 'aip skill list') or 'aip skill install --path <skills dir>'."
@@ -53,10 +53,10 @@ ok "$(aip --version)"
 ok "aip-spec $(aip-spec --version) (format)"
 if [ -n "$skills" ]; then
   # `aip skill install` prints one `installed <skill> -> <folder>  (<agent>)` line per skill and
-  # agent, and one `removed <folder>` line per legacy skill folder it cleaned up.
+  # agent, and one `removed <folder>  (...)` line per pre-0.7.0 `aip/` skill folder it cleaned up.
   installed="$(printf '%s\n' "$skills" | sed -n 's/^installed .* (\(.*\))$/\1/p' | sort -u | paste -sd ', ' -)"
   [ -n "$installed" ] && ok "skills installed into: $installed"
-  printf '%s\n' "$skills" | grep '^removed ' | while IFS= read -r line; do ok "legacy skill folder ${line#removed }: removed"; done
+  printf '%s\n' "$skills" | grep '^removed ' | while IFS= read -r line; do ok "$line"; done
 fi
 echo
 ok "aip ready. 'aip --help' lists the commands; 'aip-spec validate <folder>' checks a skill by hand."

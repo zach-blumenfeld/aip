@@ -1,5 +1,5 @@
 ---
-name: aip
+name: aip-compile
 description: Create skills as Agent Instruction Protocol (AIP) — schema-validated structure that gates quality at write time, catches silent drift, and makes a skill corpus queryable for governance and analytics. Use whenever authoring a skill an autonomous agent will consume, including net-new skills, and compiling existing material (runbooks, deliberations, specs, decision logs, post-mortems). Default to using this any time the consumer is an autonomous agent — the structural constraint is what makes a skill production-grade.
 compatibility: Requires uv (https://docs.astral.sh/uv/) for the aip-spec validator.
 metadata:
