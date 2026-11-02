@@ -6,7 +6,7 @@ import type { Draft, Step } from "../src/studio/draft";
 import { lint, STUDIO_ONLY_ERRORS } from "../src/studio/lint";
 import { RUNTIME_BLOCK } from "../src/studio/runtime-0.6a1";
 import { draftToSkillMd, skillMdToDraft } from "../src/studio/serialize";
-import { FIRST_REVISION_DIR } from "./aip";
+import { AIP_REPO, FIRST_REVISION_DIR } from "./aip";
 import { aipSpec, specErrors } from "./aip-spec";
 
 // Parity: the same skill text goes through `aip-spec validate` and the TypeScript linter, and the sets of error
@@ -107,7 +107,7 @@ test("the TypeScript linter and aip-spec agree on the error codes", () => {
     });
 
     // The spec's own fixture: the dialogue graph, a 0.5a1 body that fails the state rules.
-    const dialogue = path.resolve(import.meta.dirname, "..", "..", "aip-spec", "tests", "fixtures", "dialogue-graph.yaml");
+    const dialogue = path.join(AIP_REPO, "packages", "aip-spec", "tests", "fixtures", "dialogue-graph.yaml");
     if (existsSync(dialogue)) {
       const text = `---\nname: dialogue-graph\ndescription: Parse a dialogue script into a graph.\nmetadata:\n  aip-version: "0.6a1"\n---\n\n${RUNTIME_BLOCK.trim()}\n\n\`\`\`yaml\n${readFileSync(dialogue, "utf8")}\n\`\`\`\n`;
       mkdirSync(path.join(root, "dialogue"), { recursive: true });

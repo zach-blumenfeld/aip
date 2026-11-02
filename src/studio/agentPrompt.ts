@@ -63,7 +63,7 @@ export function contract(draft: Draft, placeholders: Placeholder[], dir?: string
     "and writes one JSON object to stdout holding exactly the step's declared outputs, each of its declared type (string, integer, float, boolean, object, list[*]). No other keys. A non-zero exit fails the step; diagnostics go to stderr.",
     "", "## Templates", "",
     "A client_task template is rendered with Python's `str.format` rules: `{key}` for each of the step's inputs, `{assets[stem]}` for each of its assets, `{meta.name}` for the skill name. Any other brace is doubled (`{{`, `}}`). The template tells the agent running the procedure what to do and asks for the step's outputs as one JSON object.",
-    "", "The AIP runtime block at the top of SKILL.md is the full statement of how a run executes each step; `aip-spec schema` prints the JSON Schema of the YAML block.",
+    "", "The AIP runtime block at the top of SKILL.md is the full statement of how a run executes each step; `aip-spec schema` prints the JSON Schema of the YAML block. The format itself is the `aip-spec` package at `packages/aip-spec` in the aip repository (https://github.com/zach-blumenfeld/aip): `docs/specification.md` there is the prose, `src/aip_spec/models.py` the models.",
   );
   return lines.join("\n");
 }
