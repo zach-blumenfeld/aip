@@ -84,7 +84,7 @@ In every mode the client only has to act at a pause: a task to perform, a decisi
 ```mermaid
 flowchart LR
     subgraph compiling["Compiling (once, with a frontier model)"]
-        doc["runbook, playbook,<br/>freeform SKILL.md"] --> skill["aip skill<br/>compiles to an AIP step graph"]
+        doc["runbook, playbook,<br/>freeform SKILL.md"] --> skill["aip-compile skill<br/>compiles to an AIP step graph"]
         skill --> validate["aip-spec validate"]
         validate --> publish["aip publish"]
     end
