@@ -2,6 +2,14 @@
   "name": "aip-console",
   "version": "0.7.0",
   "description": "The AIP console (formerly inspector): catalog, source, run console, history and governance for an AIP server, or local runs of a skill folder.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zach-blumenfeld/aip-console.git"
+  },
+  "homepage": "https://github.com/zach-blumenfeld/aip-console#readme",
+  "bugs": {
+    "url": "https://github.com/zach-blumenfeld/aip-console/issues"
+  },
   "type": "module",
   "bin": {
     "aip-console": "bin/aip-console.mjs",
