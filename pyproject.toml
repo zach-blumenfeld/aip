@@ -1,12 +1,12 @@
 [project]
-name = "aip"
-version = "0.6a1"
+name = "agent-instruction-protocol"
+version = "0.7.0"
 description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1",
+    "aip-spec==0.7.0",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",
@@ -28,20 +28,19 @@ aip = "aip.client.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# The `aip-spec` dependency is a git URL until both packages are on PyPI.
-[tool.hatch.metadata]
-allow-direct-references = true
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
 
-# No `[tool.uv.sources]` override for `aip-spec` here: uv applies a git-fetched project's
-# sources when installing it, so a `../aip-spec` path broke `uv tool install git+...aip`.
-# A uv *workspace member* does not have that problem. Spike F1 (issue #17, branch
-# `spike/f1-workspace`, commit 41189db, uv 0.11.14): with `[tool.uv.workspace]
-# members = ["packages/*"]` and `aip-spec = { workspace = true }`, `uv tool install --force
-# "agent-instruction-protocol[server] @ git+https://github.com/zach-blumenfeld/aip.git@spike/f1-workspace"`
-# into a fresh tool dir with an empty cache succeeded and installed aip-spec from the repo's
-# `packages/aip-spec` subdirectory; `aip --version` printed the branch's version. F2 adopts
-# that layout. For local work against a sibling checkout until then, layer it on per command:
-#   uv run --with-editable ../aip-spec pytest -q
+# `aip-spec` (the format: `packages/aip-spec/`) is a uv workspace member, so a checkout
+# resolves it from the tree and `uv tool install git+...aip` installs it from the repo's
+# subdirectory (spike F1, issue #17, uv 0.11.14). The pin is exact: both packages always
+# share a version. A `../aip-spec` path source is not an option: uv applies a git-fetched
+# project's sources when installing it, which broke `uv tool install`.
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+aip-spec = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/aip-spec/tests"]

@@ -1,35 +1,36 @@
 """Where the bundled authoring skill and examples live.
 
-The wheel carries the repo's root `SKILL.md`, `references/`, and `assets/` under
-`aip_spec/_skill/`, and `examples/` under `aip_spec/examples/` (hatchling `force-include`
-in pyproject.toml). One file on disk in the repo, no copies to keep in sync. In an editable
-checkout the wheel was never built, so both fall back to the repo root, found by walking up
-from this module."""
+The wheel carries the repository's `skills/aip-compile/` entries (`SKILL.md`, `references/`,
+`assets/`) under `aip_spec/_skill/`, and `examples/` under `aip_spec/examples/` (hatchling
+`force-include` in pyproject.toml). One file on disk in the repo, no copies to keep in sync.
+In an editable checkout the wheel was never built, so both fall back to the repository root,
+found by walking up from this module (`packages/aip-spec/src/aip_spec/`)."""
 
 from importlib.resources import files
 from pathlib import Path
 
-# The entries of the authoring skill, at the repo root and under `_skill/` in the wheel.
+# The entries of the authoring skill, in `skills/aip-compile/` and under `_skill/` in the wheel.
 SKILL_ENTRIES = ("SKILL.md", "references", "assets")
 SKILL_NAME = "aip"
+SKILL_FOLDER = Path("skills") / "aip-compile"
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[4]
 
 
 def skill_dir() -> Path:
     """The folder holding the authoring skill's `SKILL.md`, `references/`, and `assets/`.
 
     In the wheel this is `aip_spec/_skill/`, which holds nothing else. In a checkout it is
-    the repo root, so take `SKILL_ENTRIES` from it rather than the whole directory."""
+    `skills/aip-compile/`; either way take `SKILL_ENTRIES` from it rather than the whole directory."""
     bundled = Path(str(files("aip_spec").joinpath("_skill")))
     if (bundled / "SKILL.md").is_file():
         return bundled
-    root = _repo_root()
-    if (root / "SKILL.md").is_file():
-        return root
-    raise FileNotFoundError(f"the authoring skill is neither bundled at {bundled} nor checked out at {root}")
+    checkout = _repo_root() / SKILL_FOLDER
+    if (checkout / "SKILL.md").is_file():
+        return checkout
+    raise FileNotFoundError(f"the authoring skill is neither bundled at {bundled} nor checked out at {checkout}")
 
 
 def examples_dir() -> Path:

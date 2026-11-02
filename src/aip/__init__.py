@@ -2,7 +2,7 @@
 
 from importlib.metadata import version as _version
 
-__version__ = _version("aip")
+__version__ = _version("agent-instruction-protocol")  # the distribution; the module and command stay `aip`
 
 from aip.errors import AipError
 from aip.sdk import (

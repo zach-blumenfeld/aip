@@ -23,9 +23,9 @@ from aip_spec.cli import main, validate_command
 from aip_spec.models import LEGACY_VERSIONS, SCHEMA_ID, SPEC_URL, DecisionStep, ProcedureSpec as Spec, Strict
 from aip_spec.skill import UPGRADES, check_frontmatter
 
-REPO = Path(__file__).parent.parent
+SKILL = skill_dir()  # the authoring skill: `skills/aip-compile/` in the checkout
 EXAMPLE = example_dir("billing-support")
-SCHEMA_FILE = REPO / "assets" / "procedure.schema.json"
+SCHEMA_FILE = SKILL / "assets" / "procedure.schema.json"
 DIALOGUE = Path(__file__).parent / "fixtures" / "dialogue-graph.yaml"
 
 
@@ -96,7 +96,7 @@ class RuntimeBlock(unittest.TestCase):
 
     def test_runtime_block_appears_verbatim_in_skill_md(self):
         """The block an authoring agent copies from the aip SKILL.md must be exactly what the validator enforces."""
-        skill_md = (REPO / "SKILL.md").read_text()
+        skill_md = (SKILL / "SKILL.md").read_text()
         self.assertIn(runtime_text().strip(), skill_md,
                       "the runtime block in SKILL.md and src/aip_spec/runtime.md have drifted")
 

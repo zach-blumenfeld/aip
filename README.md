@@ -129,13 +129,13 @@ Tool-call counts were about equal, and wall clock was lower on the AIP side in t
 
 ## Project Structure
 
-The code is split across three repositories:
+Two Python packages live in this repository as a uv workspace, and the console is its own repository:
 
-| repository | what it holds | install |
-|---|---|---|
-| [aip-spec](https://github.com/zach-blumenfeld/aip-spec) | the format: pydantic models, JSON Schema, the runtime block, the `aip-spec` validator CLI, and the `aip` authoring skill | `uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1` |
-| [aip](https://github.com/zach-blumenfeld/aip) (this repo) | the runtime: `aip` CLI and Python SDK, `aip server`, the Neo4j backend, and the `aip-runtime` skill | `uv tool install "aip[server] @ git+https://github.com/zach-blumenfeld/aip.git@v0.6a1"` |
-| [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
+| package | where | what it holds | install |
+|---|---|---|---|
+| `aip-spec` | [`packages/aip-spec/`](packages/aip-spec/) | the format: pydantic models, JSON Schema, the runtime block, and the `aip-spec` validator CLI; it bundles the `aip` authoring skill ([`skills/aip-compile/`](skills/aip-compile/)) and the example ([`examples/`](examples/)) | `uv tool install "aip-spec @ git+https://github.com/zach-blumenfeld/aip.git#subdirectory=packages/aip-spec"` |
+| `agent-instruction-protocol` | this repo's root (`src/aip/`) | the runtime: the `aip` CLI and Python SDK, `aip server`, the Neo4j backend, and the `aip-runtime` skill ([`skills/aip-runtime/`](skills/aip-runtime/)); it depends on `aip-spec` at the same version | `uv tool install "agent-instruction-protocol[server] @ git+https://github.com/zach-blumenfeld/aip.git"` |
+| `aip-console` | [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
 
 ## Quick Start
 Minimal prerequisites. 
@@ -439,10 +439,10 @@ On the Neo4j backend each revision is also a graph: the parsed procedure is proj
 ```bash
 uv sync --group dev                                    # pytest and the Neo4j driver
 uv run pytest -q                                       # the Neo4j backend tests skip unless NEO4J_URI is set
-uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall aip` removes it
+uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall agent-instruction-protocol` removes it
 ```
 
-`aip-spec` installs from the git tag pinned in `pyproject.toml`. To work against a sibling checkout instead, layer it on per command: `uv run --with-editable ../aip-spec pytest -q`. (A `[tool.uv.sources]` path override is not an option: uv applies a git-fetched project's sources when installing it, which broke `uv tool install`.)
+`aip-spec` is a workspace member at `packages/aip-spec/`, so `uv sync` installs it editable alongside the runtime and `uv run pytest -q` at the root runs both packages' tests (`packages/aip-spec/tests` is in `testpaths`). The two `pyproject.toml` files carry the same version, and the runtime pins `aip-spec==<that version>`.
 
 The design behind the client-server architecture is [`docs/server-design.md`](docs/server-design.md).
 

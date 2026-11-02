@@ -7,3 +7,5 @@ __pycache__/
 .aip/
 .obsidian/
 .env
+dist/
+*.egg-info/
