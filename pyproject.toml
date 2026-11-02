@@ -35,7 +35,13 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
 
-# No `[tool.uv.sources]` override for `aip-spec`: uv applies a git-fetched project's sources
-# when installing it, so a `../aip-spec` path here broke `uv tool install git+...aip`. For
-# local work against a sibling checkout, layer it on per command:
+# No `[tool.uv.sources]` override for `aip-spec` here: uv applies a git-fetched project's
+# sources when installing it, so a `../aip-spec` path broke `uv tool install git+...aip`.
+# A uv *workspace member* does not have that problem. Spike F1 (issue #17, branch
+# `spike/f1-workspace`, commit 41189db, uv 0.11.14): with `[tool.uv.workspace]
+# members = ["packages/*"]` and `aip-spec = { workspace = true }`, `uv tool install --force
+# "agent-instruction-protocol[server] @ git+https://github.com/zach-blumenfeld/aip.git@spike/f1-workspace"`
+# into a fresh tool dir with an empty cache succeeded and installed aip-spec from the repo's
+# `packages/aip-spec` subdirectory; `aip --version` printed the branch's version. F2 adopts
+# that layout. For local work against a sibling checkout until then, layer it on per command:
 #   uv run --with-editable ../aip-spec pytest -q
