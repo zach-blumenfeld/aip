@@ -38,9 +38,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The oldest `aip` this console speaks to: the CLI JSON contract of format 0.6a0 (docs/cli-json.md), and a
- *  history whose client-task entries carry the answer. */
-export const MINIMUM_AIP = "0.6a0";
+/** The oldest `aip` this console speaks to: 0.7.0, the first release on PyPI (`agent-instruction-protocol`, with
+ *  `aip-spec` beside it). The CLI JSON contract (docs/cli-json.md) and the run history it needs date from 0.6a0. */
+export const MINIMUM_AIP = "0.7.0";
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const TYPES = {
@@ -74,7 +74,8 @@ export function compareVersions(a, b) {
 /** `aip --version`: `{version, format}`, or `{problem}` saying why this aip cannot be used. */
 export function checkAip(bin) {
   const out = spawnSync(bin, ["--version"], { encoding: "utf8" });
-  const install = "Install or upgrade it: `uv tool install --force git+https://github.com/zach-blumenfeld/aip.git`, " +
+  const install = "Install or upgrade it: `uv tool install --upgrade agent-instruction-protocol` (or the installer, " +
+                  "`curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash`), " +
                   "or point --aip (or AIP_BIN) at one.";
   if (out.error) {
     return { problem: `aip-console needs the aip CLI (${MINIMUM_AIP} or newer), and \`${bin}\` could not be run ` +
@@ -326,7 +327,8 @@ function aipSpecProblem(setup) {
   if (!out.error && out.status === 0) { specChecked = true; return null; }
   return `The Studio checks an agent's result with the real validator, and \`${setup.aipSpec}\` could not be run ` +
          `(${out.error ? out.error.code ?? out.error.message : `exit ${out.status}`}). Install it with ` +
-         "`uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1`, or point --aip-spec (or AIP_SPEC_BIN) at one.";
+         "`uv tool install aip-spec` (or the installer, `curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash`), " +
+         "or point --aip-spec (or AIP_SPEC_BIN) at one.";
 }
 
 /** `aip-spec validate` on the files: its exit status and the issues it printed on stderr, one JSON object a line. */

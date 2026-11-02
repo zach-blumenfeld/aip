@@ -6,7 +6,7 @@ import { emptyDraft, type Draft, type Step } from "../src/studio/draft";
 import { availableKeys, lint, PLACEHOLDER_MARKER } from "../src/studio/lint";
 import { RUNTIME_BLOCK } from "../src/studio/runtime-0.6a1";
 import { draftToSkillMd, skillMdToDraft } from "../src/studio/serialize";
-import { FIRST_REVISION_DIR } from "./aip";
+import { AIP_REPO, FIRST_REVISION_DIR } from "./aip";
 import { aipSpec } from "./aip-spec";
 
 // The Studio's model and linter, no browser: the Draft round-trips through SKILL.md, billing-support lints
@@ -22,7 +22,7 @@ const body = (md: string) => parse(/```yaml\n(.*)\n```/s.exec(md)![1]);
 
 test("the embedded runtime block is the one aip-spec ships", () => {
   expect(aipSpec(["runtime"]).stdout).toBe(RUNTIME_BLOCK);
-  const file = path.resolve(import.meta.dirname, "..", "..", "aip-spec", "src", "aip_spec", "runtime.md");
+  const file = path.join(AIP_REPO, "packages", "aip-spec", "src", "aip_spec", "runtime.md");
   if (existsSync(file)) expect(readFileSync(file, "utf8")).toBe(RUNTIME_BLOCK);
 });
 

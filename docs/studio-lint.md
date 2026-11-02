@@ -7,9 +7,9 @@ The Studio's linter (`src/studio/lint.ts`) runs on every edit. It has three tier
 - **unfinished**: valid, or fine for a template, but not done yet.
 - **warning**: Studio-only advice. aip-spec says nothing about it.
 
-**Upstream** means the code is aip-spec's own (`src/aip_spec/skill.py`, `models.py`), and
+**Upstream** means the code is aip-spec's own (`packages/aip-spec/src/aip_spec/skill.py`, `models.py` in the aip repo), and
 `e2e/lint-parity.spec.ts` checks that both validators agree on it. **Studio-only** rules exist only here. They are
-candidates to propose to aip-spec later. That would be a separate change in that repo (see "Open items" in
+candidates to propose to aip-spec later. That would be a separate change in the aip repo (see "Open items" in
 `plans/STUDIO-PLAN.md`).
 
 ## Errors from aip-spec (upstream)

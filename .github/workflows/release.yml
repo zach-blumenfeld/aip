@@ -1,0 +1,219 @@
+name: Release to npm
+
+# Manual trigger from the Actions tab, after the release PR is merged. Reads the version from
+# package.json (and checks package-lock.json agrees), refuses if the tag exists, builds the
+# bundle, packs the tarball and checks it carries bin/ and dist/, pushes the tag, publishes
+# `aip-console` to npm with provenance, and cuts a GitHub Release whose notes are the
+# `## [X.Y.Z]` section of CHANGELOG.md.
+#
+# The publish job runs in the `release` GitHub environment. It publishes with npm's trusted
+# publishing (OIDC: `id-token: write`, no token) once the package page names this workflow
+# and environment as its trusted publisher; until then, or if trusted publishing is not
+# available to the account, the `NPM_TOKEN` secret (a granular token with publish rights)
+# is used when it is set. Which one applies is recorded in AGENTS.md. The environment and
+# the trusted publisher are set up by hand once (aip issue #17, "Before starting").
+#
+# `target: dry-run` is the rehearsal for a new or changed workflow: same checks, same build,
+# same tarball, then `npm publish --dry-run` (nothing is uploaded), no tag is pushed and no
+# GitHub Release is created. Unlike TestPyPI it can be repeated at the same version.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish. dry-run is the rehearsal: nothing uploaded, no tag, no GitHub Release."
+        type: choice
+        options: [npm, dry-run]
+        default: npm
+
+jobs:
+  build:
+    name: Check, build, pack, tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # push the tag
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      tarball: ${{ steps.v.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve the version from package.json
+        id: v
+        # package.json is the source of truth; package-lock.json repeats it, so the two must
+        # agree before anything is built (`npm version` keeps them together).
+        run: |
+          version=$(node -p "require('./package.json').version")
+          locked=$(node -p "require('./package-lock.json').version")
+          if [ "$version" != "$locked" ]; then
+            echo "::error::versions differ: package.json $version, package-lock.json $locked. Run 'npm version $version --no-git-tag-version' in the release PR."
+            exit 1
+          fi
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a SemVer version (X.Y.Z, with an optional -prerelease)"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "tarball=aip-console-$version.tgz"
+          } >> "$GITHUB_OUTPUT"
+          echo "version $version"
+
+      - name: Refuse to release a version that already has a tag
+        # Forces a version bump before re-running. Without this, a re-run after a successful
+        # tag-and-publish would try to double-publish. Runs for dry-run too: a rehearsal of a
+        # version that has shipped is a mistake.
+        run: |
+          if git ls-remote --tags origin "refs/tags/${{ steps.v.outputs.tag }}" | grep -q .; then
+            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump package.json before re-running."
+            exit 1
+          fi
+
+      - name: Install, build, pack
+        # Before tagging, so a build failure leaves the repo clean. `npm pack` runs the build
+        # again through `prepack`; that is what `npm publish` will do too, so it is checked here.
+        run: |
+          npm ci
+          npm run build
+          rm -f ./*.tgz
+          npm pack
+          test -f "${{ steps.v.outputs.tarball }}"
+
+      - name: Check the tarball carries the launcher and the bundle
+        # The package is `bin/aip-console.mjs` plus the built `dist/` it serves; a tarball
+        # without either installs but cannot run.
+        run: |
+          tar -tzf "${{ steps.v.outputs.tarball }}" | tee tarball.txt
+          for f in package/bin/aip-console.mjs package/dist/index.html; do
+            if ! grep -qx "$f" tarball.txt; then
+              echo "::error::$f is missing from ${{ steps.v.outputs.tarball }}"
+              exit 1
+            fi
+          done
+          if ! grep -q '^package/dist/assets/.*\.js$' tarball.txt; then
+            echo "::error::no dist/assets/*.js in ${{ steps.v.outputs.tarball }}"
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        # Pulls the section under `## [<version>] ...` up to (but not including) the next
+        # `## [...` heading. Empty file is fine; the GitHub Release just won't have a body.
+        run: |
+          awk -v ver="${{ steps.v.outputs.version }}" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          echo "----- release-notes.md -----"
+          cat release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::CHANGELOG.md has no '## [${{ steps.v.outputs.version }}]' section; the GitHub Release will have no notes."
+          fi
+
+      - name: Upload the tarball and the notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.v.outputs.version }}
+          path: |
+            ${{ steps.v.outputs.tarball }}
+            release-notes.md
+          if-no-files-found: error
+
+      - name: Create and push the tag
+        if: inputs.target == 'npm'
+        # Before the publish: a publish failure leaves a tag with no release behind it, which
+        # is visible and recoverable.
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.v.outputs.tag }}" -m "Release ${{ steps.v.outputs.tag }}"
+          git push origin "${{ steps.v.outputs.tag }}"
+
+  publish:
+    name: Publish aip-console
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://www.npmjs.com/package/aip-console
+    permissions:
+      contents: read
+      id-token: write    # npm trusted publishing and the provenance attestation
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Use an npm that can publish with OIDC
+        # Trusted publishing needs npm 11.5.1 or newer; the one bundled with Node may be older.
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Publish (dry run)
+        if: inputs.target == 'dry-run'
+        # Prints what would be uploaded and uploads nothing. No token and no OIDC exchange.
+        run: npm publish "${{ needs.build.outputs.tarball }}" --access public --dry-run
+
+      - name: Publish
+        if: inputs.target == 'npm'
+        # With `NPM_TOKEN` set, that token authenticates (setup-node wrote the .npmrc that
+        # reads NODE_AUTH_TOKEN). Without it, npm exchanges the job's OIDC token with the
+        # registry: trusted publishing, which needs the package page to name this workflow and
+        # environment. `--provenance` attaches the Sigstore attestation either way.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            echo "authenticating with the NPM_TOKEN secret"
+          else
+            echo "no NPM_TOKEN secret: using npm trusted publishing (OIDC)"
+          fi
+          npm publish "${{ needs.build.outputs.tarball }}" --access public --provenance
+
+      - name: How to verify
+        if: inputs.target == 'npm'
+        run: |
+          {
+            echo "## Published aip-console ${{ needs.build.outputs.version }}"
+            echo
+            echo "Verify from a clean directory (needs an \`aip\` 0.7.0 or newer on the PATH):"
+            echo
+            echo '```'
+            echo "npx aip-console@${{ needs.build.outputs.version }} --help"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: GitHub Release
+    if: inputs.target == 'npm'
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create the GitHub Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Create GitHub Release
+        # After the publish, so a publish failure doesn't leave behind a GitHub Release
+        # pointing at nothing on npm. The tag already exists; the action attaches to it.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: ${{ needs.build.outputs.tag }}
+          body_path: release-notes.md
+          files: ${{ needs.build.outputs.tarball }}
+          fail_on_unmatched_files: true

@@ -27,7 +27,8 @@ Without `--server`, the console uses the server `aip config` names. With a skill
 local (`aip run ./folder`) and the catalog, history and governance pages are hidden.
 
 At startup the console runs `aip --version` and refuses to start if `aip` is missing or older than
-`0.6a0`, the release with the JSON contract above and a run history that records client-task answers. `--aip PATH` (or `AIP_BIN`) picks another
+`0.7.0`, the first release on PyPI (`uv tool install agent-instruction-protocol`, or the aip repo's installer); the
+JSON contract above and the run history that records client-task answers date from 0.6a0. `--aip PATH` (or `AIP_BIN`) picks another
 `aip` than the one on the PATH.
 
 The console's process answers only pages on this machine: it listens on 127.0.0.1, refuses a foreign

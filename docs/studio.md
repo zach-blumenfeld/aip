@@ -110,8 +110,9 @@ lists that already have entries, or anything you already wrote.
 
 **You need**, on the machine running the console:
 
-- `aip-spec` on the PATH: `uv tool install git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1`, or
-  pass `--aip-spec PATH`.
+- `aip-spec` on the PATH: `uv tool install aip-spec`, or the aip installer
+  (`curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash`), or pass
+  `--aip-spec PATH`. The format lives at `packages/aip-spec` in the [aip repo](https://github.com/zach-blumenfeld/aip).
 - `python` or `python3` on the PATH.
 - A coding agent that can edit files and run commands (Claude Code, Codex, Gemini CLI, …).
 

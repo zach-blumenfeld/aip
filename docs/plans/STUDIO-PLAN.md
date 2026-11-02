@@ -16,10 +16,10 @@ For an agent told "implement the next unchecked Studio milestone":
 
 - Read this file and `docs/plans/PLAN.md`'s "How to use this plan"; find the first `- [ ]` heading.
 - Do only that milestone. Run `npm run typecheck && npm run e2e` (needs `uv`, and
-  `PLAYWRIGHT_CHANNEL=chrome` if chromium is not installed). Do not edit `../aip-spec` or `../aip`.
+  `PLAYWRIGHT_CHANNEL=chrome` if chromium is not installed). Do not edit `../aip` (the format is its `packages/aip-spec`).
 - Change `- [ ]` to `- [x]`, add `Done <date>, commit <sha>: <one sentence>` under the heading,
   commit, and stop. Report what the proof printed. A fresh session takes the next milestone.
-- If the plan and the spec in `../aip-spec` disagree, the spec wins; say so in the commit.
+- If the plan and the spec in `../aip/packages/aip-spec` disagree, the spec wins; say so in the commit.
 - Do not reopen the decisions below. Surface anything under "Open items" rather than guessing.
 
 ## Decisions already made (do not re-litigate)
@@ -43,8 +43,9 @@ For an agent told "implement the next unchecked Studio milestone":
 
 ## Ground truth to read before starting
 
-The format is defined in the sibling repo `~/dev/aip-spec` (format `0.6a1`), not in `~/dev/aip`
-(which only builds a runtime `Procedure` from it in `src/aip/spec/loader.py`).
+The format is defined by the `aip-spec` package at `~/dev/aip/packages/aip-spec` (format `0.6a1`; before
+0.7.0 it was the sibling repo `~/dev/aip-spec`), not by the runtime, which only builds a `Procedure` from
+it in `src/aip/spec/loader.py`. Paths below are relative to that package.
 
 - `src/aip_spec/models.py`: the pydantic models are the spec. Step kinds `decision`, `execution`,
   `client_task`, `router`, `end`; field patterns (`STEP_NAME_PATTERN`, `QUESTION_NAME_PATTERN`,
@@ -86,9 +87,9 @@ No UI. Pure TypeScript under `src/studio/`, unit-tested with Node's test runner 
   step does not break edges (edges reference ids in the Draft, names only on export).
 - `src/studio/serialize.ts`: `draftToSkillMd(draft)` and `skillMdToDraft(text)`. Add the `yaml`
   package (named need: the body is YAML and must round-trip; keep key order matching
-  `billing-support`). Embed the runtime block by copying `aip-spec/src/aip_spec/runtime.md` into
+  `billing-support`). Embed the runtime block by copying `packages/aip-spec/src/aip_spec/runtime.md` into
   `src/studio/runtime-0.6a1.md` and importing it as text; a test compares it byte for byte to the
-  file in `../aip-spec` when that checkout exists.
+  file in `../aip/packages/aip-spec` when that checkout exists.
 - `src/studio/lint.ts`: `lint(draft) -> Issue[]` where `Issue = { tier: "error"|"unfinished"|"warning",
   code, message, stepId?, field? }`. Port, with the same `code` strings as aip-spec where one exists:
   - Errors from aip-spec: `duplicate_step_name`, `invalid_start_step`, `missing_end_step`,
@@ -287,7 +288,7 @@ Done 2026-10-31, commit a3472da: the gate, info panel, editable prompt with a ge
 - **Prompt** (`src/studio/agent-prompt.md`, shipped default, shown in the info panel and
   editable per run; an edited prompt is saved with the draft): the frozen
   contract (list every step, kind, edge, I/O name and type, question, and path it must not change),
-  the script stdin/stdout contract from the runtime block, where the spec is (`~/dev/aip-spec`
+  the script stdin/stdout contract from the runtime block, where the spec is (`~/dev/aip/packages/aip-spec`
   path if known, else the runtime block inline), the instruction to run `aip-spec validate` until it
   passes, and what to leave alone. "Copy prompt" copies it; the scaffold zip is the file input.
 - **Import result** takes the zip the agent returns and runs the checks below. The result is shown
