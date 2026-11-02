@@ -140,11 +140,14 @@ Two Python packages live in this repository as a uv workspace, and the console i
 ## Quick Start
 Minimal prerequisites. 
 
-**1. Install.** One line installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with `aip-spec` (both from PyPI), and both Agent Skills, `aip-compile` for authoring and `aip-runtime` for running, into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). Open a new terminal afterwards if `aip` is not found.
-
+**1. Install.** 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 ```
+> [!NOTE]
+> Upgrading from 0.6 or earlier? Same command. It swaps the packages to PyPI and replaces the old `aip` skill with `aip-compile`; nothing you compiled needs changing. By-hand steps are in [`docs/upgrading.md`](docs/upgrading.md).
+
+Installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with `aip-spec`, and both Agent Skills, `aip-compile` for authoring and `aip-runtime` for running, into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). Open a new terminal afterwards if `aip` is not found.
 
 **2. Run the example locally.** The bundled `billing-support` skill triages a customer message. With no decision model configured you answer its questions on the terminal; the run then either runs its escalation script or pauses with a task for you.
 
@@ -197,23 +200,6 @@ aip skill install --path ./.claude/skills    # a project-local skills directory
 aip skill remove
 ```
 
-### Already have aip 0.6 or earlier?
-
-In 0.7.0 the packages come from PyPI instead of git, and the authoring skill is named `aip-compile` instead of `aip`. Re-run the one-line installer, which does everything below, or do it by hand:
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
-```
-
-```bash
-uv tool uninstall aip                                  # the pre-0.7.0 install, if present
-uv tool install --force aip-spec agent-instruction-protocol
-aip skill install                                      # refreshes aip-runtime, adds aip-compile
-aip skill prune                                        # removes the old `aip` skill folder
-```
-
-The first line removes the git-installed `aip` tool (the distribution is `agent-instruction-protocol` now; the command is still `aip`); the second installs both packages from PyPI; `aip skill install` writes `aip-compile` and `aip-runtime` into every agent it detects, refreshing `aip-runtime` in place; `aip skill prune` removes only retired skill names (today the authoring skill's old `aip/` folder), so `aip-runtime` is refreshed by `install`, never removed by `prune`. Both are safe to re-run. `aip skill list` shows the result per agent. Authored skills need no change in 0.7.0. [`docs/upgrading.md`](docs/upgrading.md) has the same steps, plus the edits an older skill needs (a 0.6a0 skill validates with one warning; a 0.5a1 skill needs three edits).
-
 ### Model Recommendation for Co-Authoring
 
 Use the **largest frontier model available** when using the AIP skill. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
@@ -244,7 +230,7 @@ aip --help
 aip skill list          # which agents got the skills
 ```
 
-If `aip` is not found, open a new terminal. uv installs commands into `~/.local/bin`. Already have aip 0.6 or earlier? The same command upgrades it; see [above](#already-have-aip-06-or-earlier).
+If `aip` is not found, open a new terminal. uv installs commands into `~/.local/bin`. Upgrading from 0.6 or earlier? The same command does it; by-hand steps are in [`docs/upgrading.md`](docs/upgrading.md).
 
 ### 2. Start a server on Neo4j, with the example published
 
