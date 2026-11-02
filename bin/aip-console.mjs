@@ -21,7 +21,7 @@
 //                                                      runs one Python script of those files: {code, stdout, stderr, ...}
 //   POST /console/handoff      {name, files}           writes the scaffold to <workdir>/studio/<name>/ for an agent: {dir}
 //   POST /console/handoff/read {name}                  that folder's files and a hash of them: {dir, files, hash}
-// These are the Studio's agent fill-in (docs/STUDIO-PLAN.md, S6). validate and probe write the files to a fresh
+// These are the Studio's agent fill-in (docs/plans/STUDIO-PLAN.md, S6). validate and probe write the files to a fresh
 // temporary folder `<name>/` and remove it after. `files` is [{path, mode, b64}]. Without `aip-spec` the validate
 // endpoint answers 503 `aip_spec_missing` saying how to install it. A handoff never deletes: a folder already at
 // the path is moved to <workdir>/studio/.previous/ first.

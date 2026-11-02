@@ -10,7 +10,7 @@ The Studio's linter (`src/studio/lint.ts`) runs on every edit. It has three tier
 **Upstream** means the code is aip-spec's own (`src/aip_spec/skill.py`, `models.py`), and
 `e2e/lint-parity.spec.ts` checks that both validators agree on it. **Studio-only** rules exist only here. They are
 candidates to propose to aip-spec later. That would be a separate change in that repo (see "Open items" in
-`STUDIO-PLAN.md`).
+`plans/STUDIO-PLAN.md`).
 
 ## Errors from aip-spec (upstream)
 

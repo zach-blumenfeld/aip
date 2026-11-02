@@ -6,7 +6,7 @@ they need, and see a linter's verdict on the graph as it is built. The output is
 zip** in the Agent Skills layout, the same shape `src/zip.ts` already packs for download and
 publish.
 
-This follows the conventions of `docs/PLAN.md` (one milestone per session, each leaves
+This follows the conventions of `docs/plans/PLAN.md` (one milestone per session, each leaves
 `npm run typecheck` and `npm run e2e` green, tick the heading and add a `Done <date>, commit <sha>:`
 line, commit with the attribution trailer given by the session).
 
@@ -14,7 +14,7 @@ line, commit with the attribution trailer given by the session).
 
 For an agent told "implement the next unchecked Studio milestone":
 
-- Read this file and `docs/PLAN.md`'s "How to use this plan"; find the first `- [ ]` heading.
+- Read this file and `docs/plans/PLAN.md`'s "How to use this plan"; find the first `- [ ]` heading.
 - Do only that milestone. Run `npm run typecheck && npm run e2e` (needs `uv`, and
   `PLAYWRIGHT_CHANNEL=chrome` if chromium is not installed). Do not edit `../aip-spec` or `../aip`.
 - Change `- [ ]` to `- [x]`, add `Done <date>, commit <sha>: <one sentence>` under the heading,

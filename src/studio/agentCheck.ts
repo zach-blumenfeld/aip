@@ -9,7 +9,7 @@
 //      Every template's `{key}` fields resolve against the step's inputs and assets.
 //   4. Completeness: no placeholder marker anywhere, no `unfinished` lint issue, no file the graph names empty or
 //      only comments.
-// A result is accepted only when every check passes (the definition of done in docs/STUDIO-PLAN.md).
+// A result is accepted only when every check passes (the definition of done in docs/plans/STUDIO-PLAN.md).
 
 import type { ZipFile } from "../zip";
 import { QUESTION_TYPES, type Draft, type Step } from "./draft";
