@@ -37,7 +37,7 @@ packages = ["src/aip_spec"]
 path = "hatch_build.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/aip_spec", "tests", "hatch_build.py", "README.md", "LICENSE"]
+include = ["src/aip_spec", "tests", "docs", "hatch_build.py", "README.md", "LICENSE"]
 
 [tool.hatch.build.targets.sdist.force-include]
 "../../skills/aip-compile/SKILL.md" = "skills/aip-compile/SKILL.md"

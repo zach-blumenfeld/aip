@@ -41,7 +41,7 @@ Ex of an AIP procedure for marketing emails with historic runs. Visualized in th
 
 An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-shaped workflow that guides an agent on how to perform a task using tools and logical sequences.
 
-Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see the format package, [`packages/aip-spec/`](packages/aip-spec/), and the [AIP Specification](skills/aip-compile/SKILL.md#aip-specification) for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
+Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see the [AIP specification](packages/aip-spec/docs/specification.md) in the format package, [`packages/aip-spec/`](packages/aip-spec/), for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
 
 Ex of the marketing email procedure in its serialized agent skill format:
 
