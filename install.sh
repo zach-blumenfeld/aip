@@ -28,7 +28,14 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 ok "uv"
 
-# 2. aip-spec, then agent-instruction-protocol (the `aip` command). `aip` depends on
+# 2. Before 0.7.0 the runtime was the uv tool `aip`, installed from git. The distribution is
+#    `agent-instruction-protocol` now (the command is still `aip`), so that tool goes first.
+if uv tool list 2>/dev/null | grep -q '^aip v'; then
+  info "Removing the pre-0.7.0 aip tool (the package is agent-instruction-protocol now)…"
+  uv tool uninstall aip
+fi
+
+# 3. aip-spec, then agent-instruction-protocol (the `aip` command). `aip` depends on
 #    `aip-spec` and would pull it in alone, but a tool install links only its own package's
 #    commands, and the authoring skill calls `aip-spec validate`; installing both puts both
 #    on PATH.
@@ -38,25 +45,31 @@ info "Installing agent-instruction-protocol ${AIP_REF} (the aip command)…"
 uv tool install --force "agent-instruction-protocol[server]==$AIP_REF"
 hash -r 2>/dev/null || true
 
-# 3. Both skills, into every detected agent (Claude Code, Cursor, …).
-#    Non-fatal: a machine with no agent directory yet should not fail the install.
+# 4. Both skills, into every detected agent (Claude Code, Cursor, …), then `prune`, which
+#    removes skill folders installed under a name this tool has retired (`aip`, the authoring
+#    skill's name before 0.7.0). Non-fatal: a machine with no agent directory yet should not
+#    fail the install.
 info "Installing the aip-compile and aip-runtime skills…"
 skills="$(aip skill install 2>&1)" || {
   printf '%s\n' "$skills" >&2
   warn "skill install skipped: no supported agent detected. Later: 'aip skill install <agent>' (see 'aip skill list') or 'aip skill install --path <skills dir>'."
   skills=""
 }
+pruned="$(aip skill prune 2>&1 | grep '^removed ' || true)"
 
-# 4. What is now on this machine.
+# 5. What is now on this machine.
 echo
-ok "$(aip --version)"
-ok "aip-spec $(aip-spec --version) (format)"
+tools="$(uv tool list 2>/dev/null)"
+ok "agent-instruction-protocol $(printf '%s\n' "$tools" | sed -n 's/^agent-instruction-protocol v//p')  ($(aip --version))"
+ok "aip-spec $(printf '%s\n' "$tools" | sed -n 's/^aip-spec v//p')"
 if [ -n "$skills" ]; then
   # `aip skill install` prints one `installed <skill> -> <folder>  (<agent>)` line per skill and
-  # agent, and one `removed <folder>  (...)` line per pre-0.7.0 `aip/` skill folder it cleaned up.
+  # agent, and `removed <folder>  (...)` for a folder it installed earlier and no longer ships.
   installed="$(printf '%s\n' "$skills" | sed -n 's/^installed .* (\(.*\))$/\1/p' | sort -u | paste -sd ', ' -)"
   [ -n "$installed" ] && ok "skills installed into: $installed"
-  printf '%s\n' "$skills" | grep '^removed ' | while IFS= read -r line; do ok "$line"; done
+  removed="$(printf '%s\n' "$skills" | grep '^removed ' || true)"
+  [ -n "$removed" ] && printf '%s\n' "$removed" | while IFS= read -r line; do ok "$line"; done
 fi
+[ -n "$pruned" ] && printf '%s\n' "$pruned" | while IFS= read -r line; do ok "$line"; done
 echo
-ok "aip ready. 'aip --help' lists the commands; 'aip-spec validate <folder>' checks a skill by hand."
+ok "aip ready. 'aip --help' lists the commands, 'aip skill list' shows the skills per agent, 'aip-spec validate <folder>' checks a skill by hand."

@@ -12,8 +12,8 @@ from pathlib import Path
 # The entries of the authoring skill, in `skills/aip-compile/` and under `_skill/` in the wheel.
 SKILL_ENTRIES = ("SKILL.md", "references", "assets")
 SKILL_NAME = "aip-compile"
-# Names the authoring skill was installed under before: `aip`, up to 0.6a1. `skill install`
-# and `skill remove` clean those folders up; drop this after 0.9.0.
+# Skill names this tool used to install and has retired: `aip`, the authoring skill up to 0.6a1.
+# `skill prune` removes their folders (with a frontmatter guard); the table only grows.
 LEGACY_SKILL_NAMES = ("aip",)
 SKILL_FOLDER = Path("skills") / "aip-compile"
 

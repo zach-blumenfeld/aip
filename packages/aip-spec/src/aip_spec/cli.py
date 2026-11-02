@@ -3,7 +3,7 @@
     aip-spec validate <folder>          validate an AIP skill folder
     aip-spec schema [--write PATH]      the JSON Schema generated from the models
     aip-spec runtime                    the runtime block every skill carries
-    aip-spec skill install|list|remove  the authoring skill, into the agents on this machine
+    aip-spec skill install|list|remove|prune  the authoring skill, into the agents on this machine
     aip-spec example <name> --out DIR   copy a bundled example skill out
     aip-spec --version                  the format version
 
@@ -94,19 +94,27 @@ def skill_command(argv: list[str]) -> int:
     p = sub.add_parser("remove", help="from one agent, or from every agent that has it")
     p.add_argument("agent", nargs="?")
     p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    p = sub.add_parser("prune", help=f"remove skill folders installed under a retired name ({', '.join(LEGACY_SKILL_NAMES)}) "
+                                     "from every detected agent, one agent, or a skills directory")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    p.add_argument("--dry-run", action="store_true", help="report what would be removed, remove nothing")
     args = parser.parse_args(argv)
 
     if args.action == "list":
         print(agents.table([SKILL_NAME]))
         return 0
+    if args.action == "prune":
+        return _prune(args, "aip-spec skill prune")
     try:
         if args.action == "install":
-            for label, folder in agents.install([(skill_dir(), SKILL_ENTRIES)], args.agent, args.path):
+            written, removed = agents.install([(skill_dir(), SKILL_ENTRIES)], args.agent, args.path, tool="aip-spec")
+            for label, folder in written:
                 print(f"installed {SKILL_NAME} -> {folder}  ({label})")
-            for folder in agents.remove_legacy(LEGACY_SKILL_NAMES, args.agent, args.path):
-                print(f"removed {folder}  (the authoring skill's old name; it is {SKILL_NAME} now)")
+            for folder in removed:
+                print(f"removed {folder}  (installed by an earlier aip-spec, no longer one of its skills)")
             return 0
-        removed = agents.remove([SKILL_NAME], args.agent, args.path) + agents.remove_legacy(LEGACY_SKILL_NAMES, args.agent, args.path)
+        removed = agents.remove([SKILL_NAME], args.agent, args.path)
         for folder in removed:
             print(f"removed {folder}")
         if not removed:
@@ -115,6 +123,26 @@ def skill_command(argv: list[str]) -> int:
     except (KeyError, agents.NoAgentDetected) as exc:
         print(f"aip-spec skill: {exc.args[0]}", file=sys.stderr)
         return 1
+
+
+def _prune(args, prog: str) -> int:
+    """`skill prune` for both CLIs: remove folders under the retired skill names, report each one,
+    warn about a folder of that name that is not ours, and say when there was nothing to do."""
+    from aip_spec import agents
+    from aip_spec.resources import LEGACY_SKILL_NAMES
+
+    try:
+        removed, skipped = agents.prune(LEGACY_SKILL_NAMES, args.agent, args.path, dry_run=args.dry_run)
+    except KeyError as exc:
+        print(f"{prog}: {exc.args[0]}", file=sys.stderr)
+        return 1
+    for folder in removed:
+        print(f"{'would remove' if args.dry_run else 'removed'} {folder}  (a retired skill name)")
+    for folder, reason in skipped:
+        print(f"{prog}: left {folder} alone: {reason}", file=sys.stderr)
+    if not removed and not skipped:
+        print(f"nothing to prune: no {', '.join(LEGACY_SKILL_NAMES)} skill folder in any agent `{prog.split()[0]} skill list` looks at")
+    return 0
 
 
 def example_command(argv: list[str]) -> int:

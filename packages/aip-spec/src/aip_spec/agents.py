@@ -5,7 +5,9 @@ directory beside it; a skill is installed by copying its folder to
 `<skills_dir>/<skill name>/`. The catalog mirrors neo4j-cli's and knowledge-index's so users
 have one mental model across tools. `aip-spec skill install` installs the authoring skill
 through this module, and `aip skill install` installs it and `aip-runtime` through the
-same functions, so adding an agent is one line in `AGENTS`.
+same functions, so adding an agent is one line in `AGENTS`. `install` keeps a record of what
+it wrote where and removes its own earlier folders that are no longer in the set; `prune`
+removes folders written under names this tool retired before the record existed.
 
 Paths are templates: `~` is `$HOME`, `$XDG_CONFIG_HOME` falls back to `~/.config`. They
 resolve at call time, so tests can point `HOME` at a temporary directory."""
@@ -88,15 +90,24 @@ def detected_agents() -> list[Agent]:
     return [a for a in AGENTS.values() if a.detected()]
 
 
-def skill_name(folder: Path) -> str:
-    """The folder's frontmatter `name`; falls back to the folder name."""
+def frontmatter(folder: Path) -> dict:
+    """The folder's `SKILL.md` frontmatter as a dict; empty when there is none to read."""
     from aip_spec.skill import FRONTMATTER_PATTERN
 
     import yaml
 
-    match = FRONTMATTER_PATTERN.match((folder / "SKILL.md").read_text())
-    front = yaml.safe_load(match.group(1)) if match else None
-    return front["name"] if isinstance(front, dict) and isinstance(front.get("name"), str) else folder.name
+    try:
+        match = FRONTMATTER_PATTERN.match((folder / "SKILL.md").read_text())
+        front = yaml.safe_load(match.group(1)) if match else None
+    except (OSError, yaml.YAMLError):
+        return {}
+    return front if isinstance(front, dict) else {}
+
+
+def skill_name(folder: Path) -> str:
+    """The folder's frontmatter `name`; falls back to the folder name."""
+    name = frontmatter(folder).get("name")
+    return name if isinstance(name, str) else folder.name
 
 
 def write_skill(folder: Path, skills_dir: Path, entries: Sequence[str] = SKILL_ENTRIES) -> Path:
@@ -130,18 +141,68 @@ def target_dirs(agent: str | None = None, path: Path | None = None) -> list[tupl
     return found
 
 
-def install(sources: Sequence[Source], agent: str | None = None, path: Path | None = None) -> list[tuple[str, Path]]:
-    """Install every skill into each target. Returns (target label, written folder) pairs."""
-    written = []
+# The install record: which skill folders `install` wrote where, so the next `install` can remove
+# the ones it wrote earlier that are no longer in its set (a renamed, split or dropped skill) and
+# never anything else. One file, `skills.json` under `AIP_HOME` (else `~/.aip`, where the runtime
+# keeps its run files): {"version": 1, "dirs": {<skills dir>: {<tool>: [<folder name>, ...]}}}.
+# Entries are per tool because `aip skill install` writes two skills and `aip-spec skill install`
+# one; each only cleans up after its own earlier runs.
+RECORD_VERSION = 1
+
+
+def record_path() -> Path:
+    override = os.environ.get("AIP_HOME")
+    home = os.environ.get("HOME")
+    base = Path(override) if override else (Path(home) / ".aip" if home else Path(".aip"))
+    return base / "skills.json"
+
+
+def read_record() -> dict[str, dict[str, list[str]]]:
+    import json
+
+    try:
+        data = json.loads(record_path().read_text())
+    except (OSError, ValueError):
+        return {}
+    dirs = data.get("dirs") if isinstance(data, dict) and data.get("version") == RECORD_VERSION else None
+    return dirs if isinstance(dirs, dict) else {}
+
+
+def write_record(dirs: dict[str, dict[str, list[str]]]) -> None:
+    import json
+
+    path = record_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": RECORD_VERSION, "dirs": dirs}, indent=2, sort_keys=True) + "\n")
+
+
+def install(sources: Sequence[Source], agent: str | None = None, path: Path | None = None,
+            tool: str = "aip") -> tuple[list[tuple[str, Path]], list[Path]]:
+    """Install every skill into each target and record it under `tool`. First removes, from each
+    target, the folders this tool recorded there before that are not in `sources` now. Returns
+    the (target label, written folder) pairs and the folders removed."""
+    record = read_record()
+    written, removed = [], []
     for label, skills_dir in target_dirs(agent, path):
+        folders = [Path(source[0] if isinstance(source, tuple) else source) for source in sources]
+        current = [skill_name(folder) for folder in folders]
+        entry = record.setdefault(str(skills_dir), {})
+        for name in entry.get(tool, []):
+            stale = skills_dir / name
+            if name not in current and stale.is_dir():
+                shutil.rmtree(stale)
+                removed.append(stale)
         for source in sources:
             folder, entries = source if isinstance(source, tuple) else (source, SKILL_ENTRIES)
             written.append((label, write_skill(Path(folder), skills_dir, entries)))
-    return written
+        entry[tool] = current
+    write_record(record)
+    return written, removed
 
 
 def remove(names: list[str], agent: str | None = None, path: Path | None = None) -> list[Path]:
-    """Remove the named skills from one agent, `path`, or every agent that has one. Idempotent."""
+    """Remove the named skills from one agent, `path`, or every agent that has one, and drop them
+    from the install record. Idempotent."""
     if path is not None:
         dirs = [Path(path).expanduser()]
     elif agent is not None:
@@ -149,6 +210,7 @@ def remove(names: list[str], agent: str | None = None, path: Path | None = None)
         dirs = [skills] if skills is not None else []
     else:
         dirs = [a.skills_path() for a in AGENTS.values() if any(a.installed(n) for n in names)]
+    record = read_record()
     removed = []
     for skills_dir in dirs:
         for name in names:
@@ -156,28 +218,45 @@ def remove(names: list[str], agent: str | None = None, path: Path | None = None)
             if target.is_dir():
                 shutil.rmtree(target)
                 removed.append(target)
+        entry = record.get(str(skills_dir), {})
+        for tool, installed in list(entry.items()):
+            entry[tool] = [n for n in installed if n not in names]
+            if not entry[tool]:
+                del entry[tool]
+        if not entry:
+            record.pop(str(skills_dir), None)
+    if record or record_path().is_file():
+        write_record(record)
     return removed
 
 
-def remove_legacy(names: Sequence[str], agent: str | None = None, path: Path | None = None) -> list[Path]:
-    """Remove a skill's old folders, `names`, wherever `install` writes and `remove` looks: `path`,
-    one agent, or every agent. Only a folder whose `SKILL.md` declares that name goes, so a skill
-    of the user's that happens to share it stays. Idempotent; nothing to do is not an error."""
-    if path is not None or agent is not None:
-        try:
-            dirs = [d for _, d in target_dirs(agent, path)]
-        except NoAgentDetected:
-            dirs = []
-    else:
-        dirs = [a.skills_path() for a in AGENTS.values() if any(a.installed(n) for n in names)]
-    removed = []
+def prune(names: Sequence[str], agent: str | None = None, path: Path | None = None,
+          dry_run: bool = False) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Remove the folders of `names`, the skill names this tool used to install, from every
+    detected agent (or one agent, or `path`): folders written before the install record existed,
+    which `install` cannot find. A folder goes only when its `SKILL.md` frontmatter carries that
+    name and a description mentioning "Agent Instruction Protocol"; any other folder of the name
+    is left with a reason. `dry_run` reports without removing. Returns (removed, skipped)."""
+    try:
+        dirs = [d for _, d in target_dirs(agent, path)]
+    except NoAgentDetected:
+        dirs = []
+    removed, skipped = [], []
     for skills_dir in dirs:
         for name in names:
-            target = skills_dir / name
-            if (target / "SKILL.md").is_file() and skill_name(target) == name:
-                shutil.rmtree(target)
-                removed.append(target)
-    return removed
+            folder = skills_dir / name
+            if not folder.is_dir():
+                continue
+            front = frontmatter(folder)
+            if front.get("name") != name:
+                skipped.append((folder, f"its SKILL.md is not named {name!r}"))
+            elif "Agent Instruction Protocol" not in str(front.get("description", "")):
+                skipped.append((folder, "its SKILL.md does not describe an Agent Instruction Protocol skill"))
+            else:
+                if not dry_run:
+                    shutil.rmtree(folder)
+                removed.append(folder)
+    return removed, skipped
 
 
 def table(names: list[str]) -> str:

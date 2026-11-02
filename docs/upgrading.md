@@ -2,18 +2,23 @@
 
 ## 0.6a1 to 0.7.0
 
-Release 0.7.0 (one repository, PyPI) changes no skill: the format stays `0.6a1`, so a skill that
-validates today validates unchanged. Re-run the installer and nothing else:
+In 0.7.0 the packages come from PyPI instead of git, and the authoring skill is named `aip-compile`
+instead of `aip`; the format stays `0.6a1`, so a skill that validates today validates unchanged.
+Re-run the one-line installer, which does everything below, or do it by hand:
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 ```
 
-It installs `aip-spec` and `agent-instruction-protocol` (the `aip` command) from PyPI, replacing
-the git-tag installs of 0.6a1, and refreshes both skills in every agent it detects. The authoring
-skill is now named `aip-compile` (it was `aip`); `aip skill install` writes `aip-compile/` and removes
-the old `aip/` folder beside it, and says so. Both packages carry the same version; `aip --version`
-prints `aip 0.7.0 format 0.6a1`.
+```bash
+uv tool uninstall aip                                  # the pre-0.7.0 install, if present
+uv tool install --force aip-spec agent-instruction-protocol
+aip skill install                                      # refreshes aip-runtime, adds aip-compile
+aip skill prune                                        # removes the old `aip` skill folder
+```
+
+The first line removes the git-installed `aip` tool (the distribution is `agent-instruction-protocol` now; the command is still `aip`); the second installs both packages from PyPI; `aip skill install` writes `aip-compile` and `aip-runtime` into every agent it detects, refreshing `aip-runtime` in place; `aip skill prune` removes only retired skill names (today the authoring skill's old `aip/` folder), so `aip-runtime` is refreshed by `install`, never removed by `prune`. Both are safe to re-run. `aip skill list` shows the result per agent. Authored skills need no change in 0.7.0.
+Afterwards `aip --version` prints `aip 0.7.0 format 0.6a1`.
 
 If you pinned a git URL yourself, in a `pyproject.toml`, a requirements file, or a `uv tool
 install` line, change it to the PyPI names. The format package was its own repository,

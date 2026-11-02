@@ -542,28 +542,63 @@ class SkillInstall(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertFalse((Path(tmp) / "aip-compile").exists())
 
-    def test_install_removes_the_skill_under_its_old_name(self):
-        """Up to 0.6a1 the authoring skill was installed as `aip/`; install and remove clean it up,
-        but only when the folder is that skill (its SKILL.md says `name: aip`)."""
+    def test_prune_removes_the_retired_name_and_leaves_other_folders(self):
+        """Up to 0.6a1 the authoring skill was installed as `aip/`. `skill prune` removes that folder
+        when its SKILL.md is that skill (name `aip`, a description naming the protocol), leaves an
+        unrelated folder of the name with a warning, and `--dry-run` only reports."""
+        ours = "---\nname: aip\ndescription: Create skills as Agent Instruction Protocol (AIP)\n---\nbody\n"
         with tempfile.TemporaryDirectory() as tmp:
             old = Path(tmp) / "aip"
             old.mkdir()
-            (old / "SKILL.md").write_text("---\nname: aip\ndescription: the old authoring skill\n---\nbody\n")
+            (old / "SKILL.md").write_text(ours)
+            code, out, err = self.run_cli("skill", "prune", "--path", tmp, "--dry-run")
+            self.assertEqual((code, err), (0, ""), out)
+            self.assertIn(f"would remove {old}", out)
+            self.assertTrue(old.is_dir(), "dry run changes nothing")
+            code, out, err = self.run_cli("skill", "prune", "--path", tmp)
+            self.assertEqual((code, err), (0, ""), out)
+            self.assertIn(f"removed {old}", out)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), [])
+            code, out, _ = self.run_cli("skill", "prune", "--path", tmp)
+            self.assertEqual(code, 0)
+            self.assertIn("nothing to prune", out)
+            old.mkdir()
+            (old / "SKILL.md").write_text("---\nname: aip\ndescription: my own notes, not that protocol\n---\nbody\n")
+            code, out, err = self.run_cli("skill", "prune", "--path", tmp)
+            self.assertEqual(code, 0)
+            self.assertNotIn("removed", out)
+            self.assertIn(f"left {old} alone", err)
+            self.assertTrue(old.is_dir())
+            self.assertEqual(self.run_cli("skill", "install", "--path", tmp)[0], 0)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip", "aip-compile"], "install never touches it either")
+
+    def test_install_record_removes_only_what_it_installed_before(self):
+        """`skill install` records the folders it wrote, per skills directory and tool. The next
+        install removes a recorded folder that left the set, and leaves a folder it never wrote."""
+        import json
+
+        from aip_spec.agents import read_record, record_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.run_cli("skill", "install", "--path", tmp)[0], 0)
+            self.assertEqual(read_record(), {tmp: {"aip-spec": ["aip-compile"]}})
+            # Pretend an earlier aip-spec installed the skill under another name, and that the user
+            # keeps a folder of their own beside it.
+            for name in ("aip-authoring", "mine"):
+                (Path(tmp) / name).mkdir()
+                (Path(tmp) / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: x\n---\nbody\n")
+            record_path().write_text(json.dumps({"version": 1, "dirs": {tmp: {"aip-spec": ["aip-authoring", "aip-compile"]}}}))
             code, out, err = self.run_cli("skill", "install", "--path", tmp)
             self.assertEqual((code, err), (0, ""), out)
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip-compile"])
-            self.assertIn(f"removed {old}", out)
-            self.assertNotIn("removed", self.run_cli("skill", "install", "--path", tmp)[1], "nothing left to remove")
-            # `remove` takes the old folder too, and leaves a user's own skill that shares the name.
-            old.mkdir()
-            (old / "SKILL.md").write_text("---\nname: aip\ndescription: old\n---\nbody\n")
-            code, out, _ = self.run_cli("skill", "remove", "--path", tmp)
-            self.assertEqual(code, 0)
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), [])
-            old.mkdir()
-            (old / "SKILL.md").write_text("---\nname: my-own-aip-notes\ndescription: not ours\n---\nbody\n")
+            self.assertIn(f"removed {Path(tmp) / 'aip-authoring'}", out)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip-compile", "mine"])
+            self.assertEqual(read_record(), {tmp: {"aip-spec": ["aip-compile"]}})
+            # Another tool's entry for the same directory is not this tool's to clean up.
+            record_path().write_text(json.dumps({"version": 1, "dirs": {tmp: {"aip-spec": ["aip-compile"], "aip": ["aip-compile", "mine"]}}}))
             self.assertEqual(self.run_cli("skill", "install", "--path", tmp)[0], 0)
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip", "aip-compile"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip-compile", "mine"])
+            self.assertEqual(self.run_cli("skill", "remove", "--path", tmp)[0], 0)
+            self.assertEqual(read_record(), {tmp: {"aip": ["mine"]}}, "remove drops the entry")
 
     def test_install_into_detected_agents(self):
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": f"{home}/.config"}):
