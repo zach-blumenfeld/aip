@@ -10,6 +10,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Add notable changes here as you make them. On release, rename this section to the new version with a date and start a new `[Unreleased]` above it.
 
+## [0.7.1] — 2026-11-02
+
+The first release cut by the GitHub Actions workflow; 0.7.0 was published by hand from a laptop. No change to the console itself.
+
+### Added
+- **Apache-2.0 license**, the same as the aip repo: a `LICENSE` file in the package and `license` in `package.json`.
+
 ## [0.7.0] — 2026-11-02
 
 The first release on npm: `npx aip-console`. It targets aip 0.7.0, the first release of the runtime on PyPI (`agent-instruction-protocol` and `aip-spec`), and refuses an older `aip`. Before this the console was run from a checkout of the repository, tagged alongside the runtime (`v0.6a1`).
