@@ -61,8 +61,8 @@ scaffold to `<workdir>/studio/<name>/` and gives you one prompt to paste into yo
 the folder, validates the agent's work with `aip-spec` (on the PATH, or `--aip-spec PATH`), checks it against your
 design, runs its scripts, and only then lets you accept it.
 
-The walkthrough is in [docs/studio.md](docs/studio.md). Example designs to import are in
-[examples/studio/](examples/studio).
+[docs/studio.md](docs/studio.md) has a tutorial that takes the `expense-review` example from
+[examples/studio/](examples/studio) to a finished skill, then a reference for every feature.
 
 ## Developing
 

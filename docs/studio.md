@@ -7,24 +7,95 @@ for you in place, and the Studio checks its work before you accept it.
 It works in both console modes (`--server` or a skill folder). Drafts are kept in this browser's local
 storage.
 
-## Quick start with an example
+## Examples
 
 Two example designs are in [`examples/studio/`](../examples/studio):
 
 | Example | What it shows |
 |---|---|
-| `expense-review` | A complete design: an execution step, a decision, a router, a second execution with an asset, a client task and the end. It has no files yet, and three step descriptions and one question's instructions are left empty. It is ready for an agent. |
-| `meeting-notes` | A design with gaps: no `purpose`, a script with no outputs, a step reading a key nothing produces, no `requires`. Use it to learn the lint panel. |
+| `expense-review` | A complete design with no files yet. The tutorial below takes it from import to a finished skill. |
+| `meeting-notes` | A design with gaps: no `purpose`, a script with no outputs, a step reading a key nothing produces, no `requires`. Use it to learn [the lint panel](#the-lint-panel). |
+
+## Tutorial: expense-review, start to finish
+
+This builds a skill that checks a receipt against a travel policy, then approves it or explains why not. You
+design the steps; a coding agent writes the scripts. You need `aip-spec`, `python` and a coding agent on this
+machine (see [Complete with an agent](#complete-with-an-agent)).
+
+### 1. Import the design
 
 The Studio imports zips, so zip the folder first:
 
 ```
 cd examples/studio
 zip -r expense-review.zip expense-review
-zip -r meeting-notes.zip meeting-notes
 ```
 
-Then in the Studio: **Import a skill zip…** → pick `expense-review.zip`. It opens as a new draft.
+Open `#/studio`, click **Import a skill zip…** and pick `expense-review.zip`. It opens as a new draft.
+
+### 2. Read the graph
+
+```
+extract → check-policy → by-policy ─ true  → approve ─┐
+                                   └ false → explain ─┴→ end
+```
+
+| Step | Kind | What it does |
+|---|---|---|
+| `extract` | execution | A script reads `receipt_text` and outputs `amount`, `vendor`, `category`. |
+| `check-policy` | decision | Answers one yes/no question, `within_policy`. |
+| `by-policy` | router | Branches on `within_policy`. |
+| `approve` | execution | A script reads `assets/limits.json` and outputs `approval_id`. |
+| `explain` | client_task | The agent running the skill writes `explanation` from the template `assets/explain.md`. |
+| `end` | end | Returns `vendor` and `amount`. |
+
+Tick **data flow** to see which keys travel along each edge.
+
+### 3. Look at what's unfinished
+
+The lint panel shows no errors, only unfinished items: `check-policy`, `approve` and `explain` have no
+description, and the `within_policy` question has no instructions. Leave them: the agent fills empty prose.
+
+If you change the design now, for example adding an output, keep the lint panel free of errors. The agent
+can't start while there are errors.
+
+### 4. Hand it to the agent
+
+1. Click **Complete with an agent…**, then **Start**. The Studio writes the scaffold to
+   `<workdir>/studio/expense-review/`: `SKILL.md`, stubs for `scripts/extract.py` and `scripts/approve.py`,
+   and placeholders for `assets/limits.json` and `assets/explain.md`.
+2. Click **Copy prompt** and paste it into your coding agent, started anywhere. The prompt holds the folder
+   path, your design, and the rules for what the agent may change.
+3. Leave the Studio open. It counts the files as they're written: `Waiting for the agent: 2 of 4 placeholder
+   files written.`
+
+### 5. Read the checks
+
+Each time the folder stops changing, the Studio runs four checks (validate, adherence, contract,
+completeness; see [The checks](#the-checks)). A check can fail while the agent is still writing. It runs
+again on the next change.
+
+When a check fails, its failures name the step or file, for example:
+
+```
+step `approve` (`scripts/approve.py`): does not print the declared output `approval_id`
+```
+
+Paste them into the agent.
+
+When every check passes, the panel says **Every check passed**. Before you accept, read:
+
+- **Prose the agent wrote**: every empty field it filled. Edit them later in the Studio if the wording is wrong.
+- **The diff** against the scaffold: the checks prove each script runs and returns the right keys and types,
+  not that `extract.py` parses receipts well. That's for you to judge.
+
+### 6. Accept and ship
+
+Click **Accept**. The agent's prose goes into the draft and its files replace the placeholders. Nothing is
+left unfinished.
+
+**Export scaffold…** → **Download `expense-review.zip`** gives you the finished skill. With a server,
+**Publish to catalog** publishes it, and the run page can run it.
 
 ## Ways to start a draft
 
