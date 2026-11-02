@@ -1,0 +1,7 @@
+__pycache__/
+.venv/
+dist/
+*.egg-info/
+.DS_Store
+.idea/
+.claude
