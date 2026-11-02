@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { ValidationIssue } from "../api/types";
 import { navigate } from "../router";
-import { frontmatterName, packSkill, unpackSkill } from "../zip";
+import { frontmatterName, packSkill, unpackSkill, type ZipFile } from "../zip";
 import { describe, formatSize } from "./Source";
 
 /** "download zip": the revision as `<name>@<rev>.zip`, one `<name>/` folder inside (the Agent Skills layout),
@@ -16,9 +16,7 @@ export function DownloadZip({ name, revision }: { name: string; revision: string
     setError(null);
     try {
       const reference = `${name}@${revision}`;
-      const manifest = await api.files(reference);
-      const files = await Promise.all(manifest.map(async (f) => ({ path: f.path, mode: f.mode, bytes: (await api.file(reference, f.path)).bytes })));
-      save(`${reference}.zip`, packSkill(name, files));
+      save(`${reference}.zip`, packSkill(name, await revisionFiles(reference)));
     } catch (e) {
       setError(describe(e));
     } finally {
@@ -36,7 +34,13 @@ export function DownloadZip({ name, revision }: { name: string; revision: string
   );
 }
 
-function save(filename: string, bytes: Uint8Array) {
+/** Every file of a revision, from its manifest, with the token the page holds. */
+export async function revisionFiles(reference: string): Promise<ZipFile[]> {
+  const manifest = await api.files(reference);
+  return Promise.all(manifest.map(async (f) => ({ path: f.path, mode: f.mode, bytes: (await api.file(reference, f.path)).bytes })));
+}
+
+export function save(filename: string, bytes: Uint8Array) {
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
   const a = document.createElement("a");
   a.href = url;
@@ -135,7 +139,7 @@ export interface PublishedNote { existed: boolean; warnings: ValidationIssue[]; 
 
 let published: { ref: string; note: PublishedNote } | null = null;
 
-function stashPublished(ref: string, note: PublishedNote) {
+export function stashPublished(ref: string, note: PublishedNote) {
   published = { ref, note };
 }
 

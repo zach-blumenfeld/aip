@@ -213,3 +213,50 @@ ul.issues li[data-severity="warning"] { color: var(--router); }
 .published-note p { margin: 0.4rem 0; }
 .catalog-retired { margin: 0 0 0.5rem; }
 tr[data-retired] td { opacity: 0.6; }
+
+/* Studio */
+.studio-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1.5rem; align-items: start; }
+.studio-grid > * { min-width: 0; }
+@media (max-width: 56rem) { .studio-grid { grid-template-columns: 1fr; } }
+.step-graph .node-button { cursor: pointer; }
+.step-graph .node-button:focus-visible { outline: none; }
+.step-graph .node.selected rect:first-child { stroke-width: 3.5; fill: color-mix(in srgb, var(--kind) 14%, transparent); }
+.step-graph .node:focus-visible rect:first-child { stroke-width: 3.5; }
+.step-graph .mark circle { stroke: Canvas; stroke-width: 1.5; }
+.step-graph .mark-error circle { fill: #b00020; }
+.step-graph .mark-unfinished circle { fill: var(--router); }
+.step-graph .mark-warning circle { fill: var(--data); }
+.studio-panel { border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.9rem 0.9rem; }
+.studio-panel h2 { margin-top: 0.5rem; }
+.studio-panel .field input[type="text"], .studio-panel .field textarea, .studio-panel .field select { font: inherit; box-sizing: border-box; padding: 0.3rem 0.45rem; }
+.studio-panel .field textarea { width: 100%; min-height: 3.5rem; }
+.studio-panel .field input[aria-invalid="true"] { border-color: #b00020; }
+.studio-panel .field .hint { font-size: 0.85rem; }
+.studio-panel .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.25rem 0; }
+.studio-panel .row input[type="text"] { flex: 1; min-width: 0; }
+.studio-panel .row button, .studio-panel .add-kinds button { font: inherit; font-size: 0.85rem; }
+.studio-panel .add-kinds { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.25rem 0 0.75rem; }
+.studio-panel fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0.6rem 0; }
+.studio-panel .danger { color: #b00020; }
+.studio-lint { margin: 0.75rem 0; }
+.studio-lint h3 { margin: 0.5rem 0 0.2rem; }
+.studio-lint ul { margin: 0.2rem 0; padding-left: 1.2rem; font-size: 0.9rem; line-height: 1.45; }
+.studio-lint li { margin: 0.45rem 0; }
+/* A multi-line button takes its baseline from its last line, which would drop the bullet there; top-aligned,
+   the bullet stays on the first line of the item. */
+.studio-lint li button, .studio-lint li select { text-align: left; vertical-align: top; line-height: inherit; }
+.studio-lint .tier-error h3 { color: #b00020; }
+.studio-lint .tier-unfinished h3 { color: var(--router); }
+.studio-lint .tier-warning h3 { color: var(--data); }
+.studio-lint li[aria-current="true"] { background: var(--fill); outline: 2px solid var(--fill); }
+.studio-bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0.5rem 0; }
+.studio-export { margin: 0.5rem 0 0.75rem; }
+.studio-export .export-files { margin: 0.3rem 0; padding-left: 1.2rem; font-size: 0.9rem; }
+.studio-drafts { margin: 0.25rem 0 0.5rem; }
+.studio-drafts .studio-bar { gap: 0.5rem; margin: 0.35rem 0; }
+.studio-drafts .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0; }
+.studio-drafts .danger { color: #b00020; }
+.studio-agent { margin: 0.5rem 0 0.75rem; }
+.studio-agent textarea.agent-prompt { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.9rem; }
+.studio-agent .agent-checks { list-style: none; padding-left: 0; }
+.studio-agent .agent-checks > li { margin: 0.35rem 0; }

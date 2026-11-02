@@ -2,6 +2,10 @@
 // interactive runs through the `aip` CLI it spawns. Everything else goes to the server directly
 // (api/client.ts). The CLI's JSON lines are the contract of aip's docs/cli-json.md.
 
+import { MissingValidator, type Runner } from "../studio/agentCheck";
+import { store } from "../studio/import";
+import type { ZipFile } from "../zip";
+
 /** `GET /console/config`. */
 export interface ConsoleConfig {
   mode: "server" | "folder";
@@ -160,4 +164,45 @@ export async function skillInfo(ref: string): Promise<SkillInfo> {
     throw new Error(message);
   }
   return (await res.json()) as SkillInfo;
+}
+
+// ------------------------------------------------------------------ the Studio's agent checks (S6a)
+
+/** `POST /console/validate` and `POST /console/probe`, as the checks in studio/agentCheck.ts run them. The files go
+ *  as base64; a missing aip-spec is a MissingValidator, so the checks refuse rather than fail. */
+export const consoleRunner: Runner = {
+  async validate(name, files) {
+    const res = await post("/console/validate", { name, files: files.map(store) });
+    if (res.status === 503) throw new MissingValidator(await errorText(res));
+    if (!res.ok) throw new Error(await errorText(res));
+    return (await res.json()) as Awaited<ReturnType<Runner["validate"]>>;
+  },
+  async probe(name, files, script, stdin, timeout) {
+    const res = await post("/console/probe", { name, files: files.map(store), script, stdin, timeout });
+    if (!res.ok) return { code: null, error: await errorText(res) };
+    return (await res.json()) as Awaited<ReturnType<Runner["probe"]>>;
+  },
+};
+
+function post(path: string, body: unknown): Promise<Response> {
+  return fetch(path, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) });
+}
+
+async function errorText(res: Response): Promise<string> {
+  try { return ((await res.json()) as { error: { message: string } }).error.message; } catch { return `${res.status} ${res.statusText}`; }
+}
+
+/** The scaffold written to `<workdir>/studio/<name>/` for an agent to edit in place. */
+export async function writeHandoff(name: string, files: ZipFile[]): Promise<{ dir: string; previous: string | null }> {
+  const res = await post("/console/handoff", { name, files: files.map(store) });
+  if (!res.ok) throw new Error(await errorText(res));
+  return (await res.json()) as { dir: string; previous: string | null };
+}
+
+/** The handoff folder as it is now; `hash` changes whenever a file does. */
+export async function readHandoff(name: string): Promise<{ dir: string; files: ZipFile[]; hash: string | null; missing?: boolean }> {
+  const res = await post("/console/handoff/read", { name });
+  if (!res.ok) throw new Error(await errorText(res));
+  const body = (await res.json()) as { dir: string; files: { path: string; mode: number; b64: string }[]; hash: string | null; missing?: boolean };
+  return { ...body, files: body.files.map((f) => ({ path: f.path, mode: f.mode, bytes: Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0)) })) };
 }

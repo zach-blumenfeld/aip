@@ -10,6 +10,8 @@ import { useEffect, useState } from "react";
 //                         #/runs[?name=&status=]      history: the runs the server persisted
 //                         #/runs/<id>                 one run replayed as a trace over the step graph
 //                         #/governance[?name=]        the corpus queries of GET /governance as lists
+//                         #/studio[?import=<ref>|?new] build a procedure in the browser, exported as a skill zip;
+//                                                     import a revision into a new draft, or start a blank one
 //                         #/server                    the console's server, and the bearer token for this browser
 export type Route =
   | { page: "catalog" }
@@ -20,6 +22,7 @@ export type Route =
   | { page: "runs"; name?: string; status?: string }
   | { page: "run-detail"; id: string }
   | { page: "governance"; name?: string }
+  | { page: "studio"; import?: string; fresh?: boolean }
   | { page: "server" }
   | { page: "missing"; hash: string };
 
@@ -49,6 +52,11 @@ export function parseHash(hash: string): Route {
   if (m) return { page: "run-detail", id: decodeURIComponent(m[1]) };
   m = /^governance(?:\?(.*))?$/.exec(path);
   if (m) return { page: "governance", name: new URLSearchParams(m[1] ?? "").get("name") ?? undefined };
+  m = /^studio(?:\?(.*))?$/.exec(path);
+  if (m) {
+    const q = new URLSearchParams(m[1] ?? "");
+    return { page: "studio", import: q.get("import") ?? undefined, fresh: q.has("new") || undefined };
+  }
   if (path === "server") return { page: "server" };
   return { page: "missing", hash };
 }
@@ -73,6 +81,7 @@ export function href(route: Route): string {
     }
     case "run-detail": return `#/runs/${encodeURIComponent(route.id)}`;
     case "governance": return `#/governance${route.name ? "?name=" + encodeURIComponent(route.name) : ""}`;
+    case "studio": return route.import ? `#/studio?import=${encodeURIComponent(route.import)}` : route.fresh ? "#/studio?new" : "#/studio";
     case "server": return "#/server";
     case "missing": return route.hash;
   }

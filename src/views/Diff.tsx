@@ -164,7 +164,7 @@ function FileDiff({ name, a, b, change }: { name: string; a: string; b: string; 
 }
 
 /** The ops with long unchanged runs folded, leaving CONTEXT lines around each change. */
-function Hunks({ ops }: { ops: LineOp[] }) {
+export function Hunks({ ops }: { ops: LineOp[] }) {
   const rows: (LineOp | { kind: "fold"; count: number })[] = [];
   let i = 0;
   while (i < ops.length) {

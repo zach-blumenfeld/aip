@@ -11,7 +11,7 @@ test("folder mode hides the server pages", async ({ page }) => {
   await page.goto("./");
   await expect(page.getByTestId("console-target")).toContainText(FIRST_REVISION_DIR);
   const nav = page.locator(".top-nav");
-  await expect(nav.getByRole("link")).toHaveText(["run"]);
+  await expect(nav.getByRole("link")).toHaveText(["run", "studio"]);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("billing-support");
   for (const hash of ["#/governance", "#/runs", "#/p/billing-support", "#/server"]) {
     await page.goto(`./${hash}`);

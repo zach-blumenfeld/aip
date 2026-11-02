@@ -1,7 +1,8 @@
 // `npm run e2e`, before any server starts (the first webServer command in playwright.config.ts runs this):
 // a fresh .aip-e2e/ with
 //   bin/aip          the sibling aip repo's CLI (AIP_REPO, default ../aip) behind `uv run`, put first on the
-//                    consoles' PATH, the way an installed `aip` would be
+//                    consoles' PATH, the way an installed `aip` would be; `aip-spec` and `python` beside it, for
+//                    the Studio's agent checks
 //   v1/billing-support, v2/billing-support
 //                    aip-spec's example with an escalate script that files each ticket under the run's working
 //                    directory (and can fail or stall on request, below); v2 changes one line of the policy
@@ -62,6 +63,12 @@ for (const dir of ["bin", "root", "home", "work", "work-folder"]) mkdirSync(path
 const aip = path.join(E2E, "bin", "aip");
 writeFileSync(aip, `#!/bin/sh\nexec uv run --quiet --project "${repo}" --group dev aip "$@"\n`);
 chmodSync(aip, 0o755);
+// The Studio's agent checks (S6a) run `aip-spec validate` and each script under `python`, from the console's PATH.
+for (const [name, program] of [["aip-spec", "aip-spec"], ["python", "python"]]) {
+  const shim = path.join(E2E, "bin", name);
+  writeFileSync(shim, `#!/bin/sh\nexec uv run --quiet --project "${repo}" ${program} "$@"\n`);
+  chmodSync(shim, 0o755);
+}
 
 execFileSync("uv", ["run", "--quiet", "--project", repo, "aip-spec", "example", "billing-support", "--out", path.join(E2E, "example")],
              { stdio: "inherit" });

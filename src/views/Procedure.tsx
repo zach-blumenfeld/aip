@@ -81,6 +81,7 @@ export function Procedure({ reference }: { reference: string }) {
             {" · "}<a href={href({ page: "run", ref: `${info.name}@${info.revision}` })}>run</a>
             {" · "}<a href={href({ page: "runs", name: info.name })}>history</a>
             {" · "}<DownloadZip name={info.name} revision={info.revision} />
+            {" · "}<a href={href({ page: "studio", import: `${info.name}@${info.revision}` })} data-testid="edit-in-studio">edit in Studio</a>
           </p>
 
           <h2>Purpose</h2>

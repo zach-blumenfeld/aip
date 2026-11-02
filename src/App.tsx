@@ -6,6 +6,7 @@ import { Run } from "./views/Run";
 import { RunPage, Runs } from "./views/History";
 import { Governance } from "./views/Governance";
 import { Server } from "./views/Server";
+import { Studio } from "./views/Studio";
 import { consoleConfig, isFolderMode } from "./api/console";
 import { href, useRoute, type Route } from "./router";
 
@@ -21,6 +22,7 @@ export function App() {
           <a href={href({ page: "run" })}>run</a>
           {!folder && <a href={href({ page: "runs" })}>history</a>}
           {!folder && <a href={href({ page: "governance" })}>governance</a>}
+          <a href={href({ page: "studio" })}>studio</a>
         </nav>
         {folder ? <span className="muted server-link" data-testid="console-target">folder {consoleConfig().folder}</span>
                 : <a className="muted server-link" data-testid="console-target" href={href({ page: "server" })}>{consoleConfig().server}</a>}
@@ -40,6 +42,7 @@ function ServerPage({ route }: { route: Route }) {
     case "runs": return <Runs name={route.name} status={route.status} />;
     case "run-detail": return <RunPage id={route.id} />;
     case "governance": return <Governance name={route.name} />;
+    case "studio": return <Studio importRef={route.import} fresh={route.fresh} />;
     case "server": return <Server />;
     case "missing": return <p className="error">No page at <code>{route.hash}</code>.</p>;
   }
@@ -47,6 +50,7 @@ function ServerPage({ route }: { route: Route }) {
 
 /** A folder has no server behind it: no catalog, history or governance, only local runs of the folder. */
 function FolderPage({ route }: { route: Route }) {
+  if (route.page === "studio") return <Studio fresh={route.fresh} />;
   if (route.page === "run" || route.page === "catalog") return <Run />;
   return (
     <p className="muted" data-testid="folder-mode">

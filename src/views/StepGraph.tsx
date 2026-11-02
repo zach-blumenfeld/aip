@@ -3,6 +3,7 @@ import { START_INPUT } from "../graph/dataflow";
 import { layout, type Direction } from "../graph/layout";
 import type { Branch, Edge, StepDetail } from "../api/types";
 import type { Traffic } from "./Traffic";
+import type { Tier } from "../studio/lint";
 
 const W = 150, H = 48, PAD = 24;
 // Data-flow arrows run along the outside of the nodes (right of them top-down, below them left-to-right), one
@@ -28,9 +29,15 @@ interface Props {
   traffic?: Traffic;
   /** Layers top-down (the default) or left-to-right. */
   direction?: Direction;
+  /** Studio: a node is a button that selects its step. Node ids are step ids; `labels` gives the text drawn. */
+  onSelect?: (id: string) => void;
+  selected?: string;
+  labels?: Map<string, string>;
+  /** Studio: the worst lint tier on each step, drawn as a marker on its node. */
+  marks?: Map<string, Tier>;
 }
 
-export function StepGraph({ steps, edges, branches, start, end, visited, taken: takenEdges, flow, traffic, direction = "down" }: Props) {
+export function StepGraph({ steps, edges, branches, start, end, visited, taken: takenEdges, flow, traffic, direction = "down", onSelect, selected, labels, marks }: Props) {
   const g = useMemo(() => {
     const all = [
       ...edges.map((e) => ({ from: e.from, to: e.to })),
@@ -115,24 +122,35 @@ export function StepGraph({ steps, edges, branches, start, end, visited, taken: 
         }
         const step = byName.get(n.id)!;
         const isEnd = n.id === end, isStart = n.id === start;
-        return (
-          <a key={n.id} href={`#step-${n.id}`} className="node-link">
+        const text = labels?.get(n.id) ?? n.id;
+        const mark = marks?.get(n.id);
+        const node = (
             <g
-              className={`node kind-${step.kind}${visited?.has(n.id) ? " visited" : ""}`}
+              className={`node kind-${step.kind}${visited?.has(n.id) ? " visited" : ""}${selected === n.id ? " selected" : ""}`}
               transform={`translate(${n.x}, ${n.y})`}
               data-testid="step-node"
               data-step={n.id}
+              data-name={text}
               data-kind={step.kind}
+              {...(onSelect && { role: "button", tabIndex: 0, "aria-pressed": selected === n.id, "aria-label": `${text} (${step.kind})`,
+                onClick: () => onSelect(n.id),
+                onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(n.id); } } })}
             >
               <rect width={W} height={H} rx={step.kind === "router" ? H / 2 : 6} />
               {isEnd && <rect x={3} y={3} width={W - 6} height={H - 6} rx={4} className="end-ring" />}
               {isStart && <circle cx={0} cy={H / 2} r={5} className="start-dot" />}
-              <text x={W / 2} y={H / 2 - 4} textAnchor="middle" className="node-name">{n.id}</text>
+              <text x={W / 2} y={H / 2 - 4} textAnchor="middle" className="node-name">{text}</text>
               <text x={W / 2} y={H / 2 + 13} textAnchor="middle" className="node-kind">{step.kind}</text>
               {traffic && <Badge runs={traffic.steps.get(n.id) ?? 0} failed={traffic.failed.get(n.id) ?? 0} total={traffic.runs} />}
+              {mark && (
+                <g className={`mark mark-${mark}`} data-testid="step-mark" data-tier={mark}>
+                  <title>{mark}</title>
+                  <circle cx={W - 2} cy={H - 2} r={6} />
+                </g>
+              )}
             </g>
-          </a>
         );
+        return onSelect ? <g key={n.id} className="node-button">{node}</g> : <a key={n.id} href={`#step-${n.id}`} className="node-link">{node}</a>;
       })}
     </svg>
   );
