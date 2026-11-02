@@ -85,11 +85,14 @@ def runtime_command(argv: list[str]) -> int:
 
 
 def skill_command(argv: list[str]) -> int:
-    """Install, list, or remove the two AIP skills: the `aip` authoring skill, bundled in
-    `aip-spec`, and the `aip-runtime` meta-skill, bundled here. Agent detection is
-    `aip_spec.agents`, the same catalog `aip-spec skill install` uses."""
+    """Install, list, or remove the two AIP skills: the `aip-compile` authoring skill, bundled
+    in `aip-spec`, and the `aip-runtime` meta-skill, bundled here. Agent detection is
+    `aip_spec.agents`, the same catalog `aip-spec skill install` uses. `install` records what
+    it wrote and removes its own earlier folders that left the set; `prune` removes folders
+    under names this tool retired (the authoring skill's old `aip/`)."""
     from aip_spec import agents, skill_dir
-    from aip_spec.resources import SKILL_ENTRIES as AUTHORING_ENTRIES, SKILL_NAME as AUTHORING
+    from aip_spec.cli import _prune
+    from aip_spec.resources import LEGACY_SKILL_NAMES, SKILL_ENTRIES as AUTHORING_ENTRIES, SKILL_NAME as AUTHORING
 
     from aip.client import RUNTIME_SKILL, runtime_skill_dir
 
@@ -104,16 +107,26 @@ def skill_command(argv: list[str]) -> int:
     p = sub.add_parser("remove", help="from one agent, or from every agent that has either skill")
     p.add_argument("agent", nargs="?")
     p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    p = sub.add_parser("prune", help=f"remove skill folders installed under a retired name ({', '.join(LEGACY_SKILL_NAMES)}) "
+                                     "from every detected agent, one agent, or a skills directory")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    p.add_argument("--dry-run", action="store_true", help="report what would be removed, remove nothing")
     args = parser.parse_args(argv)
 
     if args.action == "list":
         print(agents.table(names))
         return 0
+    if args.action == "prune":
+        return _prune(args, "aip skill prune")
     try:
         if args.action == "install":
             sources = [(skill_dir(), AUTHORING_ENTRIES), (runtime_skill_dir(), ("SKILL.md",))]
-            for label, folder in agents.install(sources, args.agent, args.path):
+            written, removed = agents.install(sources, args.agent, args.path, tool="aip")
+            for label, folder in written:
                 print(f"installed {folder.name} -> {folder}  ({label})")
+            for folder in removed:
+                print(f"removed {folder}  (installed by an earlier aip, no longer one of its skills)")
             return 0
         removed = agents.remove(names, args.agent, args.path)
         for folder in removed:

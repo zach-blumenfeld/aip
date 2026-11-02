@@ -1,12 +1,12 @@
 [project]
-name = "aip"
-version = "0.6a1"
+name = "agent-instruction-protocol"
+version = "0.7.0"
 description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "aip-spec @ git+https://github.com/zach-blumenfeld/aip-spec.git@v0.6a1",
+    "aip-spec==0.7.0",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",
@@ -28,14 +28,19 @@ aip = "aip.client.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# The `aip-spec` dependency is a git URL until both packages are on PyPI.
-[tool.hatch.metadata]
-allow-direct-references = true
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
 
-# No `[tool.uv.sources]` override for `aip-spec`: uv applies a git-fetched project's sources
-# when installing it, so a `../aip-spec` path here broke `uv tool install git+...aip`. For
-# local work against a sibling checkout, layer it on per command:
-#   uv run --with-editable ../aip-spec pytest -q
+# `aip-spec` (the format: `packages/aip-spec/`) is a uv workspace member, so a checkout
+# resolves it from the tree and `uv tool install git+...aip` installs it from the repo's
+# subdirectory (spike F1, issue #17, uv 0.11.14). The pin is exact: both packages always
+# share a version. A `../aip-spec` path source is not an option: uv applies a git-fetched
+# project's sources when installing it, which broke `uv tool install`.
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+aip-spec = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/aip-spec/tests"]

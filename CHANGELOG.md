@@ -2,13 +2,30 @@
 
 All notable changes to AIP are documented in this file.
 
+Since `0.7.0` the runtime (the `agent-instruction-protocol` distribution, the `aip` command and
+package) and the format (`aip-spec`, in `packages/aip-spec/`) live in this repository and
+release together under one version, so there is one changelog. From `0.4a0` to `0.6a1` the
+format had its own repository and changelog, and the two histories are interleaved below with
+each section marked `(aip)` or `(aip-spec)`. Versions `0.3a3` and earlier predate the split and
+cover both.
+
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 Add notable changes here as you make them. On release, rename this section to the new version with a date and start a new `[Unreleased]` above it.
 
-## [0.6a1] — 2026-10-19
+## [0.7.0] — 2026-11-02
+
+The format and the runtime live in one repository and ship from PyPI under one version. Nothing about the format changes: `FORMAT_VERSION` stays `0.6a1`, and skills authored for 0.6a1 need no change. Upgrading is one command, the installer, which also removes the pre-0.7.0 install and the authoring skill's old folder (`docs/upgrading.md`).
+
+### Changed
+- **One repository.** The `aip-spec` repository is folded in as `packages/aip-spec/`, a uv workspace member, with its history (`git subtree add`). The authoring skill now lives at `skills/aip-compile/` (next to `skills/aip-runtime/`), the `billing-support` example at `examples/`, and the format's changelog is merged into this one. The runtime's distribution is renamed from `aip` to `agent-instruction-protocol` (the PyPI name `aip` collides with an existing project); the module and the `aip` command are unchanged, and `aip.__version__` reads the new name. `aip` depends on `aip-spec==<same version>`: both packages always share a version, and the git-URL dependency is gone. The format itself is unchanged: `FORMAT_VERSION` stays `0.6a1` and no authored skill needs editing.
+- **PyPI, and a one-command upgrade.** Both packages publish to PyPI, so `install.sh` installs `aip-spec` and `agent-instruction-protocol[server]` with `uv tool install` by version (`AIP_REF=<version>`, default the release the script ships with) instead of by git tag, removes the pre-0.7.0 `aip` tool first, runs `aip skill prune` after `aip skill install`, and ends by printing both versions, the agents it put the skills into, and what it removed. The README's install commands are the PyPI ones, the aip-spec repository links point into this repository, and `docs/upgrading.md` opens with the 0.6a1 to 0.7.0 step: re-run the installer; anyone who vendored a git URL swaps it for the PyPI name. Releases are cut by a manual GitHub Actions workflow (`.github/workflows/release.yml`): it refuses a version the two pyprojects disagree on or that is already tagged, builds all four distributions, tags, publishes `aip-spec` and then `agent-instruction-protocol` with Trusted Publishing, and creates the GitHub Release from this file's section; `target: testpypi` is the dry run. `AGENTS.md` carries the repo map, the versioning rules and the release steps for agents, which prepare releases and never publish.
+- **The authoring skill is `aip-compile`.** Its `name` was `aip`, the same word as the command and the runtime package; it is now `aip-compile`, next to `aip-runtime`, and `aip skill install`, `aip-spec skill install` and both `skill remove` actions write and remove `aip-compile/`. The skill's content and trigger text are unchanged.
+- **`skill install` keeps a record, and `skill prune` is new.** `aip skill install` and `aip-spec skill install` record what they wrote where (`~/.aip/skills.json`, or under `AIP_HOME`; one entry per skills directory and tool). On the next install each first removes the folders it recorded there that are no longer in its set, so a renamed, split or dropped skill needs no code, and only folders it put there are ever candidates; `skill remove` drops the entry. Folders written before the record existed are the job of `aip skill prune` (and `aip-spec skill prune`), a permanent, explicit, idempotent command: it removes a folder under a retired skill name (`LEGACY_SKILL_NAMES` in `aip_spec.resources`, today `aip`) from every detected agent, one agent, or `--path`, only when the folder's `SKILL.md` carries that name and a description naming the protocol; it leaves any other folder of the name alone with a warning, prints each removal, and `--dry-run` only reports. The installer runs `prune` after `install` for the 0.7 to 0.9 releases; after that, `docs/upgrading.md` says to run it when coming from before 0.7.0.
+
+## [0.6a1] — 2026-10-19 (aip)
 
 The pin on `aip-spec` moves to its `v0.6a1` release: format `0.6a1` is `0.6a0` plus the `type_mismatch` validator rule (a consumed key carries its producer's type), and a `0.6a0` skill still validates with one warning (`docs/upgrading.md`). `install.sh` installs the `v0.6a1` tags of both repos by default, and `aip --version` prints `aip 0.6a1 format 0.6a1`. The rest of this release is the Neo4j work below.
 
@@ -20,7 +37,14 @@ The pin on `aip-spec` moves to its `v0.6a1` release: format `0.6a1` is `0.6a0` p
 ### Changed
 - **The Neo4j projection carries the data flow.** `Input` nodes on `DECLARES_INPUT` edges (one per step and key, a declaration, not a value) are replaced by one `Data {name, type, description}` node per key per revision, which is what the 0.6a0 state contract allows: each key has exactly one producer and is never overwritten. `(:Step)-[:PRODUCES]->(:Data)-[:FEEDS]->(:Step)` is one hop of lineage, so a variable-length `PRODUCES|FEEDS` path follows a value from the client's start input (`(:Procedure)-[:SUPPLIES]->(:Data)`) to the end step; a decision produces its question names, and each `Question` also `YIELDS` the `Data` its answer lands under. The `requires` block is now on the `Procedure` node (`interpreter`, `interpreter_version`, `packages`, `tools`). The control-flow edges are renamed so no edge name talks about data: `INPUTS_TO` is `NEXT`, a router's `BRANCH {value}` is `THEN {value}`, and the step-run chain of a run, which was also `NEXT`, is `FOLLOWED_BY`, so the procedure's edges and a run's trace through them are told apart by name. Revisions and runs recorded before this keep the old edges; republishing a revision projects it anew. The console is unaffected: it draws the data flow from the catalog API's `inputs` and `outputs` rows.
 
-## [0.6a0] — 2026-10-18
+## [0.6a1] — 2026-10-19 (aip-spec)
+
+A validator release: format `0.6a1` is `0.6a0` with one more rule and a new heading on the runtime block. A `0.6a0` skill still validates, with a `runtime_block_outdated` warning that says to regenerate the block and bump `metadata.aip-version`; nothing else in the skill changes.
+
+### Added
+- **Type agreement (`type_mismatch`).** A key has one type everywhere it is declared: the validator now checks that every step's `inputs` entry carries the type its producer declares (a start input's declaration, a decision question's collapsed type: `noul` is `boolean`, `choice` is `string`, `score` is `integer`, or an execution/client_task step's `outputs` entry). Before, only the key's presence was checked, so a consumer could declare `ticket_id` as `string` while its script printed an integer and the mismatch surfaced only at run time.
+
+## [0.6a0] — 2026-10-18 (aip)
 
 Everything since `v0.4a0`: the client-server rebuild (milestones M1 to M7, per [`docs/server-design.md`](docs/server-design.md)), the split of the format into [`aip-spec`](https://github.com/zach-blumenfeld/aip-spec), the `0.5a1` line (never tagged here), and format `0.6a0`: the state contract and client-side execution ([`docs/client-execution.md`](docs/client-execution.md)). Format `0.6a0` is breaking; [`docs/upgrading.md`](docs/upgrading.md) lists the three edits a `0.5a1` skill needs, with `billing-support` as the example.
 
@@ -51,7 +75,39 @@ Everything since `v0.4a0`: the client-server rebuild (milestones M1 to M7, per [
 - Filesystem backend search is now weighted BM25 with Porter stemming (`aip.server.search`, no dependencies) instead of exact-token overlap, so "charged twice" and "refunds" find `billing-support`; the field weights and the exact-name boost are unchanged, and the Neo4j backend's full-text index now uses Lucene's `english` analyzer so both backends stem alike; `ensure_schema` drops and recreates an index that exists with any other analyzer, so an existing database migrates on the server's next start.
 - AIP format version bumped `0.4a0` → `0.5a0` (M4; `0.4a0` skills still validate, with a warning) → `0.5a1`.
 
-## [0.4a0] — 2026-09-28
+## [0.6a0] — 2026-10-18 (aip-spec)
+
+Breaking: `0.5a1` skills do not validate. Upgrading one takes three edits: declare `outputs` on each `execution` and `client_task` step, add a `requires` block when the skill has scripts, and replace the runtime block with `aip-spec runtime` (setting `metadata.aip-version` to `"0.6a0"`). The validator's `runtime_block_outdated` message for a `0.5a1` skill says exactly that, ahead of the `missing_outputs` and `missing_requires` errors that name the steps; the `aip` repo's `docs/upgrading.md` walks through `billing-support` as the example.
+
+- **Format `0.6a0` (breaking): declared outputs and the one-producer rule.** `execution` and `client_task` steps declare `outputs` (name, type, description, like `inputs`); a decision's outputs are its question names; routers and the end step add nothing, and the end step's `inputs` are the procedure's result. The validator adds three rules: every consumed key is produced on every path to its consumer or declared on the start step (`unproduced_input`); each key has exactly one producer and is never a start input (`duplicate_producer`); every `client_task` declares `outputs` (`missing_outputs`). The runtime block says the state only grows. `0.5a1` skills are recognised and rejected with `runtime_block_outdated` (now an error); `0.4a0` is no longer recognised. The `billing-support` example declares `escalate -> ticket_id, queue` and `reply -> reply`, and its script no longer echoes `message`.
+- Decision steps take `history` (default `false`): when set, the run's history goes to the decision model alongside the declared inputs. An execution script's stdin is described as `{state, assets, expects}` with `state` holding only the declared inputs; `billing-support`'s script reads `state`.
+- The `0.6a0` runtime block says each step sees only its declared inputs: a script's stdin is `{"state": <the step's inputs>, ...}`, a decision is answered from the step's inputs (and the run so far only with `history: true`), a client-task template renders from the step's inputs, and a failing script stops the run to be reported, not done by hand.
+- **`requires` and `command`.** A procedure with `execution` steps must declare `requires`: `interpreter` (`name`, optional minimum `version`), `packages` (pip names, optionally `name>=version`), and `tools` (executables on PATH); without it the validator reports `missing_requires`. An execution step may set `command`, the argument list that launches its script from the script's folder (default `python <script>`); its first item must be the interpreter or a declared tool (`undeclared_launcher`). The runtime block tells the agent to check `requires` before the first script and to honour `command`. `billing-support` requires python 3.10.
+
+## [0.5a1] — 2026-10-06 (aip-spec)
+
+The first tagged release of the spec as its own repo. It carries the `0.4a0` and `0.5a0` format work below, which were cut in the `aip` repo without a release section.
+
+### Added
+- **`aip-spec`, the format as its own distribution.** The spec moved out of the `aip` repo into this one: the pydantic models, the validator, the runtime block, the `aip` authoring skill, and the `billing-support` example. The package is `aip_spec`, its version is the format version, and it needs only pydantic and pyyaml; `aip` now depends on it. `SPEC_URL` and the schema `$id` point at this repo.
+- The `aip-spec` CLI: `validate <folder>` (the output contract below), `schema [--write PATH]`, `runtime`, `skill install [agent] [--path DIR]` / `skill list` / `skill remove`, `example <name> --out DIR`, and `--version`. `scripts/validate.py` is gone: the CLI is the one validator, and the installer puts it on PATH. `aip_spec.skill_dir()` and `aip_spec.example_dir(name)` return the authoring skill and an example as bundled in the wheel (hatchling `force-include` of the repo-root files), falling back to the checkout.
+- `install.sh`: installs uv if missing, `uv tool install`s this package at its tag, and runs `aip-spec skill install`, non-fatal when no agent is detected. Agent detection (`aip_spec.agents`) covers Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, and Junie, and is shared with `aip skill install`.
+- `SKILL.md`: the validator line is `aip-spec validate ./<skill-name>`; the functional-test step runs the skill with the `aip-runtime` skill when installed and otherwise by executing the procedure per the runtime block, naming no `aip` command; `compatibility` names `uv`.
+
+### Changed
+- **Format `0.5a1`: the runtime block addresses the executing agent, not an AIP client.** The "Running" section (`aip run`, `aip search`, the pause and resume loop) is gone, and the Client and Server roles collapse into "You": the agent supplies each step's input, runs its script, answers its questions, performs its task, follows its router, and has the final say. A skill compiled to the spec stands on its own as a structure any agent can execute; the client-side story lives in the `aip-runtime` skill shipped with the `aip` package. The authoring skill's guidance says "the agent" or "free-form reasoning" where it said "the client", and names no `aip` command outside the validator lines and the functional-test step. `0.5a0` skills do not get a legacy entry: their block no longer validates.
+- **One format, defined in code (`0.4a0`).** AIP no longer has schema families. The procedure format is defined by pydantic models in `src/aip_spec/models.py`; `assets/procedure.schema.json` is generated from them (`aip-spec schema`) and kept in sync by a test. Steps are typed by `kind`: `decision` (SystemOne questions with per-question review `thresholds`), `execution` (a script under `scripts/` with eager `assets`), `client_task` (a template under `assets/` with lazy `references`), `router` (server-side branching on a client-chosen value via `branch_on` and `branches`), and `end` (the final state shape). The first step is the start; edges are `inputs_to` by step name. Every runnable step declares `inputs` in the AIP type vocabulary, which the server enforces at runtime. Dropped `depends_on`, `parallel`, `one_of`, per-step `outputs`, and the top-level `scope_and_approval`, `modes`, `search_shortcuts`, `integrations`, and `scenarios`. Carried over: `purpose`, `trigger_when`, `do_not_use_when`, `steps`, `anti_patterns`.
+- **Frontmatter** collapses `metadata.aip.spec` and `metadata.aip.schemaId` into one string key, `metadata.aip-version`, making `metadata` a plain string→string map per the Agent Skills spec.
+- **`source/`** stays required for the material the skill was compiled from; it no longer bundles a schema copy.
+- **Portable semantics.** The body begins with the AIP runtime block, verbatim: what AIP is, the client and server roles, the state, and what each step kind does at run time. Every skill carries it so an agent can run the skill with no aip tooling present; it loads with the body, not on demand. The canonical text ships in the package, `aip-spec runtime` prints it, and the validator rejects a missing or edited block.
+- **Validation** moved into the package and is exposed as `aip-spec validate`. Graph checks run after the models accept the body: unique step names, runnable start, exactly one end, every edge resolves, every step reachable from the start and able to reach the end, unique input names, thresholds name real questions, and every referenced asset, reference, and script exists on disk. Routers branch on collapsed answers of any type: `true`/`false` for a noul, the label for a choice, the level number for a score, matched against the YAML's string keys; the validator checks a router fed by a decision only branches on values that question can produce (`unknown_branch_value`).
+- Format `0.5a0`: the runtime block's Running paragraph gains one sentence for the server case; skills still carrying the `0.4a0` block or `metadata.aip-version: "0.4a0"` validate with a single `runtime_block_outdated` warning. AIP format version bumped `0.3a3` → `0.4a0` → `0.5a0`.
+- `examples/billing-support`: a complete procedure skill exercising every step kind. It is the validator fixture here and runs end to end through the loader and runtime in the `aip` repo's tests.
+
+### Removed
+- `assets/base.schema.json`, `assets/aip-schemas/`, `scripts/validate_schema.py`, and the schema-family conventions (`$id` matching, bundled schema in `source/`, `aip.tag`). With one format there is nothing for them to check.
+
+## [0.4a0] — 2026-09-28 (aip)
 
 The last folder-only format: one format defined in code, the runtime block, and the `aip` runtime package with its local runner.
 

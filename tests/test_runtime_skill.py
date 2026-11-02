@@ -91,15 +91,27 @@ class TestRuntimeSkill(unittest.TestCase):
             self.assertEqual(list(check_frontmatter(frontmatter, written.parent)), [])
 
     def test_skill_install_writes_both_skills(self):
-        """`aip skill install --path DIR` writes `aip/` (from aip-spec) and `aip-runtime/` (from here),
-        each a valid Agent Skill folder; `remove` takes both away."""
+        """`aip skill install --path DIR` writes `aip-compile/` (from aip-spec) and `aip-runtime/` (from
+        here), each a valid Agent Skill folder, and records them; `aip skill prune` removes the
+        authoring skill's pre-0.7.0 folder `aip/`; `remove` takes the skills away."""
+        from aip_spec.agents import read_record
+
         with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "aip"
+            legacy.mkdir()
+            (legacy / "SKILL.md").write_text("---\nname: aip\ndescription: Create skills as Agent Instruction Protocol (AIP)\n---\nbody\n")
             out = io.StringIO()
             with redirect_stdout(out):
                 code = main(["skill", "install", "--path", tmp])
             self.assertEqual(code, 0, out.getvalue())
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip", "aip-runtime"])
-            for name, expected in (("aip", (skill_dir() / "SKILL.md").read_text()), ("aip-runtime", SKILL_MD.read_text())):
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip", "aip-compile", "aip-runtime"], "install leaves the old folder to prune")
+            self.assertEqual(read_record(), {tmp: {"aip": ["aip-compile", "aip-runtime"]}})
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["skill", "prune", "--path", tmp]), 0)
+            self.assertIn(f"removed {legacy}", out.getvalue())
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["aip-compile", "aip-runtime"])
+            for name, expected in (("aip-compile", (skill_dir() / "SKILL.md").read_text()), ("aip-runtime", SKILL_MD.read_text())):
                 folder = Path(tmp) / name
                 self.assertEqual((folder / "SKILL.md").read_text(), expected)
                 frontmatter = yaml.safe_load(FRONTMATTER.match((folder / "SKILL.md").read_text()).group(1))
@@ -107,12 +119,13 @@ class TestRuntimeSkill(unittest.TestCase):
                 self.assertEqual(issues, [], [i.to_record() for i in issues])
                 self.assertEqual(frontmatter["name"], name)
                 self.assertEqual(frontmatter["metadata"]["aip-version"], FORMAT_VERSION)
-            self.assertTrue((Path(tmp) / "aip" / "references").is_dir())
-            self.assertTrue((Path(tmp) / "aip" / "assets" / "procedure.schema.json").is_file())
+            self.assertTrue((Path(tmp) / "aip-compile" / "references").is_dir())
+            self.assertTrue((Path(tmp) / "aip-compile" / "assets" / "procedure.schema.json").is_file())
             self.assertEqual(sorted(p.name for p in (Path(tmp) / "aip-runtime").iterdir()), ["SKILL.md"])
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(main(["skill", "install", "--path", tmp]), 0, "idempotent")
                 self.assertEqual(main(["skill", "remove", "--path", tmp]), 0)
+            self.assertEqual(read_record(), {}, "remove drops the record entry")
             self.assertEqual(list(Path(tmp).iterdir()), [])
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(main(["skill", "list"]), 0)

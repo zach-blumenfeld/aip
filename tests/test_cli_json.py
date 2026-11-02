@@ -367,6 +367,6 @@ class VersionLine(unittest.TestCase):
         self.assertEqual(line.count("\n"), 1)
         got = VERSION.match(line.rstrip("\n"))
         self.assertIsNotNone(got, line)
-        self.assertEqual(got.group("version"), version("aip"))
+        self.assertEqual(got.group("version"), version("agent-instruction-protocol"))
         self.assertEqual(got.group("format"), FORMAT_VERSION)
         self.assertEqual(sample, line.rstrip("\n"))         # the doc shows this branch's real line

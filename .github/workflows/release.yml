@@ -1,0 +1,222 @@
+name: Release to PyPI
+
+# Manual trigger from the Actions tab, after the release PR is merged. Reads the version from
+# both pyprojects (the release PR aligned them), refuses if they differ or the tag exists,
+# builds all four distributions, pushes the tag, publishes `aip-spec` and then
+# `agent-instruction-protocol` with PyPI Trusted Publishing, and cuts a GitHub Release whose
+# notes are the `## [X.Y.Z]` section of CHANGELOG.md.
+#
+# Two publish jobs because PyPI allows one pending publisher per (repo, workflow, environment):
+# `aip-spec` publishes from the `release-spec` environment and `agent-instruction-protocol`
+# from `release`. The spec goes first so the runtime's exact pin (`aip-spec==X.Y.Z`) resolves
+# the moment the runtime lands. The GitHub environments and the pending publishers are set up
+# by hand once (issue #17, "Before starting").
+#
+# `target: testpypi` is the dry run for a new or changed workflow: same checks, same build,
+# both uploads go to test.pypi.org (its own account and its own two pending publishers under
+# the same names), no tag is pushed and no GitHub Release is created. TestPyPI refuses a
+# filename it has seen before, so one dry run per version; to repeat, suffix the version
+# `.dev1` in both pyprojects on a scratch branch.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish. testpypi is the dry run: no tag, no GitHub Release."
+        type: choice
+        options: [pypi, testpypi]
+        default: pypi
+
+jobs:
+  build:
+    name: Check, build, tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # push the tag
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Resolve the version from both pyprojects
+        id: v
+        # The two packages always share a version and the runtime pins the spec exactly, so
+        # all three numbers must agree before anything is built.
+        run: |
+          uv run --no-project python - <<'PY' >> "$GITHUB_OUTPUT"
+          import re, sys, tomllib, pathlib
+          runtime = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
+          spec = tomllib.loads(pathlib.Path("packages/aip-spec/pyproject.toml").read_text())["project"]
+          pin = next((d for d in runtime["dependencies"] if re.match(r"aip-spec\s*==", d)), "")
+          pinned = pin.split("==", 1)[1].strip() if pin else None
+          if not (runtime["version"] == spec["version"] == pinned):
+              print(f"::error::versions differ: pyproject.toml {runtime['version']}, "
+                    f"packages/aip-spec/pyproject.toml {spec['version']}, pin {pin or '(none)'}. "
+                    "Align all three in the release PR.", file=sys.stderr)
+              sys.exit(1)
+          print(f"version={runtime['version']}")
+          print(f"tag=v{runtime['version']}")
+          PY
+          echo "version $(grep '^version=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
+
+      - name: Refuse to release a version that already has a tag
+        # Forces a version bump before re-running. Without this, a re-run after a successful
+        # tag-and-publish would try to double-publish. Runs for testpypi too: a dry run of a
+        # version that has shipped is a mistake.
+        run: |
+          if git ls-remote --tags origin "refs/tags/${{ steps.v.outputs.tag }}" | grep -q .; then
+            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump both pyprojects before re-running."
+            exit 1
+          fi
+
+      - name: Build all four distributions
+        # Before tagging, so a build failure leaves the repo clean. `--all-packages` builds
+        # every workspace member: a wheel and an sdist each for agent-instruction-protocol
+        # and aip-spec.
+        run: |
+          rm -rf dist/
+          uv build --all-packages
+          ls -1 dist/
+          count=$(find dist/ -type f \( -name '*.whl' -o -name '*.tar.gz' \) | wc -l)   # uv also writes dist/.gitignore
+          if [ "$count" -ne 4 ]; then
+            echo "::error::expected 4 files in dist/, found $count"
+            exit 1
+          fi
+          for d in agent_instruction_protocol aip_spec; do
+            test -f dist/${d}-${{ steps.v.outputs.version }}-py3-none-any.whl
+            test -f dist/${d}-${{ steps.v.outputs.version }}.tar.gz
+          done
+
+      - name: Extract release notes from CHANGELOG.md
+        # Pulls the section under `## [<version>] ...` up to (but not including) the next
+        # `## [...` heading. Empty file is fine; the GitHub Release just won't have a body.
+        run: |
+          awk -v ver="${{ steps.v.outputs.version }}" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          echo "----- release-notes.md -----"
+          cat release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::CHANGELOG.md has no '## [${{ steps.v.outputs.version }}]' section; the GitHub Release will have no notes."
+          fi
+
+      - name: Upload the distributions and the notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.v.outputs.version }}
+          path: |
+            dist/
+            release-notes.md
+          if-no-files-found: error
+
+      - name: Create and push the tag
+        if: inputs.target == 'pypi'
+        # Before the first publish, as in the original single-package workflow: a publish
+        # failure leaves a tag with no release behind it, which is visible and recoverable.
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.v.outputs.tag }}" -m "Release ${{ steps.v.outputs.tag }}"
+          git push origin "${{ steps.v.outputs.tag }}"
+
+  publish-spec:
+    name: Publish aip-spec
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: release-spec
+      url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/p/aip-spec' || 'https://pypi.org/p/aip-spec' }}
+    permissions:
+      contents: read
+      id-token: write    # PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Keep only the aip-spec files
+        run: |
+          mkdir -p upload
+          mv dist/aip_spec-*.whl dist/aip_spec-*.tar.gz upload/
+          ls -1 upload/
+
+      - name: Publish aip-spec
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: upload/
+          repository-url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
+
+  publish-runtime:
+    name: Publish agent-instruction-protocol
+    needs: [build, publish-spec]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/p/agent-instruction-protocol' || 'https://pypi.org/p/agent-instruction-protocol' }}
+    permissions:
+      contents: read
+      id-token: write    # PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Keep only the agent-instruction-protocol files
+        run: |
+          mkdir -p upload
+          mv dist/agent_instruction_protocol-*.whl dist/agent_instruction_protocol-*.tar.gz upload/
+          ls -1 upload/
+
+      - name: Publish agent-instruction-protocol
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: upload/
+          repository-url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
+
+      - name: How to verify the dry run
+        if: inputs.target == 'testpypi'
+        # TestPyPI holds only these two packages; the dependencies come from PyPI.
+        run: |
+          {
+            echo "## Dry run published to TestPyPI"
+            echo
+            echo "Verify in a fresh venv:"
+            echo
+            echo '```'
+            echo "pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ agent-instruction-protocol==${{ needs.build.outputs.version }}"
+            echo "aip --version"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: GitHub Release
+    if: inputs.target == 'pypi'
+    needs: [build, publish-runtime]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create the GitHub Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Create GitHub Release
+        # After both publishes, so a publish failure doesn't leave behind a GitHub Release
+        # pointing at nothing on PyPI. The tag already exists; the action attaches to it.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: ${{ needs.build.outputs.tag }}
+          body_path: release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
