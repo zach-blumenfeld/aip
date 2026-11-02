@@ -149,7 +149,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
+          # No registry-url here: it would write an `_authToken=${NODE_AUTH_TOKEN}` line to .npmrc, and
+          # an empty token makes npm skip the OIDC exchange. The token step below writes .npmrc only
+          # when there is a token.
 
       - name: Use an npm that can publish with OIDC
         # Trusted publishing needs npm 11.5.1 or newer; the one bundled with Node may be older.
@@ -168,15 +170,18 @@ jobs:
 
       - name: Publish
         if: inputs.target == 'npm'
-        # With `NPM_TOKEN` set, that token authenticates (setup-node wrote the .npmrc that
-        # reads NODE_AUTH_TOKEN). Without it, npm exchanges the job's OIDC token with the
-        # registry: trusted publishing, which needs the package page to name this workflow and
-        # environment. `--provenance` attaches the Sigstore attestation either way.
+        # With `NPM_TOKEN` set, that token authenticates. Without it, npm exchanges the job's
+        # OIDC token with the registry: trusted publishing, which needs the package page to name
+        # this workflow and environment as its trusted publisher *with `npm publish` among its
+        # allowed actions* (a publisher created after 2026-09 allows only `npm stage publish`
+        # until that box is ticked; the registry then answers "OIDC permission denied for this
+        # action"). `--provenance` attaches the Sigstore attestation either way.
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -n "$NODE_AUTH_TOKEN" ]; then
+          if [ -n "$NPM_TOKEN" ]; then
             echo "authenticating with the NPM_TOKEN secret"
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           else
             echo "no NPM_TOKEN secret: using npm trusted publishing (OIDC)"
           fi
