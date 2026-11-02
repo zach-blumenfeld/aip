@@ -13,7 +13,7 @@ import { utf8, type ZipFile } from "../src/zip";
 import { AIP_REPO } from "./aip";
 import { aipSpec } from "./aip-spec";
 
-// The designs docs/studio.md walks through (examples/studio/) stay true to what the doc says: expense-review is
+// The designs the tutorial walks through (examples/studio/README.md) stay true to what it says: expense-review is
 // ready for an agent and can be completed so every check passes; meeting-notes has the gaps the doc lists.
 
 const EXAMPLES = path.resolve(import.meta.dirname, "..", "examples", "studio");
