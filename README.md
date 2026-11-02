@@ -140,13 +140,10 @@ Two Python packages live in this repository as a uv workspace, and the console i
 ## Quick Start
 Minimal prerequisites. 
 
-**1. Install.** 
+**1. Install or upgrade.** One command does both; re-run it any time.
 ```bash
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 ```
-> [!NOTE]
-> Upgrading from 0.6 or earlier? Same command. It swaps the packages to PyPI and replaces the old `aip` skill with `aip-compile`; nothing you compiled needs changing. By-hand steps are in [`docs/upgrading.md`](docs/upgrading.md).
-
 Installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with `aip-spec`, and both Agent Skills, `aip-compile` for authoring and `aip-runtime` for running, into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). Open a new terminal afterwards if `aip` is not found.
 
 **2. Run the example locally.** The bundled `billing-support` skill triages a customer message. With no decision model configured you answer its questions on the terminal; the run then either runs its escalation script or pauses with a task for you.
@@ -217,7 +214,7 @@ Extended example with Neo4j backend for deeper audit and governance.
 - A [TypeSafe](https://typesafe.ai) API key, set on the client. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model.
 - [Claude Code](https://claude.com/claude-code) for steps 5 and 6. Any agent `aip skill list` names works the same way.
 
-### 1. Install
+### 1. Install or upgrade
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
@@ -230,7 +227,7 @@ aip --help
 aip skill list          # which agents got the skills
 ```
 
-If `aip` is not found, open a new terminal. uv installs commands into `~/.local/bin`. Upgrading from 0.6 or earlier? The same command does it; by-hand steps are in [`docs/upgrading.md`](docs/upgrading.md).
+If `aip` is not found, open a new terminal. uv installs commands into `~/.local/bin`.
 
 ### 2. Start a server on Neo4j, with the example published
 
