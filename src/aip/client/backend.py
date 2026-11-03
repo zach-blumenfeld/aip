@@ -17,9 +17,10 @@ folder or the revision's cached `scripts/` and `assets/`, with the run's working
 
 And either way this process resolves the decisions (`aip.client.resolver`): the loop stops at
 each decision, and with a decision model configured on this client the answers go back with
-their attribution, or the run pauses for review, a pause only the client holds (the loop still
-waits at the decision); the agent's answer to the review, or to a decision with no model,
-goes back the same way.
+their attribution. With no model, a decision that allows `fallback` pauses for the agent, whose
+answer goes back the same way with a manual attribution; one that does not stops the run with
+`no_decision_model` (the loop still waits at the decision) until a model is configured and the
+run is resumed.
 """
 
 import time
@@ -96,10 +97,9 @@ class LocalBackend:
         return self._step(self._perform(advance), run_id or new_run_id())
 
     def submit(self, run: Any, answer: JSON | None) -> Step:
-        from aip.client.resolver import reviewed
+        from aip.client.resolver import no_decision_model
         from aip.model import engine
-        from aip.model.engine import Advance, Cursor, error_object
-        from aip.model.types import OutputValidationError
+        from aip.model.engine import Advance, Cursor
 
         if getattr(run, "workdir", None):
             self.executor.workdir = Path(run.workdir)
@@ -109,23 +109,20 @@ class LocalBackend:
             advance = engine.submit(self.procedure, cursor, self.executor.perform(run.pause), scripts=False)
         elif kind == "decision" and answer is None and self.resolver is not None:
             advance = Advance(cursor)                       # resolve it now
-        elif kind == "review":
-            try:
-                decided = reviewed(run.pause, answer)
-            except OutputValidationError as exc:
-                return Step(error_object(exc), kept=True, run_id=run.run_id, exc=exc)
-            cursor.pause = {"kind": "decision", "step": run.pause["step"]}
-            advance = engine.submit(self.procedure, cursor, decided["answer"], scripts=False,
-                                    attribution=decided["attribution"])
+        elif kind == "decision" and self.resolver is None and not run.pause.get("fallback"):
+            return Step(no_decision_model(run.pause), kept=True, run_id=run.run_id)   # the pause stands
         else:
             advance = engine.submit(self.procedure, cursor, answer, scripts=False)
         return self._step(self._perform(advance), run.run_id, created=run.created)
 
     def _perform(self, advance: Any) -> Any:
         """Run each script the loop stops at, here, and resolve each decision with the decision
-        model, carrying the result back, until the run stops for something else (a review is
-        one); the lines of every call, in order. A decision model that fails leaves the run
-        waiting at the decision: `resume` asks again."""
+        model, carrying the result back, until the run stops for something else; the lines of
+        every call, in order. A decision model that fails leaves the run waiting at the decision:
+        `resume` asks again. With no model, a decision that allows `fallback` is the stop (the
+        agent answers it); one that does not is a `no_decision_model` error, the run waiting at
+        the decision for a model."""
+        from aip.client.resolver import no_decision_model
         from aip.model import engine
         from aip.model.engine import Advance, error_object
 
@@ -140,11 +137,11 @@ class LocalBackend:
                 except Exception as exc:
                     advance = Advance(advance.cursor, error={**error_object(exc), "step": pause["step"]}, exc=exc)
                     break
-                if "answer" not in decided:
-                    advance.cursor.pause = decided          # the review: the loop still waits at the decision
-                    break
                 advance = engine.submit(self.procedure, advance.cursor, decided["answer"], scripts=False,
                                         attribution=decided["attribution"])
+            elif pause["kind"] == "decision" and not pause.get("fallback"):
+                advance = Advance(advance.cursor, lines=advance.lines, error=no_decision_model(pause))
+                break
             else:
                 break
             lines += advance.lines
@@ -179,8 +176,10 @@ class HttpBackend:
     `scripts/` and `assets/` into its cache (once), runs the script with `workdir` as the run's
     working directory, and posts the report, until the server replies with something else.
     When it replies with a decision and this client has a decision model, the client asks it
-    and posts the answers with their attribution, or keeps a review pause in the run file
-    until the agent answers it. `client` is an injected decision-model client (tests).
+    and posts the answers with their attribution; with none, a decision that allows `fallback`
+    is the pause the agent answers, and one that does not is a `no_decision_model` error, the
+    run waiting on the server until a model is configured here. `client` is an injected
+    decision-model client (tests).
     """
 
     def __init__(self, server: Any, token: str | None = None, name: str = "", *, session: Any = None,
@@ -204,9 +203,7 @@ class HttpBackend:
         return self._call("/runs", body, None)
 
     def submit(self, run: Any, answer: JSON | None) -> Step:
-        from aip.client.resolver import manual, reviewed
-        from aip.model.engine import error_object
-        from aip.model.types import OutputValidationError
+        from aip.client.resolver import manual, no_decision_model
 
         if getattr(run, "workdir", None):
             self.workdir = Path(run.workdir)
@@ -217,13 +214,9 @@ class HttpBackend:
         if kind == "decision" and answer is None and self.resolver is not None:
             return self._decide(run, [])
         attribution = None
-        if kind == "review":
-            try:
-                decided = reviewed(run.pause, answer)
-            except OutputValidationError as exc:
-                return Step(error_object(exc), kept=True, run_id=run.run_id, exc=exc)
-            answer, attribution = decided["answer"], decided["attribution"]
-        elif kind == "decision":
+        if kind == "decision":
+            if self.resolver is None and not run.pause.get("fallback"):
+                return Step(no_decision_model(run.pause), kept=True, run_id=run.run_id)   # the pause stands
             attribution = manual()
         body = {"step": run.pause.get("step"), "version": run.version,
                 **({"answer": answer} if answer is not None else {}),
@@ -254,19 +247,14 @@ class HttpBackend:
         return self._call(f"/runs/{run.run_id}/result", body, run, lines)
 
     def _decide(self, run: Any, lines: List[JSON]) -> Step:
-        """Resolve the decision the run waits at with the decision model and post the answers, or
-        stop at a review, which only this client holds. If the model fails the run waits at the
-        decision (an error, resumable: `resume` asks again)."""
+        """Resolve the decision the run waits at with the decision model and post the answers. If
+        the model fails the run waits at the decision (an error, resumable: `resume` asks again)."""
         from aip.client.runner import error_object
 
         try:
             decided = self.resolver.resolve(run.pause)
         except Exception as exc:
             return Step({**error_object(exc), "step": run.pause["step"]}, lines, run, run_id=run.run_id, exc=exc)
-        if "answer" not in decided:
-            run.pause = decided
-            return Step({"paused": "review", **{k: v for k, v in decided.items() if k != "kind"}}, lines, run,
-                        run_id=run.run_id)
         body = {"step": run.pause["step"], "version": run.version, "answer": decided["answer"],
                 "attribution": decided["attribution"]}
         return self._call(f"/runs/{run.run_id}/result", body, run, lines)
@@ -276,6 +264,7 @@ class HttpBackend:
         not fit, a 409 a run that moved on since the run file was written: either way nothing
         changed on the server, so the run file stays as it is. An execution step is run here and
         reported, and the lines of every call are kept, in order."""
+        from aip.client.resolver import no_decision_model
         from aip.client.runner import RunFile, error_object
         from aip.client.server import ServerError
 
@@ -302,5 +291,7 @@ class HttpBackend:
         if pause["kind"] == "decision":
             if self.resolver is not None:
                 return self._decide(saved, lines)
+            if not pause.get("fallback"):                  # the run waits on the server for a model
+                return Step(no_decision_model(pause), lines, saved, run_id=meta["run_id"])
             pause.pop("history", None)                     # for a resolver; the agent answers without it
         return Step(outcome, lines, saved, run_id=meta["run_id"])

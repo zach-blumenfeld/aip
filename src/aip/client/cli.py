@@ -17,13 +17,14 @@ from pathlib import Path
 
 
 def _emit(issues) -> tuple[int, int]:
+    """Print every issue to stderr; count the errors and the rest (warnings and infos never fail)."""
     errors = warnings = 0
     for issue in issues:
         print(json.dumps(issue.to_record()), file=sys.stderr)
-        if issue.severity == "warning":
-            warnings += 1
-        else:
+        if issue.severity == "error":
             errors += 1
+        else:
+            warnings += 1
     return errors, warnings
 
 
@@ -34,7 +35,7 @@ def validate_command(argv: list[str]) -> int:
 
     result = _client().validate(args.skill_dir)
     errors, warnings = _emit(result.issues)
-    suffix = f" ({warnings} warning(s) — see stderr)" if warnings else ""
+    suffix = f" ({warnings} warning(s) or info(s) — see stderr)" if warnings else ""
     if result.valid:
         print(f"VALID: {args.skill_dir} (name: {result.name}){suffix}")
         return 0

@@ -40,7 +40,8 @@ from aip.model.types import (
 )
 
 # The error kinds of the error object (`docs/cli-json.md`); anything else is reported as `server`.
-ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "server")
+ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "no_decision_model",
+               "server")
 
 PAUSED = ("client_task", "decision")
 

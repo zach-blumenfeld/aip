@@ -72,6 +72,7 @@ def test_calm_branch_end_to_end(home, tmp_path):
     assert isinstance(paused, aip.Paused)
     assert (paused.kind, paused.step, paused.state) == ("decision", "triage", {"message": CALM})
     assert set(paused.questions) == {"billing", "tone"}
+    assert (paused.confidence, paused.fallback) == ([], True)
     assert paused.run_file == aip.Client.run_file(paused.run_id)          # under AIP_HOME, by id
 
     task = client.resume(paused, {"billing": True, "tone": "calm"})
@@ -85,9 +86,9 @@ def test_calm_branch_end_to_end(home, tmp_path):
                               "run_file": str(paused.run_file)}
     record = client.run_record(done.run_id)
     assert record.status == "done"
-    assert [e["step"] for e in record.history] == ["triage", "by-tone", "reply", "end"]
-    assert record.history[0]["attribution"]["resolver"] == "manual"
-    assert record.history[2]["kind"] == "client_task"
+    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "reply", "end"]
+    assert record.history[1]["attribution"]["resolver"] == "manual"
+    assert record.history[3]["kind"] == "client_task"
 
 
 def test_angry_branch_end_to_end_with_on_pause_and_progress(home, tmp_path):
@@ -168,7 +169,7 @@ def test_catalog_runs_and_governance_are_typed(served, tmp_path):
     [entry] = served.list()
     assert entry.resolves == hit.revision
     info = served.info("billing-support")
-    assert (info.name, info.revision, info.start_step, info.inputs) == ("billing-support", hit.revision, "triage",
+    assert (info.name, info.revision, info.start_step, info.inputs) == ("billing-support", hit.revision, "start",
                                                                        {"message": "string"})
     assert info.example_input == {"message": "<string>"} and "START INPUT" in info.summary()
     local = aip.Client.over(None).info(EXAMPLE)

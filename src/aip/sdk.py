@@ -87,8 +87,10 @@ class RunError(AipError):
 
 @dataclass(frozen=True)
 class Paused:
-    """The run waits for an answer: `kind` is `decision`, `client_task` or `review`, and `state`
-    is the paused step's declared inputs. `to_json()` is the CLI's paused object."""
+    """The run waits for an answer: `kind` is `decision` or `client_task`, and `state` is the
+    paused step's declared inputs. A decision pause also says which questions emit a
+    `confidence` key and that the step allows a manual answer (`fallback`). `to_json()` is the
+    CLI's paused object."""
     kind: str
     step: str
     state: JSON
@@ -100,8 +102,8 @@ class Paused:
     references = property(lambda self: self.body.get("references"))
     answer_with = property(lambda self: self.body.get("answer_with"))
     questions = property(lambda self: self.body.get("questions"))
-    proposed_answers = property(lambda self: self.body.get("proposed_answers"))
-    review = property(lambda self: self.body.get("review"))
+    confidence = property(lambda self: self.body.get("confidence"))
+    fallback = property(lambda self: self.body.get("fallback"))
 
     def to_json(self) -> JSON:
         return {**self.body, "run_id": self.run_id, "run_file": str(self.run_file)}
@@ -155,18 +157,23 @@ class Entry:
 
 @dataclass(frozen=True)
 class Validation:
-    """The validator's verdict on a folder. `issues` are `aip_spec.Issue`s, errors and warnings."""
+    """The validator's verdict on a folder. `issues` are `aip_spec.Issue`s: errors, warnings and
+    infos (`duplicate_producer`, `declared_confidence`); only errors make it invalid."""
     path: Path
     name: str | None
     issues: List[Any]
 
     @property
     def errors(self) -> List[Any]:
-        return [i for i in self.issues if i.severity != "warning"]
+        return [i for i in self.issues if i.severity == "error"]
 
     @property
     def warnings(self) -> List[Any]:
         return [i for i in self.issues if i.severity == "warning"]
+
+    @property
+    def infos(self) -> List[Any]:
+        return [i for i in self.issues if i.severity == "info"]
 
     @property
     def valid(self) -> bool:
@@ -592,7 +599,7 @@ class Client:
     def governance(self, query: str | None = None, *, name: str | None = None, window: int | None = None,
                    limit: int | None = None, repeats: int | None = None) -> List[Any]:
         """With no query, the queries the server answers (`GovernanceQuery`); with one, its rows
-        (`repeats` is the threshold of `repeated-cycles`)."""
+        (`repeats` is the minimum count for `repeated-cycles`)."""
         server = self._server()
         if query is None:
             return [_record(GovernanceQuery, q) for q in server.get("/governance")]
@@ -665,16 +672,20 @@ def describe_skill(loaded) -> str:
         if step.kind == "router":
             branches = ", ".join(f"{v} -> {t}" for v, t in step.branches.items())
             lines.append(f"  {step.name}  [router on `{step.branch_on}`]  {branches}")
+            if step.confidence is not None:
+                lines.append(f"      confidence: {step.confidence.key} below {step.confidence.below} -> {step.confidence.to}")
         elif step.kind == "end":
             lines.append(f"  {step.name}  [end]")
+        elif step.kind == "decision":
+            suffix = "  (fallback)" if step.fallback else ""
+            lines.append(f"  {step.name}  [decision]  -> {step.inputs_to}{suffix}")
         else:
             lines.append(f"  {step.name}  [{step.kind}]  -> {step.inputs_to}")
         if getattr(step, "description", None):
             lines.append(f"      {step.description}")
         if step.kind == "decision":
             for name, q in step.questions.items():
-                threshold = step.thresholds.get(name)
-                suffix = f"  (threshold {threshold})" if threshold is not None else ""
+                suffix = "  (confidence)" if name in step.confidence else ""
                 lines.append(f"      ? {name} [{q.type}]{suffix}: {q.instructions}")
         if step.kind == "execution":
             lines.append(f"      script: {step.script}" + (f"  assets: {', '.join(step.assets)}" if step.assets else ""))
