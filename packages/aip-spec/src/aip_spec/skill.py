@@ -96,8 +96,11 @@ def parse_skill_md(skill_md: Path) -> tuple[SkillDoc | None, list[Issue]]:
 
 # What a skill in each recognised earlier format must change, said as an upgrade, not a fault.
 UPGRADES = {
-    "0.5a1": "add outputs to each execution and client_task step, a requires block, and regenerate the runtime block",
-    "0.6a0": "regenerate the runtime block (only its heading changed) and bump the version; nothing else changes",
+    "0.5a1": "run `aip upgrade <folder>` (or `aip-spec upgrade <folder>`) for the mechanical part (the `start` step, "
+             "no `thresholds`, `fallback: true` on each decision, the runtime block), then add outputs to each execution "
+             "and client_task step and a requires block by hand",
+    "0.6a0": "run `aip upgrade <folder>` (or `aip-spec upgrade <folder>`): it adds the `start` step, drops `thresholds`, "
+             "sets `fallback: true` on each decision, and replaces the runtime block",
     "0.6a1": "run `aip upgrade <folder>` (or `aip-spec upgrade <folder>`): it adds the `start` step, drops `thresholds`, "
              "sets `fallback: true` on each decision, and replaces the runtime block",
 }

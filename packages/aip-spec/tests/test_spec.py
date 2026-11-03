@@ -673,9 +673,8 @@ class SkillFolder(unittest.TestCase):
             loaded, issues = validate_skill(skill)
             self.assertIsNone(loaded)
             self.assertEqual([(i.kind, i.severity) for i in issues], [("runtime_block_outdated", "error")])
-            self.assertTrue(issues[0].message.startswith(
-                "0.5a1 skill: add outputs to each execution and client_task step, a requires block, and "
-                "regenerate the runtime block"), issues[0].message)
+            self.assertTrue(issues[0].message.startswith("0.5a1 skill: run `aip upgrade <folder>`"), issues[0].message)
+            self.assertIn("then add outputs to each execution and client_task step and a requires block by hand", issues[0].message)
             with mock.patch("sys.stdout", new=io.StringIO()), mock.patch("sys.stderr", new=io.StringIO()):
                 self.assertEqual(main(["validate", str(skill)]), 1)
             # the block alone, or the version alone, is the same issue
@@ -700,7 +699,9 @@ class SkillFolder(unittest.TestCase):
             (skill / "SKILL.md").write_text(text)
             issues = validate_skill(skill)[1]
             self.assertEqual(kinds(issues), ["runtime_block_outdated", "missing_outputs", "missing_requires"])
-            self.assertIn("0.5a1 skill: add outputs", issues[0].message)
+            self.assertIn("0.5a1 skill: run `aip upgrade <folder>`", issues[0].message)
+            for version in LEGACY_VERSIONS:
+                self.assertIn("`aip upgrade <folder>`", UPGRADES[version], version)
 
     def test_source_dir_required(self):
         with tempfile.TemporaryDirectory() as tmp:

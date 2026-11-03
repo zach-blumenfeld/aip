@@ -201,7 +201,7 @@ def _call(*argv: str) -> int:
         return main(list(argv))
 
 
-NOT_CLIENT = {"schema", "runtime", "skill", "db", "server"}       # format tooling, Neo4j loader, the server
+NOT_CLIENT = {"upgrade", "schema", "runtime", "skill", "db", "server"}   # format tooling, Neo4j loader, the server
 
 
 def test_every_cli_command_calls_the_sdk(served, api, tmp_path, monkeypatch):

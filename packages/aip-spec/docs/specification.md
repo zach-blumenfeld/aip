@@ -271,8 +271,14 @@ equal it. The runtime block's heading carries the same version, so a change to t
 change to the format. The validator also recognises the versions in `LEGACY_VERSIONS`: a skill
 in one of them is reported as a single `runtime_block_outdated` naming the edits it needs, as a
 warning when the current format still accepts that version (none today: `0.8` is breaking) and
-an error when it does not (`0.5a1`, `0.6a0`, `0.6a1`; for `0.6a1` the message names
-`aip upgrade`). The upgrades themselves are in the repository's
+an error when it does not (`0.5a1`, `0.6a0`, `0.6a1`). Each message names `aip upgrade <folder>`
+(`aip-spec upgrade`, the same command): it replaces the runtime block, inserts the `start` step
+before the old first step with its `inputs`, drops every `thresholds` block, sets `fallback: true`
+on every decision (a run in those formats could always be answered by hand, and the upgrade keeps
+that behaviour), sets `metadata.aip-version`, prints each change and what is left by hand (a
+`confidence` list and a router check where the skill relied on review; `fallback: false` where a
+decision model is required; for `0.5a1`, the outputs and `requires`), and validates the result.
+`--check` reports and writes nothing. The upgrades are also in the repository's
 [`docs/upgrading.md`](../../../docs/upgrading.md).
 
 The format's version moves only when the format changes; the package version

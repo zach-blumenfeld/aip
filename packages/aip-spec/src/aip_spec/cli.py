@@ -1,6 +1,7 @@
 """The `aip-spec` command line entry point: the format without the runtime.
 
     aip-spec validate <folder>          validate an AIP skill folder
+    aip-spec upgrade <folder>           move a skill in an earlier format to the current one
     aip-spec schema [--write PATH]      the JSON Schema generated from the models
     aip-spec runtime                    the runtime block every skill carries
     aip-spec skill install|list|remove|prune  the authoring skill, into the agents on this machine
@@ -45,6 +46,63 @@ def validate_command(argv: list[str]) -> int:
         print(f"VALID: {args.skill_dir} (name: {loaded.frontmatter.get('name')}){suffix}")
         return 0
     print(f"INVALID: {errors} error(s){suffix} — see stderr")
+    return 1
+
+
+def upgrade_command(argv: list[str], prog: str = "aip-spec upgrade") -> int:
+    """Rewrite a skill written for an earlier format (`aip_spec.upgrade`), print each change and
+    what is left to do by hand, then validate the result as `validate` does. Exit 0 when the
+    result is valid, 1 when it is not (the skill is still written, with the errors on stderr),
+    2 when the skill could not be rewritten at all (nothing is written). `--check` reports the
+    same and writes nothing."""
+    import shutil
+    import tempfile
+
+    from aip_spec import agents
+    from aip_spec.skill import validate_skill
+    from aip_spec.upgrade import CannotUpgrade, upgrade_skill_md
+
+    parser = argparse.ArgumentParser(prog=prog, description=f"Move an AIP skill written for an earlier format to format {FORMAT_VERSION}.")
+    parser.add_argument("skill_dir", type=Path, help="path to the skill folder (containing SKILL.md)")
+    parser.add_argument("--check", action="store_true", help="report the changes and whether the result validates; write nothing")
+    args = parser.parse_args(argv)
+    skill_md = args.skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        print(f"{prog}: {skill_md} not found", file=sys.stderr)
+        return 2
+    try:
+        result = upgrade_skill_md(skill_md.read_text())
+    except CannotUpgrade as exc:
+        print(f"{prog}: {skill_md}: {exc}; nothing written", file=sys.stderr)
+        return 2
+
+    if result.version == FORMAT_VERSION:
+        print(f"{skill_md} is already format {FORMAT_VERSION}; nothing to do")
+    else:
+        print(f"{skill_md}: {result.version} -> {FORMAT_VERSION}")
+        for change in result.changes:
+            print(f"  {change}")
+        print("by hand:")
+        for note in result.by_hand:
+            print(f"  {note}")
+    if args.check:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Validation reads the folder (its scripts, assets, `source/`), so the result is checked on a copy.
+            folder = Path(tmp) / args.skill_dir.resolve().name
+            shutil.copytree(args.skill_dir, folder, ignore=agents.IGNORE)
+            (folder / "SKILL.md").write_text(result.text)
+            loaded, issues = validate_skill(folder)
+        verb = "would write" if result.version != FORMAT_VERSION else "unchanged"
+    else:
+        if result.version != FORMAT_VERSION:
+            skill_md.write_text(result.text)
+        loaded, issues = validate_skill(args.skill_dir)
+        verb = "wrote" if result.version != FORMAT_VERSION else "unchanged"
+    errors, suffix = _emit(issues)
+    if errors == 0 and loaded is not None:
+        print(f"{verb} {skill_md}; VALID (name: {loaded.frontmatter.get('name')}){suffix}")
+        return 0
+    print(f"{verb} {skill_md}; INVALID: {errors} error(s){suffix} — see stderr; the rest is by hand")
     return 1
 
 
@@ -174,6 +232,7 @@ def example_command(argv: list[str]) -> int:
 
 COMMANDS = {
     "validate": validate_command,
+    "upgrade": upgrade_command,
     "schema": schema_command,
     "runtime": runtime_command,
     "skill": skill_command,

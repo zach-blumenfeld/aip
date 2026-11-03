@@ -1,7 +1,8 @@
 # aip-spec
 
 The Agent Instruction Protocol format as a Python package: the pydantic models that define
-a procedure, the validator (`aip-spec validate`), the JSON Schema generated from the models
+a procedure, the validator (`aip-spec validate`), the upgrader that moves a skill in an earlier
+format to the current one (`aip-spec upgrade`), the JSON Schema generated from the models
 (`aip-spec schema`), the runtime block every skill carries (`aip-spec runtime`), and the
 commands that copy the authoring skill and the bundled example out of an install
 (`aip-spec skill install`, `aip-spec example`).

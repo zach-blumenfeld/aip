@@ -1,13 +1,13 @@
 """The `aip` command line entry point.
 
-Local: validate, schema, runtime (the block, or `--skill` for the `aip-runtime` meta-skill),
+Local: validate, upgrade, schema, runtime (the block, or `--skill` for the `aip-runtime` meta-skill),
 skill (install both skills into the agents on this machine), info, run, resume, db, server.
 Against a configured server (`aip config`, or `AIP_SERVER`): search, list, publish, get, pin,
 retire, runs, governance, and `info`/`run` by name. A folder path always bypasses the server.
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
-arguments, calls one SDK method, and prints the result. schema, runtime and skill are the
-format's tooling, db loads Neo4j directly, and server serves: none of them is a client call.
+arguments, calls one SDK method, and prints the result. upgrade, schema, runtime and skill are
+the format's tooling, db loads Neo4j directly, and server serves: none of them is a client call.
 """
 
 import argparse
@@ -40,6 +40,13 @@ def validate_command(argv: list[str]) -> int:
         return 0
     print(f"INVALID: {errors} error(s){suffix} — see stderr")
     return 1
+
+
+def upgrade_command(argv: list[str]) -> int:
+    """`aip upgrade <folder>`: `aip-spec upgrade`, the format's own upgrader, under this command's name."""
+    from aip_spec.cli import upgrade_command as spec_upgrade
+
+    return spec_upgrade(argv, prog="aip upgrade")
 
 
 def schema_command(argv: list[str]) -> int:
@@ -653,6 +660,7 @@ def server_command(argv: list[str]) -> int:
 
 COMMANDS = {
     "validate": validate_command,
+    "upgrade": upgrade_command,
     "schema": schema_command,
     "runtime": runtime_command,
     "skill": skill_command,
