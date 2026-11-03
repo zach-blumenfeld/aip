@@ -18,15 +18,28 @@ from unittest import mock
 
 import yaml
 from pydantic import ValidationError
-from aip_spec import FORMAT_VERSION, ProcedureSpec, check_graph, example_dir, json_schema, parse_skill_md, runtime_text, skill_dir, validate_skill
+from aip_spec import FORMAT_VERSION, ProcedureSpec, check_graph, classify_sources, example_dir, json_schema, parse_skill_md, runtime_text, skill_dir, validate_skill
 from aip_spec.cli import main, validate_command
-from aip_spec.models import LEGACY_VERSIONS, SCHEMA_ID, SPEC_URL, DecisionStep, ProcedureSpec as Spec, Strict
-from aip_spec.skill import UPGRADES, check_frontmatter
+from aip_spec.models import LEGACY_VERSIONS, SCHEMA_ID, SPEC_URL, DecisionStep, ProcedureSpec as Spec, StartStep, Strict
+from aip_spec.skill import ACCEPTED_VERSIONS, UPGRADES, check_frontmatter
 
 SKILL = skill_dir()  # the authoring skill: `skills/aip-compile/` in the checkout
 EXAMPLE = example_dir("billing-support")
 SCHEMA_FILE = SKILL / "assets" / "procedure.schema.json"
 DIALOGUE = Path(__file__).parent / "fixtures" / "dialogue-graph.yaml"
+# The shipped example lets its decision be answered by hand (`fallback: true`), so the quickstart
+# runs without a decision model. That makes its one route unmeasured, which the validator says.
+EXAMPLE_WARNING = ("unmeasured_route", "warning")
+CHECK = {"key": "tone_confidence", "below": 0.6, "to": "escalate"}
+
+
+def measured(body: dict) -> dict:
+    """The example in its measured form: a decision model answers `tone` (no fallback), its
+    confidence is emitted, and the router checks it. The validator has nothing to say about it."""
+    step_of(body, "triage")["fallback"] = False
+    step_of(body, "triage")["confidence"] = ["tone"]
+    step_of(body, "by-tone")["confidence"] = dict(CHECK)
+    return body
 
 
 def example_yaml() -> dict:
@@ -35,13 +48,22 @@ def example_yaml() -> dict:
     return yaml.safe_load(doc.yaml_text)
 
 
+def step_of(body: dict, name: str) -> dict:
+    return next(s for s in body["steps"] if s["name"] == name)
+
+
 def kinds(issues) -> list[str]:
     return [i.kind for i in issues]
 
 
-def copy_example(tmp: str) -> Path:
+def copy_example(tmp: str, clean: bool = True) -> Path:
+    """A copy of the example; by default in its measured form (see `measured`), so the copy is
+    clean and a test's assertion names only what the test changed."""
     skill = Path(tmp) / "billing-support"
     shutil.copytree(EXAMPLE, skill)
+    if clean:
+        rewrite(skill, "    fallback: true\n", "    confidence: [tone]\n    fallback: false\n")
+        rewrite(skill, "    branch_on: tone\n", "    branch_on: tone\n    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n")
     return skill
 
 
@@ -104,8 +126,10 @@ class RuntimeBlock(unittest.TestCase):
 class SpecModels(unittest.TestCase):
     def test_example_parses(self):
         spec = ProcedureSpec.model_validate(example_yaml())
-        self.assertEqual([s.kind for s in spec.steps], ["decision", "router", "execution", "client_task", "end"])
-        self.assertIsInstance(spec.start, DecisionStep)
+        self.assertEqual([s.kind for s in spec.steps], ["start", "decision", "router", "execution", "client_task", "end"])
+        self.assertIsInstance(spec.start, StartStep)
+        self.assertEqual(([i.name for i in spec.start.inputs], spec.start.inputs_to), (["message"], "triage"))
+        self.assertIsInstance(spec.step("triage"), DecisionStep)
         self.assertEqual(spec.step("by-tone").branches, {"angry": "escalate", "calm": "reply"})
 
     def test_unknown_kind_rejected(self):
@@ -122,13 +146,41 @@ class SpecModels(unittest.TestCase):
 
     def test_decision_history_is_opt_in(self):
         body = example_yaml()
-        self.assertFalse(ProcedureSpec.model_validate(body).start.history)
-        body["steps"][0]["history"] = True
-        self.assertTrue(ProcedureSpec.model_validate(body).start.history)
+        self.assertFalse(ProcedureSpec.model_validate(body).step("triage").history)
+        step_of(body, "triage")["history"] = True
+        self.assertTrue(ProcedureSpec.model_validate(body).step("triage").history)
+
+    def test_decision_fallback_is_opt_in_and_thresholds_are_gone(self):
+        body = example_yaml()
+        self.assertTrue(ProcedureSpec.model_validate(body).step("triage").fallback, "the shipped example opts in")
+        del step_of(body, "triage")["fallback"]
+        self.assertFalse(ProcedureSpec.model_validate(body).step("triage").fallback)
+        self.assertEqual(ProcedureSpec.model_validate(body).step("triage").confidence, [])
+        step_of(body, "triage")["thresholds"] = {"tone": 0.6}
+        with self.assertRaises(ValidationError):
+            ProcedureSpec.model_validate(body)
+
+    def test_router_confidence_check_shape(self):
+        body = example_yaml()
+        step_of(body, "by-tone")["confidence"] = {"key": "tone_confidence", "below": 0.6, "to": "escalate"}
+        check = ProcedureSpec.model_validate(body).step("by-tone").confidence
+        self.assertEqual((check.key, check.below, check.to), ("tone_confidence", 0.6, "escalate"))
+        for bad in ({"key": "tone_confidence", "below": 1.5, "to": "escalate"},
+                    {"key": "tone_confidence", "to": "escalate"},
+                    {"key": "tone_confidence", "below": 0.6}):
+            step_of(body, "by-tone")["confidence"] = bad
+            with self.assertRaises(ValidationError, msg=bad):
+                ProcedureSpec.model_validate(body)
+
+    def test_a_procedure_is_at_least_start_one_step_and_end(self):
+        body = example_yaml()
+        body["steps"] = body["steps"][:2]
+        with self.assertRaises(ValidationError):
+            ProcedureSpec.model_validate(body)
 
     def test_resource_prefix_enforced(self):
         body = example_yaml()
-        body["steps"][2]["script"] = "escalate.py"
+        step_of(body, "escalate")["script"] = "escalate.py"
         with self.assertRaises(ValidationError):
             ProcedureSpec.model_validate(body)
 
@@ -153,32 +205,57 @@ inputs_to: end
 
     def test_router_needs_two_branches(self):
         body = example_yaml()
-        body["steps"][1]["branches"] = {"angry": "escalate"}
+        step_of(body, "by-tone")["branches"] = {"angry": "escalate"}
         with self.assertRaises(ValidationError):
             ProcedureSpec.model_validate(body)
 
 
 class GraphChecks(unittest.TestCase):
     def setUp(self):
-        self.body = example_yaml()
+        # The shipped example opts into `fallback` for the quickstart, which makes its route
+        # unmeasured. The graph tests start from the measured form; `RouteSources` covers the classes.
+        self.body = measured(example_yaml())
 
     def spec(self) -> ProcedureSpec:
         return ProcedureSpec.model_validate(self.body)
 
     def step(self, name: str) -> dict:
-        return next(s for s in self.body["steps"] if s["name"] == name)
+        return step_of(self.body, name)
 
     def test_example_is_clean(self):
         self.assertEqual(check_graph(self.spec(), "x", EXAMPLE), [])
+
+    def test_shipped_example_says_its_route_is_unmeasured(self):
+        self.body = example_yaml()
+        issues = check_graph(self.spec(), "x", EXAMPLE)
+        self.assertEqual([(i.kind, i.severity) for i in issues], [EXAMPLE_WARNING])
+        self.assertIn("decision `triage` answers `tone` with `fallback: true`", issues[0].message)
 
     def test_duplicate_step_name(self):
         self.body["steps"].append(copy.deepcopy(self.step("reply")))
         self.assertIn("duplicate_step_name", kinds(check_graph(self.spec(), "x")))
 
-    def test_start_must_be_runnable(self):
+    def test_exactly_one_start_step(self):
         steps = self.body["steps"]
-        steps.insert(0, steps.pop(1))
-        self.assertIn("invalid_start_step", kinds(check_graph(self.spec(), "x")))
+        start = steps.pop(0)
+        self.assertEqual(kinds(check_graph(self.spec(), "x")), ["missing_start_step"])
+        steps.append(start)  # any position: by convention first, not required to be
+        self.assertEqual(check_graph(self.spec(), "x"), [])
+        steps.append({**copy.deepcopy(start), "name": "again"})
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["multiple_start_steps", "unreachable_step", "duplicate_producer"])
+        self.assertIn("['start', 'again']", issues[0].message)
+
+    def test_nothing_points_at_the_start(self):
+        self.step("escalate")["inputs_to"] = "start"
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["edge_into_start"])
+        self.assertEqual(issues[0].location, "body:$.steps[3].inputs_to")
+        self.step("escalate")["inputs_to"] = "end"
+        self.step("by-tone")["branches"]["angry"] = "start"   # escalate stays reachable through the check
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["edge_into_start"])
+        self.assertEqual(issues[0].location, "body:$.steps[2].branches.angry")
 
     def test_missing_end(self):
         self.body["steps"] = [s for s in self.body["steps"] if s["kind"] != "end"]
@@ -192,9 +269,22 @@ class GraphChecks(unittest.TestCase):
 
     def test_unknown_router_target(self):
         self.step("by-tone")["branches"]["angry"] = "nowhere"
+        self.assertEqual(kinds(check_graph(self.spec(), "x")), ["unknown_step_reference"])  # the check still reaches escalate
+        self.step("by-tone")["confidence"]["to"] = "reply"
         issues = check_graph(self.spec(), "x")
         self.assertIn("unknown_step_reference", kinds(issues))
         self.assertIn("unreachable_step", kinds(issues))  # escalate is now orphaned
+
+    def test_the_confidence_check_target_is_an_edge(self):
+        self.step("by-tone")["confidence"]["to"] = "nowhere"
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["unknown_step_reference"])
+        self.assertEqual(issues[0].location, "body:$.steps[2].confidence.to")
+        # a step only the check reaches is reachable, and must reach the end like any other
+        self.body["steps"].insert(4, {"name": "review", "kind": "client_task", "description": "d", "inputs": [],
+                                      "template": "assets/reply.md", "outputs": [{"name": "notes", "type": "string"}], "inputs_to": "end"})
+        self.step("by-tone")["confidence"]["to"] = "review"
+        self.assertEqual(check_graph(self.spec(), "x"), [])
 
     def test_no_path_to_end(self):
         self.step("escalate")["inputs_to"] = "escalate"
@@ -204,9 +294,12 @@ class GraphChecks(unittest.TestCase):
         self.step("triage")["inputs"].append({"name": "message", "type": "string"})
         self.assertIn("duplicate_input_name", kinds(check_graph(self.spec(), "x")))
 
-    def test_threshold_must_name_a_question(self):
-        self.step("triage")["thresholds"]["mood"] = 0.5
-        self.assertIn("unknown_threshold_question", kinds(check_graph(self.spec(), "x")))
+    def test_confidence_must_name_a_question(self):
+        self.step("triage")["confidence"] = ["tone", "mood"]
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["unknown_confidence_question"])
+        self.assertIn("names `mood` in `confidence`", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[1].confidence[1]")
 
     def test_router_branch_keys_must_match_the_question(self):
         self.step("by-tone")["branches"] = {"angry": "escalate", "furious": "reply"}
@@ -218,11 +311,23 @@ class GraphChecks(unittest.TestCase):
         triage = self.step("triage")
         triage["questions"]["severity"] = {"type": "score", "instructions": "How bad?",
                                            "criteria": ["cosmetic", "degraded", "unusable"]}
+        triage["confidence"] = ["severity"]
         self.step("by-tone")["branch_on"] = "severity"
+        self.step("by-tone")["confidence"]["key"] = "severity_confidence"
         self.step("by-tone")["branches"] = {"0": "reply", "1": "reply", "2": "escalate"}
         self.assertEqual([i.kind for i in check_graph(self.spec(), "x")], [])
         self.step("by-tone")["branches"] = {"low": "reply", "high": "escalate"}
         self.assertEqual(kinds(check_graph(self.spec(), "x")), ["unknown_branch_value", "unknown_branch_value"])
+
+    def test_router_branches_on_a_boolean_string_or_integer(self):
+        self.step("escalate")["outputs"].append({"name": "payload", "type": "object"})
+        self.body["steps"].insert(4, {"name": "by-payload", "kind": "router", "description": "d", "branch_on": "payload",
+                                      "branches": {"a": "end", "b": "end"}})
+        self.step("escalate")["inputs_to"] = "by-payload"
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["unbranchable_type"])
+        self.assertIn("branches on `payload`, which is `object` (output of `escalate`)", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[4].branch_on")
 
     def test_example_declares_outputs(self):
         spec = self.spec()
@@ -234,11 +339,11 @@ class GraphChecks(unittest.TestCase):
         issues = check_graph(self.spec(), "x")
         self.assertEqual(kinds(issues), ["unproduced_input"])
         self.assertIn("step `end` consumes `reply`", issues[0].message)
-        self.assertIn("start step `triage`", issues[0].message)
+        self.assertIn("start step `start`", issues[0].message)
         self.step("end")["inputs"].pop()
         self.step("escalate")["inputs"].append({"name": "account_id", "type": "string"})
         self.assertEqual(kinds(check_graph(self.spec(), "x")), ["unproduced_input"])
-        self.step("triage")["inputs"].append({"name": "account_id", "type": "string"})  # the client supplies it
+        self.step("start")["inputs"].append({"name": "account_id", "type": "string"})  # the client supplies it
         self.assertEqual(check_graph(self.spec(), "x"), [])
 
     def test_rule_1_router_consumes_its_branch_key(self):
@@ -246,24 +351,45 @@ class GraphChecks(unittest.TestCase):
         self.step("by-tone")["branches"] = {"angry": "escalate", "calm": "reply"}
         self.assertIn("step `by-tone` consumes `mood`", check_graph(self.spec(), "x")[0].message)
 
-    def test_rule_2_two_steps_producing_tone(self):
+    def test_rule_1_a_confidence_key_is_declared_on_some_path(self):
+        self.step("triage")["confidence"] = []   # nothing emits what the router checks
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["unproduced_input", "confidence_on_unmeasured_source"])
+        self.assertIn("router `by-tone` checks `tone_confidence`, which no step produces on any path to it", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[2].confidence.key")
+        # declared on one path is enough: on a path where a script rewrote `tone` without a
+        # confidence, the check fires as `absent`, and the script is a deterministic source
+        self.step("escalate")["outputs"].append({"name": "tone", "type": "string"})
+        self.body["steps"].insert(4, {"name": "by-tone-again", "kind": "router", "description": "d", "branch_on": "tone",
+                                      "confidence": dict(CHECK, to="reply"), "branches": {"angry": "end", "calm": "reply"}})
+        self.step("escalate")["inputs_to"] = "by-tone-again"
+        self.step("end")["inputs"] = []
+        self.step("triage")["confidence"] = ["tone"]
+        self.assertEqual(kinds(check_graph(self.spec(), "x")), ["duplicate_producer"])
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "measured", "by-tone-again": "measured"})
+
+    def test_several_producers_are_information_not_a_fault(self):
         self.step("reply")["outputs"].append({"name": "tone", "type": "string"})
         issues = check_graph(self.spec(), "x")
-        self.assertEqual(kinds(issues), ["duplicate_producer"])
-        self.assertIn("key `tone` is produced by `triage`, `reply`", issues[0].message)
+        self.assertEqual([(i.kind, i.severity) for i in issues], [("duplicate_producer", "info")])
+        self.assertIn("key `tone` has more than one producer: `triage`, `reply`", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[4]")
+        self.assertEqual(issues[0].to_record()["severity"], "info")
 
-    def test_rule_2_no_step_overwrites_a_start_input(self):
+    def test_a_start_input_may_be_overwritten(self):
         self.step("escalate")["outputs"].append({"name": "message", "type": "string"})
         issues = check_graph(self.spec(), "x")
-        self.assertEqual(kinds(issues), ["duplicate_producer"])
-        self.assertIn("`message` is a start input", issues[0].message)
+        self.assertEqual([(i.kind, i.severity) for i in issues], [("duplicate_producer", "info")])
+        self.assertIn("`start` (a start input), `escalate`", issues[0].message)
+        self.step("escalate")["outputs"][-1]["type"] = "object"  # but every producer agrees on the type
+        self.assertEqual(sorted(kinds(check_graph(self.spec(), "x"))), ["duplicate_producer", "type_mismatch"])
 
-    def test_rule_4_consumer_type_matches_producer_type(self):
+    def test_rule_4_every_declaration_of_a_key_agrees_on_its_type(self):
         self.step("end")["inputs"][0]["type"] = "object"           # `message` is a string start input
         issues = check_graph(self.spec(), "x")
         self.assertEqual(kinds(issues), ["type_mismatch"])
-        self.assertIn("declares input `message` as `object`, but it is `string` (start input on `triage`)", issues[0].message)
-        self.assertEqual(issues[0].location, "body:$.steps[4].inputs[0].type")
+        self.assertIn("declares input `message` as `object`, but it is `string` (start input on `start`)", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[5].inputs[0].type")
         self.step("end")["inputs"][0]["type"] = "string"
         self.step("reply")["inputs"][1]["type"] = "integer"        # `tone` is a choice question: a string
         issues = check_graph(self.spec(), "x")
@@ -274,7 +400,28 @@ class GraphChecks(unittest.TestCase):
         self.step("reply")["outputs"].append({"name": "ticket_id", "type": "integer"})   # so every path has it
         issues = check_graph(self.spec(), "x")
         self.assertEqual(sorted(kinds(issues)), ["duplicate_producer", "type_mismatch"])
-        self.assertIn("output of `escalate`", next(i for i in issues if i.kind == "type_mismatch").message)
+        mismatch = next(i for i in issues if i.kind == "type_mismatch")
+        self.assertIn("step `end` declares input `ticket_id` as `string`, but it is `integer` (output of `escalate`)", mismatch.message)
+
+    def test_rule_4_the_first_declaration_in_step_order_is_the_reference(self):
+        self.step("escalate")["outputs"][0]["type"] = "string"   # ticket_id: escalate (string) comes before reply (integer)
+        self.step("reply")["outputs"].append({"name": "ticket_id", "type": "integer"})
+        issues = check_graph(self.spec(), "x")
+        mismatch = next(i for i in issues if i.kind == "type_mismatch")
+        self.assertIn("step `reply` declares output `ticket_id` as `integer`, but it is `string` (output of `escalate`)", mismatch.message)
+        self.assertEqual(mismatch.location, "body:$.steps[4].outputs[1].type")
+
+    def test_rule_4_a_confidence_key_is_a_float(self):
+        self.step("by-tone")["confidence"]["key"] = "tone"   # the answer, not its confidence
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["type_mismatch", "confidence_on_unmeasured_source"])
+        self.assertIn("router `by-tone` checks `tone` as a `float`, but it is `string` (a choice question in `triage`)", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[2].confidence.key")
+        self.step("by-tone")["confidence"]["key"] = "tone_confidence"
+        self.step("reply")["inputs"].append({"name": "tone_confidence", "type": "integer"})
+        issues = check_graph(self.spec(), "x")
+        self.assertEqual(kinds(issues), ["type_mismatch"])
+        self.assertIn("but it is `float` (the confidence of `tone` in `triage`)", issues[0].message)
 
     def test_rule_3_client_task_must_declare_outputs(self):
         del self.step("reply")["outputs"]
@@ -301,6 +448,7 @@ class GraphChecks(unittest.TestCase):
         self.assertEqual(set(kinds(issues)), {"unproduced_input"})
         build = next(i for i in issues if "step `build`" in i.message)
         self.assertIn("consumes `script_path`, `output_json`, `dot_path`, `image_path`, which no step produces", build.message)
+        self.assertEqual(classify_sources(ProcedureSpec.model_validate(body)), {"by-status": "deterministic"}, "a script's output routes it")
 
     def test_scripts_need_requires(self):
         del self.body["requires"]
@@ -309,6 +457,7 @@ class GraphChecks(unittest.TestCase):
         self.assertIn("runs scripts (`escalate`) but declares no `requires`", issues[0].message)
         self.body["steps"] = [s for s in self.body["steps"] if s["kind"] != "execution"]
         self.step("by-tone")["branches"]["angry"] = "reply"
+        self.step("by-tone")["confidence"]["to"] = "reply"
         self.assertEqual(check_graph(self.spec(), "x"), [])  # no scripts, nothing to require
 
     def test_requires_shape(self):
@@ -344,11 +493,122 @@ class GraphChecks(unittest.TestCase):
         self.assertEqual(kinds(check_graph(self.spec(), "x", EXAMPLE)), ["missing_resource"])
 
 
+class RouteSources(unittest.TestCase):
+    """What feeds a router is deterministic, measured or unmeasured; the worst producer wins.
+    The two warnings and the one info follow from the class, and `classify_sources` exposes it."""
+
+    def setUp(self):
+        self.body = example_yaml()
+        self.step("triage")["fallback"] = False
+
+    def spec(self) -> ProcedureSpec:
+        return ProcedureSpec.model_validate(self.body)
+
+    def step(self, name: str) -> dict:
+        return step_of(self.body, name)
+
+    def check(self) -> list:
+        return check_graph(self.spec(), "x")
+
+    def add_check(self, key: str = "tone_confidence") -> None:
+        self.step("by-tone")["confidence"] = {"key": key, "below": 0.6, "to": "escalate"}
+
+    def test_measured_a_decision_model_with_the_check(self):
+        self.step("triage")["confidence"] = ["tone"]
+        self.add_check()
+        self.assertEqual(self.check(), [])
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "measured"})
+
+    def test_unmeasured_a_decision_model_without_the_check(self):
+        """No fallback, but nothing records the model's confidence: an LLM routed the run."""
+        issues = self.check()
+        self.assertEqual([(i.kind, i.severity) for i in issues], [("unmeasured_route", "warning")])
+        self.assertIn("does not name `tone` in its `confidence` list", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[2]")
+        self.step("triage")["confidence"] = ["tone"]  # emitted, still not checked
+        issues = self.check()
+        self.assertEqual(kinds(issues), ["unmeasured_route"])
+        self.assertIn("emits `tone_confidence` but the router does not check it", issues[0].message)
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "unmeasured"})
+
+    def test_unmeasured_a_decision_with_fallback(self):
+        self.step("triage")["fallback"] = True
+        self.step("triage")["confidence"] = ["tone"]
+        self.assertEqual(kinds(self.check()), ["unmeasured_route"])
+        self.add_check()
+        issues = self.check()
+        self.assertEqual([(i.kind, i.severity) for i in issues], [("confidence_on_unmeasured_source", "warning")])
+        self.assertIn("checks `tone_confidence`, but its branch key `tone` is unmeasured", issues[0].message)
+        self.assertIn("`fallback: true`", issues[0].message)
+        self.assertEqual(issues[0].location, "body:$.steps[2].confidence")
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "unmeasured"})
+
+    def test_deterministic_a_start_input_or_a_scripts_output(self):
+        self.step("start")["inputs"].append({"name": "tone", "type": "string"})   # the client supplies the tone
+        self.body["steps"].remove(self.step("triage"))
+        self.step("start")["inputs_to"] = "by-tone"
+        self.assertEqual(self.check(), [])
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "deterministic"})
+        self.body["steps"].insert(2, {"name": "sort", "kind": "execution", "description": "d", "script": "scripts/escalate.py",
+                                      "inputs": [{"name": "message", "type": "string"}],
+                                      "outputs": [{"name": "tone", "type": "string"}], "inputs_to": "by-tone"})
+        self.step("start")["inputs_to"] = "sort"
+        self.assertEqual(kinds(self.check()), ["duplicate_producer"])
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "deterministic"})
+
+    def test_unmeasured_a_client_task_the_router_does_not_check(self):
+        self.step("reply")["outputs"].append({"name": "tone", "type": "string"})
+        self.step("reply")["inputs_to"] = "by-tone"   # reply feeds the router back; the decision is still the first source
+        self.step("end")["inputs"].append({"name": "ticket_id", "type": "integer"})
+        self.step("triage")["confidence"] = ["tone"]
+        self.add_check()
+        issues = self.check()
+        self.assertEqual(kinds(issues), ["duplicate_producer", "confidence_on_unmeasured_source"])
+        self.assertIn("an output of client task `reply`, chosen by the client's own judgment", issues[1].message)
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "unmeasured"}, "the worst producer wins")
+
+    def test_declared_confidence_is_information(self):
+        self.step("escalate")["outputs"].extend([{"name": "tone", "type": "string"}, {"name": "sureness", "type": "float"}])
+        self.step("escalate")["inputs_to"] = "by-tone"
+        self.step("by-tone")["branches"]["angry"] = "end"
+        self.step("end")["inputs"] = []
+        self.add_check("sureness")
+        issues = self.check()
+        self.assertEqual([(i.kind, i.severity) for i in issues],
+                         [("duplicate_producer", "info"), ("confidence_on_unmeasured_source", "warning"), ("declared_confidence", "info")],
+                         "the script's own number measures its route, but the decision's answer has no confidence recorded")
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "unmeasured"}, "the worst producer wins")
+        self.step("triage")["confidence"] = ["tone"]
+        self.step("by-tone")["confidence"]["key"] = "tone_confidence"
+        self.step("escalate")["outputs"][-1]["name"] = "tone_confidence"
+        issues = self.check()
+        self.assertEqual([(i.kind, i.severity) for i in issues], [("duplicate_producer", "info"), ("duplicate_producer", "info"),
+                                                                   ("declared_confidence", "info")])
+        self.assertIn("a confidence script `escalate` declares itself; legitimate when the code behind it is calibrated", issues[2].message)
+        self.assertEqual(classify_sources(self.spec()), {"by-tone": "measured"})
+
+    def test_declared_confidence_of_a_client_task_is_discouraged(self):
+        self.step("reply")["outputs"].extend([{"name": "tone", "type": "string"}, {"name": "tone_confidence", "type": "float"}])
+        self.step("reply")["inputs_to"] = "by-tone"
+        self.step("end")["inputs"].append({"name": "ticket_id", "type": "integer"})
+        self.step("triage")["confidence"] = ["tone"]
+        self.add_check()
+        issues = self.check()
+        self.assertEqual(kinds(issues), ["duplicate_producer", "duplicate_producer", "declared_confidence"])
+        self.assertIn("client task `reply` declares itself; discouraged, because an agent cannot calibrate its own confidence", issues[2].message)
+
+    def test_loaded_skill_carries_the_classes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loaded, issues = validate_skill(copy_example(tmp))
+            self.assertEqual((issues, loaded.routers), ([], {"by-tone": "measured"}))
+
+
 class SkillFolder(unittest.TestCase):
     def test_example_is_valid(self):
         loaded, issues = validate_skill(EXAMPLE)
-        self.assertEqual(issues, [])
+        self.assertEqual([(i.kind, i.severity) for i in issues], [EXAMPLE_WARNING])
         self.assertEqual(loaded.frontmatter["name"], "billing-support")
+        self.assertEqual(loaded.routers, {"by-tone": "unmeasured"})
 
     def test_body_is_runtime_block_then_one_yaml_block(self):
         block = runtime_text().strip()
@@ -386,23 +646,26 @@ class SkillFolder(unittest.TestCase):
                 _, issues = validate_skill(skill)
                 self.assertIn(expected, kinds(issues))
 
-    def test_accepted_earlier_format_loads_with_a_warning(self):
-        """0.6a1 is not breaking: a skill still carrying the 0.6a0 block and version loads, with
-        `runtime_block_outdated` as one warning, and the CLI exits 0."""
+    def test_no_earlier_format_is_accepted(self):
+        """0.8 is breaking: no earlier format loads unchanged. A skill still carrying the 0.6a1
+        block and version is recognised and rejected with `runtime_block_outdated`, which names
+        `aip upgrade`; the CLI exits 1."""
+        self.assertEqual(ACCEPTED_VERSIONS, ())
         with tempfile.TemporaryDirectory() as tmp:
             skill = copy_example(tmp)
-            rewrite(skill, runtime_text().strip(), runtime_text("0.6a0").strip())
-            rewrite(skill, f'aip-version: "{FORMAT_VERSION}"', 'aip-version: "0.6a0"')
+            rewrite(skill, runtime_text().strip(), runtime_text("0.6a1").strip())
+            rewrite(skill, f'aip-version: "{FORMAT_VERSION}"', 'aip-version: "0.6a1"')
             loaded, issues = validate_skill(skill)
-            self.assertIsNotNone(loaded)
-            self.assertEqual([(i.kind, i.severity) for i in issues], [("runtime_block_outdated", "warning")])
-            self.assertTrue(issues[0].message.startswith("0.6a0 skill: regenerate the runtime block"), issues[0].message)
+            self.assertIsNone(loaded)
+            self.assertEqual([(i.kind, i.severity) for i in issues], [("runtime_block_outdated", "error")])
+            self.assertTrue(issues[0].message.startswith("0.6a1 skill: run `aip upgrade <folder>`"), issues[0].message)
+            self.assertIn(f"does not accept 0.6a1 skills", issues[0].message)
             with mock.patch("sys.stdout", new=io.StringIO()), mock.patch("sys.stderr", new=io.StringIO()):
-                self.assertEqual(main(["validate", str(skill)]), 0)
+                self.assertEqual(main(["validate", str(skill)]), 1)
 
     def test_previous_format_is_rejected_as_outdated(self):
-        """0.6a0 is breaking: a skill still carrying the 0.5a1 block and version is recognised and
-        rejected with `runtime_block_outdated`, said once; the CLI exits 1."""
+        """A skill still carrying the 0.5a1 block and version is recognised and rejected with
+        `runtime_block_outdated`, said once; the CLI exits 1."""
         with tempfile.TemporaryDirectory() as tmp:
             skill = copy_example(tmp)
             rewrite(skill, runtime_text().strip(), runtime_text("0.5a1").strip())
@@ -452,26 +715,40 @@ class SkillFolder(unittest.TestCase):
             rewrite(skill, "    branch_on: tone\n", "    on: tone\n")
             _, issues = validate_skill(skill)
             self.assertEqual(kinds(issues), ["schema_violation", "schema_violation"])
-            self.assertTrue(all(i.location.startswith("body:$.steps[1]") for i in issues), [i.location for i in issues])
+            self.assertTrue(all(i.location.startswith("body:$.steps[2]") for i in issues), [i.location for i in issues])
 
     def test_cli_validate_output_contract(self):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = validate_command([str(EXAMPLE)])
-        self.assertEqual((code, err.getvalue()), (0, ""))
-        self.assertTrue(out.getvalue().startswith("VALID: "))
-
-        with tempfile.TemporaryDirectory() as tmp:
-            skill = copy_example(tmp)
-            rewrite(skill, "angry: escalate", "angry: nowhere")
+        def run(skill) -> tuple[int, str, list[dict]]:
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = validate_command([str(skill)])
-            self.assertEqual(code, 1)
-            records = [json.loads(line) for line in err.getvalue().splitlines()]
-            self.assertEqual({r["kind"] for r in records}, {"unknown_step_reference", "unreachable_step"})
-            self.assertTrue(out.getvalue().startswith("INVALID: 2 error(s)"))
+            return code, out.getvalue(), [json.loads(line) for line in err.getvalue().splitlines()]
 
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = copy_example(tmp)
+            code, out, records = run(skill)
+            self.assertEqual((code, records), (0, []))
+            self.assertTrue(out.startswith("VALID: "))
+            self.assertNotIn("see stderr", out)
+
+            rewrite(skill, "        description: The queue the ticket was routed to.\n",
+                    "        description: The queue the ticket was routed to.\n      - name: message\n        type: string\n")
+            code, out, records = run(skill)   # information never fails validation
+            self.assertEqual(code, 0)
+            self.assertEqual([(r["kind"], r["severity"]) for r in records], [("duplicate_producer", "info")])
+            self.assertTrue(out.startswith("VALID: "), out)
+            self.assertIn("(1 info — see stderr)", out)
+
+            rewrite(skill, "angry: escalate", "angry: nowhere")   # escalate stays reachable through the check
+            code, out, records = run(skill)
+            self.assertEqual(code, 1)
+            self.assertEqual({r["kind"] for r in records}, {"unknown_step_reference", "duplicate_producer"})
+            self.assertTrue(out.startswith("INVALID: 1 error(s) (1 info — see stderr)"), out)
+
+        code, out, records = run(EXAMPLE)   # the shipped example: valid, with its one warning
+        self.assertEqual((code, [(r["kind"], r["severity"]) for r in records]), (0, [EXAMPLE_WARNING]))
+        self.assertTrue(out.startswith("VALID: "), out)
+        self.assertIn("(1 warning(s) — see stderr)", out)
 
 
 class Cli(unittest.TestCase):
@@ -504,7 +781,7 @@ class Cli(unittest.TestCase):
             copied = Path(tmp) / "billing-support"
             self.assertEqual(sorted(p.relative_to(copied) for p in copied.rglob("*") if p.is_file()),
                              sorted(p.relative_to(EXAMPLE) for p in EXAMPLE.rglob("*") if p.is_file() and "__pycache__" not in p.parts))
-            self.assertEqual(validate_skill(copied)[1], [])
+            self.assertEqual([(i.kind, i.severity) for i in validate_skill(copied)[1]], [EXAMPLE_WARNING])
             self.assertEqual(self.run_cli("example", "billing-support", "--out", tmp)[0], 1, "refuses to overwrite")
         self.assertEqual(self.run_cli("example", "nope", "--out", "/tmp")[0], 1)
 

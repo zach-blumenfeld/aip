@@ -8,11 +8,12 @@ procedure, with nothing else. The block carries the execution semantics so any a
 that activates the skill can run it with no aip tooling present.
 
 Validation issues follow one contract everywhere (CLI, wrapper script, server):
-records with `path`, `kind`, `message`, optional `location`, and `severity`.
+records with `path`, `kind`, `message`, optional `location`, and `severity` (`error`,
+`warning` or `info`; an error fails validation, the other two never do).
 """
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -20,7 +21,7 @@ import yaml
 from pydantic import ValidationError
 
 from aip_spec.models import (
-    DEFAULT_LAUNCHER, FORMAT_VERSION, LEGACY_VERSIONS, RUNNABLE_KINDS, ProcedureSpec, runtime_text,
+    DEFAULT_LAUNCHER, FORMAT_VERSION, LEGACY_VERSIONS, ProcedureSpec, runtime_text,
 )
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
@@ -28,6 +29,7 @@ FENCE_PATTERN = re.compile(r"^```(?:yaml|yml)[ \t]*\n(.*?)\n```\s*$", re.DOTALL)
 # Agent Skills `name` rule: lowercase a-z/0-9, hyphen-separated groups.
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 VERSION_KEY = "aip-version"
+SEVERITIES = ("error", "warning", "info")
 
 
 @dataclass
@@ -200,10 +202,21 @@ def parse_spec(yaml_text: str, path: str) -> tuple[ProcedureSpec | None, list[Is
         return None, issues
 
 
-def _targets(step: Any) -> list[str]:
+def _edges(step: Any) -> list[tuple[str, str]]:
+    """Every step a step hands off to, with the field that names it: a router's branches and
+    its confidence check's `to`, everything else's `inputs_to`; the end step has none."""
     if step.kind == "router":
-        return list(step.branches.values())
-    return [step.inputs_to] if getattr(step, "inputs_to", None) else []
+        edges = [(target, f"branches.{value}") for value, target in step.branches.items()]
+        if step.confidence is not None:
+            edges.append((step.confidence.to, "confidence.to"))
+        return edges
+    if step.kind == "end":
+        return []
+    return [(step.inputs_to, "inputs_to")]
+
+
+def _targets(step: Any) -> list[str]:
+    return [target for target, _ in _edges(step)]
 
 
 def _resource_paths(step: Any) -> list[str]:
@@ -217,31 +230,99 @@ def _resource_paths(step: Any) -> list[str]:
 
 
 def _consumed(step: Any) -> list[str]:
-    """Keys a step reads from the state, in declaration order."""
+    """Keys a step reads from the state, in declaration order. The start step reads none: its
+    inputs are what the client supplies. A router's confidence key is checked apart (it need
+    only be declared on some path, not every path)."""
     if step.kind == "router":
         return [step.branch_on]
+    if step.kind == "start":
+        return []
     return [item.name for item in step.inputs]
 
 
+def confidence_key(question: str) -> str:
+    """The state key a decision's `confidence` list emits for a question. Fixed, not configurable."""
+    return f"{question}_confidence"
+
+
 def _produced(step: Any) -> list[str]:
-    """Keys a step adds to the state. Routers and the end step add none."""
+    """Keys a step adds to the state. The start step adds its inputs, a decision its question
+    names and the confidence keys it names; routers and the end step add none."""
+    if step.kind == "start":
+        return [item.name for item in step.inputs]
     if step.kind == "decision":
-        return list(step.questions)
+        return [*step.questions, *(confidence_key(q) for q in step.confidence)]
     return [item.name for item in getattr(step, "outputs", []) or []]
 
 
 # The state type a collapsed answer lands as, per question type.
 QUESTION_TYPES = {"noul": "boolean", "choice": "string", "score": "integer"}
+# The type a confidence key carries (the vocabulary's number type), and what a router may branch on.
+CONFIDENCE_TYPE = "float"
+BRANCHABLE_TYPES = ("boolean", "string", "integer")
 
 
-def check_state(spec: ProcedureSpec, path: str, by_name: dict[str, Any]) -> list[Issue]:
+def _declarations(step: Any, i: int) -> list[tuple[str, str, str, str, str]]:
+    """Every (key, type, what this step says, what it is when another step cites it, location)
+    a step declares, in order: a start's inputs, a runnable step's inputs then outputs or
+    questions and confidence keys, an end's inputs, a router's confidence key."""
+    where = f"body:$.steps[{i}]"
+    out: list[tuple[str, str, str, str, str]] = []
+    if step.kind == "router":
+        if step.confidence is not None:
+            out.append((step.confidence.key, CONFIDENCE_TYPE, f"router `{step.name}` checks `{step.confidence.key}` as a `float`",
+                        f"the confidence check of `{step.name}`", f"{where}.confidence.key"))
+        return out
+    for j, item in enumerate(step.inputs):
+        noun = "start input" if step.kind == "start" else "input"
+        out.append((item.name, item.type.value, f"step `{step.name}` declares {noun} `{item.name}` as `{item.type.value}`",
+                    f"{noun} on `{step.name}`" if step.kind == "start" else f"input of `{step.name}`", f"{where}.inputs[{j}].type"))
+    if step.kind == "decision":
+        for qname, q in step.questions.items():
+            out.append((qname, QUESTION_TYPES[q.type], f"step `{step.name}` answers `{qname}` with a {q.type} question, a `{QUESTION_TYPES[q.type]}`",
+                        f"a {q.type} question in `{step.name}`", f"{where}.questions.{qname}"))
+        for k, qname in enumerate(step.confidence):
+            key = confidence_key(qname)
+            out.append((key, CONFIDENCE_TYPE, f"step `{step.name}` emits `{key}`, the confidence of `{qname}`, a `float`",
+                        f"the confidence of `{qname}` in `{step.name}`", f"{where}.confidence[{k}]"))
+    for j, item in enumerate(getattr(step, "outputs", []) or []):
+        out.append((item.name, item.type.value, f"step `{step.name}` declares output `{item.name}` as `{item.type.value}`",
+                    f"output of `{step.name}`", f"{where}.outputs[{j}].type"))
+    return out
+
+
+def _availability(steps: list[Any], start: Any, preds: dict[str, list[Any]], by_name: dict[str, Any],
+                  combine) -> dict[str, set[str] | None]:
+    """The keys known to be in the state when each step is reached: a fixpoint over the graph,
+    cycles included. `combine` is set intersection for must-availability (on every path) or
+    union for may-availability (on some path). None marks a step nothing reaches."""
+    available: dict[str, set[str] | None] = {s.name: None for s in steps}
+    if start is not None:
+        available[start.name] = set()
+    changed = True
+    while changed:
+        changed = False
+        for step in steps:
+            if step is start or by_name.get(step.name) is not step:
+                continue
+            known = [available[p.name] | set(_produced(p)) for p in preds.get(step.name, []) if available[p.name] is not None]
+            if not known:
+                continue
+            new = combine(*known)
+            if new != available[step.name]:
+                available[step.name], changed = new, True
+    return available
+
+
+def check_state(spec: ProcedureSpec, path: str, by_name: dict[str, Any], start: Any) -> list[Issue]:
     """The state contract: every consumed key has a producer on every path to its consumer
-    (or is a start input), every key has exactly one producer, client tasks declare outputs,
-    and a consumer declares the same type as the producer."""
+    (the start step produces its inputs), client tasks declare outputs, every declaration of a
+    key agrees on its type, a router branches on a value it can match and checks a `float`. A
+    key with several producers is reported as information, not a fault: a later producer
+    overwrites the value where a run passes through both."""
     issues: list[Issue] = []
-    steps, start = spec.steps, spec.steps[0]
+    steps = spec.steps
     index = {id(step): i for i, step in enumerate(steps)}
-    start_inputs = set(_consumed(start)) if start.kind != "router" else set()
 
     # Rule 3: a client task's outputs are what the client is asked to answer with.
     for i, step in enumerate(steps):
@@ -256,78 +337,185 @@ def check_state(spec: ProcedureSpec, path: str, by_name: dict[str, Any]) -> list
                                     f"body:$.steps[{i}].outputs[{j}].name"))
             seen.add(item.name)
 
-    # Rule 2: one producer per key, never a start input.
+    # Several producers of one key: allowed, and said, so authors and compilers see the overwrite.
     producers: dict[str, list[Any]] = {}
     for step in steps:
         for key in dict.fromkeys(_produced(step)):
             producers.setdefault(key, []).append(step)
     for key, makers in producers.items():
-        names = ", ".join(f"`{s.name}`" for s in makers)
         if len(makers) > 1:
+            names = ", ".join(f"`{s.name}`" + (" (a start input)" if s.kind == "start" else "") for s in makers)
             issues.append(Issue(path, "duplicate_producer",
-                                f"key `{key}` is produced by {names}; each key must have exactly one producer, so rename "
-                                f"one of them", f"body:$.steps[{index[id(makers[1])]}]"))
-        if key in start_inputs:
-            issues.append(Issue(path, "duplicate_producer",
-                                f"key `{key}` is a start input (declared on `{start.name}`) and is also produced by {names}; "
-                                f"a step must not overwrite what the client supplied, so rename the output",
-                                f"body:$.steps[{index[id(makers[0])]}]"))
+                                f"key `{key}` has more than one producer: {names}; where a run passes through both, the "
+                                f"later one overwrites the value", f"body:$.steps[{index[id(makers[1])]}]", severity="info"))
 
-    # Rule 4: a consumer declares the type its producer declares. One key, one type, end to end.
-    produced_type: dict[str, tuple[str, str]] = {}      # key -> (type, who declares it)
-    if start.kind != "router":
-        for item in start.inputs:
-            produced_type.setdefault(item.name, (item.type.value, f"start input on `{start.name}`"))
-    for step in steps:
-        if step.kind == "decision":
-            for qname, q in step.questions.items():
-                produced_type.setdefault(qname, (QUESTION_TYPES[q.type], f"a {q.type} question in `{step.name}`"))
-        for item in getattr(step, "outputs", []) or []:
-            produced_type.setdefault(item.name, (item.type.value, f"output of `{step.name}`"))
+    # Rule 4: every declaration of a key agrees on its type. The first in step order is the reference.
+    reference: dict[str, tuple[str, str]] = {}      # key -> (type, who declares it)
     for i, step in enumerate(steps):
-        if step.kind == "router":
-            continue
-        for j, item in enumerate(step.inputs):
-            if step is start and item.name in start_inputs:
-                continue
-            expected = produced_type.get(item.name)
-            if expected is not None and expected[0] != item.type.value:
+        for key, type_, says, cited_as, location in _declarations(step, i):
+            expected = reference.setdefault(key, (type_, cited_as))
+            if expected[0] != type_:
                 issues.append(Issue(path, "type_mismatch",
-                                    f"step `{step.name}` declares input `{item.name}` as `{item.type.value}`, but it is "
-                                    f"`{expected[0]}` ({expected[1]}); a key has one type everywhere it is declared",
-                                    f"body:$.steps[{i}].inputs[{j}].type"))
+                                    f"{says}, but it is `{expected[0]}` ({expected[1]}); a key has one type everywhere it is declared",
+                                    location))
+    for i, step in enumerate(steps):
+        if step.kind != "router":
+            continue
+        expected = reference.get(step.branch_on)
+        if expected is not None and expected[0] not in BRANCHABLE_TYPES:
+            issues.append(Issue(path, "unbranchable_type",
+                                f"router `{step.name}` branches on `{step.branch_on}`, which is `{expected[0]}` ({expected[1]}); a "
+                                f"router branches on a `boolean`, `string` or `integer`", f"body:$.steps[{i}].branch_on"))
 
     # Rule 1: keys available on every path (must-availability over the graph, cycles included).
-    available: dict[str, set[str] | None] = {s.name: None for s in steps}
-    available[start.name] = set(start_inputs)
     preds: dict[str, list[Any]] = {}
     for step in steps:
         for target in _targets(step):
             preds.setdefault(target, []).append(step)
-    changed = True
-    while changed:
-        changed = False
-        for step in steps:
-            if step is start or by_name.get(step.name) is not step:
-                continue
-            known = [available[p.name] | set(_produced(p)) for p in preds.get(step.name, []) if available[p.name] is not None]
-            if not known:
-                continue
-            new = set.intersection(*known)
-            if new != available[step.name]:
-                available[step.name], changed = new, True
+    must = _availability(steps, start, preds, by_name, set.intersection)
+    may = _availability(steps, start, preds, by_name, set.union)
     for i, step in enumerate(steps):
-        have = available[step.name]
+        have = must[step.name]
         if have is None:
             continue  # unreachable; reported elsewhere
         missing = [key for key in dict.fromkeys(_consumed(step)) if key not in have]
         if missing:
             keys = ", ".join(f"`{k}`" for k in missing)
+            on_start = f" on the start step `{start.name}`" if start is not None else " on the start step"
             issues.append(Issue(path, "unproduced_input",
                                 f"step `{step.name}` consumes {keys}, which no step produces on every path to it; declare "
-                                f"them on the start step `{start.name}` if the client supplies them, or as `outputs` of an "
-                                f"upstream step", f"body:$.steps[{i}]"))
+                                f"them{on_start} if the client supplies them, or as `outputs` of an upstream step",
+                                f"body:$.steps[{i}]"))
+        if step.kind == "router" and step.confidence is not None and step.confidence.key not in (may[step.name] or set()):
+            issues.append(Issue(path, "unproduced_input",
+                                f"router `{step.name}` checks `{step.confidence.key}`, which no step produces on any path to it; "
+                                f"name the question in a decision's `confidence` list (which emits `<question>_confidence`), or "
+                                f"declare the key as an output of an upstream step", f"body:$.steps[{i}].confidence.key"))
     return issues
+
+
+# ------------------------------------------------------------- the sources of a route
+
+DETERMINISTIC, MEASURED, UNMEASURED = "deterministic", "measured", "unmeasured"
+# Worst class wins when a branch key has several producers.
+CLASS_RANK = {DETERMINISTIC: 0, MEASURED: 1, UNMEASURED: 2}
+
+
+def _classify(router: Any, producer: Any) -> tuple[str, str]:
+    """What kind of source one producer of a router's branch key is, and why in a phrase.
+
+    Deterministic: a start input, or a script's output the router does not read a confidence
+    from. Measured: a decision model (no fallback) whose confidence for the branch question the
+    router checks, or a script or client task whose own declared number the router checks.
+    Unmeasured: a decision the client may answer by hand, or a client task's output the router
+    does not check. Probabilistic, with no calibrated number behind it."""
+    check = router.confidence
+    checked = check.key if check is not None else None
+    key = router.branch_on
+    if producer.kind == "start":
+        return DETERMINISTIC, f"`{key}` is a start input"
+    if producer.kind in ("execution", "client_task"):
+        own = [o.name for o in producer.outputs]
+        label = "script" if producer.kind == "execution" else "client task"
+        if checked in own:
+            return MEASURED, f"{label} `{producer.name}` declares `{checked}`, the number the router checks, beside `{key}`"
+        if producer.kind == "execution":
+            return DETERMINISTIC, f"`{key}` is an output of script `{producer.name}`"
+        return UNMEASURED, (f"`{key}` is an output of client task `{producer.name}`, chosen by the client's own judgment, and "
+                            f"the router checks no number the task declares")
+    # a decision
+    if producer.fallback:
+        return UNMEASURED, f"decision `{producer.name}` answers `{key}` with `fallback: true`, so the client may have chosen it by hand"
+    if key not in producer.confidence:
+        return UNMEASURED, f"decision `{producer.name}` does not name `{key}` in its `confidence` list, so the model's confidence is not recorded"
+    if checked != confidence_key(key):
+        return UNMEASURED, f"decision `{producer.name}` emits `{confidence_key(key)}` but the router does not check it"
+    return MEASURED, f"decision `{producer.name}` answers `{key}` with a decision model and the router checks `{checked}`"
+
+
+def _sources(spec: ProcedureSpec) -> dict[str, list[tuple[Any, str, str]]]:
+    """For each router, by name: every producer of its branch key from which the router can be
+    reached, with the producer's class and the reason. The first step of each name counts."""
+    by_name: dict[str, Any] = {}
+    for step in spec.steps:
+        by_name.setdefault(step.name, step)
+
+    def reaches(from_name: str, target: str) -> bool:
+        seen: set[str] = set()
+        stack = [from_name]
+        while stack:
+            current = stack.pop()
+            if current in seen or current not in by_name:
+                continue
+            seen.add(current)
+            for nxt in _targets(by_name[current]):
+                if nxt == target:
+                    return True
+                stack.append(nxt)
+        return False
+
+    sources: dict[str, list[tuple[Any, str, str]]] = {}
+    for router in spec.steps:
+        if router.kind != "router" or by_name[router.name] is not router:
+            continue
+        found = []
+        for producer in spec.steps:
+            if router.branch_on in _produced(producer) and reaches(producer.name, router.name):
+                found.append((producer, *_classify(router, producer)))
+        sources[router.name] = found
+    return sources
+
+
+def classify_sources(spec: ProcedureSpec) -> dict[str, str]:
+    """The class of every router's source, by router name: `deterministic`, `measured` or
+    `unmeasured`, the worst of its branch key's producers. The server stores it with the
+    procedure so governance can report the runs that passed through an unmeasured route."""
+    return {name: max((cls for _, cls, _ in found), key=CLASS_RANK.get, default=DETERMINISTIC)
+            for name, found in _sources(spec).items()}
+
+
+def check_sources(spec: ProcedureSpec, path: str) -> list[Issue]:
+    """What the class of a route says to its author. A router whose check reads a number
+    nothing calibrated (`confidence_on_unmeasured_source`), a router an LLM steers with
+    nothing recorded (`unmeasured_route`), both warnings; a router checking a confidence a
+    script or client task declared itself (`declared_confidence`), information. A
+    deterministic route says nothing."""
+    issues: list[Issue] = []
+    index: dict[str, int] = {}
+    for i, s in enumerate(spec.steps):
+        index.setdefault(s.name, i)
+    fix = ("decide the key with a decision model (`fallback: false`) that names the question in its `confidence` "
+           "list, and check `<question>_confidence` on the router")
+    for name, found in _sources(spec).items():
+        router = spec.step(name)
+        where = f"body:$.steps[{index[name]}]"
+        worst = max((cls for _, cls, _ in found), key=CLASS_RANK.get, default=DETERMINISTIC)
+        reasons = "; ".join(why for _, cls, why in found if cls == UNMEASURED)
+        if worst == UNMEASURED and router.confidence is not None:
+            issues.append(Issue(path, "confidence_on_unmeasured_source",
+                                f"router `{name}` checks `{router.confidence.key}`, but its branch key `{router.branch_on}` is "
+                                f"unmeasured: {reasons}; the check reads a number nothing calibrated. To measure the route, {fix}",
+                                f"{where}.confidence", severity="warning"))
+        elif worst == UNMEASURED:
+            issues.append(Issue(path, "unmeasured_route",
+                                f"router `{name}` branches on `{router.branch_on}`, which is unmeasured: {reasons}; a probabilistic "
+                                f"choice routes the run and nothing records how sure it was. To measure the route, {fix}",
+                                where, severity="warning"))
+        for producer, cls, _ in found:
+            if cls != MEASURED or producer.kind == "decision":
+                continue
+            if producer.kind == "execution":
+                verdict = f"script `{producer.name}` declares itself; legitimate when the code behind it is calibrated"
+            else:
+                verdict = (f"client task `{producer.name}` declares itself; discouraged, because an agent cannot calibrate "
+                           f"its own confidence. Prefer a decision step for the judgment")
+            issues.append(Issue(path, "declared_confidence",
+                                f"router `{name}` checks `{router.confidence.key}`, a confidence {verdict}",
+                                f"{where}.confidence.key", severity="info"))
+    return issues
+
+
+# ----------------------------------------------------------------------- the graph
 
 
 def check_requires(spec: ProcedureSpec, path: str) -> list[Issue]:
@@ -367,11 +555,15 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
         else:
             by_name[step.name] = step
 
-    start = steps[0]
-    if start.kind not in RUNNABLE_KINDS:
-        issues.append(Issue(path, "invalid_start_step",
-                            f"the first step is the start and must be a decision, execution, or client_task; got kind `{start.kind}`",
-                            "body:$.steps[0].kind"))
+    starts = [s for s in steps if s.kind == "start"]
+    if not starts:
+        issues.append(Issue(path, "missing_start_step",
+                            "procedure has no step of kind `start`; add one holding the procedure's inputs, with `inputs_to` "
+                            "naming the first runnable step", "body:$.steps"))
+    elif len(starts) > 1:
+        issues.append(Issue(path, "multiple_start_steps",
+                            f"procedure must have exactly one `start` step; found {[s.name for s in starts]}", "body:$.steps"))
+    start = starts[0] if starts else None
 
     end_names = [s.name for s in steps if s.kind == "end"]
     if not end_names:
@@ -380,11 +572,23 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
         issues.append(Issue(path, "multiple_end_steps", f"procedure must have exactly one `end` step; found {end_names}", "body:$.steps"))
 
     for i, step in enumerate(steps):
-        for target in _targets(step):
+        for target, where in _edges(step):
             if target not in by_name:
-                where = "branches" if step.kind == "router" else "inputs_to"
                 issues.append(Issue(path, "unknown_step_reference",
                                     f"step `{step.name}` hands off to `{target}`, which is not a declared step", f"body:$.steps[{i}].{where}"))
+            elif start is not None and target == start.name:
+                issues.append(Issue(path, "edge_into_start",
+                                    f"step `{step.name}` hands off to `{target}`, the start step; a run begins there and nothing "
+                                    f"returns to it", f"body:$.steps[{i}].{where}"))
+
+    for i, step in enumerate(steps):
+        if step.kind != "decision":
+            continue
+        for k, qname in enumerate(step.confidence):
+            if qname not in step.questions:
+                issues.append(Issue(path, "unknown_confidence_question",
+                                    f"decision `{step.name}` names `{qname}` in `confidence`, which is not one of its questions "
+                                    f"{sorted(step.questions)}", f"body:$.steps[{i}].confidence[{k}]"))
 
     def reachable(from_name: str) -> set[str]:
         seen: set[str] = set()
@@ -397,10 +601,11 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
             stack.extend(_targets(by_name[current]))
         return seen
 
-    from_start = reachable(start.name)
-    for i, step in enumerate(steps):
-        if step.name not in from_start:
-            issues.append(Issue(path, "unreachable_step", f"step `{step.name}` cannot be reached from the start step `{start.name}`", f"body:$.steps[{i}]"))
+    if start is not None:
+        from_start = reachable(start.name)
+        for i, step in enumerate(steps):
+            if step.name not in from_start:
+                issues.append(Issue(path, "unreachable_step", f"step `{step.name}` cannot be reached from the start step `{start.name}`", f"body:$.steps[{i}]"))
     if len(end_names) == 1:
         for i, step in enumerate(steps):
             if step.kind != "end" and end_names[0] not in reachable(step.name):
@@ -428,7 +633,8 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
                                         f"`{feeder.name}`, but `{key}` is not one of its possible answers {sorted(allowed)}",
                                         f"body:$.steps[{i}].branches.{key}"))
 
-    issues.extend(check_state(spec, path, by_name))
+    issues.extend(check_state(spec, path, by_name, start))
+    issues.extend(check_sources(spec, path))
     issues.extend(check_requires(spec, path))
 
     for i, step in enumerate(steps):
@@ -454,6 +660,8 @@ class LoadedSkill:
     skill_dir: Path
     frontmatter: dict
     spec: ProcedureSpec
+    # The class of each router's source (see `classify_sources`), by router name.
+    routers: dict[str, str] = field(default_factory=dict)
 
 
 def validate_skill(skill_dir: Path) -> tuple[LoadedSkill | None, list[Issue]]:
@@ -486,7 +694,7 @@ def validate_skill(skill_dir: Path) -> tuple[LoadedSkill | None, list[Issue]]:
         issues = [i for i in issues if i.kind != "runtime_block_outdated" or i is outdated[0]]
     if any(i.severity == "error" for i in issues) or spec is None:
         return None, issues
-    return LoadedSkill(skill_dir=skill_dir, frontmatter=doc.frontmatter, spec=spec), issues
+    return LoadedSkill(skill_dir=skill_dir, frontmatter=doc.frontmatter, spec=spec, routers=classify_sources(spec)), issues
 
 
 def load_skill(skill_dir: Path) -> LoadedSkill:

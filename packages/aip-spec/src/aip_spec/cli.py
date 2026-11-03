@@ -19,21 +19,20 @@ from pathlib import Path
 from aip_spec.models import FORMAT_VERSION
 
 
-def _emit(issues) -> tuple[int, int]:
-    errors = warnings = 0
+def _emit(issues) -> tuple[int, str]:
+    """Print one JSON record per issue to stderr; return the error count and a note on the rest."""
+    counts = {"error": 0, "warning": 0, "info": 0}
     for issue in issues:
         print(json.dumps(issue.to_record()), file=sys.stderr)
-        if issue.severity == "warning":
-            warnings += 1
-        else:
-            errors += 1
-    return errors, warnings
+        counts[issue.severity] += 1
+    rest = [f"{counts['warning']} warning(s)"] * bool(counts["warning"]) + [f"{counts['info']} info"] * bool(counts["info"])
+    return counts["error"], f" ({', '.join(rest)} — see stderr)" if rest else ""
 
 
 def validate_command(argv: list[str]) -> int:
-    """Exit 0 when valid (warnings allowed), 1 on any error. One human line on stdout;
+    """Exit 0 when valid (warnings and info allowed), 1 on any error. One human line on stdout;
     one JSON record per issue on stderr: `path`, `kind`, `message`, optional `location`
-    and `severity` (absent means error)."""
+    and `severity` (absent means error; `warning` or `info` otherwise)."""
     from aip_spec.skill import validate_skill
 
     parser = argparse.ArgumentParser(prog="aip-spec validate", description="Validate an AIP skill folder.")
@@ -41,8 +40,7 @@ def validate_command(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     loaded, issues = validate_skill(args.skill_dir)
-    errors, warnings = _emit(issues)
-    suffix = f" ({warnings} warning(s) — see stderr)" if warnings else ""
+    errors, suffix = _emit(issues)
     if errors == 0 and loaded is not None:
         print(f"VALID: {args.skill_dir} (name: {loaded.frontmatter.get('name')}){suffix}")
         return 0

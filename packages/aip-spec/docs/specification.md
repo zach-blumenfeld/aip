@@ -191,13 +191,39 @@ path through the graph:
 
 1. **Every consumed key is produced.** A key a step reads (`inputs`, or a router's `branch_on`)
    is produced by a step on every path to that step, or declared on the start step. A key
-   produced on one branch only cannot be read after the branches join (`unproduced_input`).
-2. **One producer per key.** No two steps produce the same key, and no step produces a start
-   input (`duplicate_producer`). The state only grows; nothing is overwritten.
-3. **One type per key.** A consumer declares the type its producer declares: an `IOItem` type
-   for a start input or an output, `boolean`/`string`/`integer` for a noul/choice/score answer
-   (`type_mismatch`).
-4. **A step sees only its declared inputs.** The agent gives it those keys and nothing else.
+   produced on one branch only cannot be read after the branches join (`unproduced_input`). A
+   router's confidence `key` need only be produced on some path to it: where it is absent at
+   runtime the check fires.
+2. **One type per key.** Every declaration of a key agrees on its type: an `IOItem` type for a
+   start input, an input or an output, `boolean`/`string`/`integer` for a noul/choice/score
+   answer, `float` for a confidence key and a router's confidence `key`. The first declaration
+   in step order is the reference (`type_mismatch`). A router branches on a `boolean`, `string`
+   or `integer` (`unbranchable_type`).
+3. **A step sees only its declared inputs.** The agent gives it those keys and nothing else.
+
+A key may have more than one producer, the start step included: keys accumulate, and where a
+run passes through two producers the later one overwrites the value. The validator says so as
+information (`duplicate_producer`, severity `info`), never as a fault.
+
+### The sources of a route
+
+What feeds a router's `branch_on` is classified, per router, from every producer of the key
+from which the router can be reached; with several producers the worst class wins:
+
+| Class | Source |
+|---|---|
+| deterministic | a start input, or a script's output when the router reads no confidence the script declares |
+| measured | a decision with `fallback: false` whose `confidence` list names the branch question, with the router checking `<question>_confidence`; or a script or client task whose outputs include the number the router checks |
+| unmeasured | a decision with `fallback: true`, a decision whose confidence is not emitted or not checked, or a client task output the router does not check: probabilistic, with no calibrated number behind it |
+
+A router with a confidence check on an unmeasured source gets `confidence_on_unmeasured_source`
+(a warning: the check reads a number nothing calibrated); a router with no check on an
+unmeasured source gets `unmeasured_route` (a warning: a probabilistic choice routed the run and
+nothing recorded how sure it was); a router checking a confidence a script or client task
+declared itself gets `declared_confidence` (information: legitimate for calibrated code,
+discouraged for an agent's task, which cannot calibrate its own confidence). A deterministic
+source reports nothing. `aip_spec.classify_sources(spec)` returns the class per router, and
+`validate_skill` carries it on the loaded skill as `routers`, so a server can store it.
 
 ## Types
 
@@ -219,10 +245,11 @@ checks the state before a step runs and the step's result after.
 aip-spec validate <skill-folder>
 ```
 
-Exit 0 when valid (warnings allowed), 1 on any error. One human line on stdout; on stderr, one
-JSON record per issue: `path`, `kind`, `message`, optional `location` (`$.name` in the
-frontmatter, `body:$.steps[2].inputs_to` in the YAML) and optional `severity` (absent means
-error, `warning` otherwise). The same checks run in Python as `aip_spec.validate_skill(folder)`.
+Exit 0 when valid (warnings and information allowed), 1 on any error. One human line on
+stdout; on stderr, one JSON record per issue: `path`, `kind`, `message`, optional `location`
+(`$.name` in the frontmatter, `body:$.steps[2].inputs_to` in the YAML) and optional `severity`
+(absent means error; `warning` or `info` otherwise). The same checks run in Python as
+`aip_spec.validate_skill(folder)`.
 
 What is checked, in order, and the `kind` each failure reports:
 
@@ -232,8 +259,9 @@ What is checked, in order, and the `kind` each failure reports:
 | frontmatter | present and a mapping (`missing_frontmatter`, `invalid_frontmatter`); the rules in the table above (`missing_required_frontmatter`, `invalid_name`, `name_mismatch`, `invalid_description`, `invalid_compatibility`, `invalid_license`, `invalid_allowed_tools`, `invalid_metadata`); `metadata.aip-version` present and current (`missing_aip_version`, `aip_version_mismatch`, `runtime_block_outdated` for a recognised earlier format) |
 | body | the runtime block, verbatim, then exactly one fenced YAML block (`empty_body`, `missing_runtime_block`, `invalid_body_format`); the YAML parses to a mapping (`invalid_body_yaml`, `invalid_body`) |
 | schema | the mapping validates as `ProcedureSpec`; each pydantic error is one `schema_violation` with its location |
-| graph | unique step names (`duplicate_step_name`); a runnable start (`invalid_start_step`); exactly one end (`missing_end_step`, `multiple_end_steps`); every `inputs_to` and branch target exists (`unknown_step_reference`); every step reachable from the start (`unreachable_step`) and able to reach the end (`no_path_to_end`); a router fed by a decision branches only on values it can produce (`unknown_branch_value`); unique input and output names per step (`duplicate_input_name`, `duplicate_output_name`); thresholds name real questions (`unknown_threshold_question`); every `script`, `template`, asset and reference exists (`missing_resource`) |
-| state | the three data-flow rules (`unproduced_input`, `duplicate_producer`, `type_mismatch`); every `client_task` declares `outputs` (`missing_outputs`) |
+| graph | unique step names (`duplicate_step_name`); exactly one start (`missing_start_step`, `multiple_start_steps`) that nothing hands off to (`edge_into_start`); exactly one end (`missing_end_step`, `multiple_end_steps`); every `inputs_to`, branch target and confidence check `to` exists (`unknown_step_reference`); every step reachable from the start (`unreachable_step`) and able to reach the end (`no_path_to_end`); a decision's `confidence` list names its own questions (`unknown_confidence_question`); a router fed by a decision branches only on values it can produce (`unknown_branch_value`); unique input and output names per step (`duplicate_input_name`, `duplicate_output_name`); every `script`, `template`, asset and reference exists (`missing_resource`) |
+| state | the data-flow rules (`unproduced_input`, `type_mismatch`, `unbranchable_type`); every `client_task` declares `outputs` (`missing_outputs`); several producers of one key, as information (`duplicate_producer`) |
+| sources | the class of each route (`confidence_on_unmeasured_source` and `unmeasured_route` as warnings, `declared_confidence` as information) |
 | environment | a procedure with `execution` steps declares `requires` (`missing_requires`); each `command` starts with the interpreter or a declared tool (`undeclared_launcher`) |
 
 ## Versioning
@@ -242,8 +270,9 @@ What is checked, in order, and the `kind` each failure reports:
 equal it. The runtime block's heading carries the same version, so a change to the block is a
 change to the format. The validator also recognises the versions in `LEGACY_VERSIONS`: a skill
 in one of them is reported as a single `runtime_block_outdated` naming the edits it needs, as a
-warning when the current format still accepts that version (`0.6a0` today) and an error when
-it does not (`0.5a1`). The upgrades themselves are in the repository's
+warning when the current format still accepts that version (none today: `0.8` is breaking) and
+an error when it does not (`0.5a1`, `0.6a0`, `0.6a1`; for `0.6a1` the message names
+`aip upgrade`). The upgrades themselves are in the repository's
 [`docs/upgrading.md`](../../../docs/upgrading.md).
 
 The format's version moves only when the format changes; the package version
