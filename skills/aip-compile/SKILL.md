@@ -84,7 +84,7 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 |-------------------------|----------|----------------------------------------------------------------------------------------------------|
 | `name`                  | Yes      | 1–64 chars; lowercase `a–z`, `0–9`, hyphens; no leading, trailing, or consecutive hyphens. Must match the parent directory name. |
 | `description`           | Yes      | 1–1024 chars. Describes *what* the skill encodes and *when* to use it; include specific keywords that help agents identify relevant tasks. |
-| `metadata.aip-version`  | Yes      | AIP format version this skill is written in. Currently `"0.6a1"`. *AIP-specific.*                  |
+| `metadata.aip-version`  | Yes      | AIP format version this skill is written in. Currently `"0.8"`. *AIP-specific.*                    |
 | `license`               | No       | License name or reference to a bundled license file, e.g. `Apache-2.0`.                            |
 | `compatibility`         | No       | 1–500 chars. Only when the skill has specific environment requirements (intended product, system packages, network access, runtime versions); most skills don't need it. |
 | Other `metadata.*` keys | No       | Arbitrary string→string mapping for properties not defined by the Agent Skills spec, e.g. `author`, `version` (the skill's own version, distinct from `aip-version`). Use unique key names. |
@@ -100,7 +100,7 @@ YAML metadata at the top of `SKILL.md`, delimited by `---` markers.
 
 ```yaml
 metadata:
-  aip-version: "0.6a1"
+  aip-version: "0.8"
   author: example-org
   version: "1.0"
 ```
@@ -109,7 +109,7 @@ metadata:
 
 The body — everything after the closing `---` of the frontmatter — must be the AIP runtime block, verbatim, followed by exactly one fenced YAML code block. No other prose or code blocks. The runtime block gives whoever executes the skill the terminology and semantics they need; copy it exactly as shown below. The YAML inside the fence is the procedure; it validates against the AIP procedure schema.     
 
-Example (pared down for illustration — real skills typically carry more steps and richer detail), from the bundled `examples/billing-support` skill. The first step is the start; the router branches on the value the decision produced:
+Example (pared down for illustration — real skills typically carry more steps and richer detail), from the bundled `examples/billing-support` skill. The `start` step holds the inputs; the decision writes its confidence in `tone`, and the router checks it before branching on the value:
 
 ````markdown
 # AIP runtime — format 0.8
@@ -152,13 +152,21 @@ requires:
     version: "3.10"
 
 steps:
+  - name: start
+    kind: start
+    description: The customer's message, as support received it.
+    inputs:
+      - name: message
+        type: string
+        description: The customer's message, verbatim.
+    inputs_to: triage
+
   - name: triage
     kind: decision
     description: Classify whether the message is about billing and how upset the customer is.
     inputs:
       - name: message
         type: string
-        description: The customer's message, verbatim.
     questions:
       billing:
         type: noul
@@ -169,15 +177,19 @@ steps:
         criteria:
           angry: Frustrated, demanding, or threatening to leave.
           calm: Neutral or polite, asking a question.
-    thresholds:
-      billing: 0.15
-      tone: 0.6
+    # Emits `tone_confidence`, the probability the decision model put on its answer; `by-tone` checks it.
+    confidence: [tone]
+    # The quickstart keeps fallback on so the walkthrough runs without a TypeSafe key: the agent answers
+    # by hand, which writes no confidence, so the router's check fires. A production skill turns it off.
+    fallback: true
     inputs_to: by-tone
 
   - name: by-tone
     kind: router
     description: Angry customers go to a human queue; calm ones get a drafted reply.
     branch_on: tone
+    # Checked before the branches: below the bound, or with no confidence recorded, the run escalates.
+    confidence: {key: tone_confidence, below: 0.6, to: escalate}
     branches:
       angry: escalate
       calm: reply
@@ -295,9 +307,9 @@ Treat `SKILL.md` as an execution graph: steps are nodes, inputs flow over edges.
    - domain-specific logic
    - **deterministic** if/then/else, when/unless, or "only if" rules over structured inputs
    - lookup tables
-   - numeric calculations, thresholds, or caps
+   - numeric calculations, cutoffs, or caps
    - validation against a fixed set of rules
-2. **Decision (`decision`)** when the step must judge the input — which case applies, whether a condition holds, how severe something is — and the answer space can be written down before seeing the input: yes/no, one of a fixed set, or a position on a described scale. The answer becomes a typed value in the state: a `router` can branch on it, a script can take it as input, or the procedure can end on it. `thresholds` mark the questions where an uncertain answer must be reconsidered, so a decision is never less safe than leaving the judgment to free-form reasoning.
+2. **Decision (`decision`)** when the step must judge the input — which case applies, whether a condition holds, how severe something is — and the answer space can be written down before seeing the input: yes/no, one of a fixed set, or a position on a described scale. The answer becomes a typed value in the state: a `router` can branch on it, a script can take it as input, or the procedure can end on it. Name a question in `confidence` and a router can send an uncertain answer elsewhere, so a decision is never less safe than leaving the judgment to free-form reasoning.
 3. **Client task (`client_task`)** only when the output must be generated by the agent itself: text, code, a plan, a synthesis. If a judgment seems to need information the state lacks, add an upstream script that puts it in the state instead of falling back to a client task.
 
 While scripting is critical, scripting the wrong things results in brittle errors and over-restriction. Leaving to free-form reasoning what a script or decision can do also costs speed, consistency, and calibration.
@@ -346,18 +358,32 @@ Further advice ([System One concepts](https://docs.typesafe.ai/concepts/system-o
 - Put every question about the same input in one decision step; one call answers them all.
 - The step's `inputs` are the content being judged. Criteria go in `instructions`, not in the inputs.
 - A question's name is the key downstream steps declare in `inputs` and a router names in `branch_on`. Branch keys are the choice labels, `true`/`false` for a noul, or level numbers for a score.
-- Set `thresholds` per question: raise when a false positive is costly, lower when a false negative is.
-- If a question only applies to some inputs (severity only matters for bugs), say what the answer is for the others in its `instructions` ("non-bugs are level 0"), or ask it in a separate decision after a router. Otherwise the model hedges on every input it does not apply to and flags them all for review.
+- A decision model answers by default. Set `fallback: true` only where the client may answer by hand when no model is configured; a manual answer records no confidence.
+- Name in `confidence` each question a router will check. The decision then writes `<question>_confidence`, the probability the model put on its answer, in `[0, 1]`, into the state; the check lives on the router (below), not in the question.
+- If a question only applies to some inputs (severity only matters for bugs), say what the answer is for the others in its `instructions` ("non-bugs are level 0"), or ask it in a separate decision after a router. Otherwise the model hedges on every input it does not apply to, and its confidence drops on all of them.
+
+#### Routing on a Probability
+
+A router branches on a value; when a model produced it, the route is a bet. Give the router a `confidence` check, `{key: <question>_confidence, below: <bound>, to: <step>}`: the run goes to `to` when the number is below the bound **or absent**, since a manual answer writes no confidence and nobody invents one. One check per router; a router that needs two is two routers. Raise the bound when a wrong branch is costly, lower it when `to` is.
+
+The validator classifies what feeds each router and reports on it:
+- **Deterministic**: a start input, or a script's output. Nothing to report.
+- **Measured**: a decision with `fallback: false` that names the branch question in `confidence`, with the router checking `<question>_confidence`. Nothing to report.
+- **Unmeasured**: a decision with `fallback: true` (the client may have answered by hand), or a client task's output. Without a check the router gets `unmeasured_route` (warning): an LLM routed the run and nothing was recorded; use a decision model, turn `fallback` off, or add the check. With one it gets `confidence_on_unmeasured_source` (warning): the number it reads is not calibrated.
+- A script or client task that declares the number a router checks gets `declared_confidence` (info). Fine for calibrated code; avoid it for a client task, since an agent cannot calibrate its own confidence.
+
+With several producers of a key, the worst class wins.
 
 
 
 ### Declare What Each Step Adds
 
-Every `execution` and `client_task` step lists the keys it adds to the state as `outputs` (same shape as `inputs`: name, type, description). A decision's outputs are its question names; routers and the end step add nothing. The end step's `inputs` are the procedure's result, and the start step's `inputs` are everything the caller must supply. The validator enforces three rules:
+Every `execution` and `client_task` step lists the keys it adds to the state as `outputs` (same shape as `inputs`: name, type, description). A decision's outputs are its question names, plus `<question>_confidence` for each question it names in `confidence`; routers and the end step add nothing. The end step's `inputs` are the procedure's result, and the `start` step's `inputs` are everything the caller must supply. The validator enforces two rules:
 
-1. Every key a step consumes (its `inputs`, or a router's `branch_on`) is produced by a step on every path to it, or declared on the start step. A key produced on only one branch cannot be read after the branches join.
-2. Each key is produced by exactly one step and is never a start input. No step overwrites another's key; if two steps would produce the same name, rename one.
-3. A `client_task` must declare `outputs`: they are exactly what the agent is asked to answer with.
+1. Every key a step consumes (its `inputs`, or a router's `branch_on`) is produced by a step on every path to it, or declared on the `start` step. A key produced on only one branch cannot be read after the branches join. A router's confidence `key` need only be produced on some path to it; where it is not, the check fires.
+2. A `client_task` must declare `outputs`: they are exactly what the agent is asked to answer with.
+
+Every declaration of a key, producer or consumer, agrees on its type. A later step may produce a key again (the newer value replaces the older one); the validator reports each such key as an info, `duplicate_producer`, so do it on purpose, never by accident.
 
 A script prints only its declared outputs, never an echo of its inputs.
 
@@ -430,13 +456,13 @@ Checklist. Follow sequentially.
          - **Erroneous drop** — the format can and should carry it. Re-author the body to include it. Expect this case.
          - **Deliberate drop** — not actionable (background, history, rationale) or redundant. Record it in `source/README.md` with rationale.
 
-      The check passes when every source item has been found in the body or recorded as a deliberate drop. Rules, conditions, thresholds, lookups, branching, and the context needed to apply them are never deliberate drops.
+      The check passes when every source item has been found in the body or recorded as a deliberate drop. Rules, conditions, cutoffs, lookups, branching, and the context needed to apply them are never deliberate drops.
    4. Functional test the skill.
       1. Run it with realistic start inputs: with the `aip-runtime` skill if it is installed, otherwise execute the procedure yourself per the runtime block, answering the decision questions and performing the client tasks. Run it through to the end step. Use enough inputs to reach every router branch at least once.
       2. Spawn a fresh agent if possible, i.e. Agent/Task tool if present, `claude -p` via bash, or whatever the runtime exposes. Spawn 2–3 fresh sessions against the skill folder using prompts derived from `trigger_when` and `purpose`. For each session, capture script errors and the final response.
       3. Evaluate against:
          - **Script errors** — non-zero exits, stderr noise, exceptions
-         - **Decision quality** — answers and confidences on the test inputs make sense; thresholds flag the genuinely ambiguous ones and no others.
+         - **Decision quality** — answers and confidences on the test inputs make sense; a router's confidence check fires on the genuinely ambiguous ones and no others.
          - **Quality** — response matches what `description` promises; no missing sections, no hallucinated steps.
          - **Intent capture** — the response addresses the prompt's stated need, not an adjacent one.
          - **Over-restriction** — compare against what agent reasoning would produce unaided. If a script or decision stripped reasoning, nuance, or form that mattered, revise it or convert the step to a decision or client task.
@@ -461,12 +487,12 @@ Checklist. Follow sequentially.
 ```bash
 aip-spec validate <path/to/skill-folder>
 ```
-Checks: frontmatter — required fields (`name`, `description`, `metadata.aip-version`), Agent Skills format rules on `name` (length, charset, hyphen rules, folder-name match), length caps on `description` and `compatibility`, type rules on `license`/`allowed-tools`/`metadata` values, `metadata.aip-version` matches the validator's format version. Required folder structure (`source/` present). Body is the AIP runtime block, verbatim, then exactly one fenced YAML block. The YAML validates against the AIP procedure schema. Graph rules: unique step names, a runnable start, exactly one `end`, every `inputs_to` and router branch resolves, every step reachable from the start and able to reach the end, unique input and output names, thresholds name real questions, every consumed key produced on every path or declared on the start step, one producer per key, `outputs` on every `client_task`, `requires` present when there are `execution` steps and each script's launcher declared in it, every referenced asset, reference, and script exists on disk.
+Checks: frontmatter — required fields (`name`, `description`, `metadata.aip-version`), Agent Skills format rules on `name` (length, charset, hyphen rules, folder-name match), length caps on `description` and `compatibility`, type rules on `license`/`allowed-tools`/`metadata` values, `metadata.aip-version` matches the validator's format version. Required folder structure (`source/` present). Body is the AIP runtime block, verbatim, then exactly one fenced YAML block. The YAML validates against the AIP procedure schema. Graph rules: unique step names, exactly one `start` step that nothing points at and exactly one `end`, every `inputs_to`, router branch and check `to` resolves, every step reachable from the start and able to reach the end, unique input and output names, `confidence` names real questions, every consumed key produced on every path or declared on the start step, every declaration of a key agreeing on its type, a router's `branch_on` key a boolean, string or integer and its check's key a float, `outputs` on every `client_task`, `requires` present when there are `execution` steps and each script's launcher declared in it, every referenced asset, reference, and script exists on disk. Warnings name routers fed by an unmeasured source (`unmeasured_route`, `confidence_on_unmeasured_source`); infos name a key produced twice (`duplicate_producer`) and a declared confidence a router checks (`declared_confidence`).
 
 **Output contract:**
 - Exit 0 on success, 1 on any error.
 - stdout: single-line human summary.
-- stderr: JSON Lines, one record per error or warning. Stream-parse to classify.
+- stderr: JSON Lines, one record per error, warning or info (`severity`); an info never fails. Stream-parse to classify.
 
 **On failure, apply tiered recovery:**
 - **Trivial** (typo, missing required field, formatting drift): fix silently and re-run.
@@ -479,5 +505,5 @@ Checks: frontmatter — required fields (`name`, `description`, `metadata.aip-ve
 1. Dropping content from original SKILL.md to over compress a SKILL.md
 2. Dumping YAML bodies into chat without asking. Default to a natural-language summary; offer the raw artifact if the user wants it.
 3. Skipping the validator under user scope restrictions. `aip-spec validate` is part of this skill's contract, not a third-party resource — run it anyway and surface that you're doing so.
-4. Encoding rules, lookup tables, numeric calculations/thresholds, or other scriptable logic as prose instead of via scripts; or leaving to free-form reasoning a judgment a decision step can make.
+4. Encoding rules, lookup tables, numeric calculations/cutoffs, or other scriptable logic as prose instead of via scripts; or leaving to free-form reasoning a judgment a decision step can make.
 5. Inventing AIP frontmatter keywords at the root. The only AIP-specific field is `metadata.aip-version`. No bare-root `aip_version:`, `aip:`, etc.
