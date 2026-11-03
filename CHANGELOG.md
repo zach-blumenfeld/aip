@@ -14,6 +14,9 @@ Add notable changes here as you make them. On release, rename this section to th
 
 The first release cut by the GitHub Actions workflow; 0.7.0 was published by hand from a laptop. No change to the console itself.
 
+### Changed
+- **The release workflow stages instead of publishing.** `npm stage publish --provenance` by trusted publishing puts the version in npm's staging area, and the maintainer approves it with 2FA on npmjs.com (or `npm stage approve`); nothing is installable before that. No npm token exists anywhere.
+
 ### Added
 - **Apache-2.0 license**, the same as the aip repo: a `LICENSE` file in the package and `license` in `package.json`.
 
@@ -29,4 +32,4 @@ The first release on npm: `npx aip-console`. It targets aip 0.7.0, the first rel
 ### Changed
 - **The step graph** draws loops on a rail outside the steps they span, bends an edge that skips layers around the steps between, and has a left-to-right toggle.
 - **aip 0.7.0 is the minimum.** The install hints name the PyPI packages (`uv tool install agent-instruction-protocol`, `uv tool install aip-spec`) or the aip repo's installer; the format's files the tests compare against live at `packages/aip-spec` in the aip repo, and the agent prompt says so.
-- **Releases** are cut by a manual GitHub Actions workflow (`.github/workflows/release.yml`): it refuses a version that is already tagged, builds and packs, tags, publishes to npm with provenance, and creates the GitHub Release from this file's section; `target: dry-run` is the rehearsal. `AGENTS.md` carries the repo map and the release steps for agents, which prepare releases and never publish.
+- **Releases** are cut by a manual GitHub Actions workflow (`.github/workflows/release.yml`): it refuses a version that is already tagged, builds and packs, tags, publishes to npm with provenance, and creates the GitHub Release from this file's section; `target: dry-run` is the rehearsal. (From 0.7.1 it stages instead, see there.) `AGENTS.md` carries the repo map and the release steps for agents, which prepare releases and never publish.

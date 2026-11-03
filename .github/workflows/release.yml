@@ -2,25 +2,28 @@ name: Release to npm
 
 # Manual trigger from the Actions tab, after the release PR is merged. Reads the version from
 # package.json (and checks package-lock.json agrees), refuses if the tag exists, builds the
-# bundle, packs the tarball and checks it carries bin/ and dist/, pushes the tag, publishes
-# `aip-console` to npm with provenance, and cuts a GitHub Release whose notes are the
+# bundle, packs the tarball and checks it carries bin/ and dist/, pushes the tag, STAGES
+# `aip-console` on npm with provenance, and cuts a GitHub Release whose notes are the
 # `## [X.Y.Z]` section of CHANGELOG.md.
 #
-# The publish job runs in the `release` GitHub environment. It publishes with npm's trusted
-# publishing (OIDC: `id-token: write`, no token) once the package page names this workflow
-# and environment as its trusted publisher; until then, or if trusted publishing is not
-# available to the account, the `NPM_TOKEN` secret (a granular token with publish rights)
-# is used when it is set. Which one applies is recorded in AGENTS.md. The environment and
-# the trusted publisher are set up by hand once (aip issue #17, "Before starting").
+# Staged, not published: npm's staged publishing puts the version in a holding area that is not
+# installable until a maintainer approves it with 2FA, on npmjs.com (the package's "Staged
+# Packages" tab → Approve) or with `npm stage approve <stage-id>`. That approval is the last
+# step of a release and is always a person's. The stage job runs in the `release` GitHub
+# environment and authenticates with npm's trusted publishing (OIDC, `id-token: write`, no
+# token): the package page names this repository, `release.yml` and the `release` environment
+# as its trusted publisher, and `npm stage publish` is the one action a trusted publisher is
+# always allowed. The environment and the trusted publisher are set up by hand once (aip issue
+# #17, "Before starting").
 #
 # `target: dry-run` is the rehearsal for a new or changed workflow: same checks, same build,
-# same tarball, then `npm publish --dry-run` (nothing is uploaded), no tag is pushed and no
-# GitHub Release is created. Unlike TestPyPI it can be repeated at the same version.
+# same tarball, then `npm stage publish --dry-run` (nothing is uploaded), no tag is pushed and
+# no GitHub Release is created. It can be repeated at the same version.
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Where to publish. dry-run is the rehearsal: nothing uploaded, no tag, no GitHub Release."
+        description: "npm stages the version for your approval on npmjs.com. dry-run is the rehearsal: nothing uploaded, no tag, no GitHub Release."
         type: choice
         options: [npm, dry-run]
         default: npm
@@ -127,16 +130,16 @@ jobs:
 
       - name: Create and push the tag
         if: inputs.target == 'npm'
-        # Before the publish: a publish failure leaves a tag with no release behind it, which
-        # is visible and recoverable.
+        # Before the staging: a failure there leaves a tag with no release behind it, which is
+        # visible and recoverable (delete the tag, fix, re-run).
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ steps.v.outputs.tag }}" -m "Release ${{ steps.v.outputs.tag }}"
           git push origin "${{ steps.v.outputs.tag }}"
 
-  publish:
-    name: Publish aip-console
+  stage:
+    name: Stage aip-console on npm
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -145,16 +148,17 @@ jobs:
     permissions:
       contents: read
       id-token: write    # npm trusted publishing and the provenance attestation
+    outputs:
+      stage-id: ${{ steps.stage.outputs.stage-id }}
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          # No registry-url here: it would write an `_authToken=${NODE_AUTH_TOKEN}` line to .npmrc, and
-          # an empty token makes npm skip the OIDC exchange. The token step below writes .npmrc only
-          # when there is a token.
+          # No registry-url: it would write an `_authToken=${NODE_AUTH_TOKEN}` line to .npmrc,
+          # and an empty token makes npm skip the OIDC exchange.
 
-      - name: Use an npm that can publish with OIDC
-        # Trusted publishing needs npm 11.5.1 or newer; the one bundled with Node may be older.
+      - name: Use an npm with staged publishing
+        # `npm stage` arrived in npm 11.15.0; the npm bundled with Node may be older.
         run: |
           npm install -g npm@latest
           npm --version
@@ -163,37 +167,36 @@ jobs:
         with:
           name: release-${{ needs.build.outputs.version }}
 
-      - name: Publish (dry run)
+      - name: Stage (dry run)
         if: inputs.target == 'dry-run'
-        # Prints what would be uploaded and uploads nothing. No token and no OIDC exchange.
-        run: npm publish "${{ needs.build.outputs.tarball }}" --access public --dry-run
+        # Prints what would be uploaded and uploads nothing. No OIDC exchange.
+        run: npm stage publish "${{ needs.build.outputs.tarball }}" --access public --dry-run
 
-      - name: Publish
+      - name: Stage
+        id: stage
         if: inputs.target == 'npm'
-        # With `NPM_TOKEN` set, that token authenticates. Without it, npm exchanges the job's
-        # OIDC token with the registry: trusted publishing, which needs the package page to name
-        # this workflow and environment as its trusted publisher *with `npm publish` among its
-        # allowed actions* (a publisher created after 2026-09 allows only `npm stage publish`
-        # until that box is ticked; the registry then answers "OIDC permission denied for this
-        # action"). `--provenance` attaches the Sigstore attestation either way.
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # npm exchanges the job's OIDC token with the registry (trusted publishing) and puts the
+        # version in the package's staging area. `--provenance` attaches the Sigstore attestation.
+        # The stage id is what `npm stage approve` takes; the Approve button on npmjs.com needs
+        # nothing.
         run: |
-          if [ -n "$NPM_TOKEN" ]; then
-            echo "authenticating with the NPM_TOKEN secret"
-            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          else
-            echo "no NPM_TOKEN secret: using npm trusted publishing (OIDC)"
-          fi
-          npm publish "${{ needs.build.outputs.tarball }}" --access public --provenance
+          npm stage publish "${{ needs.build.outputs.tarball }}" --access public --provenance --json | tee stage.json
+          id=$(node -p "JSON.parse(require('fs').readFileSync('stage.json','utf8')).stageId ?? ''")
+          echo "stage-id=$id" >> "$GITHUB_OUTPUT"
+          echo "staged ${{ needs.build.outputs.version }} with id ${id:-(none printed)}"
 
-      - name: How to verify
+      - name: How to approve
         if: inputs.target == 'npm'
         run: |
           {
-            echo "## Published aip-console ${{ needs.build.outputs.version }}"
+            echo "## aip-console ${{ needs.build.outputs.version }} is staged on npm"
             echo
-            echo "Verify from a clean directory (needs an \`aip\` 0.7.0 or newer on the PATH):"
+            echo "Nobody can install it until you approve it (2FA):"
+            echo
+            echo "- on npmjs.com: https://www.npmjs.com/package/aip-console → **Staged Packages** → **Approve**, or"
+            echo "- in a terminal: \`npm stage approve ${{ steps.stage.outputs.stage-id }}\`"
+            echo
+            echo "Then verify from a clean directory (needs an \`aip\` 0.7.0 or newer on the PATH):"
             echo
             echo '```'
             echo "npx aip-console@${{ needs.build.outputs.version }} --help"
@@ -203,7 +206,7 @@ jobs:
   github-release:
     name: GitHub Release
     if: inputs.target == 'npm'
-    needs: [build, publish]
+    needs: [build, stage]
     runs-on: ubuntu-latest
     permissions:
       contents: write    # create the GitHub Release
@@ -213,8 +216,9 @@ jobs:
           name: release-${{ needs.build.outputs.version }}
 
       - name: Create GitHub Release
-        # After the publish, so a publish failure doesn't leave behind a GitHub Release
-        # pointing at nothing on npm. The tag already exists; the action attaches to it.
+        # After the staging, so a staging failure doesn't leave behind a GitHub Release
+        # pointing at nothing on npm. The tag already exists; the action attaches to it. The
+        # version is installable once the maintainer approves it on npmjs.com.
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build.outputs.tag }}
