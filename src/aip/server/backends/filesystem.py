@@ -368,7 +368,8 @@ class FilesystemGovernance:
             return None
         return next((s.get("script") for s in steps if s.get("name") == step), None)
 
-    def _resolved_procedures(self, name: str | None):
+    def _resolved_manifests(self, name: str | None):
+        """(name, revision, manifest) for what every name (or one) resolves to; nothing live, nothing yielded."""
         catalog = self.catalog._read_catalog()
         for entry_name in sorted(catalog):
             if name is not None and entry_name != name:
@@ -377,7 +378,11 @@ class FilesystemGovernance:
                 _, revision = self.catalog._resolve_in(catalog, entry_name)
             except NotFound:
                 continue
-            yield entry_name, revision, self.catalog._manifest(entry_name, revision).get("procedure", {})
+            yield entry_name, revision, self.catalog._manifest(entry_name, revision)
+
+    def _resolved_procedures(self, name: str | None):
+        for entry_name, revision, manifest in self._resolved_manifests(name):
+            yield entry_name, revision, manifest.get("procedure", {})
 
     def queries(self) -> List[JSON]:
         return governance.listing()
@@ -392,8 +397,10 @@ class FilesystemGovernance:
               limit: int = governance.DEFAULT_LIMIT, repeats: int = governance.DEFAULT_REPEATS) -> List[JSON]:
         if query not in governance.QUERIES:
             raise NotFound(governance.NOT_FOUND.format(name=query))
-        if query == "overridden-decisions":
-            return governance.overridden_decisions(self._window(name, window), limit)
+        if query == "confidence-fired":
+            return governance.confidence_fired(self._window(name, window), limit)
+        if query == "unmeasured-routes":
+            return governance.unmeasured_routes(self._resolved_manifests(name), self._window(name, window), limit)
         if query == "manual-decisions":
             return governance.manual_decisions(self._window(name, window), limit)
         if query == "failing-scripts":

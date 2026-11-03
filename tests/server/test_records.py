@@ -43,16 +43,23 @@ def test_snapshot_captures_files_and_graph():
     assert all(f.encoding == "utf-8" for f in b.files)
     assert set(b.directories) == {"assets", "references", "scripts", "source"}
 
-    assert [s["name"] for s in b.steps] == ["triage", "by-tone", "escalate", "reply", "end"]
-    assert (b.procedure["start"], b.procedure["end"]) == ("triage", "end")
-    assert b.edges == [{"from": "triage", "to": "by-tone"}, {"from": "escalate", "to": "end"},
-                       {"from": "reply", "to": "end"}]
+    assert [s["name"] for s in b.steps] == ["start", "triage", "by-tone", "escalate", "reply", "end"]
+    assert (b.procedure["start"], b.procedure["end"]) == ("start", "end")
+    assert b.edges == [{"from": "start", "to": "triage"}, {"from": "triage", "to": "by-tone"},
+                       {"from": "escalate", "to": "end"}, {"from": "reply", "to": "end"}]
+    assert b.inputs[0] == {"step": "start", "order": 0, "name": "message", "type": "string",
+                           "description": "The customer's message, verbatim."}
+    steps = {s["name"]: s for s in b.steps}
+    assert (steps["triage"]["fallback"], steps["triage"]["confidence"]) == (True, [])
+    assert (steps["by-tone"]["source_class"], steps["by-tone"]["check"]) == ("unmeasured", None)
+    # the validator's warning travels with the revision, named to its step
+    assert [(i["code"], i["severity"], i["step"]) for i in b.issues] == [("unmeasured_route", "warning", "by-tone")]
     assert b.branches == [{"router": "by-tone", "value": "angry", "to": "escalate"},
                           {"router": "by-tone", "value": "calm", "to": "reply"}]
     q = {x["name"]: x for x in b.questions}
     assert q["tone"]["type"] == "choice"
     assert json.loads(q["tone"]["criteria"])["angry"] == "Frustrated, demanding, or threatening to leave."
-    assert q["tone"]["threshold"] == 0.6
+    assert q["tone"]["confidence"] is False and "threshold" not in q["tone"]
     roles = {(r["step"], r["role"], r["path"]) for r in b.resources}
     assert {("escalate", "script", "scripts/escalate.py"), ("reply", "template", "assets/reply.md"),
             ("reply", "reference", "references/help.md")} <= roles

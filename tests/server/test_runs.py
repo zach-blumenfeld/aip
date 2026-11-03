@@ -67,7 +67,7 @@ def test_open_answer_and_finish(api):
     pause = r.json()
     run_id, version = pause["run_id"], pause["version"]
     assert (pause["paused"], pause["step"], pause["state"]) == ("decision", "triage", {"message": CALM})
-    assert pause["thresholds"] == {"billing": 0.15, "tone": 0.6}            # the author's, sent with the questions
+    assert (pause["confidence"], pause["fallback"]) == ([], True)          # what the decision emits and allows
     assert pause["steps"] == []
 
     r = api.post(f"/runs/{run_id}/result", json={"step": "triage", "version": version,
@@ -79,7 +79,7 @@ def test_open_answer_and_finish(api):
     assert [line["step"] for line in task["steps"]] == ["triage", "by-tone"]
     assert task["version"] > version
     held = api.get(f"/runs/{run_id}").json()
-    assert [e["step"] for e in held["history"]] == ["triage", "by-tone"]   # the task's entry waits for its answer
+    assert [e["step"] for e in held["history"]] == ["start", "triage", "by-tone"]   # the task's entry waits for its answer
 
     r = api.post(f"/runs/{run_id}/result", json={"step": "reply", "version": task["version"],
                                                    "answer": {"reply": REPLY}})
@@ -88,8 +88,8 @@ def test_open_answer_and_finish(api):
     assert (done["done"], done["state"]) == (True, {"message": CALM})
     run = api.get(f"/runs/{run_id}").json()
     assert (run["status"], run["state"], run["version"]) == ("done", {"message": CALM}, done["version"])
-    assert [e["step"] for e in run["history"]] == ["triage", "by-tone", "reply", "end"]
-    assert run["history"][2] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
+    assert [e["step"] for e in run["history"]] == ["start", "triage", "by-tone", "reply", "end"]
+    assert run["history"][3] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
                                  "input": {"message": CALM, "tone": "calm"},
                                  "result": {"task": task["task"], "references": task["references"],
                                             "answer": {"reply": REPLY}}}
@@ -168,8 +168,8 @@ def test_two_servers_over_one_root_serve_one_run_alternately(root, api):
     for server in (a, b):
         run = server.get(f"/runs/{pause['run_id']}").json()
         assert run["status"] == "done"
-        assert [e["step"] for e in run["history"]] == ["triage", "by-tone", "reply", "end"]
-    assert run["history"][2] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
+        assert [e["step"] for e in run["history"]] == ["start", "triage", "by-tone", "reply", "end"]
+    assert run["history"][3] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
                                  "input": {"message": CALM, "tone": "calm"},
                                  "result": {"task": task["task"], "references": task["references"],
                                             "answer": {"reply": REPLY}}}

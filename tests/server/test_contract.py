@@ -359,25 +359,29 @@ def governance(backend) -> GovernanceBackend:
     return backend.governance
 
 
-def decision(billing: bool = True, tone: str = "angry", proposed: dict | None = None, manual: bool = False,
+MANUAL = {"resolver": "manual", "model": None, "confidence": None}
+
+
+def decision(billing: bool = True, tone: str = "angry", tone_p: float = 0.9, manual: bool = False,
              message: str = "I was charged twice!") -> dict:
     """A triage history entry as the server records it: the answers the client posted and their
-    attribution, model-resolved (reviewed when `proposed`, the model's answers, is given) or manual."""
+    attribution, model-resolved (with the model's confidence per question) or manual."""
     answers = {"billing": billing, "tone": tone}
-    if manual:
-        attribution = {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
-    else:
-        attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.9},
-                       "reviewed": proposed is not None}
-        if proposed is not None:
-            attribution["proposed"] = proposed
+    attribution = MANUAL if manual else {"resolver": "typesafe", "model": "jev-1",
+                                         "confidence": {"billing": 0.97, "tone": tone_p}}
     return {"step": "triage", "kind": "decision", "input": {"message": message}, "result": {"answers": answers},
             "attribution": attribution}
 
 
-def route(tone: str) -> dict:
-    return {"step": "by-tone", "kind": "router", "input": {"tone": tone},
-            "result": {"to": "escalate" if tone == "angry" else "reply"}}
+def route(tone: str, fired: str | None = None) -> dict:
+    """The router's entry; with `fired`, the reason its confidence check fired (`low`, `absent`), and
+    the run went where the check points (escalate)."""
+    entry = {"step": "by-tone", "kind": "router", "input": {"tone": tone},
+             "result": {"to": "escalate" if tone == "angry" else "reply"}}
+    if fired is not None:
+        entry["input"] = {"tone_confidence": None if fired == "absent" else 0.4}
+        entry["result"] = {"to": "escalate", "confidence": {"fired": True, "reason": fired}}
+    return entry
 
 
 def escalate(message="I was charged twice!", billing=True, failed: str | None = None, **detail) -> dict:
@@ -422,7 +426,7 @@ def loop_example(tmp_path: Path):
 
 def loop_run(runs, revision: str, drafts: int) -> str:
     """A calm run of the loop example that redrafts `drafts - 1` times before the check passes."""
-    msg, manual = "Was my March invoice a duplicate?", {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    msg, manual = "Was my March invoice a duplicate?", MANUAL
     entries = [{"step": "triage", "kind": "decision", "input": {"message": msg}, "result": {"answers": {"billing": True, "tone": "calm"}},
                 "attribution": manual},
                {"step": "by-tone", "kind": "router", "input": {"tone": "calm"}, "result": {"to": "reply"}}]
@@ -451,36 +455,62 @@ def test_governance_backend_satisfies_protocol(governance):
         governance.query("nope")
 
 
-def test_governance_overridden_decisions(catalog, runs, governance, example):
+def test_governance_confidence_fired_and_manual_decisions(catalog, runs, governance, example):
     rev = catalog.publish(example)
-    assert governance.query("overridden-decisions") == []
-    # kept as the model said: angry -> escalate
+    assert governance.query("confidence-fired") == []
+    # the model was sure: angry -> escalate, the check held
     seed(runs, rev, decision(), route("angry"), escalate(), end())
-    # tone overridden to calm at review
-    seed(runs, rev, decision(tone="calm", proposed={"billing": True, "tone": "angry"}), route("calm"), reply(), end())
-    # billing overridden at review
-    seed(runs, rev, decision(billing=False, tone="calm", proposed={"billing": True, "tone": "calm"}), route("calm"),
-         reply(billing=False), end())
-    # a manual decision has no model answer to override
-    seed(runs, rev, decision(tone="calm", manual=True), route("calm"), reply())
-    # reviewed and accepted as proposed
-    seed(runs, rev, decision(proposed={"billing": True, "tone": "angry"}), route("angry"), status="running")
+    # the model said calm at 0.4: the check fired and sent the run to escalate
+    low = seed(runs, rev, decision(tone="calm", tone_p=0.4), route("calm", fired="low"), escalate(), end())
+    # a manual answer carries no confidence: the check fired on the absent key
+    absent = seed(runs, rev, decision(tone="calm", manual=True), route("calm", fired="absent"), escalate())
+    # another low one, still running
+    low2 = seed(runs, rev, decision(tone="calm", tone_p=0.3), route("calm", fired="low"), status="running")
 
-    rows = governance.query("overridden-decisions")
+    rows = governance.query("confidence-fired")
     assert rows == [
-        {"name": "billing-support", "step": "triage", "question": "billing", "resolver": "typesafe", "decided": 4,
-         "overridden": 1, "rate": 0.25},
-        {"name": "billing-support", "step": "triage", "question": "tone", "resolver": "typesafe", "decided": 4,
-         "overridden": 1, "rate": 0.25},
+        {"name": "billing-support", "router": "by-tone", "reason": "low", "fired": 2, "run_ids": [low2, low]},
+        {"name": "billing-support", "router": "by-tone", "reason": "absent", "fired": 1, "run_ids": [absent]},
     ]
-    assert governance.query("overridden-decisions", name="other") == []
-    assert governance.query("overridden-decisions", window=2) == []          # the newest two runs overrode nothing
-    assert [r["question"] for r in governance.query("overridden-decisions", limit=1)] == ["billing"]
+    assert governance.query("confidence-fired", name="other") == []
+    assert governance.query("confidence-fired", window=1) == [
+        {"name": "billing-support", "router": "by-tone", "reason": "low", "fired": 1, "run_ids": [low2]}]
+    assert [r["reason"] for r in governance.query("confidence-fired", limit=1)] == ["low"]
 
     assert governance.query("manual-decisions") == [
-        {"name": "billing-support", "step": "triage", "decided": 5, "manual": 1, "rate": 0.2}]
+        {"name": "billing-support", "step": "triage", "decided": 4, "manual": 1, "rate": 0.25}]
     assert governance.query("manual-decisions", window=1) == []               # the newest run used the model
     assert governance.query("manual-decisions", name="other") == []
+
+
+def test_governance_unmeasured_routes(catalog, runs, governance, example, tmp_path):
+    """The example's `triage` allows a manual answer, so its router is an unmeasured route the validator
+    flagged at publish; the query names it with the windowed runs that went through it."""
+    rev = catalog.publish(example)
+    assert governance.query("unmeasured-routes") == [
+        {"name": "billing-support", "revision": rev, "router": "by-tone", "code": "unmeasured_route",
+         "source_class": "unmeasured", "runs": 0, "run_ids": []}]
+    first = seed(runs, rev, decision(), route("angry"), escalate(), end())
+    second = seed(runs, rev, decision(tone="calm", manual=True), route("calm"), reply())
+    seed(runs, rev, decision(), status="running")                            # never reached the router
+    rows = governance.query("unmeasured-routes")
+    assert rows == [{"name": "billing-support", "revision": rev, "router": "by-tone", "code": "unmeasured_route",
+                     "source_class": "unmeasured", "runs": 2, "run_ids": [second, first]}]
+    assert governance.query("unmeasured-routes", window=1) == [{**rows[0], "runs": 0, "run_ids": []}]
+    assert governance.query("unmeasured-routes", name="other") == []
+    # a decision model with no fallback, its confidence checked on the router: measured, nothing to report
+    md = tmp_path / "measured-support" / "SKILL.md"
+    variant(tmp_path, "measured-support")
+    text = md.read_text().replace("    fallback: true\n", "    fallback: false\n    confidence: [tone]\n")
+    text = text.replace("    branch_on: tone\n", "    branch_on: tone\n"
+                        "    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n")
+    md.write_text(text)
+    measured = snapshot(tmp_path / "measured-support")
+    assert measured.issues == [] and {s["name"]: s.get("source_class") for s in measured.steps}["by-tone"] == "measured"
+    catalog.publish(measured)
+    assert [r["name"] for r in governance.query("unmeasured-routes")] == ["billing-support"]
+    catalog.retire("billing-support", rev)                                     # nothing live, nothing to report
+    assert governance.query("unmeasured-routes") == []
 
 
 def test_governance_failing_scripts(catalog, runs, governance, example):
@@ -592,7 +622,7 @@ def test_governance_stored_queries(backend, catalog, runs, governance, example):
                    "builtin": False}
     assert governance.queries() == builtins + [row]
     assert governance.query("steps-by-kind") == [{"kind": k, "steps": 1}
-                                                 for k in ("client_task", "decision", "end", "execution", "router")]
+                                                 for k in ("client_task", "decision", "end", "execution", "router", "start")]
     assert governance.query("steps-by-kind", name="nope") == []          # $ids follows the name filter
     assert governance.query("steps-by-kind", limit=2) == [{"kind": "client_task", "steps": 1}, {"kind": "decision", "steps": 1}]
     # run data is reachable and temporal values come back as ISO strings
@@ -710,12 +740,21 @@ class TestNeo4j:
             "RETURN st.name AS step, st.kind AS kind, labels(st) AS labels, files",
             name="billing-support", id=example.id, database_=neo4j.conn.database)
         steps = {r["step"]: (r["kind"], sorted(r["files"]), set(r["labels"])) for r in rows}
-        assert [r["step"] for r in rows] == ["triage", "by-tone", "escalate", "reply", "end"]
+        assert [r["step"] for r in rows] == ["start", "triage", "by-tone", "escalate", "reply", "end"]
+        assert steps["start"] == ("start", [], {"Step", "Start"})
         rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (:Procedure {key: $id})-[:STARTS_AT]->(a)-[e:NEXT|THEN*]->(z:Step:End) "
+            "MATCH (:Procedure {key: $id})-[:STARTS_AT]->(a:Step:Start)-[e:NEXT|THEN|BELOW*]->(z:Step:End) "
             "RETURN [x IN e | type(x) + coalesce(':' + x.value, '')] AS edges ORDER BY edges",
             id=example.id, database_=neo4j.conn.database)
-        assert [r["edges"] for r in rows] == [["NEXT", "THEN:angry", "NEXT"], ["NEXT", "THEN:calm", "NEXT"]]
+        assert [r["edges"] for r in rows] == [["NEXT", "NEXT", "THEN:angry", "NEXT"], ["NEXT", "NEXT", "THEN:calm", "NEXT"]]
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (p:Procedure {key: $id})-[:HAS_ISSUE]->(i:Issue)-[:AT]->(st:Step) "
+            "MATCH (p)-[:HAS_STEP]->(d:Step:Decision {name: 'triage'}) "
+            "RETURN i.code AS code, i.severity AS severity, st.name AS step, st.source_class AS source_class, "
+            "       d.fallback AS fallback, d.confidence AS confidence",
+            id=example.id, database_=neo4j.conn.database)
+        assert [r.data() for r in rows] == [{"code": "unmeasured_route", "severity": "warning", "step": "by-tone",
+                                             "source_class": "unmeasured", "fallback": True, "confidence": []}]
         assert steps["escalate"] == ("execution", ["assets/config.json", "scripts/escalate.py"],
                                      {"Step", "Execution"})
         assert steps["by-tone"][0] == "router" and "Router" in steps["by-tone"][2]
@@ -734,9 +773,9 @@ class TestNeo4j:
             id=example.id, database_=db)
         flow = {r["name"]: r.data() for r in rows}
         assert set(flow) == {"message", "billing", "tone", "ticket_id", "queue", "reply"}
-        # a start input: supplied by the procedure, produced by no step, read by the start step and the end
+        # a start input: supplied by the procedure, produced by no step, read by triage and the end (not the start step)
         assert flow["message"]["start"] and flow["message"]["producer"] is None
-        assert {"triage", "end"} <= set(flow["message"]["consumers"])
+        assert {"triage", "end"} <= set(flow["message"]["consumers"]) and "start" not in flow["message"]["consumers"]
         # a decision's answer: produced by the decision, typed as the question collapses, fed to the router
         assert (flow["tone"]["producer"], flow["tone"]["type"], flow["tone"]["start"]) == ("triage", "string", False)
         assert "by-tone" in flow["tone"]["consumers"] and flow["billing"]["type"] == "boolean"
@@ -761,23 +800,55 @@ class TestNeo4j:
                                                 id=example.id, database_=db)
         assert rows[0]["n"] == 0
 
+    def test_projection_carries_the_confidence_check(self, neo4j, tmp_path):
+        """A decision emitting `tone_confidence` and a router checking it: the key is a `Data` node the decision
+        produces and the router reads, the check is a `BELOW` edge beside the branches, and the question says
+        it is scored."""
+        variant(tmp_path, "checked-support")
+        md = tmp_path / "checked-support" / "SKILL.md"
+        text = md.read_text().replace("    fallback: true\n", "    fallback: false\n    confidence: [tone]\n")
+        text = text.replace("    branch_on: tone\n", "    branch_on: tone\n"
+                            "    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n")
+        md.write_text(text)
+        checked = snapshot(tmp_path / "checked-support")
+        neo4j.catalog.publish(checked)
+        db = neo4j.conn.database
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (p:Step {skill_id: $id})-[:PRODUCES]->(d:Data {name: 'tone_confidence'})-[:FEEDS]->(c:Step) "
+            "MATCH (q:Question {skill_id: $id, name: 'tone'}) "
+            "RETURN p.name AS producer, d.type AS type, c.name AS consumer, q.confidence AS scored",
+            id=checked.id, database_=db)
+        assert [r.data() for r in rows] == [{"producer": "triage", "type": "float", "consumer": "by-tone", "scored": True}]
+        rows, _, _ = neo4j.driver.execute_query(
+            "MATCH (r:Step:Router {skill_id: $id})-[b:BELOW]->(t:Step) "
+            "RETURN r.name AS router, r.check_key AS key, r.check_below AS below, r.check_to AS to, r.source_class AS cls, "
+            "       b.key AS edge_key, b.below AS edge_below, t.name AS target",
+            id=checked.id, database_=db)
+        assert [r.data() for r in rows] == [{"router": "by-tone", "key": "tone_confidence", "below": 0.6, "to": "escalate",
+                                             "cls": "measured", "edge_key": "tone_confidence", "edge_below": 0.6,
+                                             "target": "escalate"}]
+        rows, _, _ = neo4j.driver.execute_query("MATCH (:Procedure {key: $id})-[:HAS_ISSUE]->(i) RETURN count(i) AS n",
+                                                id=checked.id, database_=db)
+        assert rows[0]["n"] == 0
+
     def test_runs_link_to_the_steps_they_executed(self, neo4j, example):
         rev = neo4j.catalog.publish(example)
         rid = neo4j.runs.create("billing-support", rev)
         neo4j.runs.append(rid, {"step": "triage", "kind": "decision", "input": {"message": "hi"},
                                 "result": {"answers": {}}}, status="running", pause=None)
-        neo4j.runs.append(rid, {"step": "by-tone", "kind": "router", "input": {}, "result": {}},
-                          status="done", pause=None)
+        neo4j.runs.append(rid, route("calm", fired="absent"), status="done", pause=None)
         rows, _, _ = neo4j.driver.execute_query(
             "MATCH (r:Run {id: $id})-[:OF_SKILL]->(s:Skill) "
             "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:FOLLOWED_BY]->(b:StepRun) "
             "MATCH (a)-[:OF_STEP]->(sa:Step), (b)-[:OF_STEP]->(sb:Step) "
-            "RETURN s.id AS skill, a.step AS first, sa.key AS first_key, b.step AS second, a.input AS input",
+            "RETURN s.id AS skill, a.step AS first, sa.key AS first_key, b.step AS second, a.input AS input, "
+            "       a.confidence_fired AS a_fired, b.confidence_fired AS fired, b.confidence_reason AS reason",
             id=rid, database_=neo4j.conn.database)
         row = rows[0].data()
         assert row["skill"] == example.id and row["first"] == "triage" and row["second"] == "by-tone"
         assert row["first_key"] == f"{example.id}:triage"
         assert row["input"] == '{"message": "hi"}'
+        assert (row["a_fired"], row["fired"], row["reason"]) == (None, True, "absent")
 
     def test_cache_is_rebuilt_when_a_file_is_tampered(self, neo4j, example):
         rev = neo4j.catalog.publish(example)
