@@ -1,6 +1,6 @@
 # The AIP procedure format
 
-Format version `0.6a1`. This is the specification of an AIP skill: the folder, the `SKILL.md`
+Format version `0.8`. This is the specification of an AIP skill: the folder, the `SKILL.md`
 file, the YAML procedure inside it, and the rules the validator enforces. The source of truth
 is the pydantic model in [`src/aip_spec/models.py`](../src/aip_spec/models.py); the JSON Schema
 at [`skills/aip-compile/assets/procedure.schema.json`](../../../skills/aip-compile/assets/procedure.schema.json)
@@ -42,7 +42,7 @@ The Agent Skills fields, plus one AIP key under `metadata`.
 |---|---|---|
 | `name` | yes | 1–64 characters, lowercase `a–z`, `0–9` and hyphens, no leading, trailing or doubled hyphen; equal to the folder name |
 | `description` | yes | 1–1024 characters; what the skill does and when to use it |
-| `metadata.aip-version` | yes | the format version the skill is written in, as a string: `"0.6a1"` |
+| `metadata.aip-version` | yes | the format version the skill is written in, as a string: `"0.8"` |
 | `metadata.*` | no | any other string-to-string entries, such as `author` or `version`; keys starting `aip-` are reserved |
 | `license` | no | a string |
 | `compatibility` | no | 1–500 characters; environment requirements, when the skill has any |
@@ -53,7 +53,7 @@ The Agent Skills fields, plus one AIP key under `metadata`.
 The body is exactly two things, in order, and nothing else:
 
 1. **The runtime block**, verbatim. It is the text `aip-spec runtime` prints
-   ([`src/aip_spec/runtime.md`](../src/aip_spec/runtime.md)): a heading `# AIP runtime — format 0.6a1`
+   ([`src/aip_spec/runtime.md`](../src/aip_spec/runtime.md)): a heading `# AIP runtime — format 0.8`
    and the execution semantics any agent needs to run the procedure with no AIP tooling present.
    The validator compares the skill's copy to the package's and rejects a missing or edited one.
 2. **One fenced YAML block** holding the procedure described below.
@@ -73,14 +73,16 @@ unknown key is an error.
 | `trigger_when` | yes | list of strings, at least one | conditions under which an agent should consider the skill |
 | `do_not_use_when` | no | list of strings | explicit non-purposes |
 | `requires` | when there are `execution` steps | [`Requires`](#requires) | what the machine running the scripts must have |
-| `steps` | yes | list of [steps](#steps), at least two | the execution graph |
+| `steps` | yes | list of [steps](#steps), at least three | the execution graph: the `start` step, one runnable step at least, the `end` step |
 | `anti_patterns` | no | list of strings | mistakes the procedure steers the agent away from |
 
-The graph: the first entry of `steps` is the **start** and must be runnable (`decision`,
-`execution` or `client_task`). Exactly one step has `kind: end`. Each runnable step names the
-step that receives its output in `inputs_to`; a `router` names its successors in `branches`.
-Step names are unique, kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`), and every reference resolves to
-one of them. Every step is reachable from the start and can reach the end.
+The graph: exactly one step has `kind: start` (in any position; by convention first) and
+exactly one has `kind: end`. The start step holds the procedure's `inputs` and names the first
+runnable step (`decision`, `execution` or `client_task`) in `inputs_to`; nothing points at it.
+Each runnable step names the step that receives its output in `inputs_to`; a `router` names its
+successors in `branches` and, when it has a confidence check, in the check's `to`. Step names are
+unique, kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`), and every reference resolves to one of them.
+Every step is reachable from the start and can reach the end.
 
 ### `Requires`
 
@@ -95,8 +97,19 @@ An agent checks `requires` before the first script and stops, naming everything 
 
 ## Steps
 
-Every step has `name`, `kind` and `description` (one line; optional on `end`). The other keys
-depend on `kind`.
+Every step has `name`, `kind` and `description` (one line; optional on `start` and `end`). The
+other keys depend on `kind`.
+
+### `start`: the procedure's inputs
+
+| Key | Required | Rule |
+|---|---|---|
+| `inputs` | yes | the keys the client supplies to open a run; see [`IOItem`](#ioitem) |
+| `inputs_to` | yes | the first runnable step |
+
+The state begins as these inputs, checked against their types. The step runs nothing and adds
+nothing else; it is the one producer the data-flow rules credit with the start inputs, and a
+later step may overwrite one of them.
 
 ### `execution`: a script runs
 
@@ -121,14 +134,19 @@ key, fails the step.
 |---|---|---|
 | `inputs` | yes | the content being judged |
 | `questions` | yes, at least one | a mapping of question name (`^[A-Za-z_][A-Za-z0-9_]*$`) to a [question](#questions) |
-| `thresholds` | no | question name to a number in `[0, 1]`: the review threshold for that question |
+| `confidence` | no | a list of question names (each one of this step's, `unknown_confidence_question`); for each, a decision model's answer also writes `<question>_confidence` into the state |
+| `fallback` | no, default `false` | whether a client with no decision model may answer the questions by hand |
 | `history` | no, default `false` | also give the decision model the run so far, not only the declared inputs |
 | `inputs_to` | yes | the next step |
 
-A decision's outputs are its question names: each answer collapses to one value under its
-name. For a `noul` the threshold flags an answer whose probability is within that margin of
-0.5; for `choice` and `score` it flags an answer whose confidence is below it. A flagged answer
-is reconsidered, by the agent running the skill or by a client with a human in the loop.
+A decision's outputs are its question names, each answer collapsing to one value under its
+name, plus `<question>_confidence` for each question in `confidence`: a `float` in `[0, 1]`, the
+probability the model put on the answer it gave, its own confidence for a `choice` or `score`
+and `|2p - 1|` for a `noul`. It is the same number the run's history records in the answer's
+attribution. An answer given by hand writes no confidence key; nobody invents a number, and a
+router that checks the key treats its absence as low confidence. With `fallback: false` a run
+with no decision model stops at the step (`no_decision_model`); with `true` the questions go to
+the agent, and a router fed by the answer is an unmeasured route (below).
 
 #### Questions
 
@@ -159,11 +177,16 @@ Quote labels that YAML would read as booleans (`"yes"`, `"no"`, `"on"`, `"off"`)
 
 | Key | Required | Rule |
 |---|---|---|
-| `branch_on` | yes | a state key, typically a question name or an output |
+| `branch_on` | yes | a state key of type `boolean`, `string` or `integer`, typically a question name or an output |
 | `branches` | yes, at least two | value to step name |
+| `confidence` | no | one check, `{key, below, to}`: `key` a `float` in the state (typically a `<question>_confidence`), `below` a bound in `[0, 1]`, `to` a step |
 
-A router reads `branch_on` and continues at `branches[value]`; a value with no branch is an
-error. It adds nothing to the state. When `branch_on` is a decision question, the branch keys
+A router with a `confidence` check reads `key` first: when the value is below `below`, or the key
+is absent, or null, the run continues at `to` and the branches are not consulted. Otherwise, and
+on a router with no check, it reads `branch_on` and continues at `branches[value]`; a value with
+no branch is an error. It adds nothing to the state; its history entry records the branch taken
+and, with a check, whether it fired and why (`low`, `absent`, `null`). One check per router: a
+router that needs more is two routers. When `branch_on` is a decision question, the branch keys
 must be values that question can produce: its labels, `true`/`false`, or level numbers written
 as strings (`"0"`, `"1"`).
 

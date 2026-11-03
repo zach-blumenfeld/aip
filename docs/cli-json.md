@@ -262,5 +262,5 @@ reads it at startup and refuses an `aip` below its minimum.
 
 <!-- cli-version -->
 ```text
-aip 0.7.0 format 0.8
+aip 0.8.0 format 0.8
 ```

@@ -1,5 +1,12 @@
 # A fresh agent runs `billing-support` through `aip-runtime`
 
+> Recorded under format 0.6a1. The skill the agent read and the `aip info` output it saw are quoted as they
+> were, so three things differ from 0.8: the `review` pause row is gone (a model's answer is never put up for
+> confirmation; a router checks its confidence instead), `aip info` shows a `start` step and marks questions
+> `(confidence)` and decisions `(fallback)` where it showed thresholds, and a decision's attribution has no
+> `reviewed`. The loop the agent follows is unchanged, and the shipped example still escalates a message
+> answered by hand (`skills/aip-runtime/SKILL.md` is the current skill).
+
 The fresh-agent check for the `aip-runtime` skill, re-recorded for the 0.6a0 release (milestone C1), where the
 server holds the run and the client runs its scripts and resolves its decisions. It doubles as step 5 of the
 README's walkthrough: the server is the walkthrough's, `aip server` over a local Neo4j with `billing-support`

@@ -1,12 +1,12 @@
 [project]
 name = "agent-instruction-protocol"
-version = "0.7.0"
+version = "0.8.0"
 description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "aip-spec==0.7.0",
+    "aip-spec==0.8.0",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",
