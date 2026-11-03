@@ -1,6 +1,6 @@
 """The CLI's JSON contract (`docs/cli-json.md`): every example in the doc is what `aip run` /
-`aip resume` actually print for `billing-support`, run locally with no decision model (and, to
-resume past a decision that allows none by hand, a stub one). Run files go to the default place, `$AIP_HOME/runs/<run-id>.json`,
+`aip resume` actually print for `billing-support`, run locally with no decision model (and a
+stub one where a run needs a confidence: the calm branch, and a decision that allows no manual answer). Run files go to the default place, `$AIP_HOME/runs/<run-id>.json`,
 and `resume` is given the run id. Before comparing, the run's generated id becomes the doc's
 `SAMPLE_ID`, `run_file` is reduced to its file name, and an execution step's `seconds` to
 `<seconds>`, so nothing else varies.
@@ -70,7 +70,8 @@ def normalise(obj, run_id: str | None = None):
 
 
 class FakeTypeSafe:
-    """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97, confidence 0.94), tone is angry at `TONE`."""
+    """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97, confidence 0.94); `TONE` is the
+    probability of angry, so the tone is angry at 0.58 by default and calm at `1 - TONE` when patched low."""
     TONE = 0.58
 
     def __enter__(self):
@@ -84,7 +85,8 @@ class FakeTypeSafe:
         return SystemOneResponse.model_validate({
             "model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
             "answers": {"billing": {"type": "noul", "noul": 0.97},
-                        "tone": {"type": "choice", "choice": "angry", "confidence": self.TONE,
+                        "tone": {"type": "choice", "choice": "angry" if self.TONE >= 0.5 else "calm",
+                                 "confidence": self.TONE if self.TONE >= 0.5 else round(1 - self.TONE, 6),
                                  "probabilities": {"angry": self.TONE, "calm": round(1 - self.TONE, 6)}}}})
 
 
@@ -196,7 +198,16 @@ class CliJson(unittest.TestCase):
         self.assert_documented("error-invalid-output", error)
         self.assertEqual(RunFile.load(self.run_file).pause["kind"], "decision", "a bad answer leaves the pause")
 
-        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})
+        code, [done], _ = self.resume({"billing": True, "tone": "calm"})   # by hand: no confidence, the check fires
+        self.assertEqual((code, done.get("done")), (0, True))
+        history = RunFile.load(self.run_file).history
+        self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone", "escalate", "end"])
+        self.assertEqual(history[1]["attribution"],                     # no key: answered by the agent
+                         {"resolver": "manual", "model": None, "confidence": None})
+        self.assertEqual(history[2]["result"], {"to": "escalate", "confidence": {"fired": True, "reason": "absent"}})
+
+        with self.decision_model(), mock.patch.object(FakeTypeSafe, "TONE", 0.1):   # calm at 0.9: the check passes
+            code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
         self.assertEqual(code, 0)
         self.assert_documented("paused-client-task", pause)
 
@@ -205,8 +216,8 @@ class CliJson(unittest.TestCase):
         self.assert_documented("done", done)
         history = RunFile.load(self.run_file).history
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone", "reply", "end"])
-        self.assertEqual(history[1]["attribution"],                     # no key: answered by the agent
-                         {"resolver": "manual", "model": None, "confidence": None})
+        self.assertEqual(history[1]["attribution"]["confidence"], {"billing": 0.94, "tone": 0.9})
+        self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": None}})
 
     def test_no_decision_model_and_no_fallback_is_an_error_until_a_model_answers(self):
         code, [error], err = self.run_(self.fallback_off(), MESSAGE)

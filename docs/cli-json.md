@@ -67,7 +67,9 @@ false` never pauses this way: with no model it is the `no_decision_model` error 
   "state": {
     "message": "I was charged twice for March. Could you check?"
   },
-  "confidence": [],
+  "confidence": [
+    "tone"
+  ],
   "fallback": true,
   "run_id": "4f1c9a2e7b3d5068",
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
@@ -77,6 +79,11 @@ false` never pauses this way: with no model it is the `no_decision_model` error 
 Answer: one key per question, `{"billing": true, "tone": "calm"}`. A `noul` is `true`/`false`, a
 `choice` one of its `criteria` labels, a `score` the level number (its position in `criteria`,
 from 0). The questions define the answer's shape, so there is no `answer_with`.
+
+In `billing-support` the next step, the router `by-tone`, checks `tone_confidence` before it
+branches, and a manual answer never writes it: answered by hand, the run is escalated whichever
+tone was given. The client task below is where a decision model confident the tone is calm
+sends the run.
 
 ### `client_task`: do the step's work
 

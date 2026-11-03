@@ -3,21 +3,20 @@ name: aip-runtime
 description: Run published AIP procedures (runbooks, step-by-step workflows) from an AIP server with the `aip` command. Use when a task might match a known procedure, runbook, or workflow, when the user mentions aip or AIP, or when AIP_SERVER is set; search the catalog first, then run the match and answer its pauses instead of doing the steps by hand.
 license: Apache-2.0
 metadata:
-  aip-version: "0.6a1"
+  aip-version: "0.8"
 ---
 
 # Running AIP procedures
 
-An AIP procedure is a graph of typed steps that `aip` and its server run: scripts, decisions,
-routers, and tasks it hands back to you. You find the procedure, give it its start input,
-and answer when it pauses. You never execute its steps yourself.
+An AIP procedure is a graph of typed steps that `aip` and its server run: a start step holding
+the input, scripts, decisions, routers, and tasks it hands back to you. You find the procedure,
+give it its start input, and answer when it pauses. You never execute its steps yourself.
 
 ## Check once
 
 ```
 aip --help          # the client is installed
-aip config          # prints `server: <url>`; else set AIP_SERVER=http://host:port
-                    # and `decision model: TypeSafe` or `none`
+aip config          # prints `server: <url>` (else set AIP_SERVER=http://host:port) and `decision model: TypeSafe` or `none`
 ```
 
 No server and no `aip`: this skill does not apply; do the task as you normally would.
@@ -58,8 +57,7 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 
    | `paused`      | what the pause carries                               | what you put in the answer file                                    |
    |---------------|------------------------------------------------------|--------------------------------------------------------------------|
-   | `decision`    | `questions` (`type`, `instructions`, `criteria`) and `state`: no decision model here | one key per question: `true`/`false` for `noul`, a `criteria` label for `choice`, the level number (list position from 0) for `score`; judge from `state` |
-   | `review`      | `proposed_answers` from this machine's decision model, and `review`: the ones under their confidence threshold | only the keys you override, e.g. `{"tone": "calm"}`; `{}` accepts every proposed answer |
+   | `decision`    | `questions` (`type`, `instructions`, `criteria`) and `state`: no decision model here, and the step allows your answer (`fallback: true`) | one key per question: `true`/`false` for `noul`, a `criteria` label for `choice`, the level number (list position from 0) for `score`; judge from `state` |
    | `client_task` | `task`: what to do; `state`; `references`; `answer_with` | the work product under every key in `answer_with`, with those types |
 
    `state` is only what this step needs. The run holds the rest (the server, for a published
@@ -71,7 +69,9 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
    bad answer leaves the pause in place). `script_failed` carries the script's `exit_code`
    and `stderr`; if `resumable` is true, `aip resume <run_id>` with no input retries that
    step once the cause is fixed. `requires_unmet` lists in `missing` what the machine running
-   the scripts lacks; install it if you may, then retry the same way. Otherwise report the error.
+   the scripts lacks; install it if you may, then retry the same way. `no_decision_model`: the step
+   allows no answer by hand (`fallback: false`) and this machine has no model: do not answer it
+   yourself; report it (once a key is set, a bare `aip resume <run_id>` asks the model). Otherwise report the error.
 
 ## Rules
 
@@ -80,10 +80,11 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 - **Scripts run here, on this machine,** for a published procedure too: `aip` fetches them
   from the server and runs them itself. Files they read and write are relative to the run's
   working directory, the directory `aip run` started in (or `--workdir`), kept for `resume`.
-- **Decisions are resolved here too.** With a TypeSafe key on this machine (`TYPESAFE_API_KEY`,
-  or `aip config --decision-model KEY`) `aip` asks the model and pauses only for a `review`;
-  without one every decision pauses as `decision` for you to answer. Either way the run's
-  history records who answered (`resolver`: `typesafe` or `manual`). Do not set a key unless asked.
+- **Decisions are resolved here too.** With a TypeSafe key on this machine (`TYPESAFE_API_KEY`, or
+  `aip config --decision-model KEY`) `aip` asks the model, which records its confidence where the
+  step asks for it; without one, a decision that allows it pauses as `decision` for you, and one that
+  does not stops the run with `no_decision_model`. Your own answer has no confidence, so a router that
+  checks one treats it as low. The history records who answered (`resolver`: `typesafe` or `manual`). Do not set a key unless asked.
 - **One run, one run id.** Every outcome prints `run_id`; `aip resume <run_id>` finds the
   run file (`run_file`, under `~/.aip/runs/`) from any directory and rewrites it. Do not edit it. Do not start a second run of the same task.
 - **Report the result** from `state` (the end step's declared keys) in the task's terms,
@@ -105,7 +106,7 @@ $ aip info billing-support --example-input > start.json       # edit: real messa
 $ aip run billing-support --input start.json
 { "paused": "decision", "step": "triage",
   "questions": { "billing": {"type": "noul", ...}, "tone": {"type": "choice", "criteria": {"angry": ..., "calm": ...}} },
-  "state": { "message": "I was charged twice!" },
+  "state": { "message": "I was charged twice!" }, "confidence": ["tone"], "fallback": true,
   "run_id": "4f1c9a2e7b3d5068", "run_file": "~/.aip/runs/4f1c9a2e7b3d5068.json" }
 $ echo '{"billing": true, "tone": "angry"}' > answer.json
 $ aip resume 4f1c9a2e7b3d5068 --input answer.json
@@ -113,5 +114,6 @@ $ aip resume 4f1c9a2e7b3d5068 --input answer.json
 ```
 
 The angry branch ran the procedure's script here and opened the ticket (its `ticket_id` is in
-the run's history); you answered one pause. The calm branch would instead pause with
-`client_task` asking you to draft the reply, and your `{"reply": "..."}` would end the run.
+the run's history); you answered one pause. The router checks the model's confidence in the tone
+before it branches, and an answer by hand has none, so without a key every message goes this way;
+with a key, a message the model is confident is calm pauses with `client_task` asking you to draft the reply, and your `{"reply": "..."}` ends the run.

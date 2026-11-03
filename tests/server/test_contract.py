@@ -484,17 +484,18 @@ def test_governance_confidence_fired_and_manual_decisions(catalog, runs, governa
 
 
 def test_governance_unmeasured_routes(catalog, runs, governance, example, tmp_path):
-    """The example's `triage` allows a manual answer, so its router is an unmeasured route the validator
-    flagged at publish; the query names it with the windowed runs that went through it."""
+    """The example's `triage` allows a manual answer, so the confidence its router checks is unmeasured,
+    which the validator flagged at publish; the query names the router with the windowed runs that
+    went through it."""
     rev = catalog.publish(example)
     assert governance.query("unmeasured-routes") == [
-        {"name": "billing-support", "revision": rev, "router": "by-tone", "code": "unmeasured_route",
+        {"name": "billing-support", "revision": rev, "router": "by-tone", "code": "confidence_on_unmeasured_source",
          "source_class": "unmeasured", "runs": 0, "run_ids": []}]
     first = seed(runs, rev, decision(), route("angry"), escalate(), end())
     second = seed(runs, rev, decision(tone="calm", manual=True), route("calm"), reply())
     seed(runs, rev, decision(), status="running")                            # never reached the router
     rows = governance.query("unmeasured-routes")
-    assert rows == [{"name": "billing-support", "revision": rev, "router": "by-tone", "code": "unmeasured_route",
+    assert rows == [{"name": "billing-support", "revision": rev, "router": "by-tone", "code": "confidence_on_unmeasured_source",
                      "source_class": "unmeasured", "runs": 2, "run_ids": [second, first]}]
     assert governance.query("unmeasured-routes", window=1) == [{**rows[0], "runs": 0, "run_ids": []}]
     assert governance.query("unmeasured-routes", name="other") == []
@@ -753,8 +754,8 @@ class TestNeo4j:
             "RETURN i.code AS code, i.severity AS severity, st.name AS step, st.source_class AS source_class, "
             "       d.fallback AS fallback, d.confidence AS confidence",
             id=example.id, database_=neo4j.conn.database)
-        assert [r.data() for r in rows] == [{"code": "unmeasured_route", "severity": "warning", "step": "by-tone",
-                                             "source_class": "unmeasured", "fallback": True, "confidence": []}]
+        assert [r.data() for r in rows] == [{"code": "confidence_on_unmeasured_source", "severity": "warning", "step": "by-tone",
+                                             "source_class": "unmeasured", "fallback": True, "confidence": ["tone"]}]
         assert steps["escalate"] == ("execution", ["assets/config.json", "scripts/escalate.py"],
                                      {"Step", "Execution"})
         assert steps["by-tone"][0] == "router" and "Router" in steps["by-tone"][2]

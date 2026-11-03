@@ -50,16 +50,17 @@ def test_snapshot_captures_files_and_graph():
     assert b.inputs[0] == {"step": "start", "order": 0, "name": "message", "type": "string",
                            "description": "The customer's message, verbatim."}
     steps = {s["name"]: s for s in b.steps}
-    assert (steps["triage"]["fallback"], steps["triage"]["confidence"]) == (True, [])
-    assert (steps["by-tone"]["source_class"], steps["by-tone"]["check"]) == ("unmeasured", None)
+    assert (steps["triage"]["fallback"], steps["triage"]["confidence"]) == (True, ["tone"])
+    assert (steps["by-tone"]["source_class"], steps["by-tone"]["check"]) == (
+        "unmeasured", {"key": "tone_confidence", "below": 0.6, "to": "escalate"})
     # the validator's warning travels with the revision, named to its step
-    assert [(i["code"], i["severity"], i["step"]) for i in b.issues] == [("unmeasured_route", "warning", "by-tone")]
+    assert [(i["code"], i["severity"], i["step"]) for i in b.issues] == [("confidence_on_unmeasured_source", "warning", "by-tone")]
     assert b.branches == [{"router": "by-tone", "value": "angry", "to": "escalate"},
                           {"router": "by-tone", "value": "calm", "to": "reply"}]
     q = {x["name"]: x for x in b.questions}
     assert q["tone"]["type"] == "choice"
     assert json.loads(q["tone"]["criteria"])["angry"] == "Frustrated, demanding, or threatening to leave."
-    assert q["tone"]["confidence"] is False and "threshold" not in q["tone"]
+    assert q["tone"]["confidence"] is True and q["billing"]["confidence"] is False and "threshold" not in q["tone"]
     roles = {(r["step"], r["role"], r["path"]) for r in b.resources}
     assert {("escalate", "script", "scripts/escalate.py"), ("reply", "template", "assets/reply.md"),
             ("reply", "reference", "references/help.md")} <= roles

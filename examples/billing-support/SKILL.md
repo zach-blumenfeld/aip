@@ -70,7 +70,10 @@ steps:
         criteria:
           angry: Frustrated, demanding, or threatening to leave.
           calm: Neutral or polite, asking a question.
-    # The quickstart answers by hand, with no decision model configured; a production skill turns this off.
+    # Emits `tone_confidence`, the probability the decision model put on its answer; `by-tone` checks it.
+    confidence: [tone]
+    # The quickstart keeps fallback on so the walkthrough runs without a TypeSafe key: the agent answers
+    # by hand, which writes no confidence, so the router's check fires. A production skill turns it off.
     fallback: true
     inputs_to: by-tone
 
@@ -78,6 +81,8 @@ steps:
     kind: router
     description: Angry customers go to a human queue; calm ones get a drafted reply.
     branch_on: tone
+    # Checked before the branches: below the bound, or with no confidence recorded, the run escalates.
+    confidence: {key: tone_confidence, below: 0.6, to: escalate}
     branches:
       angry: escalate
       calm: reply

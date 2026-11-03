@@ -98,8 +98,8 @@ def test_publish_search_info_and_listing(api, example):
     r = publish(api)
     assert r.status_code == 201
     assert r.json()["name"] == "billing-support" and r.json()["revision"] == example.revision
-    # the example lets the agent answer `triage` by hand, so its router is an unmeasured route: a warning
-    assert [w["kind"] for w in r.json()["warnings"]] == ["unmeasured_route"] and r.json()["infos"] == []
+    # the example lets the agent answer `triage` by hand, so the confidence its router checks is unmeasured: a warning
+    assert [w["kind"] for w in r.json()["warnings"]] == ["confidence_on_unmeasured_source"] and r.json()["infos"] == []
     assert publish(api).json()["revision"] == example.revision                      # idempotent
 
     listing = api.get("/catalog").json()
@@ -337,7 +337,7 @@ def test_client_resolved_traversal_calm_branch_pauses_as_a_client_task(backend, 
         r = api.post("/procedures/billing-support/step", json={"after": "start", "payload": start, "history": []})
     assert r.status_code == 422 and r.json()["error"]["kind"] == "no_decision_model"
 
-    attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55}}
+    attribution = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.95}}
     r = api.post("/procedures/billing-support/answer",
                  json={"after": "start", "payload": start, "history": [], "answers": {"billing": True, "tone": "calm"},
                        "attribution": attribution})
@@ -358,10 +358,10 @@ def test_client_resolved_traversal_calm_branch_pauses_as_a_client_task(backend, 
     assert "Duplicate charges are refunded in full" in second["result"]["task"]       # the policy asset
     assert "I was charged twice!" in second["result"]["task"]
     assert second["result"]["references"][0]["uri"] == "billing-support/references/help.md"
-    assert second["suggested"] == {"message": "I was charged twice!", "billing": True, "tone": "calm"}
+    assert second["suggested"] == {"message": "I was charged twice!", "billing": True, "tone": "calm", "tone_confidence": 0.95}
     assert second["next"] == {"step": "end", "kind": "end", "inputs": {"message": "string"}}
-    assert second["history"][1] == {"step": "by-tone", "kind": "router", "input": {"tone": "calm"},
-                                    "result": {"to": "reply"}}
+    assert second["history"][1] == {"step": "by-tone", "kind": "router", "input": {"tone": "calm", "tone_confidence": 0.95},
+                                    "result": {"to": "reply", "confidence": {"fired": False, "reason": None}}}
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "paused" and run["pause"]["kind"] == "client_task"
     assert run["pause"]["step"] == "reply" and run["pause"]["answer_with"] == {"reply": "string"}
@@ -378,7 +378,7 @@ def test_client_resolved_traversal_calm_branch_pauses_as_a_client_task(backend, 
     assert [h["step"] for h in last["history"]] == ["triage", "by-tone", "reply", "end"]
     run = api.get(f"/runs/{run_id}").json()
     assert run["status"] == "done" and run["pause"] is None and len(run["history"]) == 4
-    assert run["history"][0]["attribution"]["confidence"]["tone"] == 0.55
+    assert run["history"][0]["attribution"]["confidence"]["tone"] == 0.95
 
 
 def test_execution_errors(api, example):
@@ -397,7 +397,8 @@ def test_execution_errors(api, example):
     assert r.status_code == 422 and "tone" in r.json()["error"]["message"]
 
     r = api.post("/procedures/billing-support/step",
-                 json={"after": "triage", "payload": {"message": "x", "tone": "furious"}, "history": []})
+                 json={"after": "triage", "payload": {"message": "x", "tone": "furious", "tone_confidence": 0.9},
+                       "history": []})
     assert r.status_code == 422 and r.json()["error"]["location"] == "by-tone"
 
     r = api.post("/procedures/billing-support/step", json={"after": "nope", "payload": {}, "history": []})
@@ -476,17 +477,17 @@ def broken_variant(tmp_path: Path, name: str = "broken-support") -> Path:
 
 
 def checked_variant(tmp_path: Path, name: str = "checked-support", fallback: bool = True, to: str = "reply") -> Path:
-    """A copy of the example whose `triage` emits `tone_confidence` and whose router sends the run to
-    `to` when that number is below 0.6 or missing."""
+    """A renamed copy of the example (whose `triage` emits `tone_confidence` and whose router checks it)
+    with `fallback` set and the check sending the run to `to` when the number is below 0.6 or missing."""
     import shutil
 
     copy = tmp_path / name
     shutil.copytree(EXAMPLE, copy)
     md = copy / "SKILL.md"
     text = md.read_text().replace("name: billing-support", f"name: {name}")
-    text = text.replace("    fallback: true\n", f"    fallback: {str(fallback).lower()}\n    confidence: [tone]\n")
-    text = text.replace("    branch_on: tone\n", "    branch_on: tone\n"
-                        f"    confidence: {{key: tone_confidence, below: 0.6, to: {to}}}\n")
+    assert "    fallback: true\n" in text and "below: 0.6, to: escalate}\n" in text
+    text = text.replace("    fallback: true\n", f"    fallback: {str(fallback).lower()}\n")
+    text = text.replace("below: 0.6, to: escalate}\n", f"below: 0.6, to: {to}}}\n")
     md.write_text(text)
     return copy
 
@@ -498,12 +499,13 @@ def test_info_reports_fallback_confidence_and_the_class_of_each_route(backend, n
     publish(api)
     info = api.get("/catalog/billing-support").json()
     assert "thresholds" not in info and all("threshold" not in q for q in info["questions"])
-    assert info["decisions"] == {"triage": {"fallback": True, "confidence": []}}
-    assert info["routers"] == {"by-tone": {"branch_on": "tone", "confidence": None}}
+    check = {"key": "tone_confidence", "below": 0.6, "to": "escalate"}
+    assert info["decisions"] == {"triage": {"fallback": True, "confidence": ["tone"]}}
+    assert info["routers"] == {"by-tone": {"branch_on": "tone", "confidence": check}}
     steps = {s["name"]: s for s in info["step_details"]}
-    assert (steps["triage"]["fallback"], steps["triage"]["confidence"]) == (True, [])
-    assert (steps["by-tone"]["source_class"], steps["by-tone"]["check"]) == ("unmeasured", None)
-    assert [(i["code"], i["severity"], i["step"]) for i in info["issues"]] == [("unmeasured_route", "warning", "by-tone")]
+    assert (steps["triage"]["fallback"], steps["triage"]["confidence"]) == (True, ["tone"])
+    assert (steps["by-tone"]["source_class"], steps["by-tone"]["check"]) == ("unmeasured", check)
+    assert [(i["code"], i["severity"], i["step"]) for i in info["issues"]] == [("confidence_on_unmeasured_source", "warning", "by-tone")]
 
     r = publish(api, checked_variant(tmp_path, fallback=False, to="escalate"))
     assert r.status_code == 201 and r.json()["warnings"] == [], r.text
@@ -532,7 +534,7 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     for query in ("confidence-fired", "manual-decisions", "failing-scripts", "missing-fields"):
         assert api.get(f"/governance/{query}").json() == []
     assert api.get("/governance/unmeasured-routes").json() == [
-        {"name": "billing-support", "revision": example.revision, "router": "by-tone", "code": "unmeasured_route",
+        {"name": "billing-support", "revision": example.revision, "router": "by-tone", "code": "confidence_on_unmeasured_source",
          "source_class": "unmeasured", "runs": 0, "run_ids": []}]
     for query in ("untaken-branches", "empty-results", "unused-data", "cycles", "repeated-cycles"):
         r = api.get(f"/governance/{query}")
@@ -577,16 +579,19 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     assert api.get("/governance/confidence-fired").json() == [
         {"name": "checked-support", "router": "by-tone", "reason": "absent", "fired": 1, "run_ids": [second["run_id"]]},
         {"name": "checked-support", "router": "by-tone", "reason": "low", "fired": 1, "run_ids": [opened["run_id"]]}]
-    # both routes are unmeasured: the example's because `triage` may be answered by hand and the variant's
-    # because its check reads a number a hand answer never gives; the query counts the runs that went through
+    # both routes are unmeasured, each because its check reads a number a hand answer never gives (`triage`
+    # allows one in the example and in the variant); the query counts the runs that went through
     third = api.post("/runs", json={"name": "billing-support", "input": start}).json()
-    assert api.post(f"/runs/{third['run_id']}/result", json={"answer": {"billing": True, "tone": "calm"}}).status_code == 200
+    r = api.post(f"/runs/{third['run_id']}/result", json={"answer": {"billing": True, "tone": "calm"}})
+    assert r.status_code == 200 and (r.json()["paused"], r.json()["step"]) == ("execute", "escalate")   # by hand: the check fired
+    r = api.post(f"/runs/{third['run_id']}/result", json={"answer": {"output": {"ticket_id": 1, "queue": "tier2"}, "seconds": 0.1}})
+    assert r.status_code == 200 and r.json()["done"] is True                   # the router's passage is recorded with the report
     rows = api.get("/governance/unmeasured-routes").json()
     assert rows == [
         {"name": "checked-support", "revision": rows[0]["revision"], "router": "by-tone",
          "code": "confidence_on_unmeasured_source", "source_class": "unmeasured", "runs": 2,
          "run_ids": [second["run_id"], opened["run_id"]]},
-        {"name": "billing-support", "revision": example.revision, "router": "by-tone", "code": "unmeasured_route",
+        {"name": "billing-support", "revision": example.revision, "router": "by-tone", "code": "confidence_on_unmeasured_source",
          "source_class": "unmeasured", "runs": 1, "run_ids": [third["run_id"]]}]
     assert api.get("/governance/unmeasured-routes", params={"name": "billing-support", "window": 1}).json() == [
         {**rows[1], "runs": 1}]

@@ -42,22 +42,23 @@ def entry_of(history: list, step: str) -> dict:
 
 
 FALLBACK = "    fallback: true\n"
+CONFIDENCE = "    confidence: [tone]\n"
 CHECK = "    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n"
 
 
-def variant(tmp: str, fallback: bool = True, check: bool = False) -> Path:
-    """billing-support with `fallback` off on `triage`, or with `triage` emitting `tone_confidence`
-    and `by-tone` sending the run to `escalate` when it is below 0.6 (or missing)."""
+def variant(tmp: str, fallback: bool = True, check: bool = True) -> Path:
+    """billing-support with `fallback` off on `triage`, or without the check the example ships
+    (`triage` emitting `tone_confidence` and `by-tone` sending the run to `escalate` when it is
+    below 0.6 or missing)."""
     skill = Path(tmp) / "billing-support"
     shutil.copytree(EXAMPLE, skill)
     md = skill / "SKILL.md"
     text = md.read_text()
-    assert FALLBACK in text
+    assert FALLBACK in text and CONFIDENCE in text and CHECK in text
     if not fallback:
         text = text.replace(FALLBACK, "    fallback: false\n")
-    if check:
-        text = text.replace(FALLBACK, FALLBACK + "    confidence: [tone]\n")
-        text = text.replace("    branch_on: tone\n", "    branch_on: tone\n" + CHECK)
+    if not check:
+        text = text.replace(CONFIDENCE, "").replace(CHECK, "")
     md.write_text(text)
     return skill
 
@@ -262,7 +263,7 @@ class NonInteractive(Both):
             self.assertEqual((block["paused"], block["step"]), ("decision", "triage"))
             self.assertEqual(set(block["questions"]), {"billing", "tone"})
             self.assertEqual(block["questions"]["tone"]["criteria"]["angry"], "Frustrated, demanding, or threatening to leave.")
-            self.assertEqual((block["confidence"], block["fallback"]), ([], True))
+            self.assertEqual((block["confidence"], block["fallback"]), (["tone"], True))
             self.assertNotIn("history", block)
 
             run = RunFile.load(outcome.run_file)
@@ -321,7 +322,8 @@ class Cli(Both):
             text = out.getvalue()
             for needle in ("START INPUT  (step `start`, start)", "message  string", '{"message": "<string>"}',
                            "by-tone  [router on `tone`]", "triage  [decision]  -> by-tone  (fallback)",
-                           "? tone [choice]: How upset", "script: scripts/escalate.py", "RESULT",
+                           "? tone [choice]  (confidence): How upset", "confidence: tone_confidence below 0.6 -> escalate",
+                           "script: scripts/escalate.py", "RESULT",
                            f"run:  aip run {self.target(h)} --input start.json"):
                 self.assertIn(needle, text, needle)
 
@@ -471,7 +473,8 @@ class Failures(Both):
                 self.assertEqual(error["run_id"], run.run_id)
                 recorded = h.server_run(run.run_id)
                 self.assertEqual((recorded["status"], recorded["after"]), ("failed", "triage"))
-                self.assertEqual(recorded["state"], {"message": "I was charged twice!", "billing": True, "tone": "angry"})
+                self.assertEqual(recorded["state"], {"message": "I was charged twice!", "billing": True, "tone": "angry",
+                                                     "tone_confidence": 0.95})
                 self.assertEqual(h.api.get("/governance/failing-scripts").json()[0]["failed"], 1)
                 runner2, out2 = h.runner(tmp, run=run)  # the retry reaches the server: same revision, same failure
                 self.assertEqual(runner2.resume(run, None).code, EXIT_ERROR)

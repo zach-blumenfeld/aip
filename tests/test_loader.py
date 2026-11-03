@@ -82,15 +82,13 @@ class LoaderEndToEnd(unittest.TestCase):
     def test_confidence_and_fallback_load_onto_the_runtime_nodes(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = copy_example(tmp)
-            rewrite(skill, "    fallback: true\n", "    fallback: false\n    confidence: [tone]\n")
-            rewrite(skill, "    branch_on: tone\n",
-                    "    branch_on: tone\n    confidence: {key: tone_confidence, below: 0.6, to: reply}\n")
+            rewrite(skill, "    fallback: true\n", "    fallback: false\n")      # the example already names `tone` and checks it
             proc = load_procedure(skill, client=FakeJev())
             triage, router = proc.nodes["triage"], proc.nodes["by-tone"]
             self.assertEqual((triage.confidence, triage.fallback), (["tone"], False))
             self.assertEqual((router.confidence.key, router.confidence.below), ("tone_confidence", 0.6))
-            self.assertIs(router.confidence.to, proc.nodes["reply"])
-            self.assertEqual(proc.describe()["routers"]["by-tone"]["confidence"]["to"], "reply")
+            self.assertIs(router.confidence.to, proc.nodes["escalate"])
+            self.assertEqual(proc.describe()["routers"]["by-tone"]["confidence"]["to"], "escalate")
 
             r0 = proc.run(None, {"message": "I was charged twice!"})
             r1 = proc.run(r0.ran, r0.suggested, r0.history)

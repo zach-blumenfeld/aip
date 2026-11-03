@@ -29,7 +29,7 @@ SCHEMA_FILE = SKILL / "assets" / "procedure.schema.json"
 DIALOGUE = Path(__file__).parent / "fixtures" / "dialogue-graph.yaml"
 # The shipped example lets its decision be answered by hand (`fallback: true`), so the quickstart
 # runs without a decision model. That makes its one route unmeasured, which the validator says.
-EXAMPLE_WARNING = ("unmeasured_route", "warning")
+EXAMPLE_WARNING = ("confidence_on_unmeasured_source", "warning")   # the example checks a fallback decision's confidence
 CHECK = {"key": "tone_confidence", "below": 0.6, "to": "escalate"}
 
 
@@ -153,7 +153,9 @@ class SpecModels(unittest.TestCase):
     def test_decision_fallback_is_opt_in_and_thresholds_are_gone(self):
         body = example_yaml()
         self.assertTrue(ProcedureSpec.model_validate(body).step("triage").fallback, "the shipped example opts in")
+        self.assertEqual(ProcedureSpec.model_validate(body).step("triage").confidence, ["tone"], "and emits `tone_confidence`")
         del step_of(body, "triage")["fallback"]
+        del step_of(body, "triage")["confidence"]
         self.assertFalse(ProcedureSpec.model_validate(body).step("triage").fallback)
         self.assertEqual(ProcedureSpec.model_validate(body).step("triage").confidence, [])
         step_of(body, "triage")["thresholds"] = {"tone": 0.6}
@@ -225,7 +227,9 @@ class GraphChecks(unittest.TestCase):
     def test_example_is_clean(self):
         self.assertEqual(check_graph(self.spec(), "x", EXAMPLE), [])
 
-    def test_shipped_example_says_its_route_is_unmeasured(self):
+    def test_shipped_example_checks_an_unmeasured_source(self):
+        """The example keeps `fallback: true` so the quickstart runs without a key; its router checks
+        `tone_confidence` all the same, so the validator says the check reads an unmeasured source."""
         self.body = example_yaml()
         issues = check_graph(self.spec(), "x", EXAMPLE)
         self.assertEqual([(i.kind, i.severity) for i in issues], [EXAMPLE_WARNING])
@@ -500,6 +504,8 @@ class RouteSources(unittest.TestCase):
     def setUp(self):
         self.body = example_yaml()
         self.step("triage")["fallback"] = False
+        self.step("triage").pop("confidence")        # the shipped example emits `tone_confidence` and checks it;
+        self.step("by-tone").pop("confidence")       # every case below starts from neither
 
     def spec(self) -> ProcedureSpec:
         return ProcedureSpec.model_validate(self.body)

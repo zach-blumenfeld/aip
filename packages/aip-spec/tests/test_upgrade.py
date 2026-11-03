@@ -34,12 +34,15 @@ def old_example(tmp: str) -> Path:
 
 
 def shape(body: dict) -> dict:
-    """A procedure with its input descriptions dropped: the upgrade copies the first step's inputs
-    to the start step, descriptions included, where the hand migration moved them."""
+    """A procedure with its input descriptions dropped (the upgrade copies the first step's inputs
+    to the start step, descriptions included, where the hand migration moved them) and without the
+    `confidence` list and router check the upgrade leaves to be added by hand."""
     body = copy.deepcopy(body)
     for step in body["steps"]:
         if step["kind"] == "start":
             step.pop("description", None)
+        if step["kind"] in ("decision", "router"):
+            step.pop("confidence", None)
         for key in step.get("inputs") or []:
             key.pop("description", None)
     return body
