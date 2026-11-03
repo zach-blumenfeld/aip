@@ -96,10 +96,12 @@ def parse_skill_md(skill_md: Path) -> tuple[SkillDoc | None, list[Issue]]:
 UPGRADES = {
     "0.5a1": "add outputs to each execution and client_task step, a requires block, and regenerate the runtime block",
     "0.6a0": "regenerate the runtime block (only its heading changed) and bump the version; nothing else changes",
+    "0.6a1": "run `aip upgrade <folder>` (or `aip-spec upgrade <folder>`): it adds the `start` step, drops `thresholds`, "
+             "sets `fallback: true` on each decision, and replaces the runtime block",
 }
 # Earlier formats the current one still accepts: their skills load, with the upgrade said as a warning.
-# A version in `LEGACY_VERSIONS` but not here is rejected (an error), as 0.5a1 is since the breaking 0.6a0.
-ACCEPTED_VERSIONS = ("0.6a0",)
+# A version in `LEGACY_VERSIONS` but not here is rejected (an error). 0.8 is breaking, so nothing older loads.
+ACCEPTED_VERSIONS: tuple[str, ...] = ()
 
 
 def _outdated(path: str, version: str) -> Issue:
@@ -110,8 +112,7 @@ def _outdated(path: str, version: str) -> Issue:
         return Issue(path, "runtime_block_outdated",
                      f"{edits} Format {FORMAT_VERSION} still accepts {version} skills", severity="warning")
     return Issue(path, "runtime_block_outdated",
-                 f"{edits} Format {FORMAT_VERSION} does not accept {version} skills; any `missing_outputs` and "
-                 f"`missing_requires` errors below name the steps to edit")
+                 f"{edits} Format {FORMAT_VERSION} does not accept {version} skills; the errors below name what to edit")
 
 
 # ---------------------------------------------------------------- frontmatter rules
@@ -437,12 +438,6 @@ def check_graph(spec: ProcedureSpec, path: str, skill_dir: Path | None = None) -
                 issues.append(Issue(path, "duplicate_input_name", f"step `{step.name}` declares input `{item.name}` more than once",
                                     f"body:$.steps[{i}].inputs[{j}].name"))
             seen_inputs.add(item.name)
-        if step.kind == "decision":
-            for key in step.thresholds:
-                if key not in step.questions:
-                    issues.append(Issue(path, "unknown_threshold_question",
-                                        f"step `{step.name}` sets a threshold for `{key}`, which is not one of its questions",
-                                        f"body:$.steps[{i}].thresholds.{key}"))
         if skill_dir is not None:
             for rel in _resource_paths(step):
                 if not (skill_dir / rel).is_file():

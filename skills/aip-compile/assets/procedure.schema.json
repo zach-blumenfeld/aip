@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/v0.6a1/assets/procedure.schema.json",
+  "$id": "https://raw.githubusercontent.com/zach-blumenfeld/aip/v0.8.0/skills/aip-compile/assets/procedure.schema.json",
   "title": "Procedure",
-  "description": "An execution graph of typed steps run by an AIP server with the client in the loop. Step kinds are `decision` (SystemOne questions answered by a structured decision model), `execution` (a script under scripts/), `client_task` (templated work the client performs itself), `router` (server-side branching on a value the client chose), and `end` (the procedure's result). The first step in `steps` is the start; its `inputs` are what the client supplies. Edges are `inputs_to` by step name. Every runnable step declares the keys it reads as `inputs`; execution and client_task steps declare the keys they add as `outputs`, and a decision's outputs are its question names. Every key is produced by exactly one step, so the state only grows.",
+  "description": "An execution graph of typed steps run by an AIP server with the client in the loop. Step kinds are `start` (the procedure's inputs, what the client supplies), `decision` (SystemOne questions answered by a structured decision model), `execution` (a script under scripts/), `client_task` (templated work the client performs itself), `router` (server-side branching on a value the client chose) and `end` (the procedure's result). Edges are `inputs_to` by step name. Every runnable step declares the keys it reads as `inputs`; execution and client_task steps declare the keys they add as `outputs`, and a decision's outputs are its question names plus a `<question>_confidence` for each question its `confidence` list names. Keys accumulate and a later step may overwrite one; every declaration of a key agrees on its type.",
   "aip": {
-    "spec": "https://github.com/zach-blumenfeld/aip-spec/tree/v0.6a1",
-    "version": "0.6a1"
+    "spec": "https://github.com/zach-blumenfeld/aip/blob/v0.8.0/packages/aip-spec/docs/specification.md",
+    "version": "0.8"
   },
   "$defs": {
     "ChoiceQuestion": {
@@ -131,6 +131,37 @@
       "title": "ClientTaskStep",
       "type": "object"
     },
+    "ConfidenceCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "description": "A `float` key in the state, declared on a path to the router: typically a decision's `<question>_confidence`.",
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "below": {
+          "description": "The bound. The check fires when the key's value is below it, or when the key is absent or null: unknown confidence is low confidence, and nobody invents a number.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Below",
+          "type": "number"
+        },
+        "to": {
+          "description": "The step the run goes to when the check fires.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "below",
+        "to"
+      ],
+      "title": "ConfidenceCheck",
+      "type": "object"
+    },
     "DataType": {
       "description": "AIP type vocabulary. Machine-enforced at runtime: the server compiles each step's\n`inputs` and `outputs` to JSON Schemas and validates the state and the step's result against them.",
       "enum": [
@@ -202,15 +233,20 @@
           "title": "Questions",
           "type": "object"
         },
-        "thresholds": {
-          "additionalProperties": {
-            "maximum": 1,
-            "minimum": 0,
-            "type": "number"
+        "confidence": {
+          "description": "Question names whose confidence the step also emits. For each, `<question>_confidence` is added to the state beside the answer as a `float` in `[0, 1]`: the probability the decision model put on the answer it gave, which is its confidence for a `choice` or `score` and `|2p - 1|` for a `noul`. An answer given by hand writes no confidence key.",
+          "items": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
           },
-          "description": "Per-question review thresholds, keyed by question name. For `noul`: flag when the probability is within this margin of 0.5. For `choice` and `score`: flag when the model's confidence is below this value. The client may override per call; it makes the final call on flagged answers.",
-          "title": "Thresholds",
-          "type": "object"
+          "title": "Confidence",
+          "type": "array"
+        },
+        "fallback": {
+          "default": false,
+          "description": "Whether the client may answer the questions by hand when no decision model is configured. Off by default: a run with no model stops at this step. On, a manual answer carries no confidence, so a router's confidence check on it fires.",
+          "title": "Fallback",
+          "type": "boolean"
         },
         "history": {
           "default": false,
@@ -316,7 +352,7 @@
           "type": "string"
         },
         "outputs": {
-          "description": "The keys this step adds to the state. Each key has exactly one producer in the procedure and is never a start input, so the state only grows and nothing is overwritten.",
+          "description": "The keys this step adds to the state. A key may have more than one producer, and a later step may overwrite one; every declaration of a key agrees on its type.",
           "items": {
             "$ref": "#/$defs/IOItem"
           },
@@ -590,10 +626,22 @@
           "type": "string"
         },
         "branch_on": {
-          "description": "Key in the state whose value selects the branch. Typically a decision question name or an output of an execution or client task. The router adds nothing to the state; its choice is recorded in the run history only.",
+          "description": "Key in the state whose value selects the branch: a `boolean`, `string` or `integer`, typically a decision question name or an output of an execution or client task. The router adds nothing to the state; its choice is recorded in the run history only.",
           "minLength": 1,
           "title": "Branch On",
           "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfidenceCheck"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional confidence check, applied before `branches`: when `key` is below `below`, absent or null, the run goes to `to` and the value match is skipped. One check per router; a router that needs more is two routers."
         },
         "branches": {
           "additionalProperties": {
@@ -649,6 +697,58 @@
       ],
       "title": "ScoreQuestion",
       "type": "object"
+    },
+    "StartStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Short kebab-case identifier, unique within the procedure. Edges (`inputs_to`, router `branches`) reference steps by this name.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "start",
+          "description": "Where a run begins. Holds the procedure's inputs and hands them to the first runnable step. Not runnable, adds nothing of its own.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the client supplies to start a run. One line.",
+          "title": "Description"
+        },
+        "inputs": {
+          "description": "The procedure's inputs: the keys the client supplies to start a run. They are the initial state.",
+          "items": {
+            "$ref": "#/$defs/IOItem"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "inputs_to": {
+          "description": "The first runnable step.",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "title": "Inputs To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "inputs",
+        "inputs_to"
+      ],
+      "title": "StartStep",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -688,7 +788,7 @@
       "description": "The environment the scripts need: interpreter and minimum version, Python packages, other tools. Required when the procedure has execution steps."
     },
     "steps": {
-      "description": "The nodes of the execution graph. The first step is the start and must be runnable (decision, execution, or client_task). Exactly one step has kind `end`. Every runnable step names the node that receives its output via `inputs_to`; routers name theirs via `branches`. The validator checks that names are unique, every reference resolves, every step is reachable from the start, every step can reach the end, every consumed key is produced on every path to its consumer or declared on the start step, every key has exactly one producer, a procedure with execution steps declares `requires` and launches each script with its interpreter or one of its tools, and every referenced asset, reference, and script exists on disk.",
+      "description": "The nodes of the execution graph. Exactly one step has kind `start` (by convention the first) and exactly one has kind `end`. Every runnable step names the node that receives its output via `inputs_to`; routers name theirs via `branches` and their confidence check's `to`. The validator checks that names are unique, every reference resolves, nothing points at the start, every step is reachable from the start, every step can reach the end, every consumed key is produced on every path to its consumer or declared on the start step, every declaration of a key agrees on its type, a router branches on a `boolean`, `string` or `integer` and checks a `float`, a procedure with execution steps declares `requires` and launches each script with its interpreter or one of its tools, and every referenced asset, reference, and script exists on disk.",
       "items": {
         "discriminator": {
           "mapping": {
@@ -696,11 +796,15 @@
             "decision": "#/$defs/DecisionStep",
             "end": "#/$defs/EndStep",
             "execution": "#/$defs/ExecutionStep",
-            "router": "#/$defs/RouterStep"
+            "router": "#/$defs/RouterStep",
+            "start": "#/$defs/StartStep"
           },
           "propertyName": "kind"
         },
         "oneOf": [
+          {
+            "$ref": "#/$defs/StartStep"
+          },
           {
             "$ref": "#/$defs/DecisionStep"
           },
@@ -718,7 +822,7 @@
           }
         ]
       },
-      "minItems": 2,
+      "minItems": 3,
       "title": "Steps",
       "type": "array"
     },

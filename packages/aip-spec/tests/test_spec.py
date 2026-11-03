@@ -63,7 +63,7 @@ class GeneratedSchema(unittest.TestCase):
         self.assertEqual(schema["aip"]["version"], FORMAT_VERSION)
         self.assertIn(FORMAT_VERSION, schema["$id"])
         self.assertEqual((schema["$id"], schema["aip"]["spec"]), (SCHEMA_ID, SPEC_URL))
-        self.assertIn("github.com/zach-blumenfeld/aip-spec", SPEC_URL)
+        self.assertIn("github.com/zach-blumenfeld/aip/", SPEC_URL)
         self.assertFalse(schema["additionalProperties"])
 
     def test_every_field_is_described(self):
