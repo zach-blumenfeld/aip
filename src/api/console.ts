@@ -3,7 +3,7 @@
 // (api/client.ts). The CLI's JSON lines are the contract of aip's docs/cli-json.md.
 
 import { MissingValidator, type Runner } from "../studio/agentCheck";
-import { store } from "../studio/import";
+import { store, type Upgrader } from "../studio/import";
 import type { ZipFile } from "../zip";
 
 /** `GET /console/config`. */
@@ -191,6 +191,13 @@ function post(path: string, body: unknown): Promise<Response> {
 async function errorText(res: Response): Promise<string> {
   try { return ((await res.json()) as { error: { message: string } }).error.message; } catch { return `${res.status} ${res.statusText}`; }
 }
+
+/** `POST /console/upgrade`: `aip upgrade` on the skill's files, as studio/import.ts's `upgradeDraft` runs it. */
+export const consoleUpgrader: Upgrader = async (name, files) => {
+  const res = await post("/console/upgrade", { name, files });
+  if (!res.ok) throw new Error(await errorText(res));
+  return (await res.json()) as Awaited<ReturnType<Upgrader>>;
+};
 
 /** The scaffold written to `<workdir>/studio/<name>/` for an agent to edit in place. */
 export async function writeHandoff(name: string, files: ZipFile[]): Promise<{ dir: string; previous: string | null }> {

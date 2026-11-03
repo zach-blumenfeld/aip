@@ -154,7 +154,8 @@ export function facts(d: Draft): Map<string, Fact> {
           q.criteria.forEach((c, j) => put(`${qk}.criteria[${j}]`, `${qa}'s level ${j}`, c, true));
         }
       });
-      put(`${k}.thresholds`, `${at}: the thresholds`, s.thresholds ?? {});
+      put(`${k}.confidence`, `${at}: the \`confidence\` list`, s.confidence ?? []);
+      put(`${k}.fallback`, `${at}: \`fallback\``, !!s.fallback);
       put(`${k}.history`, `${at}: \`history\``, !!s.history);
     }
     if (s.kind === "execution" || s.kind === "client_task") {

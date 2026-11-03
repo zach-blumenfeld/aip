@@ -23,7 +23,7 @@ export interface SearchHit {
   score: number;
 }
 
-export type StepKind = "decision" | "router" | "execution" | "client_task" | "end";
+export type StepKind = "start" | "decision" | "router" | "execution" | "client_task" | "end";
 
 export interface StepDetail {
   name: string;

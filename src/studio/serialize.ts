@@ -5,7 +5,7 @@
 import { parse, stringify } from "yaml";
 import { emptyDraft, FORMAT_VERSION, UNRESOLVED, type Branch, type Draft, type IOItem, type Question, type Requires, type Step, type StepKind } from "./draft";
 import { patchYaml } from "./patch";
-import { RUNTIME_BLOCK } from "./runtime-0.6a1";
+import { RUNTIME_BLOCK } from "./runtime-0.8";
 
 const FRONTMATTER = /^---\s*\n(.*?)\n---\s*\n?(.*)$/s;
 const FENCE = /```(?:yaml|yml)[ \t]*\n(.*?)\n```/gs;
@@ -27,7 +27,10 @@ export function draftToSkillMd(draft: Draft): string {
   const body: Obj = { purpose: draft.purpose, trigger_when: draft.triggerWhen };
   if (draft.doNotUseWhen.length) body.do_not_use_when = draft.doNotUseWhen;
   if (draft.requires) body.requires = requiresOut(draft.requires);
-  body.steps = draft.steps.map((s) => stepOut(s, target));
+  // The start step is written first, wherever the draft holds it; the rest keep their order.
+  const start = draft.steps.find((s) => s.kind === "start");
+  const ordered = start ? [start, ...draft.steps.filter((s) => s !== start)] : draft.steps;
+  body.steps = ordered.map((s) => stepOut(s, target));
   if (draft.antiPatterns.length) body.anti_patterns = draft.antiPatterns;
 
   // An imported draft keeps its own formatting wherever only values changed.
@@ -62,19 +65,27 @@ function questionOut(q: Question): Obj {
 
 function stepOut(s: Step, target: (id: string | undefined) => string | undefined): Obj {
   const out: Obj = { name: s.name, kind: s.kind };
-  if (s.kind !== "end" || s.description) out.description = s.description;
+  if ((s.kind !== "end" && s.kind !== "start") || s.description) out.description = s.description;
   const put = (key: string, value: unknown) => { if (value !== undefined) out[key] = value; };
   const list = (key: string, value: unknown[] | undefined) => { if (value?.length) out[key] = value; };
 
   if (s.kind === "router") {
     put("branch_on", s.branchOn);
+    if (s.check) {
+      const check: Obj = { key: s.check.key };
+      if (s.check.below !== undefined) check.below = s.check.below;
+      const to = target(s.check.to);
+      if (to !== undefined) check.to = to;
+      out.confidence = check;
+    }
     out.branches = Object.fromEntries((s.branches ?? []).map((b) => [b.value, target(b.target)]));
     return out;
   }
   out.inputs = ioOut(s.inputs);
   if (s.kind === "decision") {
     out.questions = Object.fromEntries((s.questions ?? []).map((q) => [q.name, questionOut(q)]));
-    if (s.thresholds && Object.keys(s.thresholds).length) out.thresholds = s.thresholds;
+    list("confidence", s.confidence);
+    if (s.fallback) out.fallback = true;
     if (s.history) out.history = true;
   } else if (s.kind === "execution") {
     put("script", s.script);
@@ -149,13 +160,19 @@ function stepIn(s: Obj, id: string, edge: (name: unknown) => string | undefined)
   const step: Step = { id, kind, name: str(s.name), description: str(s.description), inputs: ioIn(s.inputs) };
   if (kind === "router") {
     step.branchOn = str(s.branch_on);
+    if (s.confidence !== undefined && s.confidence !== null) {
+      const c = asObj(s.confidence);
+      step.check = { key: str(c.key) };
+      if (c.below !== undefined && c.below !== null) step.check.below = Number(c.below);
+      if (c.to !== undefined && c.to !== null) step.check.to = edge(c.to);
+    }
     step.branches = Object.entries(asObj(s.branches)).map(([value, to]): Branch => ({ value, target: edge(to) }));
     return step;
   }
   if (kind === "decision") {
     step.questions = Object.entries(asObj(s.questions)).map(([name, q]) => questionIn(name, asObj(q)));
-    const thresholds = asObj(s.thresholds);
-    if (Object.keys(thresholds).length) step.thresholds = Object.fromEntries(Object.entries(thresholds).map(([k, v]) => [k, Number(v)]));
+    if (s.confidence !== undefined) step.confidence = strs(s.confidence);
+    if (s.fallback === true) step.fallback = true;
     if (s.history === true) step.history = true;
   } else if (kind === "execution") {
     if (s.script !== undefined) step.script = str(s.script);

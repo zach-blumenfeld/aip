@@ -7,11 +7,18 @@ export function aipSpec(args: string[]): { status: number; stdout: string; stder
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
-export interface SpecIssue { kind: string; message: string; severity?: string }
+export interface SpecIssue { kind: string; message: string; severity: "error" | "warning" | "info" }
 
-/** The errors `aip-spec validate` reports for a skill folder (warnings are left out). */
-export function specErrors(dir: string): SpecIssue[] {
+/** Every issue `aip-spec validate` reports for a skill folder, with its severity (an error carries none on the wire). */
+export function specIssues(dir: string): SpecIssue[] {
   const { stderr } = aipSpec(["validate", dir]);
-  const records = stderr.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as SpecIssue);
-  return records.filter((r) => r.severity !== "warning");
+  return stderr.split("\n").filter((l) => l.startsWith("{")).map((l) => {
+    const r = JSON.parse(l) as Partial<SpecIssue> & { kind: string; message: string };
+    return { ...r, severity: r.severity ?? "error" };
+  });
+}
+
+/** The errors alone. */
+export function specErrors(dir: string): SpecIssue[] {
+  return specIssues(dir).filter((r) => r.severity === "error");
 }

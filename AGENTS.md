@@ -23,7 +23,7 @@ sibling checkout (`AIP_REPO`, default `../aip`) behind `uv run`, and the launche
 | Path | What's there |
 |---|---|
 | `bin/aip-console.mjs` | the launcher: argument parsing, `aip --version` and `MINIMUM_AIP`, the `/console/*` endpoints (run, resume, cancel, validate, probe, handoff), the static server; loopback only |
-| `src/` | the page: React + Vite, hash-routed. `api/` the typed client and the console's own endpoints; `views/` the pages; `graph/` the hand-rolled step graph layout; `diff/` line diffs; `run/protocol.ts` the launcher's event-stream protocol; `zip.ts` the skill zip reader and writer (`fflate`); `studio/` the Studio's Draft model, SKILL.md round-trip (`serialize.ts`), linter (`lint.ts`), scaffold, import, the agent prompt and checks, and `runtime-0.6a1.ts`, the runtime block verbatim |
+| `src/` | the page: React + Vite, hash-routed. `api/` the typed client and the console's own endpoints; `views/` the pages; `graph/` the hand-rolled step graph layout; `diff/` line diffs; `run/protocol.ts` the launcher's event-stream protocol; `zip.ts` the skill zip reader and writer (`fflate`); `studio/` the Studio's Draft model, SKILL.md round-trip (`serialize.ts`), linter (`lint.ts`), scaffold, import, the agent prompt and checks, and `runtime-0.8.ts`, the runtime block verbatim |
 | `e2e/` | Playwright specs and the harness: `prepare.mjs` writes `.aip-e2e/`, `aip.ts` / `aip-spec.ts` run the sibling repo's CLIs, `global-setup.ts` publishes the fixtures; `playwright.config.ts` starts the aip server and two consoles |
 | `docs/studio.md`, `docs/studio-lint.md` | the Studio reference and its lint codes |
 | `docs/plans/` | the historical plans (`PLAN.md`, `STUDIO-PLAN.md`); current plans are GitHub issues on the aip repo |
@@ -58,7 +58,7 @@ sibling checkout (`AIP_REPO`, default `../aip`) behind `uv run`, and the launche
 - **`MINIMUM_AIP`** in `bin/aip-console.mjs` is the oldest `aip` the launcher accepts; it moves when
   the console starts to depend on something newer in the CLI's JSON contract or the server API.
 - The console does not carry a format version. The runtime block it embeds
-  (`src/studio/runtime-0.6a1.ts`) is compared byte for byte to the aip repo's
+  (`src/studio/runtime-0.8.ts`) is compared byte for byte to the aip repo's
   `packages/aip-spec/src/aip_spec/runtime.md` by `e2e/studio-lint.spec.ts`; a format change in the
   aip repo fails that test until the console catches up.
 

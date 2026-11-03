@@ -18,8 +18,8 @@ skill, agent step included. The rest of this page is the reference.
 - **Import from catalog** (with a server), or **edit in Studio** on a procedure page: a published revision.
   On export, your edits are written into the original `SKILL.md`, so an unedited line comes back unchanged.
 
-A skill written in an older format shows a banner with aip-spec's upgrade note. The export always writes
-format `0.6a1`.
+A skill written in an older format shows a banner with aip-spec's upgrade note, which names `aip upgrade`; the
+console's process can run it on the imported files (`POST /console/upgrade`). The export always writes format `0.8`.
 
 ## Build the graph
 

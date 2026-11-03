@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 import { emptyDraft, type Draft, type Step } from "../src/studio/draft";
-import { availableKeys, lint, PLACEHOLDER_MARKER } from "../src/studio/lint";
-import { RUNTIME_BLOCK } from "../src/studio/runtime-0.6a1";
+import { availableKeys, classifySources, lint, PLACEHOLDER_MARKER } from "../src/studio/lint";
+import { RUNTIME_BLOCK } from "../src/studio/runtime-0.8";
 import { draftToSkillMd, skillMdToDraft } from "../src/studio/serialize";
 import { AIP_REPO, FIRST_REVISION_DIR } from "./aip";
 import { aipSpec } from "./aip-spec";
@@ -29,21 +29,33 @@ test("the embedded runtime block is the one aip-spec ships", () => {
 test("billing-support round-trips through the Draft", () => {
   const md = billing();
   const draft = skillMdToDraft(md);
-  expect(draft.steps.map((s) => s.name)).toEqual(["triage", "by-tone", "escalate", "reply", "end"]);
+  expect(draft.steps.map((s) => s.name)).toEqual(["start", "triage", "by-tone", "escalate", "reply", "end"]);
   const out = draftToSkillMd(draft);
   expect(body(out)).toEqual(body(md));
   expect(skillMdToDraft(out)).toEqual(draft);
   expect(out.indexOf("# AIP runtime")).toBeGreaterThan(0);
 });
 
-/** The issues aip-spec's own rules give, without the Studio-only warnings (S5). */
+/** The issues aip-spec's own rules reject a skill for, without the warnings, aip-spec's and the Studio's (S5). */
 const strict = (d: Draft) => lint(d).filter((i) => i.tier !== "warning");
 
-test("billing-support lints clean, but for one Studio-only warning", () => {
+test("billing-support lints clean, but for aip-spec's warning on its route and one Studio-only warning", () => {
   const draft = skillMdToDraft(billing());
   expect(strict(draft)).toEqual([]);
-  // the step `reply` outputs a key `reply`
-  expect(lint(draft).map((i) => [i.tier, i.code, i.stepId])).toEqual([["warning", "name_collision", step(draft, "reply").id]]);
+  // the example keeps `fallback: true` so the quickstart runs without a key, and its router checks `tone_confidence`
+  // all the same; and the step `reply` outputs a key `reply`
+  expect(lint(draft).map((i) => [i.tier, i.code, i.stepId])).toEqual([
+    ["warning", "confidence_on_unmeasured_source", step(draft, "by-tone").id],
+    ["warning", "name_collision", step(draft, "reply").id],
+  ]);
+});
+
+test("a decision model with its confidence checked measures the route: no warning at all", () => {
+  const draft = skillMdToDraft(billing());
+  step(draft, "triage").fallback = false;
+  step(draft, "reply").name = "draft-reply";
+  expect(lint(draft)).toEqual([]);
+  expect(classifySources(draft).get(step(draft, "by-tone").id)).toBe("measured");
 });
 
 test("a blank draft: errors for what the spec requires, unfinished for what a template may leave", () => {
@@ -55,7 +67,7 @@ test("a blank draft: errors for what the spec requires, unfinished for what a te
 test("a step's rename moves with its edges", () => {
   const draft = skillMdToDraft(billing());
   step(draft, "reply").name = "draft-reply";
-  expect(lint(draft)).toEqual([]);   // and the name no longer collides with the key
+  expect(lint(draft).map((i) => i.code)).toEqual(["confidence_on_unmeasured_source"]);   // and the name no longer collides with the key
   expect(draftToSkillMd(draft)).toContain("calm: draft-reply");
 });
 

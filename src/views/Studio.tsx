@@ -15,7 +15,7 @@ import { describe } from "./Source";
 import type { ZipFile } from "../zip";
 
 const STEP_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const TIERS: Tier[] = ["error", "unfinished", "warning"];
+const TIERS: Tier[] = ["error", "unfinished", "warning", "info"];
 /** How many Draft snapshots undo keeps, and how close together keystrokes in one text field fold into one step. */
 const HISTORY = 100;
 const COALESCE_MS = 800;
@@ -587,13 +587,6 @@ function RouterFields({ draft, step, available, set, target, onPrefill, onAddOnB
   );
 }
 
-/** What a threshold does depends on the question: aip-spec's description of `thresholds`. */
-const THRESHOLD_HELP: Record<Question["type"], string> = {
-  noul: "Flag the answer for review by the agent calling the procedure when the probability of true is within this margin of 0.5: 0.1 flags answers between 0.4 and 0.6, and a higher value flags more. The calling agent makes the final call on flagged answers.",
-  choice: "Flag the answer for review by the agent calling the procedure when the model's confidence in the label it chose is below this value: 0.8 flags anything under 80% confidence, and a higher value flags more. The calling agent makes the final call on flagged answers.",
-  score: "Flag the answer for review by the agent calling the procedure when the model's confidence in the level it chose is below this value: 0.8 flags anything under 80% confidence, and a higher value flags more. The calling agent makes the final call on flagged answers.",
-};
-
 /** A number field that keeps what is typed, so `0.` survives on the way to `0.5`, and hands over a number only when
  *  the text is one (or nothing, which clears it). A value outside min and max is marked, and still handed over:
  *  the linter says what is wrong with it. */
@@ -639,14 +632,6 @@ function DecisionFields({ step, set }: { step: Step; set: (c: (s: Step) => void)
             </Field>
             <Text name="instructions" area value={question.instructions} onChange={(v) => q(i, (x) => { x.instructions = v; })} />
             <Criteria question={question} change={(f) => q(i, f)} />
-            <Field name="review threshold, 0 to 1 (optional)" hint={<span data-testid="threshold-help">{THRESHOLD_HELP[question.type]}</span>}>
-              <NumberInput value={step.thresholds?.[question.name]} ariaLabel={`${question.name} threshold`} min={0} max={1}
-                onCommit={(n) => set((s) => {
-                  const t = { ...(s.thresholds ?? {}) };
-                  if (n === undefined) delete t[question.name]; else t[question.name] = n;
-                  s.thresholds = Object.keys(t).length ? t : undefined;
-                })} />
-            </Field>
             <button onClick={() => set((s) => { s.questions!.splice(i, 1); })}>remove question</button>
           </fieldset>
         ))}

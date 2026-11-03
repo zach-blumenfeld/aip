@@ -1,14 +1,15 @@
 // The Studio's linter: a TypeScript port of aip-spec's frontmatter, schema, graph and state rules (`skill.py`,
 // `models.py`), run on a Draft in the browser on every edit. Codes are aip-spec's where one exists; the models'
 // pattern and length rules are all `schema_violation`, as there. The real `aip-spec validate` stays the authority:
-// e2e/lint-parity.spec.ts runs both over the same fixtures and fails on any disagreement in the error codes.
+// e2e/lint-parity.spec.ts runs both over the same fixtures and fails on any disagreement in the codes.
 //
-// Three tiers. `error`: aip-spec would reject it. `unfinished`: valid or fixable, but a placeholder or an empty
-// field a template may carry. `warning`: reserved for Studio-only advice (S5).
+// Four tiers. `error`: aip-spec would reject it. `warning`: aip-spec's own warnings (a route an LLM steers with
+// nothing recorded) and Studio-only advice (S5). `info`: aip-spec's information (a key with several producers).
+// `unfinished`: valid or fixable, but a placeholder or an empty field a template may carry.
 
-import { QUESTION_TYPES, RUNNABLE_KINDS, UNRESOLVED, type Draft, type Step } from "./draft";
+import { BRANCHABLE_TYPES, CONFIDENCE_TYPE, QUESTION_TYPES, RUNNABLE_KINDS, UNRESOLVED, confidenceKey, type Draft, type Step } from "./draft";
 
-export type Tier = "error" | "unfinished" | "warning";
+export type Tier = "error" | "unfinished" | "warning" | "info";
 
 export interface Issue {
   tier: Tier;
@@ -36,12 +37,15 @@ const VERSION = /^[0-9]+(\.[0-9]+)*$/;
 const PROGRAM = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 const DEFAULT_LAUNCHER = "python";
 const DATA_TYPE_SET = new Set(["string", "integer", "float", "boolean", "object", "list[*]"]);
+const KIND_SET = new Set<string>(["start", ...RUNNABLE_KINDS, "router", "end"]);
 
 /** A step with its edges resolved to names, the form aip-spec's checks work on. */
 interface R {
   s: Step;
   index: number;
   name: string;
+  /** Every step this one hands off to, with the Draft field that names it. */
+  edges: { target: string; field: string }[];
   targets: string[];
   /** The name `inputs_to` points at, for the router-fed-by-decision check. */
   inputsTo?: string;
@@ -56,7 +60,7 @@ export function lint(draft: Draft, options: LintOptions = {}): Issue[] {
 
   frontmatter(draft, err);
   schema(draft, err);
-  if (draft.steps.length > 0) graph(draft, err);
+  if (draft.steps.length > 0) graph(draft, add);
   unfinished(draft, options, add);
   if (draft.steps.length > 0) studio(draft, add);
   return issues;
@@ -66,9 +70,13 @@ export function lint(draft: Draft, options: LintOptions = {}): Issue[] {
  *  so the parity test leaves them out of the comparison. */
 export const STUDIO_ONLY_ERRORS = new Set(["loop_without_router"]);
 
+/** Warning codes only the Studio reports (S5); aip-spec's own warnings are every other warning the linter gives. */
+export const STUDIO_ONLY_WARNINGS = new Set(["redundant_branches", "numeric_choice_labels", "duplicate_score_levels", "execution_without_outputs", "dead_key", "name_collision"]);
+
 // ------------------------------------------------------------------------------------------ frontmatter
 
 type Err = (code: string, message: string, step?: Step, field?: string, key?: string) => void;
+type Add = (tier: Tier, code: string, message: string, step?: Step, field?: string, key?: string) => void;
 
 function frontmatter(d: Draft, err: Err): void {
   if (!d.name) err("missing_required_frontmatter", "`name` is required", undefined, "name");
@@ -90,7 +98,7 @@ function schema(d: Draft, err: Err): void {
   const bad = (message: string, step?: Step, field?: string) => err("schema_violation", message, step, field);
   const label = (s: Step) => (s.name ? `step \`${s.name}\`` : `an unnamed ${s.kind} step`);
 
-  if (d.steps.length < 2) bad(`\`steps\` needs at least 2 steps (a runnable step and an end); there ${d.steps.length === 1 ? "is 1" : `are ${d.steps.length}`}`, undefined, "steps");
+  if (d.steps.length < 3) bad(`\`steps\` needs at least 3 steps (a start, a runnable step and an end); there ${d.steps.length === 1 ? "is 1" : `are ${d.steps.length}`}`, undefined, "steps");
   if (d.triggerWhen.length < 1) bad("`trigger_when` needs at least 1 entry", undefined, "triggerWhen");
 
   if (d.requires) {
@@ -103,7 +111,7 @@ function schema(d: Draft, err: Err): void {
 
   for (const s of d.steps) {
     if (!STEP_NAME.test(s.name)) bad(`${label(s)}: the name must be kebab-case (lowercase a–z, 0–9, single hyphens)`, s, "name");
-    if (!(RUNNABLE_KINDS as readonly string[]).includes(s.kind) && s.kind !== "router" && s.kind !== "end") {
+    if (!KIND_SET.has(s.kind)) {
       bad(`${label(s)} has an unknown kind \`${s.kind}\``, s, "kind");
       continue;
     }
@@ -117,7 +125,8 @@ function schema(d: Draft, err: Err): void {
     if (s.kind !== "router") io(s.inputs, "inputs");
     if (s.kind === "execution" || s.kind === "client_task") io(s.outputs, "outputs");
 
-    if (s.kind !== "router" && s.kind !== "end" && s.next === undefined) bad(`${label(s)} has no next step (\`inputs_to\`); every runnable step names the step that receives its output`, s, "next");
+    if (s.kind === "start" && s.next === undefined) bad(`${label(s)} has no next step (\`inputs_to\`); the start step names the first runnable step`, s, "next");
+    if (RUNNABLE_KINDS.includes(s.kind) && s.next === undefined) bad(`${label(s)} has no next step (\`inputs_to\`); every runnable step names the step that receives its output`, s, "next");
 
     if (s.kind === "decision") {
       const questions = s.questions ?? [];
@@ -140,9 +149,9 @@ function schema(d: Draft, err: Err): void {
           bad(`${label(s)}: question \`${(q as { name: string }).name}\` has an unknown type`, s, `questions[${i}].type`);
         }
       });
-      for (const [key, value] of Object.entries(s.thresholds ?? {})) {
-        if (!(value >= 0 && value <= 1)) bad(`${label(s)}: threshold \`${key}\` must be between 0 and 1; got ${value}`, s, `thresholds.${key}`);
-      }
+      (s.confidence ?? []).forEach((name, k) => {
+        if (!QUESTION_NAME.test(name)) bad(`${label(s)}: \`confidence\` entry \`${name}\` must be a question name (letters, digits, underscore; not starting with a digit)`, s, `confidence[${k}]`);
+      });
     }
 
     if (s.kind === "execution") {
@@ -160,6 +169,12 @@ function schema(d: Draft, err: Err): void {
 
     if (s.kind === "router") {
       if (!s.branchOn) bad(`${label(s)}: \`branch_on\` is required`, s, "branchOn");
+      if (s.check) {
+        if (!s.check.key) bad(`${label(s)}: the confidence check names no key`, s, "check.key");
+        if (s.check.below === undefined) bad(`${label(s)}: the confidence check has no bound (\`below\`)`, s, "check.below");
+        else if (!(s.check.below >= 0 && s.check.below <= 1)) bad(`${label(s)}: the confidence check's bound must be between 0 and 1; got ${s.check.below}`, s, "check.below");
+        if (s.check.to === undefined) bad(`${label(s)}: the confidence check names no step to go to (\`to\`)`, s, "check.to");
+      }
       const branches = s.branches ?? [];
       const values = new Set<string>();
       branches.forEach((b, i) => {
@@ -184,19 +199,36 @@ function resolve(draft: Draft): R[] {
     return byId.get(id)?.name ?? id;
   };
   return draft.steps.map((s, index) => {
-    const targets = s.kind === "router" ? (s.branches ?? []).map((b) => nameOf(b.target)) : [nameOf(s.next)];
-    return { s, index, name: s.name, targets: targets.filter((t): t is string => t !== undefined), inputsTo: s.kind === "router" || s.kind === "end" ? undefined : nameOf(s.next) };
+    const edges: { target: string | undefined; field: string }[] = [];
+    if (s.kind === "router") {
+      (s.branches ?? []).forEach((b, i) => edges.push({ target: nameOf(b.target), field: `branches[${i}].target` }));
+      if (s.check) edges.push({ target: nameOf(s.check.to), field: "check.to" });
+    } else if (s.kind !== "end") {
+      edges.push({ target: nameOf(s.next), field: "next" });
+    }
+    const known = edges.filter((e): e is { target: string; field: string } => e.target !== undefined);
+    return { s, index, name: s.name, edges: known, targets: known.map((e) => e.target), inputsTo: s.kind === "router" || s.kind === "end" ? undefined : nameOf(s.next) };
   });
 }
 
-const consumed = (r: R): string[] => (r.s.kind === "router" ? (r.s.branchOn ? [r.s.branchOn] : []) : r.s.inputs.map((i) => i.name).filter(Boolean));
+/** Keys a step reads from the state. The start step reads none: its inputs are what the client supplies. A router's
+ *  confidence key is checked apart (it need only be declared on some path, not every path). */
+const consumed = (r: R): string[] =>
+  r.s.kind === "router" ? (r.s.branchOn ? [r.s.branchOn] : []) : r.s.kind === "start" ? [] : r.s.inputs.map((i) => i.name).filter(Boolean);
 
-const produced = (r: R): string[] =>
-  r.s.kind === "decision" ? (r.s.questions ?? []).map((q) => q.name).filter(Boolean) : (r.s.outputs ?? []).map((i) => i.name).filter(Boolean);
+/** Keys a step adds to the state: the start its inputs, a decision its question names and the confidence keys it
+ *  names, an execution or client task its outputs. */
+const produced = (r: R): string[] => {
+  if (r.s.kind === "start") return r.s.inputs.map((i) => i.name).filter(Boolean);
+  if (r.s.kind === "decision") {
+    return [...(r.s.questions ?? []).map((q) => q.name).filter(Boolean), ...(r.s.confidence ?? []).filter(Boolean).map(confidenceKey)];
+  }
+  return (r.s.outputs ?? []).map((i) => i.name).filter(Boolean);
+};
 
-function graph(draft: Draft, err: Err): void {
+function graph(draft: Draft, add: Add): void {
+  const err: Err = (code, message, step, field, key) => add("error", code, message, step, field, key);
   const steps = resolve(draft);
-  const start = steps[0];
   const byName = new Map<string, R>();
   for (const r of steps) {
     if (byName.has(r.name)) {
@@ -204,20 +236,31 @@ function graph(draft: Draft, err: Err): void {
     } else byName.set(r.name, r);
   }
 
-  if (!(RUNNABLE_KINDS as readonly string[]).includes(start.s.kind)) {
-    err("invalid_start_step", `the first step is the start and must be a decision, execution, or client_task; got kind \`${start.s.kind}\``, start.s, "kind");
-  }
+  const starts = steps.filter((r) => r.s.kind === "start");
+  if (starts.length === 0) err("missing_start_step", "procedure has no step of kind `start`; add one holding the procedure's inputs, with `inputs_to` naming the first runnable step", undefined, "steps");
+  else if (starts.length > 1) err("multiple_start_steps", `procedure must have exactly one \`start\` step; found [${starts.map((r) => `'${r.name}'`).join(", ")}]`, undefined, "steps");
+  const start: R | undefined = starts[0];
 
   const ends = steps.filter((r) => r.s.kind === "end");
   if (ends.length === 0) err("missing_end_step", "procedure has no step of kind `end`", undefined, "steps");
   else if (ends.length > 1) err("multiple_end_steps", `procedure must have exactly one \`end\` step; found [${ends.map((r) => `'${r.name}'`).join(", ")}]`, undefined, "steps");
 
   for (const r of steps) {
-    for (const target of r.targets) {
+    for (const { target, field } of r.edges) {
       if (!byName.has(target)) {
-        err("unknown_step_reference", `step \`${r.name}\` hands off to \`${target}\`, which is not a declared step`, r.s, r.s.kind === "router" ? "branches" : "next");
+        err("unknown_step_reference", `step \`${r.name}\` hands off to \`${target}\`, which is not a declared step`, r.s, field);
+      } else if (start && target === start.name) {
+        err("edge_into_start", `step \`${r.name}\` hands off to \`${target}\`, the start step; a run begins there and nothing returns to it`, r.s, field);
       }
     }
+  }
+
+  for (const r of steps) {
+    if (r.s.kind !== "decision") continue;
+    const names = new Set((r.s.questions ?? []).map((q) => q.name));
+    (r.s.confidence ?? []).forEach((q, k) => {
+      if (!names.has(q)) err("unknown_confidence_question", `decision \`${r.name}\` names \`${q}\` in \`confidence\`, which is not one of its questions [${[...names].sort().map((n) => `'${n}'`).join(", ")}]`, r.s, `confidence[${k}]`);
+    });
   }
 
   const reachable = (from: string): Set<string> => {
@@ -233,9 +276,11 @@ function graph(draft: Draft, err: Err): void {
     return seen;
   };
 
-  const fromStart = reachable(start.name);
-  for (const r of steps) {
-    if (!fromStart.has(r.name)) err("unreachable_step", `step \`${r.name}\` cannot be reached from the start step \`${start.name}\``, r.s);
+  if (start) {
+    const fromStart = reachable(start.name);
+    for (const r of steps) {
+      if (!fromStart.has(r.name)) err("unreachable_step", `step \`${r.name}\` cannot be reached from the start step \`${start.name}\``, r.s);
+    }
   }
   if (ends.length === 1) {
     for (const r of steps) {
@@ -258,31 +303,26 @@ function graph(draft: Draft, err: Err): void {
     }
   }
 
-  state(steps, byName, err);
+  state(steps, byName, start, add);
+  sources(steps, byName, add);
   requires(draft, steps, err);
 
   for (const r of steps) {
+    if (r.s.kind === "router") continue;
     const seen = new Set<string>();
     r.s.inputs.forEach((item, j) => {
-      if (r.s.kind === "router") return;
       if (seen.has(item.name)) err("duplicate_input_name", `step \`${r.name}\` declares input \`${item.name}\` more than once`, r.s, `inputs[${j}].name`);
       seen.add(item.name);
     });
-    if (r.s.kind === "decision") {
-      const names = new Set((r.s.questions ?? []).map((q) => q.name));
-      for (const key of Object.keys(r.s.thresholds ?? {})) {
-        if (!names.has(key)) err("unknown_threshold_question", `step \`${r.name}\` sets a threshold for \`${key}\`, which is not one of its questions`, r.s, `thresholds.${key}`);
-      }
-    }
   }
 }
 
 /** The state contract. A literal port of aip-spec's `check_state`: every consumed key has a producer on every path to
- *  its consumer (or is a start input), every key has one producer, client tasks declare outputs, and a consumer
- *  declares the type its producer does. */
-function state(steps: R[], byName: Map<string, R>, err: Err): void {
-  const start = steps[0];
-  const startInputs = new Set(start.s.kind !== "router" ? consumed(start) : []);
+ *  its consumer (the start step produces its inputs), client tasks declare outputs, every declaration of a key agrees
+ *  on its type, a router branches on a value it can match and checks a `float`. A key with several producers is
+ *  information, not a fault: a later producer overwrites the value where a run passes through both. */
+function state(steps: R[], byName: Map<string, R>, start: R | undefined, add: Add): void {
+  const err: Err = (code, message, step, field, key) => add("error", code, message, step, field, key);
 
   // Rule 3: a client task's outputs are what the client is asked to answer with.
   for (const r of steps) {
@@ -296,66 +336,108 @@ function state(steps: R[], byName: Map<string, R>, err: Err): void {
     });
   }
 
-  // Rule 2: one producer per key, never a start input.
+  // Several producers of one key: allowed, and said, so authors see the overwrite.
   const producers = new Map<string, R[]>();
   for (const r of steps) for (const key of unique(produced(r))) producers.set(key, [...(producers.get(key) ?? []), r]);
   for (const [key, makers] of producers) {
-    const names = makers.map((m) => `\`${m.name}\``).join(", ");
     if (makers.length > 1) {
-      err("duplicate_producer", `key \`${key}\` is produced by ${names}; each key must have exactly one producer, so rename one of them`, makers[1].s);
-    }
-    if (startInputs.has(key)) {
-      err("duplicate_producer", `key \`${key}\` is a start input (declared on \`${start.name}\`) and is also produced by ${names}; a step must not overwrite what the client supplied, so rename the output`, makers[0].s);
+      const names = makers.map((m) => `\`${m.name}\`${m.s.kind === "start" ? " (a start input)" : ""}`).join(", ");
+      add("info", "duplicate_producer", `key \`${key}\` has more than one producer: ${names}; where a run passes through both, the later one overwrites the value`, makers[1].s, undefined, key);
     }
   }
 
-  // Rule 4: a consumer declares the type its producer declares. One key, one type, end to end.
-  const producedType = typeTable(steps);
+  // Rule 4: every declaration of a key agrees on its type. The first in step order is the reference.
+  const reference = new Map<string, [string, string]>();
   for (const r of steps) {
-    if (r.s.kind === "router") continue;
-    r.s.inputs.forEach((item, j) => {
-      if (r === start && startInputs.has(item.name)) return;
-      const expected = producedType.get(item.name);
-      if (expected && expected[0] !== item.type) {
-        err("type_mismatch", `step \`${r.name}\` declares input \`${item.name}\` as \`${item.type}\`, but it is \`${expected[0]}\` (${expected[1]}); a key has one type everywhere it is declared`, r.s, `inputs[${j}].type`);
+    for (const d of declarations(r)) {
+      const expected = reference.get(d.key);
+      if (!expected) { reference.set(d.key, [d.type, d.citedAs]); continue; }
+      if (expected[0] !== d.type) {
+        err("type_mismatch", `${d.says}, but it is \`${expected[0]}\` (${expected[1]}); a key has one type everywhere it is declared`, r.s, d.field);
       }
-    });
+    }
+  }
+  for (const r of steps) {
+    if (r.s.kind !== "router" || !r.s.branchOn) continue;
+    const expected = reference.get(r.s.branchOn);
+    if (expected && !BRANCHABLE_TYPES.includes(expected[0])) {
+      err("unbranchable_type", `router \`${r.name}\` branches on \`${r.s.branchOn}\`, which is \`${expected[0]}\` (${expected[1]}); a router branches on a \`boolean\`, \`string\` or \`integer\``, r.s, "branchOn");
+    }
   }
 
-  // Rule 1: keys available on every path (must-availability over the graph, cycles included).
-  const available = mustAvailable(steps, byName, startInputs);
+  // Rule 1: keys available on every path (must-availability over the graph, cycles included); a router's confidence
+  // key need only be declared on some path (may-availability).
+  const must = availability(steps, byName, start, intersect);
+  const may = availability(steps, byName, start, union);
+  const onStart = start ? ` on the start step \`${start.name}\`` : " on the start step";
   for (const r of steps) {
-    const have = available.get(r.name);
+    const have = must.get(r.name);
     if (have == null) continue;                    // unreachable; reported elsewhere
     for (const k of unique(consumed(r)).filter((k) => !have.has(k))) {
       if (r.s.kind === "router") {
-        err("unproduced_input", `router \`${r.name}\` branches on \`${k}\`, which no step produces on every path to it; pick a key that reaches the router, or declare \`${k}\` on the start step \`${start.name}\` or as an \`output\` of an upstream step`, r.s, "branchOn", k);
+        err("unproduced_input", `router \`${r.name}\` branches on \`${k}\`, which no step produces on every path to it; pick a key that reaches the router, or declare \`${k}\`${onStart} if the client supplies it, or as an \`output\` of an upstream step`, r.s, "branchOn", k);
         continue;
       }
-      err("unproduced_input", `step \`${r.name}\` consumes \`${k}\`, which no step produces on every path to it; declare it on the start step \`${start.name}\` if the client supplies it, or as an \`output\` of an upstream step`, r.s, "inputs", k);
+      err("unproduced_input", `step \`${r.name}\` consumes \`${k}\`, which no step produces on every path to it; declare it${onStart} if the client supplies it, or as an \`output\` of an upstream step`, r.s, "inputs", k);
+    }
+    if (r.s.kind === "router" && r.s.check?.key && !(may.get(r.name) ?? new Set()).has(r.s.check.key)) {
+      err("unproduced_input", `router \`${r.name}\` checks \`${r.s.check.key}\`, which no step produces on any path to it; name the question in a decision's \`confidence\` list (which emits \`<question>_confidence\`), or declare the key as an output of an upstream step`, r.s, "check.key", r.s.check.key);
     }
   }
 }
 
-/** Each key's type and where it comes from, first declaration winning: start inputs, then each step in order. */
-function typeTable(steps: R[]): Map<string, [string, string]> {
-  const start = steps[0];
-  const table = new Map<string, [string, string]>();
-  const setDefault = (key: string, value: [string, string]) => { if (!table.has(key)) table.set(key, value); };
-  if (start.s.kind !== "router") for (const item of start.s.inputs) setDefault(item.name, [item.type, `start input on \`${start.name}\``]);
-  for (const r of steps) {
-    if (r.s.kind === "decision") for (const q of r.s.questions ?? []) setDefault(q.name, [QUESTION_TYPES[q.type] ?? q.type, `a ${q.type} question in \`${r.name}\``]);
-    for (const item of r.s.outputs ?? []) setDefault(item.name, [item.type, `output of \`${r.name}\``]);
+interface Declaration { key: string; type: string; says: string; citedAs: string; field: string }
+
+/** Every (key, type) a step declares, in order: a start's inputs, a runnable step's inputs then questions and
+ *  confidence keys or outputs, an end's inputs, a router's confidence key. */
+function declarations(r: R): Declaration[] {
+  const s = r.s;
+  const out: Declaration[] = [];
+  if (s.kind === "router") {
+    if (s.check?.key) {
+      out.push({ key: s.check.key, type: CONFIDENCE_TYPE, says: `router \`${r.name}\` checks \`${s.check.key}\` as a \`${CONFIDENCE_TYPE}\``, citedAs: `the confidence check of \`${r.name}\``, field: "check.key" });
+    }
+    return out;
   }
+  s.inputs.forEach((item, j) => {
+    if (!item.name) return;
+    const noun = s.kind === "start" ? "start input" : "input";
+    out.push({ key: item.name, type: item.type, says: `step \`${r.name}\` declares ${noun} \`${item.name}\` as \`${item.type}\``, citedAs: s.kind === "start" ? `start input on \`${r.name}\`` : `input of \`${r.name}\``, field: `inputs[${j}].type` });
+  });
+  if (s.kind === "decision") {
+    (s.questions ?? []).forEach((q, i) => {
+      if (!q.name) return;
+      const type = QUESTION_TYPES[q.type] ?? q.type;
+      out.push({ key: q.name, type, says: `step \`${r.name}\` answers \`${q.name}\` with a ${q.type} question, a \`${type}\``, citedAs: `a ${q.type} question in \`${r.name}\``, field: `questions[${i}]` });
+    });
+    (s.confidence ?? []).forEach((q, k) => {
+      if (!q) return;
+      out.push({ key: confidenceKey(q), type: CONFIDENCE_TYPE, says: `step \`${r.name}\` emits \`${confidenceKey(q)}\`, the confidence of \`${q}\`, a \`${CONFIDENCE_TYPE}\``, citedAs: `the confidence of \`${q}\` in \`${r.name}\``, field: `confidence[${k}]` });
+    });
+  }
+  (s.outputs ?? []).forEach((item, j) => {
+    if (!item.name) return;
+    out.push({ key: item.name, type: item.type, says: `step \`${r.name}\` declares output \`${item.name}\` as \`${item.type}\``, citedAs: `output of \`${r.name}\``, field: `outputs[${j}].type` });
+  });
+  return out;
+}
+
+/** Each key's type and where it comes from, first declaration in step order winning (aip-spec's reference). */
+function typeTable(steps: R[]): Map<string, [string, string]> {
+  const table = new Map<string, [string, string]>();
+  for (const r of steps) for (const d of declarations(r)) if (!table.has(d.key)) table.set(d.key, [d.type, d.citedAs]);
   return table;
 }
 
-/** The keys in the state when each step starts, on every path to it (null: no path from the start found). A
- *  fixed point over the graph, so a loop is handled. */
-function mustAvailable(steps: R[], byName: Map<string, R>, startInputs: Set<string>): Map<string, Set<string> | null> {
-  const start = steps[0];
+const intersect = (sets: Set<string>[]) => sets.reduce((a, b) => new Set([...a].filter((k) => b.has(k))));
+const union = (sets: Set<string>[]) => new Set(sets.flatMap((s) => [...s]));
+
+/** The keys known to be in the state when each step starts: a fixed point over the graph, so a loop is handled.
+ *  `combine` is intersection for must-availability (on every path) or union for may-availability (on some path).
+ *  Null marks a step nothing reaches; with no start step, every step. */
+function availability(steps: R[], byName: Map<string, R>, start: R | undefined, combine: (sets: Set<string>[]) => Set<string>): Map<string, Set<string> | null> {
   const available = new Map<string, Set<string> | null>(steps.map((r) => [r.name, null]));
-  available.set(start.name, new Set(startInputs));
+  if (start) available.set(start.name, new Set());
   const preds = new Map<string, R[]>();
   for (const r of steps) for (const target of r.targets) preds.set(target, [...(preds.get(target) ?? []), r]);
   let changed = true;
@@ -367,7 +449,7 @@ function mustAvailable(steps: R[], byName: Map<string, R>, startInputs: Set<stri
         .filter((p) => available.get(p.name) != null)
         .map((p) => new Set([...available.get(p.name)!, ...produced(p)]));
       if (known.length === 0) continue;
-      const next = known.reduce((a, b) => new Set([...a].filter((k) => b.has(k))));
+      const next = combine(known);
       const old = available.get(r.name);
       if (!old || old.size !== next.size || [...next].some((k) => !old.has(k))) {
         available.set(r.name, next);
@@ -380,23 +462,128 @@ function mustAvailable(steps: R[], byName: Map<string, R>, startInputs: Set<stri
 
 export interface AvailableKey { name: string; type: string }
 
-/** For each step id, the keys it may declare as inputs: the start inputs and everything produced on every path to
- *  it, with their types. The same computation `unproduced_input` is judged by, so a pick from this list never
- *  raises it. A step nothing reaches has none. */
+/** For each step id, the keys it may declare as inputs: everything produced on every path to it (the start step
+ *  produces its inputs), with their types. The same computation `unproduced_input` is judged by, so a pick from this
+ *  list never raises it. A step nothing reaches has none. */
 export function availableKeys(draft: Draft): Map<string, AvailableKey[]> {
   const out = new Map<string, AvailableKey[]>();
   if (draft.steps.length === 0) return out;
   const steps = resolve(draft);
   const byName = new Map<string, R>();
   for (const r of steps) if (!byName.has(r.name)) byName.set(r.name, r);
-  const start = steps[0];
-  const available = mustAvailable(steps, byName, new Set(start.s.kind !== "router" ? consumed(start) : []));
+  const start = steps.find((r) => r.s.kind === "start");
+  const available = availability(steps, byName, start, intersect);
   const types = typeTable(steps);
   for (const r of steps) {
     const have = byName.get(r.name) === r ? available.get(r.name) : null;
     out.set(r.s.id, have ? [...have].map((name) => ({ name, type: types.get(name)?.[0] ?? "string" })) : []);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------- the sources of a route
+
+export type SourceClass = "deterministic" | "measured" | "unmeasured";
+const CLASS_RANK: Record<SourceClass, number> = { deterministic: 0, measured: 1, unmeasured: 2 };
+
+interface Source { producer: R; cls: SourceClass; why: string }
+
+/** What kind of source one producer of a router's branch key is, and why in a phrase (aip-spec's `_classify`).
+ *  Deterministic: a start input, or a script's output the router does not read a confidence from. Measured: a
+ *  decision model (no fallback) whose confidence for the branch question the router checks, or a script or client
+ *  task whose own declared number the router checks. Unmeasured: a decision the client may answer by hand, or a
+ *  client task's output the router does not check. */
+function classify(router: R, producer: R): [SourceClass, string] {
+  const checked = router.s.check?.key;
+  const key = router.s.branchOn ?? "";
+  const p = producer.s;
+  if (p.kind === "start") return ["deterministic", `\`${key}\` is a start input`];
+  if (p.kind === "execution" || p.kind === "client_task") {
+    const own = (p.outputs ?? []).map((o) => o.name);
+    const label = p.kind === "execution" ? "script" : "client task";
+    if (checked && own.includes(checked)) return ["measured", `${label} \`${producer.name}\` declares \`${checked}\`, the number the router checks, beside \`${key}\``];
+    if (p.kind === "execution") return ["deterministic", `\`${key}\` is an output of script \`${producer.name}\``];
+    return ["unmeasured", `\`${key}\` is an output of client task \`${producer.name}\`, chosen by the client's own judgment, and the router checks no number the task declares`];
+  }
+  // a decision
+  if (p.fallback) return ["unmeasured", `decision \`${producer.name}\` answers \`${key}\` with \`fallback: true\`, so the client may have chosen it by hand`];
+  if (!(p.confidence ?? []).includes(key)) return ["unmeasured", `decision \`${producer.name}\` does not name \`${key}\` in its \`confidence\` list, so the model's confidence is not recorded`];
+  if (checked !== confidenceKey(key)) return ["unmeasured", `decision \`${producer.name}\` emits \`${confidenceKey(key)}\` but the router does not check it`];
+  return ["measured", `decision \`${producer.name}\` answers \`${key}\` with a decision model and the router checks \`${checked}\``];
+}
+
+/** For each router (the first of its name): every producer of its branch key from which the router can be reached,
+ *  with the producer's class and the reason. */
+function routeSources(steps: R[], byName: Map<string, R>): Map<R, Source[]> {
+  const reaches = (from: string, target: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [from];
+    while (stack.length) {
+      const current = stack.pop()!;
+      const r = byName.get(current);
+      if (seen.has(current) || !r) continue;
+      seen.add(current);
+      for (const next of r.targets) {
+        if (next === target) return true;
+        stack.push(next);
+      }
+    }
+    return false;
+  };
+  const out = new Map<R, Source[]>();
+  for (const router of steps) {
+    if (router.s.kind !== "router" || byName.get(router.name) !== router) continue;
+    const key = router.s.branchOn;
+    const found: Source[] = [];
+    if (key) {
+      for (const producer of steps) {
+        if (produced(producer).includes(key) && reaches(producer.name, router.name)) {
+          const [cls, why] = classify(router, producer);
+          found.push({ producer, cls, why });
+        }
+      }
+    }
+    out.set(router, found);
+  }
+  return out;
+}
+
+const worstOf = (found: Source[]): SourceClass => found.reduce<SourceClass>((w, f) => (CLASS_RANK[f.cls] > CLASS_RANK[w] ? f.cls : w), "deterministic");
+
+/** The class of every router's source, by step id: `deterministic`, `measured` or `unmeasured`, the worst of its
+ *  branch key's producers (aip-spec's `classify_sources`, what the server stores and the Procedure page shows). */
+export function classifySources(draft: Draft): Map<string, SourceClass> {
+  const steps = resolve(draft);
+  const byName = new Map<string, R>();
+  for (const r of steps) if (!byName.has(r.name)) byName.set(r.name, r);
+  const out = new Map<string, SourceClass>();
+  for (const [router, found] of routeSources(steps, byName)) out.set(router.s.id, worstOf(found));
+  return out;
+}
+
+/** What the class of a route says to its author (aip-spec's `check_sources`): a router whose check reads a number
+ *  nothing calibrated (`confidence_on_unmeasured_source`), a router an LLM steers with nothing recorded
+ *  (`unmeasured_route`), both warnings; a router checking a confidence a script or client task declared itself
+ *  (`declared_confidence`), information. A deterministic route says nothing. */
+function sources(steps: R[], byName: Map<string, R>, add: Add): void {
+  const fix = "decide the key with a decision model (`fallback: false`) that names the question in its `confidence` list, and check `<question>_confidence` on the router";
+  for (const [router, found] of routeSources(steps, byName)) {
+    const s = router.s;
+    const worst = worstOf(found);
+    const reasons = found.filter((f) => f.cls === "unmeasured").map((f) => f.why).join("; ");
+    if (worst === "unmeasured" && s.check) {
+      add("warning", "confidence_on_unmeasured_source", `router \`${router.name}\` checks \`${s.check.key}\`, but its branch key \`${s.branchOn}\` is unmeasured: ${reasons}; the check reads a number nothing calibrated. To measure the route, ${fix}`, s, "check");
+    } else if (worst === "unmeasured") {
+      add("warning", "unmeasured_route", `router \`${router.name}\` branches on \`${s.branchOn}\`, which is unmeasured: ${reasons}; a probabilistic choice routes the run and nothing records how sure it was. To measure the route, ${fix}`, s, "branchOn");
+    }
+    for (const { producer, cls } of found) {
+      if (cls !== "measured" || producer.s.kind === "decision") continue;
+      const verdict = producer.s.kind === "execution"
+        ? `script \`${producer.name}\` declares itself; legitimate when the code behind it is calibrated`
+        : `client task \`${producer.name}\` declares itself; discouraged, because an agent cannot calibrate its own confidence. Prefer a decision step for the judgment`;
+      add("info", "declared_confidence", `router \`${router.name}\` checks \`${s.check?.key}\`, a confidence ${verdict}`, s, "check.key");
+    }
+  }
 }
 
 /** A procedure with execution steps declares the environment its scripts need, and launches each script with the
@@ -420,8 +607,6 @@ function requires(draft: Draft, steps: R[], err: Err): void {
 
 // ------------------------------------------------------------------------------------------ unfinished
 
-type Add = (tier: Tier, code: string, message: string, step?: Step, field?: string) => void;
-
 function unfinished(d: Draft, options: LintOptions, add: Add): void {
   const todo = (code: string, message: string, step?: Step, field?: string) => add("unfinished", code, message, step, field);
 
@@ -433,7 +618,7 @@ function unfinished(d: Draft, options: LintOptions, add: Add): void {
     const label = s.name ? `step \`${s.name}\`` : `an unnamed ${s.kind} step`;
     if (s.kind === "end") {
       if (s.inputs.length === 0) todo("end_without_inputs", `${label} declares no inputs, so the procedure returns nothing`, s, "inputs");
-    } else if (!s.description.trim()) {
+    } else if (s.kind !== "start" && !s.description.trim()) {
       todo("empty_description", `${label} has no description`, s, "description");
     }
     (s.questions ?? []).forEach((q, i) => {
@@ -470,10 +655,10 @@ function studio(d: Draft, add: Add): void {
   // A runnable chain that comes back to itself with no router on it can never leave.
   const reported = new Set<string>();
   for (const s of d.steps) {
-    if (!(RUNNABLE_KINDS as readonly string[]).includes(s.kind) || reported.has(s.id)) continue;
+    if (!RUNNABLE_KINDS.includes(s.kind) || reported.has(s.id)) continue;
     const chain: Step[] = [];
     let cur: Step | undefined = s;
-    while (cur && (RUNNABLE_KINDS as readonly string[]).includes(cur.kind) && chain.length <= d.steps.length) {
+    while (cur && RUNNABLE_KINDS.includes(cur.kind) && chain.length <= d.steps.length) {
       chain.push(cur);
       cur = cur.next ? byId.get(cur.next) : undefined;
       if (cur === s) {
@@ -518,11 +703,7 @@ function studio(d: Draft, add: Add): void {
     }
 
     if (s.kind === "decision") {
-      const questions = s.questions ?? [];
-      if (questions.length > 0 && Object.keys(s.thresholds ?? {}).length === 0) {
-        warn("no_thresholds", `${label(s)} sets no review threshold, so no answer is ever flagged for the calling agent to check; set one on the questions where a wrong answer costs most`, s, "questions");
-      }
-      questions.forEach((q, i) => {
+      (s.questions ?? []).forEach((q, i) => {
         if (q.type === "choice") {
           const labels = q.criteria.map((c) => c.label).filter(Boolean);
           if (labels.length > 0 && labels.every((l) => /^-?[0-9]+(\.[0-9]+)?$/.test(l))) {
@@ -543,8 +724,9 @@ function studio(d: Draft, add: Add): void {
   }
 
   // An output nothing reads, where some step could read it: a dead key. A key produced on only some paths, which
-  // no step after the paths join can take, is left alone; the author cannot fix that by adding an input.
-  const read = new Set(d.steps.flatMap((s) => (s.kind === "router" ? (s.branchOn ? [s.branchOn] : []) : s.inputs.map((i) => i.name))));
+  // no step after the paths join can take, is left alone; the author cannot fix that by adding an input. A router's
+  // confidence check reads its key.
+  const read = new Set(d.steps.flatMap((s) => (s.kind === "router" ? [s.branchOn, s.check?.key].filter((k): k is string => !!k) : s.inputs.map((i) => i.name))));
   const reachable = new Set([...availableKeys(d).values()].flatMap((keys) => keys.map((k) => k.name)));
   for (const s of d.steps) {
     if (s.kind !== "execution" && s.kind !== "client_task") continue;

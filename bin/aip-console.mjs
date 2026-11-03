@@ -17,6 +17,7 @@
 //   POST /console/resume       {run_id, input?}        -> event stream of `aip resume --progress`
 //   POST /console/cancel       {session}               kills that session's `aip` and its scripts
 //   POST /console/validate     {name, files}           `aip-spec validate` on those files: {status, valid, issues}
+//   POST /console/upgrade      {name, files}           `aip upgrade` on those files: {status, valid, issues, output, skillMd}
 //   POST /console/probe        {name, files, script, stdin, timeout}
 //                                                      runs one Python script of those files: {code, stdout, stderr, ...}
 //   POST /console/handoff      {name, files}           writes the scaffold to <workdir>/studio/<name>/ for an agent: {dir}
@@ -348,6 +349,30 @@ function validate(setup, body) {
   }
 }
 
+/** `aip upgrade` on the files (a skill in an earlier format moved to the current one): the command's exit status
+ *  (0 valid, 1 written but still invalid, 2 refused and nothing written), what it printed, the validator's issues,
+ *  and the rewritten SKILL.md when one was written. */
+function upgrade(setup, body) {
+  const { root, dir } = writeSkill(body.name, body.files);
+  try {
+    const before = readFileSync(path.join(dir, "SKILL.md"), "utf8");
+    const out = spawnSync(setup.aip, ["upgrade", dir], { cwd: setup.cwd, env: setup.env, encoding: "utf8" });
+    if (out.error) throw new Error(`\`${setup.aip} upgrade\` could not be run (${out.error.code ?? out.error.message})`);
+    const issues = `${out.stderr ?? ""}`.split("\n").filter((l) => l.startsWith("{")).flatMap((l) => {
+      try {
+        const i = JSON.parse(l);
+        return [{ ...i, path: typeof i.path === "string" && i.path.startsWith(dir) ? path.relative(dir, i.path) || "SKILL.md" : i.path }];
+      } catch { return []; }
+    });
+    const after = readFileSync(path.join(dir, "SKILL.md"), "utf8");
+    const noise = `${out.stderr ?? ""}`.split("\n").filter((l) => l && !l.startsWith("{")).join("\n");
+    const output = `${out.stdout ?? ""}${noise ? `\n${noise}` : ""}`.replaceAll(dir, body.name ?? "skill").trim();
+    return { status: out.status, valid: out.status === 0, issues, output, skillMd: after !== before ? after : null };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 /** The program `name` resolves to on PATH, or null. */
 function onPath(name, env) {
   for (const dir of `${env.PATH ?? ""}`.split(path.delimiter)) {
@@ -439,6 +464,7 @@ function handler(setup, port) {
         if (missing) return problem(res, 503, "aip_spec_missing", missing);
         return json(res, 200, validate(setup, body));
       }
+      if (route === "POST /console/upgrade") return json(res, 200, upgrade(setup, await readJson(req)));
       if (route === "POST /console/handoff") return json(res, 200, handoff(setup, await readJson(req)));
       if (route === "POST /console/handoff/read") return json(res, 200, readHandoff(setup, await readJson(req)));
       if (route === "POST /console/probe") {

@@ -8,7 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-Add notable changes here as you make them. On release, rename this section to the new version with a date and start a new `[Unreleased]` above it.
+Targets aip 0.8.0 and format 0.8 (explicit start step, free producers, confidence instead of thresholds; the aip repo's plan issue #18).
+
+### Changed
+- **The Studio's model, serializer and linter follow format 0.8.** A step of kind `start` holds the procedure's inputs and names the first runnable step (any position; the export writes it first). A decision has a `confidence` list (the questions whose `<question>_confidence` it emits) and a `fallback` flag instead of `thresholds`; a router has an optional confidence check (`key`, `below`, `to`), applied before its branches. The linter adds `missing_start_step`, `multiple_start_steps`, `edge_into_start`, `unknown_confidence_question` and `unbranchable_type`, drops the one-producer rule (`duplicate_producer` is now **info**, a new tier, with every producer named), generalises type agreement to every declaration of a key (the first in step order is the reference), checks a router's confidence key as a `float` produced on some path to it, and classifies what feeds each router as deterministic, measured or unmeasured (`classifySources`), warning on `confidence_on_unmeasured_source` and `unmeasured_route` and noting `declared_confidence`. `unknown_threshold_question` and the Studio-only `no_thresholds` warning are gone. `docs/studio-lint.md` lists the codes.
+- **Lint parity covers every severity.** `e2e/lint-parity.spec.ts` compares the linter with `aip-spec validate` on errors, warnings and infos over the migrated fixtures.
+- **The embedded runtime block is format 0.8** (`src/studio/runtime-0.8.ts`); an imported 0.5a1, 0.6a0 or 0.6a1 skill gets aip-spec's upgrade note, which names `aip upgrade`.
+
+### Added
+- **`POST /console/upgrade`**: the launcher runs `aip upgrade` on a skill's files and answers with the rewritten SKILL.md, the command's report and the validator's issues; `upgradeDraft` in `src/studio/import.ts` re-imports the result. The Studio's button for it comes with the views.
 
 ## [0.7.1] — 2026-11-02
 

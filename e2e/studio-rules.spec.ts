@@ -14,10 +14,12 @@ import { FIRST_REVISION_DIR } from "./aip";
 
 const step = (d: Draft, name: string): Step => d.steps.find((s) => s.name === name)!;
 
-/** billing-support with the step `reply` renamed, so it no longer shares a name with its key: no issues at all. */
+/** billing-support with the step `reply` renamed, so it no longer shares a name with its key, and `fallback` off on
+ *  its decision, so its route is measured: no issues at all. */
 function base(): Draft {
   const d = skillMdToDraft(readFileSync(path.join(FIRST_REVISION_DIR, "SKILL.md"), "utf8"));
   step(d, "reply").name = "draft-reply";
+  step(d, "triage").fallback = false;
   return d;
 }
 
@@ -37,7 +39,6 @@ const RULES: Record<string, [Tier, (d: Draft) => void]> = {
     d.steps.splice(d.steps.indexOf(reply) + 1, 0, again);
   }],
   loop_without_router: ["error", (d) => { step(d, "draft-reply").next = step(d, "draft-reply").id; }],
-  no_thresholds: ["warning", (d) => { delete step(d, "triage").thresholds; }],
   numeric_choice_labels: ["warning", (d) => {
     const tone = step(d, "triage").questions![1];
     if (tone.type === "choice") { tone.criteria[0].label = "1"; tone.criteria[1].label = "2"; }
