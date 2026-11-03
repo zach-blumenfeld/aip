@@ -68,24 +68,25 @@ Releases are cut by the **`.github/workflows/release.yml`** workflow, **triggere
 (Actions → *Release to npm* → Run workflow) by a maintainer **after the release PR is merged to
 `main`**. The workflow reads the version from `package.json`, refuses if `package-lock.json`
 disagrees or if the tag already exists, runs `npm ci && npm run build && npm pack`, checks the
-tarball carries `bin/aip-console.mjs` and `dist/`, tags `vX.Y.Z`, publishes `aip-console` to npm
-with `--provenance` from the `release` GitHub environment, and cuts a GitHub Release whose body is
-the matching `## [X.Y.Z]` section of `CHANGELOG.md`.
+tarball carries `bin/aip-console.mjs` and `dist/`, tags `vX.Y.Z`, **stages** `aip-console` on npm
+with `npm stage publish --provenance` from the `release` GitHub environment, and cuts a GitHub
+Release whose body is the matching `## [X.Y.Z]` section of `CHANGELOG.md`.
 
-**How it authenticates.** npm's trusted publishing (OIDC, `id-token: write`, no token) once the
+**Staged, then approved by a person.** A staged version is held by npm and not installable until
+the maintainer approves it with 2FA: on npmjs.com, the package's *Staged Packages* tab → *Approve*,
+or `npm stage approve <stage-id>` (the id is in the run's summary). That approval is the last step
+of every release. The workflow authenticates with npm's trusted publishing (OIDC, no token): the
 package page names this repository, `release.yml` and the `release` environment as its trusted
-publisher. npm lets that be configured only on an existing package, so the **first** publish of
-`aip-console` (0.7.0) is done by the maintainer from a laptop (`npm login`, then
-`npm publish --access public` on the packed 0.7.0); every later release goes through the workflow.
-Until the trusted publisher is set, or if trusted publishing is not available to the account, the
-workflow uses the `NPM_TOKEN` secret (a granular access token with publish rights) whenever it is
-set, and OIDC otherwise; the publish step prints which one it used. Record a change of method here.
+publisher, and `npm stage publish` is the one action a trusted publisher is always allowed, so no
+publish permission and no `NPM_TOKEN` secret exist. 0.7.0 was published by hand from a laptop
+before any of this existed.
 
 Running it with `target: dry-run` is the rehearsal for a new or changed workflow: same checks,
-same build, same tarball, then `npm publish --dry-run`, no tag and no GitHub Release. It can be
-repeated at the same version.
+same build, same tarball, then `npm stage publish --dry-run`, no tag and no GitHub Release. It can
+be repeated at the same version. A failed run that already pushed the tag is re-run after deleting
+the tag (`git push origin :refs/tags/vX.Y.Z`).
 
-So an agent's job for a release is **prep only — never build, tag, or publish by hand:**
+So an agent's job for a release is **prep only — never build, tag, stage, approve or publish by hand:**
 
 1. **Set the version** with `npm version X.Y.Z --no-git-tag-version` (SemVer, pre-1.0 → breaking
    changes bump the minor; match the aip release the console targets), and move `MINIMUM_AIP` if the
@@ -94,7 +95,8 @@ So an agent's job for a release is **prep only — never build, tag, or publish 
    section (one section per release — the workflow extracts just that one). The `## [X.Y.Z]`
    heading format is **load-bearing** (awk-matched); leave a fresh empty `## [Unreleased]` above
    it.
-3. Open the release PR. The maintainer merges it and triggers the workflow.
+3. Open the release PR. The maintainer merges it, triggers the workflow, and approves the staged
+   version on npmjs.com.
 
 Never move or force-push a published tag.
 
