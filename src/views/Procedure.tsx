@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { CatalogEntry, ProcedureInfo, Question, Resource, StepDetail, StepInput, StepOutput } from "../api/types";
-import { dataFlow, groupFlow, START_INPUT } from "../graph/dataflow";
+import type { CatalogEntry, ProcedureInfo, PublishIssue, Question, Resource, StepDetail, StepInput, StepOutput } from "../api/types";
+import { dataFlow, groupFlow, outputsOf } from "../graph/dataflow";
 import { href, navigate } from "../router";
 import { Requires } from "./Requires";
 import { describe } from "./Source";
@@ -91,7 +91,10 @@ export function Procedure({ reference }: { reference: string }) {
           <List title="Anti-patterns" items={info.anti_patterns} />
 
           <h2>Start input</h2>
-          <p className="muted">Step <code>{info.start.step}</code> ({info.start.kind})</p>
+          <p className="muted">
+            The <code>{info.start.step}</code> step holds what the client supplies and hands the run to{" "}
+            <a href={`#step-${info.edges.find((e) => e.from === info.start.step)?.to ?? ""}`}><code>{info.edges.find((e) => e.from === info.start.step)?.to}</code></a>. An example:
+          </p>
           <pre data-testid="example-input">{JSON.stringify(info.example_input, null, 2)}</pre>
 
           <h2>Requires</h2>
@@ -107,6 +110,7 @@ export function Procedure({ reference }: { reference: string }) {
         <StepCard key={s.name} step={s} isStart={s.name === info.start.step} isEnd={s.name === info.end.step}
                   inputs={byStep(info.inputs, s.name)} outputs={byStep(info.outputs ?? [], s.name)} questions={byStep(info.questions, s.name)}
                   resources={byStep(info.resources, s.name)} branches={info.branches.filter((b) => b.router === s.name)}
+                  issues={(info.issues ?? []).filter((i) => i.step === s.name)}
                   next={info.edges.find((e) => e.from === s.name)?.to} />
       ))}
     </article>
@@ -142,9 +146,23 @@ interface CardProps {
   step: StepDetail; isStart: boolean; isEnd: boolean;
   inputs: StepInput[]; outputs: StepOutput[]; questions: Question[]; resources: Resource[];
   branches: { value: string; to: string }[]; next?: string;
+  /** The validator's warnings and infos on this step at publish. */
+  issues: PublishIssue[];
 }
 
-function StepCard({ step, isStart, isEnd, inputs, outputs, questions, resources, branches, next }: CardProps) {
+/** What a router's source class means, for the tag's title. */
+const CLASS_TITLES = {
+  deterministic: "deterministic: the branch key is a start input or a script's output",
+  measured: "measured: a decision model answers the branch key and this router checks its confidence",
+  unmeasured: "unmeasured: a probabilistic choice routes the run (a decision the client may answer by hand, or a client task) and nothing calibrated records how sure it was",
+};
+
+function SourceClassTag({ cls }: { cls: StepDetail["source_class"] }) {
+  if (!cls) return <span className="muted">unclassified</span>;
+  return <span className={`status-tag class-${cls}`} data-testid="source-class" data-class={cls} title={CLASS_TITLES[cls]}>{cls}</span>;
+}
+
+function StepCard({ step, isStart, isEnd, inputs, outputs, questions, resources, branches, next, issues }: CardProps) {
   return (
     <section className={`step-card kind-${step.kind}`} id={`step-${step.name}`}>
       <h3>
@@ -152,8 +170,25 @@ function StepCard({ step, isStart, isEnd, inputs, outputs, questions, resources,
         {isStart && <span className="muted"> · start</span>}{isEnd && <span className="muted"> · end</span>}
       </h3>
       {step.description && <p>{step.description}</p>}
+      {isStart && <p className="muted small">The procedure's inputs: what the client supplies when it opens a run.</p>}
       <dl>
-        {step.kind === "router" && <><dt>branch on</dt><dd><code>{step.branch_on}</code></dd></>}
+        {step.kind === "router" && <><dt>branch on</dt><dd><code>{step.branch_on}</code> · source <SourceClassTag cls={step.source_class} /></dd></>}
+        {step.kind === "router" && (
+          <><dt>confidence check</dt>
+            <dd data-testid="router-check">
+              {step.check
+                ? <>when <code>{step.check.key}</code> is below <code>{step.check.below}</code>, or absent, go to <a href={`#step-${step.check.to}`}><code>{step.check.to}</code></a></>
+                : <span className="muted">none</span>}
+            </dd></>
+        )}
+        {step.kind === "decision" && (
+          <><dt>fallback</dt>
+            <dd data-testid="fallback" data-fallback={step.fallback ? "true" : "false"}>
+              {step.fallback
+                ? <>on <span className="muted">· a client with no decision model may answer by hand, which records no confidence</span></>
+                : <>off <span className="muted">· a client with no decision model stops here (<code>no_decision_model</code>)</span></>}
+            </dd></>
+        )}
         {step.kind === "execution" && <><dt>script</dt><dd><code>{step.script}</code>{step.timeout ? ` (timeout ${step.timeout}s)` : ""}</dd></>}
         {step.kind === "execution" && <><dt>command</dt><dd data-testid="command"><code>{step.command ? step.command.join(" ") : `python ${step.script?.replace(/^.*\//, "")}`}</code>{!step.command && <span className="muted"> (default)</span>}</dd></>}
         {step.kind === "client_task" && <><dt>template</dt><dd><code>{step.template}</code>{step.framing ? " · framed" : ""}</dd></>}
@@ -175,11 +210,11 @@ function StepCard({ step, isStart, isEnd, inputs, outputs, questions, resources,
         </table>
       )}
       {questions.length > 0 && (
-        <table className="compact"><thead><tr><th>question</th><th>type</th><th>threshold</th><th>instructions</th></tr></thead>
+        <table className="compact" data-testid="questions"><thead><tr><th>question</th><th>type</th><th>confidence</th><th>instructions</th></tr></thead>
           <tbody>{questions.map((q) => (
-            <tr key={q.name}>
+            <tr key={q.name} data-question={q.name} data-confidence={q.confidence ? "true" : "false"}>
               <td><code>{q.name}</code></td><td>{q.type}</td>
-              <td>{q.threshold ?? <span className="muted">default</span>}</td>
+              <td>{q.confidence ? <>emits <code>{q.name}_confidence</code></> : <span className="muted">not emitted</span>}</td>
               <td>{q.instructions}{q.criteria && <Criteria text={q.criteria} />}</td>
             </tr>
           ))}</tbody>
@@ -190,31 +225,43 @@ function StepCard({ step, isStart, isEnd, inputs, outputs, questions, resources,
           <tbody>{resources.map((r) => <tr key={r.path}><td><code>{r.path}</code></td><td>{r.role}</td><td>{r.description ?? ""}</td></tr>)}</tbody>
         </table>
       )}
+      {issues.length > 0 && (
+        <ul className="publish-issues small" data-testid="publish-issues">
+          {issues.map((i, n) => (
+            <li key={n} data-code={i.code} data-severity={i.severity}>
+              <span className={`status-tag ${i.severity === "warning" ? "flagged" : ""}`}>{i.severity}</span> {i.message} <code className="muted">{i.code}</code>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
 
-/** Every key, who produces it, and who reads it: the graph's data-flow arrows as rows. */
+/** Every key, who produces it, and who reads it: the graph's data-flow arrows as rows. A key may have several
+ *  producers (a later one overwrites the value where a run passes through both); the start step produces the
+ *  procedure's inputs. */
 function DataFlowTable({ info, flow }: { info: ProcedureInfo; flow: { key: string; from: string; to: string }[] }) {
-  const keys: { key: string; from: string; to: string[] }[] = [];
-  for (const e of flow) {
-    const row = keys.find((k) => k.key === e.key);
-    if (row) row.to.push(e.to);
-    else keys.push({ key: e.key, from: e.from, to: [e.to] });
-  }
-  // A key no step reads (a step's output kept only in the history) still has its producer.
-  const produced = [...(info.outputs ?? []).map((o) => [o.name, o.step]), ...info.questions.map((q) => [q.name, q.step])];
-  for (const [key, from] of produced) if (!keys.some((k) => k.key === key)) keys.push({ key, from, to: [] });
-  const step = (s: string) => (s === START_INPUT ? <span className="muted">start input</span> : <a href={`#step-${s}`}><code>{s}</code></a>);
+  const keys: { key: string; from: string[]; to: string[] }[] = [];
+  const row = (key: string) => {
+    let r = keys.find((k) => k.key === key);
+    if (!r) { r = { key, from: [], to: [] }; keys.push(r); }
+    return r;
+  };
+  const ordered = [...info.step_details].sort((a, b) => a.order - b.order);
+  for (const s of ordered) for (const key of outputsOf(info, s.name)) { const r = row(key); if (!r.from.includes(s.name)) r.from.push(s.name); }
+  for (const e of flow) { const r = row(e.key); if (!r.to.includes(e.to)) r.to.push(e.to); }
+  const step = (s: string) => <a href={`#step-${s}`}><code>{s}</code></a>;
+  const list = (names: string[]) => names.map((t, i) => <span key={t}>{i ? ", " : ""}{step(t)}</span>);
   return (
     <table className="compact" aria-label="data flow">
       <thead><tr><th>key</th><th>produced by</th><th>read by</th></tr></thead>
       <tbody>
         {keys.map((k) => (
-          <tr key={k.key} data-testid="data-flow-row" data-key={k.key} data-from={k.from} data-to={k.to.join(",")}>
+          <tr key={k.key} data-testid="data-flow-row" data-key={k.key} data-from={k.from.join(",")} data-to={k.to.join(",")}>
             <td><code>{k.key}</code></td>
-            <td>{step(k.from)}</td>
-            <td>{k.to.length ? k.to.map((t, i) => <span key={t}>{i ? ", " : ""}{step(t)}</span>) : <span className="muted">no step (kept in the history)</span>}</td>
+            <td>{list(k.from)}{k.from.length > 1 && <span className="muted small"> (the later overwrites)</span>}</td>
+            <td>{k.to.length ? list(k.to) : <span className="muted">no step (kept in the history)</span>}</td>
           </tr>
         ))}
       </tbody>
@@ -234,7 +281,8 @@ function Criteria({ text }: { text: string }) {
 interface GovernanceProps { info: ProcedureInfo; entry: CatalogEntry | null; onChanged: () => void }
 
 /** Pin and retire this revision. Both need the publish scope: a 403 points at the Server page, where the token
- *  is set. Thresholds are the author's, from SKILL.md, so there is nothing to override here. */
+ *  is set. A router's confidence check and a decision's `fallback` are the author's, in SKILL.md, so there is
+ *  nothing to override here. */
 function Governance({ info, entry, onChanged }: GovernanceProps) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);

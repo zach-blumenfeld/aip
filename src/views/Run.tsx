@@ -206,23 +206,6 @@ function PauseView({ pause, onAnswer }: { pause: Paused; onAnswer: (input: Recor
                    </>}
                    expects={pause.answer_with} initial={{}} busy={false} onSubmit={onAnswer} />
       )}
-      {pause.paused === "review" && (
-        <InputForm title={`Review ${pause.step}: confirm or override the model`} testid="pause-review" submit="Answer"
-                   intro={<>
-                     <ul className="review" data-testid="review-items">
-                       {pause.review.map((r) => (
-                         <li key={r.question}>
-                           <code>{r.question}</code>: {r.reason}; the model says <code>{JSON.stringify(pause.proposed_answers[r.question])}</code>
-                           {r.probabilities && <span className="muted small"> {JSON.stringify(r.probabilities)}</span>}
-                           {r.noul !== undefined && <span className="muted small"> p(true) = {r.noul.toFixed(3)}</span>}
-                         </li>
-                       ))}
-                     </ul>
-                     <p className="muted">Proposed: <code>{JSON.stringify(pause.proposed_answers)}</code>. Answer with only the overrides; <code>{"{}"}</code> accepts every proposed answer.</p>
-                     <StateBlock state={pause.state} />
-                   </>}
-                   expects={{}} initial={{}} busy={false} onSubmit={onAnswer} />
-      )}
     </>
   );
 }
@@ -241,6 +224,12 @@ function ErrorView({ error, onRetry }: { error: RunErrorObject; onRetry: () => v
     <section className="pause error-box" data-testid="run-error" data-kind={error.error}>
       <h2><span data-testid="error-kind">{error.error}</span>{error.step && <> at <code>{error.step}</code></>}</h2>
       <p className="error" role="alert">{error.message}</p>
+      {error.error === "no_decision_model" && (
+        <p className="muted" data-testid="no-decision-model">
+          This decision has <code>fallback: false</code>, so it is not answered by hand. Configure a decision model for the
+          <code> aip</code> on this machine (<code>aip config --decision-model KEY</code>, or <code>TYPESAFE_API_KEY</code>), then retry: the run waits at the step.
+        </p>
+      )}
       {error.exit_code !== undefined && <p>exit code <code data-testid="exit-code">{error.exit_code}</code>{error.script && <> from <code>{error.script}</code></>}</p>}
       {error.stderr && <><h3>stderr</h3><pre data-testid="error-stderr">{error.stderr}</pre></>}
       {error.missing && error.missing.length > 0 && <p>missing {error.missing.map((m) => <code key={m}>{m} </code>)}</p>}
@@ -365,7 +354,16 @@ function DecisionForm({ pause, onAnswer }: { pause: Extract<Paused, { paused: "d
   return (
     <section className="pause" data-testid="pause-decision">
       <h2>Decision {pause.step}: answer its questions</h2>
-      <p className="muted">This client has no decision model (<code>aip config --decision-model</code>), so the answers are yours; the run records them as <code>resolver: manual</code>.</p>
+      <p className="muted">
+        This client has no decision model (<code>aip config --decision-model</code>) and the step allows a manual answer
+        (<code>fallback: true</code>), so the answers are yours; the run records them as <code>resolver: manual</code> with no confidence.
+      </p>
+      {pause.confidence?.length > 0 && (
+        <p className="muted small" data-testid="manual-confidence-note">
+          A model would also write {pause.confidence.map((q, i) => <span key={q}>{i ? ", " : ""}<code>{q}_confidence</code></span>)} to the state;
+          a manual answer writes none, so a router that checks it fires with reason <code>absent</code>.
+        </p>
+      )}
       <StateBlock state={pause.state} />
       {questions.map(([name, q]) => (
         <fieldset key={name} className="question">

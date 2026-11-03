@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const STEPS = ["triage", "by-tone", "escalate", "reply", "end"];
+const STEPS = ["start", "triage", "by-tone", "escalate", "reply", "end"];
 
 test("search ranks billing-support first and links to its page", async ({ page }) => {
   await page.goto("./");
@@ -25,12 +25,22 @@ test("the procedure page draws every step and the router's branches", async ({ p
     await expect(graph.locator(`[data-testid="step-node"][data-step="${name}"]`)).toHaveCount(1);
   }
   await expect(graph.locator('[data-step="by-tone"]')).toHaveAttribute("data-kind", "router");
+  await expect(graph.locator('[data-step="start"]')).toHaveAttribute("data-kind", "start");
+  await expect(graph.locator('[data-testid="step-edge"][data-from="start"][data-to="triage"]')).toHaveCount(1);
 
   const labels = graph.getByTestId("branch-label");
   await expect(labels).toHaveText(["angry", "calm"]);
 
   await expect(page.getByTestId("example-input")).toContainText('"message"');
   await expect(page.getByText("Do not use when")).toBeVisible();
+  // the start step's card holds the procedure's inputs; the decision's says fallback is on; the router has no check here
+  await expect(page.locator("#step-start")).toContainText("what the client supplies");
+  await expect(page.locator("#step-start")).toContainText("message");
+  await expect(page.locator("#step-triage").getByTestId("fallback")).toHaveAttribute("data-fallback", "true");
+  await expect(page.locator("#step-triage").locator('[data-question="tone"]')).toHaveAttribute("data-confidence", "true");
+  await expect(page.locator("#step-by-tone").getByTestId("router-check")).toHaveText("none");
+  await expect(page.locator("#step-by-tone").getByTestId("source-class")).toHaveAttribute("data-class", "unmeasured");
+  await expect(page.locator("#step-by-tone").getByTestId("publish-issues").locator("li")).toHaveAttribute("data-code", "unmeasured_route");
   await expect(page.getByRole("combobox", { name: "revision" })).toContainText("latest");
 });
 

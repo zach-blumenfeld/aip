@@ -26,15 +26,17 @@ console's process can run it on the imported files (`POST /console/upgrade`). Th
 The graph is on the left and the editor panel on the right. Click a step to edit it. Click
 **procedure settings** to edit the skill as a whole.
 
-- **First step**: an empty draft offers only runnable kinds (decision, execution, client_task), because the
-  first step is the start.
+- **First step**: an empty draft offers the runnable kinds (decision, execution, client_task) for the first step
+  that runs. Picking one adds the `start` step with it: the start holds the inputs the client supplies and
+  names that step (`inputs_to`). A draft has exactly one start step; the export writes it first.
 - **Add a step after this one**: inserts the new step between this step and its next one, so the chain stays
-  connected.
+  connected. Works from the start step too.
 - **Routers**: each branch row has a value, a target, and **+ kind** buttons that create a new step on that
   branch. **fill from the decision before** fills in the rows from the feeding question's answers (`true`/`false`
   for a yes/no question, the labels for a choice).
-- **delete step**: the step before it is re-linked to the step after it, when there is exactly one.
-- **make this the start**: moves a runnable step to the front.
+- **delete step**: the step before it is re-linked to the step after it, when there is exactly one. Deleting the
+  start step leaves the draft without one; the lint panel's **add a start step** fix puts one back.
+- **make this the first step**: the start step hands to this runnable step instead.
 - **data flow**: draws which keys travel along each edge. **left to right** turns the graph sideways.
 
 Edges are fields (`next step`, router branches), so a step can never have two outbound edges.
@@ -49,11 +51,17 @@ Edges are fields (`next step`, router branches), so a step can never have two ou
 
 | Kind | Fields |
 |---|---|
-| decision | questions (`noul` yes/no, `choice`, `score`), instructions, criteria, an optional review threshold per question, `history` |
+| start | inputs: what the client supplies; first step (`inputs_to`) |
+| decision | questions (`noul` yes/no, `choice`, `score`), instructions, criteria; **confidence**: tick a question and the step also writes `<question>_confidence` to the state, the probability the decision model put on its answer; **fallback**: whether a client with no decision model may answer by hand (off by default; the help says what it costs); `history` |
 | execution | `script` (under `scripts/`), command (default `python` only), `assets`, `timeout` |
 | client_task | `template` (under `assets/`), `assets`, `references` (path and when to load it), `framing` |
-| router | `branch_on`, branches |
+| router | `branch_on`, branches; **confidence check**: a float key (a decision's `<question>_confidence`, or a declared float output), a bound in 0 to 1, and the step the run goes to when the key is below it, or absent or null. Checked before the branches; one check per router |
 | end | inputs: the procedure's result |
+
+A decision answered by hand records no confidence, so a router's check on it fires with reason `absent`. The
+linter classifies what feeds each router as deterministic, measured or unmeasured and warns where an unmeasured
+source routes the run ([studio-lint.md](studio-lint.md)); the procedure page shows the class the server stored
+at publish.
 
 ### Inputs and outputs
 
@@ -66,15 +74,18 @@ description.
 - **Typing a new name** is allowed. The lint panel then reports `unproduced_input`, with two fixes: **declare
   as start input**, or **make it an output of…** an earlier step.
 - **A decision's outputs** are read-only: one key per question (yes/no → boolean, choice → string,
-  score → integer).
+  score → integer), plus `<question>_confidence` (float) for each question ticked under **confidence**.
+- **A key may have more than one producer.** The lint panel lists it as information (`duplicate_producer`):
+  where a run passes through both, the later one overwrites the value. The data-flow view draws an arrow from each.
 
 ## The lint panel
 
-Lint runs on every edit. Issues come in three tiers:
+Lint runs on every edit. Issues come in four tiers:
 
 - **error**: aip-spec would reject the skill.
 - **unfinished**: an empty field or a placeholder file. That's fine in a template.
-- **warning**: advice.
+- **warning**: aip-spec's warnings (a route an unmeasured source steers) and the Studio's advice.
+- **info**: aip-spec's information (a key with several producers).
 
 Click an issue to jump to its field. Some issues have a fix button (for example, add `requires`). Each
 step on the graph shows a marker for its worst issue. Every rule is listed in

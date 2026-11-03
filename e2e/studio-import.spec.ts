@@ -181,9 +181,10 @@ test("drafts: new, rename, switch, reset and delete, all kept across a reload", 
     await drafts(page).getByRole("button", { name: "save name" }).click();
     await expect(select.locator("option:checked")).toHaveText(name);
   };
+  // the first step brings the start step with it
   const addFirst = async (kind: string) => {
     await page.getByRole("group", { name: "Add the first step" }).getByRole("button", { name: `+ ${kind}` }).click();
-    await expect(page.getByTestId("step-node")).toHaveCount(1);
+    await expect(page.getByTestId("step-node")).toHaveCount(2);
   };
 
   await rename("alpha");
@@ -192,26 +193,26 @@ test("drafts: new, rename, switch, reset and delete, all kept across a reload", 
   await expect(page.getByTestId("studio-empty")).toBeVisible();
   await rename("beta");
   await addFirst("execution");
-  await page.getByRole("group", { name: /^Add step after/ }).getByRole("button", { name: "+ end" }).click();
-  await expect(page.getByTestId("step-node")).toHaveCount(2);
+  await page.getByRole("group", { name: /^Add step after execution-1/ }).getByRole("button", { name: "+ end" }).click();
+  await expect(page.getByTestId("step-node")).toHaveCount(3);
 
   // switching shows each draft's own steps
   await select.selectOption({ label: "alpha" });
-  await expect(page.getByTestId("step-node")).toHaveCount(1);
-  await expect(page.getByTestId("step-node")).toHaveAttribute("data-kind", "decision");
-  await select.selectOption({ label: "beta" });
   await expect(page.getByTestId("step-node")).toHaveCount(2);
+  await expect(page.getByTestId("step-node").last()).toHaveAttribute("data-kind", "decision");
+  await select.selectOption({ label: "beta" });
+  await expect(page.getByTestId("step-node")).toHaveCount(3);
 
   await expect(page.getByTestId("studio-saved")).toHaveAttribute("data-state", "saved");
   await page.reload();
   await expect(select.locator("option:checked")).toHaveText("beta");
-  await expect(page.getByTestId("step-node")).toHaveCount(2);
+  await expect(page.getByTestId("step-node")).toHaveCount(3);
   await expect(select.locator("option")).toContainText(["beta", "alpha"]);
 
   // reset asks first, then empties the open draft and keeps its name
   await drafts(page).getByRole("button", { name: "reset" }).click();
   await drafts(page).getByRole("group", { name: "confirm reset" }).getByRole("button", { name: "cancel" }).click();
-  await expect(page.getByTestId("step-node")).toHaveCount(2);
+  await expect(page.getByTestId("step-node")).toHaveCount(3);
   await drafts(page).getByRole("button", { name: "reset" }).click();
   await drafts(page).getByRole("button", { name: "yes, reset" }).click();
   await expect(page.getByTestId("studio-empty")).toBeVisible();
@@ -234,7 +235,7 @@ test("without storage the page says drafts will not be kept, and still works", a
   await page.goto("./#/studio");
   await expect(page.getByTestId("storage-notice")).toBeVisible();
   await page.getByRole("group", { name: "Add the first step" }).getByRole("button", { name: "+ decision" }).click();
-  await expect(page.getByTestId("step-node")).toHaveCount(1);
+  await expect(page.getByTestId("step-node")).toHaveCount(2);
 });
 
 test("the catalog links to a new draft in the Studio", async ({ page }) => {

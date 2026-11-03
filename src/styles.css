@@ -9,6 +9,7 @@
   --execution: #2e8b57;
   --client_task: #a0522d;
   --end: #777;
+  --start: #5a7d9a;
   --data: #8a4fbf;
 }
 body { margin: 0; }
@@ -51,6 +52,8 @@ ul.criteria { margin: 0.25rem 0 0; padding-left: 1.2rem; }
 .step-graph .node.kind-execution { --kind: var(--execution); }
 .step-graph .node.kind-client_task { --kind: var(--client_task); }
 .step-graph .node.kind-end { --kind: var(--end); }
+.step-graph .node.kind-start { --kind: var(--start); }
+.step-graph .node.kind-start rect { stroke-dasharray: 4 3; }
 .step-graph .node .end-ring { fill: none; stroke-width: 1; }
 .step-graph .node .start-dot { fill: var(--kind); stroke: none; }
 .step-graph .node-name { font-weight: 600; font-size: 13px; fill: currentColor; }
@@ -64,7 +67,6 @@ ul.criteria { margin: 0.25rem 0 0; padding-left: 1.2rem; }
 .step-graph .data-edge { color: var(--data); }
 .step-graph .data-arrow { fill: var(--data); }
 .step-graph .data-label { font-size: 11px; fill: var(--data); paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
-.step-graph .input-node rect { fill: var(--fill); stroke: var(--data); stroke-width: 1.5; stroke-dasharray: 4 3; }
 .flow-toggle { display: inline-flex; gap: 0.75rem; font-size: 0.9rem; }
 .graph-controls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.5rem; }
 .graph-controls > p { margin: 0; }
@@ -100,6 +102,7 @@ pre.stderr { max-height: 8rem; margin: 0; font-size: 0.8rem; }
 .step-card.kind-execution { --kind: var(--execution); }
 .step-card.kind-client_task { --kind: var(--client_task); }
 .step-card.kind-end { --kind: var(--end); }
+.step-card.kind-start { --kind: var(--start); }
 .step-card h3 { margin-top: 0.25rem; }
 .kind-tag { font-size: 0.8rem; color: var(--kind); border: 1px solid var(--kind); border-radius: 999px; padding: 0 0.5rem; }
 
@@ -175,9 +178,10 @@ ul.dist li { position: relative; padding: 0.05rem 0.3rem; line-height: 1.5; }
 ul.dist li .bar { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--decision) 22%, transparent); border-radius: 3px; z-index: -1; }
 ul.dist li.chosen code { font-weight: 600; }
 .status-tag.flagged { color: var(--router); }
-input.threshold { width: 5rem; font: inherit; }
+.status-tag.class-unmeasured, .status-tag.check-fired { color: var(--router); }
+.status-tag.class-measured { color: var(--execution); }
+.status-tag.class-deterministic, .status-tag.check-held { opacity: 0.7; }
 ol.trace { padding-left: 1.4rem; }
-ul.review li { margin: 0.2rem 0; }
 
 /* History */
 .filters { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0.5rem 0 1rem; }

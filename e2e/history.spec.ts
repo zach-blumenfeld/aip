@@ -32,17 +32,19 @@ test("the angry run's trace highlights the script step", async ({ page }) => {
 
   await page.goto(`./#/runs/${done.run_id}`);
   await expect(page.getByTestId("run-status")).toHaveText("done");
-  await expectTrace(page, ["triage", "by-tone", "escalate", "end"], ["reply"],
-                    [["triage", "by-tone"], ["by-tone", "escalate"], ["escalate", "end"]]);
+  await expectTrace(page, ["start", "triage", "by-tone", "escalate", "end"], ["reply"],
+                    [["start", "triage"], ["triage", "by-tone"], ["by-tone", "escalate"], ["escalate", "end"]]);
 
-  // The step cards, read-only: the manual decision with its attribution, the branch, the script's stdout.
+  // The step cards, read-only: the start input, the manual decision with its attribution, the branch, the script's stdout.
   const cards = page.getByTestId("run-step");
-  await expect(cards).toHaveCount(4);
+  await expect(cards).toHaveCount(5);
+  await expect(cards.first()).toHaveAttribute("data-kind", "start");
+  await expect(cards.first().getByTestId("state-out")).toContainText("charged twice");
   await expect(page.locator('[data-testid="run-step"][data-step="triage"]').getByTestId("attribution")).toHaveAttribute("data-resolver", "manual");
   await expect(page.getByTestId("branch-taken")).toContainText("escalate");
   await expect(page.locator('[data-testid="run-step"][data-step="escalate"]').getByTestId("script-stdout")).toContainText('"ticket_id"');
   await expect(page.locator('[data-testid="run-step"][data-step="escalate"]').getByTestId("script-stdout")).toContainText('"queue": "tier2"');
-  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage/, /by-tone/, /escalate/, /end/]);
+  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/start/, /triage/, /by-tone/, /escalate/, /end/]);
   await expect(page.getByRole("button")).toHaveCount(0);           // nothing to drive from here
 });
 
@@ -52,7 +54,7 @@ test("the calm run's trace highlights the client task, paused and then done", as
 
   await page.goto(`./#/runs/${paused.run_id}`);
   await expect(page.getByTestId("run-status")).toHaveText("paused");
-  await expectTrace(page, ["triage", "by-tone", "reply"], ["escalate", "end"], [["triage", "by-tone"], ["by-tone", "reply"]]);
+  await expectTrace(page, ["start", "triage", "by-tone", "reply"], ["escalate", "end"], [["start", "triage"], ["triage", "by-tone"], ["by-tone", "reply"]]);
   await expect(page.getByTestId("run-pause")).toContainText("Paused at reply");
   await expect(page.locator('[data-testid="run-step"][data-step="reply"]')).toHaveCount(0);   // recorded once answered
   await expect(page.getByTestId("run-pause").getByTestId("task")).toContainText("billed $12");
@@ -62,8 +64,8 @@ test("the calm run's trace highlights the client task, paused and then done", as
   expect(done.done).toBe(true);
   await page.reload();
   await expect(page.getByTestId("run-status")).toHaveText("done");
-  await expectTrace(page, ["triage", "by-tone", "reply", "end"], ["escalate"],
-                    [["triage", "by-tone"], ["by-tone", "reply"], ["reply", "end"]]);
+  await expectTrace(page, ["start", "triage", "by-tone", "reply", "end"], ["escalate"],
+                    [["start", "triage"], ["triage", "by-tone"], ["by-tone", "reply"], ["reply", "end"]]);
   await expect(page.getByTestId("final-state")).toContainText("billed $12");
   await expect(page.getByTestId("run-pause")).toHaveCount(0);
   const reply = page.locator('[data-testid="run-step"][data-step="reply"]');

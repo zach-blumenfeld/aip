@@ -15,9 +15,21 @@ export const AIP_REPO = path.resolve(process.env.AIP_REPO ?? path.join(import.me
 /** The `aip` the consoles find first on their PATH: the aip repo's CLI behind `uv run`. */
 export const BIN = path.join(E2E, "bin");
 
-/** The two revisions of billing-support (v2 changes one policy line), and the folder the folder console runs. */
+/** aip-spec's example as shipped (`aip-spec example billing-support`): what the lint specs read, since its router
+ *  checks `tone_confidence` and its decision keeps `fallback: true`, the one warning the example carries. */
+export const EXAMPLE_DIR = path.join(E2E, "example", "billing-support");
+
+/** The two revisions of billing-support the consoles drive (v2 changes one policy line), and the folder the folder
+ *  console runs. Their router has no confidence check: the e2e CLI has no decision model, every decision is answered
+ *  by hand and so records no confidence, and a check would send every run to `escalate`; without it, the tone
+ *  answered in the page picks the branch, so both branches are reachable from the console. */
 export const FIRST_REVISION_DIR = path.join(E2E, "v1", "billing-support");
 export const SECOND_REVISION_DIR = path.join(E2E, "v2", "billing-support");
+
+/** The example as shipped, under another name: its router checks `tone_confidence` (below 0.6, or absent, to
+ *  `escalate`), so the specs that need a check to fire or hold drive this one. */
+export const CHECKED = "billing-checked";
+export const CHECKED_REVISION_DIR = path.join(E2E, "checked", CHECKED);
 export const CHANGED_FILE = "assets/policy.md";
 export const OLD_LINE = "- Refunds for other reasons are honored within 30 days of purchase.";
 export const NEW_LINE = "- Refunds for other reasons are honored within 45 days of purchase.";

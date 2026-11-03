@@ -3,9 +3,15 @@
 //   bin/aip          the sibling aip repo's CLI (AIP_REPO, default ../aip) behind `uv run`, put first on the
 //                    consoles' PATH, the way an installed `aip` would be; `aip-spec` and `python` beside it, for
 //                    the Studio's agent checks
+//   example/billing-support
+//                    aip-spec's example as shipped, for the lint specs
 //   v1/billing-support, v2/billing-support
-//                    aip-spec's example with an escalate script that files each ticket under the run's working
-//                    directory (and can fail or stall on request, below); v2 changes one line of the policy
+//                    the example with its router's confidence check removed (every decision the e2e CLI drives is
+//                    answered by hand, which records no confidence, and the check would send every run to escalate)
+//                    and an escalate script that files each ticket under the run's working directory (and can fail
+//                    or stall on request, below); v2 changes one line of the policy
+//   checked/billing-checked
+//                    the example as shipped under another name, check included, with the same escalate script
 //   root/ home/ work/ work-folder/
 //                    the server's backend, the CLI's run files, and the two consoles' working directories
 // The diff spec reads the policy lines from e2e/aip.ts, which repeats them.
@@ -72,9 +78,27 @@ for (const [name, program] of [["aip-spec", "aip-spec"], ["python", "python"]]) 
 
 execFileSync("uv", ["run", "--quiet", "--project", repo, "aip-spec", "example", "billing-support", "--out", path.join(E2E, "example")],
              { stdio: "inherit" });
+const example = path.join(E2E, "example", "billing-support");
 const v1 = path.join(E2E, "v1", "billing-support");
-cpSync(path.join(E2E, "example", "billing-support"), v1, { recursive: true });
+cpSync(example, v1, { recursive: true });
 writeFileSync(path.join(v1, "scripts", "escalate.py"), ESCALATE);
+// The router's check and the comment above it: two lines of the shipped example.
+const CHECK = /^    # Checked before the branches.*\n    confidence: \{key: tone_confidence, below: 0\.6, to: escalate\}\n/m;
+const skillMd = readFileSync(path.join(v1, "SKILL.md"), "utf8");
+if (!CHECK.test(skillMd)) {
+  console.error("prepare: the example's SKILL.md no longer holds the router check these lines remove");
+  process.exit(1);
+}
+writeFileSync(path.join(v1, "SKILL.md"), skillMd.replace(CHECK, ""));
+
+// The example as shipped, check included, under its own name (the validator wants the folder named after the skill).
+const checked = path.join(E2E, "checked", "billing-checked");
+cpSync(example, checked, { recursive: true });
+writeFileSync(path.join(checked, "scripts", "escalate.py"), ESCALATE);
+// Its own description too, so the catalog search specs still rank billing-support first for "refund".
+writeFileSync(path.join(checked, "SKILL.md"), readFileSync(path.join(checked, "SKILL.md"), "utf8")
+  .replace(/^name: billing-support$/m, "name: billing-checked")
+  .replace(/^description: .*$/m, "description: The billing example as shipped, its router checking the decision model's confidence. Use in the console's tests."));
 
 // The folder must still be called billing-support: the validator checks the name.
 const v2 = path.join(E2E, "v2", "billing-support");

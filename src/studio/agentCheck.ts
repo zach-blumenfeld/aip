@@ -12,7 +12,7 @@
 // A result is accepted only when every check passes (the definition of done in docs/plans/STUDIO-PLAN.md).
 
 import type { ZipFile } from "../zip";
-import { QUESTION_TYPES, type Draft, type Step } from "./draft";
+import { CONFIDENCE_TYPE, QUESTION_TYPES, confidenceKey, startOf, type Draft, type Step } from "./draft";
 import { lint, PLACEHOLDER_MARKER } from "./lint";
 import { skillMdToDraft } from "./serialize";
 import { NOTES_PATH, README_PATH, STUDIO_NOTE } from "./scaffold";
@@ -131,6 +131,7 @@ export function facts(d: Draft): Map<string, Fact> {
     };
     if (s.kind === "router") {
       put(`${k}.branchOn`, `${at}: \`branch_on\``, s.branchOn ?? "");
+      put(`${k}.check`, `${at}: the confidence check`, s.check ? { key: s.check.key, below: s.check.below ?? null, to: target(s.check.to) } : null);
       put(`${k}.branches`, `${at}: the branches`, (s.branches ?? []).map((b) => [b.value, target(b.target)]));
       return;
     }
@@ -242,34 +243,39 @@ function describeNext(d: Draft, id: string | undefined, depth = 0): unknown {
   return { step: s.name, kind: s.kind, inputs: Object.fromEntries(s.inputs.map((i) => [i.name, i.type])) };
 }
 
-/** Steps in the order a run first reaches them from the start (breadth first; each once, so a loop ends). */
+/** Steps in the order a run first reaches them from the start step (breadth first; each once, so a loop ends). */
 function runOrder(d: Draft): Step[] {
   const byId = new Map(d.steps.map((s) => [s.id, s]));
   const seen = new Set<string>(), order: Step[] = [];
-  const queue = d.steps[0] ? [d.steps[0]] : [];
+  const start = startOf(d.steps);
+  const queue = start ? [start] : [];
   while (queue.length) {
     const s = queue.shift()!;
     if (seen.has(s.id)) continue;
     seen.add(s.id);
     order.push(s);
-    const next = s.kind === "router" ? (s.branches ?? []).map((b) => b.target) : [s.next];
+    const next = s.kind === "router" ? [...(s.branches ?? []).map((b) => b.target), s.check?.to] : [s.next];
     for (const id of next) { const t = id ? byId.get(id) : undefined; if (t && !seen.has(t.id)) queue.push(t); }
   }
   return order;
 }
 
-/** Every execution script run in graph order: synthetic start inputs, each step's outputs added to the state for the
- *  steps after it (a decision's answers and a client task's outputs are synthetic). Then every template's fields. */
+/** Every execution script run in graph order: synthetic start inputs (the start step's), each step's outputs added
+ *  to the state for the steps after it (a decision's answers and confidence keys and a client task's outputs are
+ *  synthetic). Then every template's fields. */
 export async function scriptContract(d: Draft, files: ZipFile[], runner: Runner): Promise<CheckResult> {
   const failures: string[] = [];
   const byPath = new Map(files.map((f) => [f.path, f]));
   const state: Record<string, unknown> = {};
   const order = runOrder(d);
-  for (const i of d.steps[0]?.inputs ?? []) state[i.name] = synthetic(i.type);
+  for (const i of startOf(d.steps)?.inputs ?? []) state[i.name] = synthetic(i.type);
 
   for (const s of order) {
     const label = `step \`${s.name}\``;
-    if (s.kind === "decision") for (const q of s.questions ?? []) if (!(q.name in state)) state[q.name] = synthetic(QUESTION_TYPES[q.type]);
+    if (s.kind === "decision") {
+      for (const q of s.questions ?? []) if (!(q.name in state)) state[q.name] = synthetic(QUESTION_TYPES[q.type]);
+      for (const q of s.confidence ?? []) if (q && !(confidenceKey(q) in state)) state[confidenceKey(q)] = synthetic(CONFIDENCE_TYPE);
+    }
     if (s.kind === "client_task") for (const o of s.outputs ?? []) if (!(o.name in state)) state[o.name] = synthetic(o.type);
     if (s.kind !== "execution" || !s.script) continue;
     const inputs = Object.fromEntries(s.inputs.map((i) => [i.name, i.name in state ? state[i.name] : synthetic(i.type)]));

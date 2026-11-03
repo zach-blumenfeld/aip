@@ -6,14 +6,14 @@ import { emptyDraft, type Draft, type Step } from "../src/studio/draft";
 import { availableKeys, classifySources, lint, PLACEHOLDER_MARKER } from "../src/studio/lint";
 import { RUNTIME_BLOCK } from "../src/studio/runtime-0.8";
 import { draftToSkillMd, skillMdToDraft } from "../src/studio/serialize";
-import { AIP_REPO, FIRST_REVISION_DIR } from "./aip";
+import { AIP_REPO, EXAMPLE_DIR } from "./aip";
 import { aipSpec } from "./aip-spec";
 
 // The Studio's model and linter, no browser: the Draft round-trips through SKILL.md, billing-support lints
 // clean, and each tier and the cycle-aware state rule behave. The parity spec checks the same linter against
 // the real `aip-spec validate`.
 
-const billing = () => readFileSync(path.join(FIRST_REVISION_DIR, "SKILL.md"), "utf8");
+const billing = () => readFileSync(path.join(EXAMPLE_DIR, "SKILL.md"), "utf8");
 const codes = (d: Draft, tier?: string) => [...new Set(lint(d).filter((i) => !tier || i.tier === tier).map((i) => i.code))].sort();
 const step = (d: Draft, name: string): Step => d.steps.find((s) => s.name === name)!;
 

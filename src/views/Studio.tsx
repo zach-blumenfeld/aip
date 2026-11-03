@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DirectionToggle, StepGraph, useDirection } from "./StepGraph";
-import { DATA_TYPES, emptyDraft, FORMAT_VERSION, QUESTION_TYPES, RUNNABLE_KINDS, type Draft, type IOItem, type Question, type Step, type StepKind } from "../studio/draft";
+import { CONFIDENCE_TYPE, DATA_TYPES, confidenceKey, emptyDraft, FORMAT_VERSION, QUESTION_TYPES, RUNNABLE_KINDS, startOf, type Draft, type IOItem, type Question, type Step, type StepKind } from "../studio/draft";
 import { KINDS, addStepAfter, addStepOnBranch, declareOutput, declareStartInput, deleteStep, flowOf, graphOf, label, possibleValues, prefillBranches, renameStep, setStart } from "../studio/edit";
 import { carried, importSkill, versionMessage } from "../studio/import";
 import { availableKeys, lint, type AvailableKey, type Issue, type Tier } from "../studio/lint";
@@ -267,7 +267,10 @@ export function Studio({ importRef, fresh }: { importRef?: string; fresh?: boole
           {draft.steps.length === 0 ? (
             <div className="studio-panel" data-testid="studio-empty">
               <h2>Start with the first step</h2>
-              <p className="muted">The first step is where the procedure starts, so it has to be one that runs.</p>
+              <p className="muted">
+                A procedure begins at its <code>start</code> step, which holds the inputs the client supplies and names the
+                first step that runs. Pick that step's kind: the start step is added with it.
+              </p>
               <AddKinds label="Add the first step" kinds={RUNNABLE_KINDS} onAdd={(k) => add(undefined, k)} />
             </div>
           ) : (
@@ -338,7 +341,7 @@ function Fixes({ issue, draft, onFix }: { issue: Issue; draft: Draft; onFix: (d:
   return (
     <span className="fixes" data-testid="lint-fixes">
       {" "}
-      {draft.steps[0] && draft.steps[0].kind !== "router" && (
+      {startOf(draft.steps) && (
         <button aria-label={`declare ${key} as a start input`} onClick={() => onFix(declareStartInput(draft, key, type))}>declare as start input</button>
       )}
       {makers.length > 0 && (
@@ -454,13 +457,16 @@ interface StepPanelProps {
 function StepPanel({ draft, step, available, edit, onAdd, onDelete, onStart, onPrefill, onAddOnBranch }: StepPanelProps) {
   const at = (d: Draft) => d.steps.find((s) => s.id === step.id)!;
   const set = (change: (s: Step) => void) => edit((d) => change(at(d)));
-  const others = draft.steps.filter((s) => s.id !== step.id);
-  const isStart = draft.steps[0]?.id === step.id;
+  const others = draft.steps.filter((s) => s.id !== step.id && s.kind !== "start");
+  const start = startOf(draft.steps);
+  const isStart = step.kind === "start";
+  const isFirst = start?.next === step.id;
   const runnable = RUNNABLE_KINDS.includes(step.kind);
-  const target = (value: string | undefined, onChange: (v: string | undefined) => void, field?: string, aria?: string) => (
+  const target = (value: string | undefined, onChange: (v: string | undefined) => void, field?: string, aria?: string, from: Step[] = others) => (
     <select value={value ?? ""} data-field={field} aria-label={aria} onChange={(e) => onChange(e.target.value || undefined)}>
       <option value="">(none)</option>
-      {others.map((s) => <option key={s.id} value={s.id}>{label(s)}</option>)}
+      {from.map((s) => <option key={s.id} value={s.id}>{label(s)}</option>)}
+      {value && !from.some((s) => s.id === value) && <option value={value}>{draft.steps.find((s) => s.id === value)?.name || value} (not a step here)</option>}
     </select>
   );
 
@@ -477,6 +483,14 @@ function StepPanel({ draft, step, available, edit, onAdd, onDelete, onStart, onP
         hint={STEP_NAME.test(step.name) ? "lowercase letters, digits and hyphens" : <span className="error">use lowercase letters, digits and single hyphens</span>} />
       <Text name="description" field="description" area value={step.description} onChange={(v) => set((s) => { s.description = v; })} />
 
+      {isStart && (
+        <>
+          <p className="muted small">The procedure begins here: the client supplies these inputs, and the run goes to the first step.</p>
+          <Field name="first step (inputs_to)" hint="the first step that runs, with the inputs as its state">
+            {target(step.next, (v) => set((s) => { s.next = v; }), "next", "first step", others.filter((s) => RUNNABLE_KINDS.includes(s.kind)))}
+          </Field>
+        </>
+      )}
       {runnable && (
         <Field name="next step (inputs_to)">
           {target(step.next, (v) => set((s) => { s.next = v; }), "next", "next step")}
@@ -531,28 +545,40 @@ function StepPanel({ draft, step, available, edit, onAdd, onDelete, onStart, onP
       )}
       {step.kind === "decision" && (
         <fieldset data-testid="decision-outputs">
-          <legend>outputs (one key per question)</legend>
+          <legend>outputs (one key per question, and a confidence key where asked)</legend>
           {(step.questions ?? []).length === 0 && <p className="muted small">Add a question and its answer becomes a key.</p>}
           <ul className="criteria">
             {(step.questions ?? []).map((q, i) => <li key={i}><code>{q.name || "(unnamed)"}</code>: {QUESTION_TYPES[q.type]}</li>)}
+            {(step.confidence ?? []).filter(Boolean).map((q) => <li key={`c-${q}`}><code>{confidenceKey(q)}</code>: {CONFIDENCE_TYPE}</li>)}
           </ul>
         </fieldset>
       )}
 
       <div className="actions">
-        {runnable && !isStart && <button onClick={onStart}>make this the start</button>}
-        {isStart && <span className="muted">this is the start</span>}
+        {runnable && start && !isFirst && <button onClick={onStart} data-testid="make-first">make this the first step</button>}
+        {runnable && isFirst && <span className="muted">the start hands to this step</span>}
         <button className="danger" onClick={onDelete}>delete step</button>
       </div>
     </div>
   );
 }
 
+/** The help on a router's confidence check, in the panel. */
+const CHECK_HELP = "Checked before the branches: when the key is below the bound, or absent (a decision answered by hand writes no confidence) or null, the run goes to the named step instead. One check per router.";
+
 function RouterFields({ draft, step, available, set, target, onPrefill, onAddOnBranch }: {
   draft: Draft; step: Step; available: AvailableKey[]; set: (c: (s: Step) => void) => void; onPrefill: () => void; onAddOnBranch: (index: number, kind: StepKind) => void;
   target: (value: string | undefined, onChange: (v: string | undefined) => void, field?: string, aria?: string) => ReactNode;
 }) {
   const branches = step.branches ?? [];
+  // The keys a check can read: every float produced anywhere in the draft (a decision's confidence keys, a script's
+  // or task's float outputs). A check's key need only be produced on some path to the router.
+  const floats = new Map<string, string>();
+  for (const s of draft.steps) {
+    for (const q of s.confidence ?? []) if (q) floats.set(confidenceKey(q), `${label(s)}'s confidence of ${q}`);
+    for (const o of s.outputs ?? []) if (o.name && o.type === CONFIDENCE_TYPE) floats.set(o.name, `output of ${label(s)}`);
+  }
+  const check = step.check;
   return (
     <>
       <Field name="branch_on" hint={
@@ -583,6 +609,31 @@ function RouterFields({ draft, step, available, set, target, onPrefill, onAddOnB
           <button onClick={onPrefill}>fill from the decision before</button>
         </div>
       </fieldset>
+      <fieldset data-testid="router-check">
+        <legend>confidence check</legend>
+        <label className="option">
+          <input type="checkbox" checked={!!check} data-field="check"
+            onChange={(e) => set((s) => { if (e.target.checked) s.check = { key: [...floats.keys()][0] ?? "", below: 0.6 }; else delete s.check; })} /> check a confidence before branching
+        </label>
+        <p className="hint muted small" data-testid="check-help">{CHECK_HELP}</p>
+        {check && (
+          <>
+            <Field name="key" hint={floats.size ? "a float key: a decision's `<question>_confidence`, or a declared float output" : <span className="error">no float key is produced yet: name a question in a decision's confidence list</span>}>
+              <select value={check.key} data-field="check.key" aria-label="check key" onChange={(e) => set((s) => { s.check!.key = e.target.value; })}>
+                <option value="">(choose a key)</option>
+                {[...floats].map(([k, from]) => <option key={k} value={k}>{k} ({from})</option>)}
+                {check.key && !floats.has(check.key) && <option value={check.key}>{check.key} (not produced here)</option>}
+              </select>
+            </Field>
+            <Field name="below" hint="in 0 to 1; a confidence under this bound sends the run to the step below">
+              <NumberInput value={check.below} field="check.below" ariaLabel="check below" min={0} max={1} onCommit={(n) => set((s) => { s.check!.below = n; })} />
+            </Field>
+            <Field name="to" hint="where the run goes when the check fires">
+              {target(check.to, (v) => set((s) => { s.check!.to = v; }), "check.to", "check target")}
+            </Field>
+          </>
+        )}
+      </fieldset>
     </>
   );
 }
@@ -611,9 +662,18 @@ function blankQuestion(type: Question["type"], name: string, instructions = ""):
   return { type, name, instructions, criteria: ["", ""] };
 }
 
+/** The help on a decision's `fallback`, in the panel. */
+const FALLBACK_HELP = "On: a client with no decision model may answer the questions by hand; a manual answer writes no confidence, so any route on this step's answers is unmeasured (the linter says so) and a router's check on its confidence fires with reason `absent`. Off (the default): a client with no decision model stops at this step with `no_decision_model` until one is configured.";
+
 function DecisionFields({ step, set }: { step: Step; set: (c: (s: Step) => void) => void }) {
   const questions = step.questions ?? [];
   const q = (i: number, change: (q: Question) => void) => set((s) => change(s.questions![i]));
+  const emits = (name: string) => (step.confidence ?? []).includes(name);
+  const toggle = (name: string, on: boolean) => set((s) => {
+    const list = (s.confidence ?? []).filter((x) => x !== name);
+    if (on) list.push(name);
+    s.confidence = list.length ? list : undefined;
+  });
   return (
     <>
       <fieldset>
@@ -640,6 +700,26 @@ function DecisionFields({ step, set }: { step: Step; set: (c: (s: Step) => void)
             <button key={t} onClick={() => set((s) => { (s.questions ??= []).push(blankQuestion(t, `question_${(s.questions?.length ?? 0) + 1}`)); })}>+ {t}</button>
           ))}
         </div>
+      </fieldset>
+      <fieldset data-testid="confidence-picker">
+        <legend>confidence</legend>
+        <p className="hint muted small">Each ticked question also writes <code>&lt;question&gt;_confidence</code> to the state: the probability the decision model put on its answer, a float in 0 to 1. A router after this step can check it.</p>
+        {questions.length === 0 && <p className="muted small">Add a question first.</p>}
+        {questions.map((question, i) => (
+          <label className="option" key={i}>
+            <input type="checkbox" checked={emits(question.name)} disabled={!question.name} aria-label={`emit ${question.name || `question ${i + 1}`} confidence`}
+              data-field={i === 0 ? "confidence" : undefined}
+              onChange={(e) => toggle(question.name, e.target.checked)} /> emit <code>{confidenceKey(question.name || "…")}</code>
+          </label>
+        ))}
+      </fieldset>
+      <fieldset data-testid="fallback">
+        <legend>fallback</legend>
+        <label className="option">
+          <input type="checkbox" checked={!!step.fallback} data-field="fallback" aria-label="fallback"
+            onChange={(e) => set((s) => { s.fallback = e.target.checked || undefined; })} /> the client may answer by hand when it has no decision model
+        </label>
+        <p className="hint muted small" data-testid="fallback-help">{FALLBACK_HELP}</p>
       </fieldset>
       <label className="option">
         <input type="checkbox" checked={!!step.history} onChange={(e) => set((s) => { s.history = e.target.checked || undefined; })} /> history

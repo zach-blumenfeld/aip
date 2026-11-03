@@ -27,9 +27,9 @@ Without `--server`, the console uses the server `aip config` names. With a skill
 local (`aip run ./folder`) and the catalog, history and governance pages are hidden.
 
 At startup the console runs `aip --version` and refuses to start if `aip` is missing or older than
-`0.7.0`, the first release on PyPI (`uv tool install agent-instruction-protocol`, or the aip repo's installer); the
-JSON contract above and the run history that records client-task answers date from 0.6a0. `--aip PATH` (or `AIP_BIN`) picks another
-`aip` than the one on the PATH.
+`0.8.0` (`uv tool install agent-instruction-protocol`, or the aip repo's installer): the console reads and edits
+format 0.8, whose `start` step, decision `confidence` and `fallback`, router confidence check and `no_decision_model`
+stop date from that release. `--aip PATH` (or `AIP_BIN`) picks another `aip` than the one on the PATH.
 
 The console's process answers only pages on this machine: it listens on 127.0.0.1, refuses a foreign
 `Host` (DNS rebinding) and any post that is not same-origin JSON, since a post starts a run.
@@ -48,8 +48,10 @@ layout, packed in the page from the manifest and the files),
 `#/p/<ref>/files[/<path>]` source manifest and viewer (with the same download), `#/p/<name>/diff[/<a>..<b>]` the diff between two
 revisions (manifest by hash, line diff for changed text files, both computed client-side),
 `#/run[/<ref>]` the run console, `#/runs[/<id>]` history (each step's declared state in and out, the
-machine that ran it, and each decision's resolver and review status), `#/governance` the corpus queries of
-`GET /governance` as lists (with the model/by-hand split of `manual-decisions` and the stderr clients
+machine that ran it, each decision's resolver and the confidence its model recorded, and whether a router's
+confidence check fired and why), `#/governance` the corpus queries of
+`GET /governance` as lists (with the runs each fired check sent elsewhere for `confidence-fired`, the source class
+of each flagged router for `unmeasured-routes`, the model/by-hand split of `manual-decisions` and the stderr clients
 reported for `failing-scripts`), plus a form to keep a query of your own on the server, which a Neo4j-backed
 server stores and runs read-only and lists beside the built-ins, and `#/server` (the console's server, and a
 bearer token for this tab).

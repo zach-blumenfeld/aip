@@ -6,7 +6,7 @@ import { autofix } from "../src/studio/fixes";
 import { lint, type Tier } from "../src/studio/lint";
 import { skillMdToDraft } from "../src/studio/serialize";
 import { DRAFT_KEY } from "../src/studio/storage";
-import { FIRST_REVISION_DIR } from "./aip";
+import { EXAMPLE_DIR } from "./aip";
 
 // S5: the Studio-only rules (docs/studio-lint.md). Each fixture is billing-support, lint-clean, with one thing
 // changed, and must raise its rule exactly once at its tier. Then, in the page: an autofix clears its issue, undo and
@@ -17,7 +17,7 @@ const step = (d: Draft, name: string): Step => d.steps.find((s) => s.name === na
 /** billing-support with the step `reply` renamed, so it no longer shares a name with its key, and `fallback` off on
  *  its decision, so its route is measured: no issues at all. */
 function base(): Draft {
-  const d = skillMdToDraft(readFileSync(path.join(FIRST_REVISION_DIR, "SKILL.md"), "utf8"));
+  const d = skillMdToDraft(readFileSync(path.join(EXAMPLE_DIR, "SKILL.md"), "utf8"));
   step(d, "reply").name = "draft-reply";
   step(d, "triage").fallback = false;
   return d;

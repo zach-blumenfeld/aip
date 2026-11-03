@@ -1,5 +1,5 @@
-import type { Attribution, ClientTaskResult, DecisionResult, HistoryEntry, ProcedureInfo } from "../api/types";
-import { inputsOf, outputsOf } from "../graph/dataflow";
+import type { Attribution, CheckOutcome, ClientTaskResult, DecisionResult, HistoryEntry, ProcedureInfo } from "../api/types";
+import { confidenceKey, inputsOf, outputsOf } from "../graph/dataflow";
 import { href } from "../router";
 
 interface Props {
@@ -21,15 +21,16 @@ export function RunStepCard({ entry, info, index }: Props) {
         {entry.kind === "error" && <span className="error"> · failed</span>}
       </h3>
       <Machine entry={entry} />
-      {entry.kind === "decision" && <Decision result={entry.result as unknown as DecisionResult} info={info} attribution={entry.attribution} />}
-      {entry.kind === "router" && <Router entry={entry} />}
+      {entry.kind === "start" && <p className="muted" data-testid="start-input">The start input the client gave: the procedure's inputs, as the run began.</p>}
+      {entry.kind === "decision" && <Decision step={entry.step} result={entry.result as unknown as DecisionResult} info={info} attribution={entry.attribution} />}
+      {entry.kind === "router" && <Router entry={entry} info={info} />}
       {entry.kind === "execution" && <Execution entry={entry} info={info} />}
       {entry.kind === "client_task" && <ClientTask result={entry.result as unknown as ClientTaskResult} info={info} />}
       {entry.kind === "end" && <pre data-testid="final-state">{JSON.stringify(entry.result, null, 2)}</pre>}
       {entry.kind === "error" && <ErrorResult result={entry.result} />}
       <div className="state-pair state-io">
         <div>
-          <h4>state in <span className="muted small">{io.inKeys.length ? io.inKeys.join(", ") : "no keys"}</span></h4>
+          <h4>state in <span className="muted small">{io.inLabel}</span></h4>
           <pre data-testid="state-in">{JSON.stringify(io.in, null, 2)}</pre>
         </div>
         <div>
@@ -56,14 +57,25 @@ function Machine({ entry }: { entry: HistoryEntry }) {
     text = "performed by the client";
   } else {
     where = "server";
-    text = kind === "router" ? "routed by the server" : kind === "end" ? "closed by the server" : "recorded by the server";
+    text = kind === "router" ? "routed by the server" : kind === "end" ? "closed by the server" : kind === "start" ? "opened by the server with the client's input" : "recorded by the server";
   }
   return <p className="muted machine" data-testid="ran-on" data-machine={where} data-host={host}>{text}</p>;
 }
 
+/** The confidence keys a decision wrote to the state, from its attribution: `<question>_confidence` for each question
+ *  the step emits one for. A manual answer wrote none. */
+function confidenceOut(step: string, info: ProcedureInfo, attribution: Attribution | undefined): State {
+  const out: State = {};
+  const scores = attribution?.confidence;
+  if (!scores) return out;
+  for (const q of info.questions) if (q.step === step && q.confidence && scores[q.name] !== undefined) out[confidenceKey(q.name)] = scores[q.name];
+  return out;
+}
+
 /** The declared keys a step read and added. A step sees only its `inputs`, so the history's `input` is the state
- *  in (an error entry keeps the whole state before the step: projected here). Out is the step's outputs: a
- *  script's stdout, a decision's answers, a client task's answer; routers and the end step add nothing. */
+ *  in (an error entry keeps the whole state before the step: projected here). Out is the step's outputs: the
+ *  start input, a script's stdout, a decision's answers and the confidence keys it emits, a client task's answer;
+ *  routers and the end step add nothing. */
 function stateIO(entry: HistoryEntry, info: ProcedureInfo) {
   const step = entry.step;
   const inKeys = inputsOf(info, step);
@@ -72,43 +84,46 @@ function stateIO(entry: HistoryEntry, info: ProcedureInfo) {
   const outKeys = outputsOf(info, step);
   let out: State | null = null;
   let outNote = outKeys.join(", ");
-  if (entry.kind === "execution") out = entry.result;
-  else if (entry.kind === "decision") out = (entry.result as unknown as DecisionResult).answers;
+  if (entry.kind === "start") out = entry.input;
+  else if (entry.kind === "execution") out = entry.result;
+  else if (entry.kind === "decision") out = { ...(entry.result as unknown as DecisionResult).answers, ...confidenceOut(step, info, entry.attribution) };
   else if (entry.kind === "client_task") out = (entry.result as unknown as ClientTaskResult).answer;
   else if (entry.kind === "router") outNote = "adds nothing; the branch is in the history";
   else if (entry.kind === "end") outNote = "the procedure's result";
   else if (entry.kind === "error") outNote = "nothing: the step failed";
   if (entry.kind === "end") out = entry.result;
-  return { in: input, inKeys, out, outNote };
+  const inLabel = entry.kind === "start" ? "nothing: the client's input opens the run" : inKeys.length ? inKeys.join(", ") : "no keys";
+  return { in: input, inKeys, inLabel, out, outNote };
 }
 
-function Decision({ result, info, attribution }: { result: DecisionResult; info: ProcedureInfo; attribution?: Attribution }) {
-  const byName = new Map(info.questions.map((q) => [q.name, q]));
-  const who = attribution ?? { resolver: "manual", model: null, confidence: null, reviewed: false };
-  const review = reviewOf(who, result.answers);
+function Decision({ step, result, info, attribution }: { step: string; result: DecisionResult; info: ProcedureInfo; attribution?: Attribution }) {
+  const byName = new Map(info.questions.filter((q) => q.step === step).map((q) => [q.name, q]));
+  const who: Attribution = attribution ?? { resolver: "manual", model: null, confidence: null };
+  const detail = info.step_details.find((s) => s.name === step);
   return (
     <>
       <p data-testid="attribution" data-resolver={who.resolver}>
         resolver <strong>{who.resolver}</strong>
-        {who.resolver === "manual" ? <span className="muted"> · answered by the client, no decision model</span>
+        {who.resolver === "manual"
+          ? <span className="muted"> · answered by the client, no decision model{detail?.fallback ? " (the step allows it: fallback on)" : ""}; no confidence recorded</span>
           : <span className="muted">{who.model ? ` · model ${who.model}` : ""}</span>}
-        {" · "}<span className={`status-tag review-${review.status}`} data-testid="review-status" data-review={review.status}>{review.text}</span>
       </p>
       <table className="compact answers" aria-label="answers">
-        <thead><tr><th>question</th><th>answer</th><th>confidence</th><th>threshold</th></tr></thead>
+        <thead><tr><th>question</th><th>answer</th><th>confidence</th><th>in the state</th></tr></thead>
         <tbody>
           {Object.entries(result.answers).map(([name, value]) => {
-            const proposed = who.proposed?.[name];
-            const overridden = proposed !== undefined && proposed !== value;
+            const q = byName.get(name);
+            const score = who.confidence?.[name];
             return (
               <tr key={name} data-testid="answer" data-question={name}>
-                <td><code>{name}</code><div className="muted small">{byName.get(name)?.instructions}</div></td>
-                <td>
-                  <code data-testid="answer-value">{JSON.stringify(value)}</code>
-                  {overridden && <span className="muted"> · overrode the model's <code>{JSON.stringify(proposed)}</code></span>}
+                <td><code>{name}</code><div className="muted small">{q?.instructions}</div></td>
+                <td><code data-testid="answer-value">{JSON.stringify(value)}</code></td>
+                <td data-testid="answer-confidence">{score !== undefined ? score.toFixed(3) : <span className="muted">none{who.resolver === "manual" ? " (by hand)" : ""}</span>}</td>
+                <td className="muted small">
+                  {q?.confidence
+                    ? (score !== undefined ? <><code>{confidenceKey(name)}</code> = {score.toFixed(3)}</> : <><code>{confidenceKey(name)}</code> not written</>)
+                    : "answer only"}
                 </td>
-                <td>{who.confidence?.[name] !== undefined ? `${(who.confidence[name] * 100).toFixed(1)}%` : <span className="muted">—</span>}</td>
-                <td>{byName.get(name)?.threshold ?? <span className="muted">default</span>}</td>
               </tr>
             );
           })}
@@ -118,22 +133,35 @@ function Decision({ result, info, attribution }: { result: DecisionResult; info:
   );
 }
 
-/** A decision's review status: answered by hand (no model, nothing to review), the model's answers accepted
- *  without review, or reviewed because a question fell under its threshold, keeping or overriding them. */
-function reviewOf(who: Attribution | { resolver: "manual"; reviewed: boolean; proposed?: undefined }, answers: DecisionResult["answers"]) {
-  if (who.resolver === "manual") return { status: "manual", text: "no review: answered by hand" };
-  if (!who.reviewed) return { status: "accepted", text: "accepted without review" };
-  const changed = Object.entries(answers).filter(([q, v]) => who.proposed?.[q] !== undefined && who.proposed[q] !== v).map(([q]) => q);
-  if (!changed.length) return { status: "kept", text: "reviewed: the model's answers kept" };
-  return { status: "overridden", text: `reviewed: overrode ${changed.join(", ")}` };
-}
+const REASONS: Record<string, string> = {
+  low: "the confidence was below the bound",
+  absent: "no confidence was in the state (the decision was answered by hand)",
+  null: "the confidence was null",
+};
 
-function Router({ entry }: { entry: HistoryEntry }) {
-  const [key, value] = Object.entries(entry.input)[0] ?? ["?", undefined];
+/** A router's entry: the branch key it read and where it went; with a check, the key it checked and whether the
+ *  check fired, and why. */
+function Router({ entry, info }: { entry: HistoryEntry; info: ProcedureInfo }) {
+  const detail = info.step_details.find((s) => s.name === entry.step);
+  const key = detail?.branch_on ?? Object.keys(entry.input)[0] ?? "?";
+  const check = detail?.check ?? null;
+  const outcome = (entry.result.confidence as CheckOutcome | undefined) ?? null;
+  // A fired check decides before the branch key is read, so the entry records only the key it checked.
   return (
-    <p data-testid="branch-taken">
-      <code>{key}</code> = <code>{JSON.stringify(value)}</code> → branch to <code>{String(entry.result.to)}</code>
-    </p>
+    <>
+      <p data-testid="branch-taken">
+        {key in entry.input && <><code>{key}</code> = <code>{JSON.stringify(entry.input[key])}</code> → </>}
+        {outcome?.fired ? "the check sent the run to" : "branch to"} <code>{String(entry.result.to)}</code>
+      </p>
+      {check && (
+        <p className="small" data-testid="check-outcome" data-fired={outcome?.fired ? "true" : "false"} data-reason={outcome?.reason ?? undefined}>
+          <span className={`status-tag ${outcome?.fired ? "check-fired" : "check-held"}`}>{outcome?.fired ? "check fired" : "check held"}</span>{" "}
+          <code>{check.key}</code> = <code>{JSON.stringify(entry.input[check.key] ?? null)}</code>, bound <code>{check.below}</code>
+          {outcome?.fired && outcome.reason && <>: {REASONS[outcome.reason] ?? outcome.reason}</>}
+          {!outcome?.fired && <>: at or above the bound, so the branches decided</>}
+        </p>
+      )}
+    </>
   );
 }
 

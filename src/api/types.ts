@@ -25,12 +25,28 @@ export interface SearchHit {
 
 export type StepKind = "start" | "decision" | "router" | "execution" | "client_task" | "end";
 
+/** What the validator made of what feeds a router's branch key, stored with the revision at publish: a start input
+ *  or a script's output (`deterministic`), a decision model whose confidence the router checks (`measured`), or a
+ *  probabilistic choice with no calibrated number behind it (`unmeasured`). */
+export type SourceClass = "deterministic" | "measured" | "unmeasured";
+
+/** A router's confidence check: below `below`, or with `key` absent or null, the run goes to `to`. */
+export interface ConfidenceCheck { key: string; below: number; to: string }
+
 export interface StepDetail {
   name: string;
   kind: StepKind;
   order: number;
   description: string | null;
   branch_on?: string;   // router
+  /** router: the class of its source, null for a router the validator could not classify. */
+  source_class?: SourceClass | null;
+  /** router: its confidence check, null when it has none. */
+  check?: ConfidenceCheck | null;
+  /** decision: whether the client may answer by hand when it has no decision model. */
+  fallback?: boolean;
+  /** decision: the question names whose `<question>_confidence` the step emits. */
+  confidence?: string[];
   script?: string;      // execution
   timeout?: number | null;
   /** How the script is launched, from its folder; null is `python <script>`. */
@@ -67,7 +83,8 @@ export interface Question {
   type: string;
   instructions: string;
   criteria: string | null;   // JSON text
-  threshold: number | null;
+  /** Whether the step emits `<name>_confidence` into the state (the decision's `confidence` list names it). */
+  confidence: boolean;
 }
 
 export interface Resource {
@@ -78,6 +95,9 @@ export interface Resource {
 }
 
 export interface FileEntry { path: string; size: number; sha256: string; mode: number }
+
+/** A warning or info the validator reported at publish, kept with the revision; `step` names the step it is on. */
+export interface PublishIssue { code: string; severity: "warning" | "info"; step: string | null; location: string | null; message: string }
 
 /** `GET /catalog/{ref}`: describe() plus the `aip info` fields and the projection. */
 export interface ProcedureInfo {
@@ -93,9 +113,13 @@ export interface ProcedureInfo {
   do_not_use_when: string[];
   anti_patterns: string[];
   example_input: Record<string, unknown>;
-  start: { step: string; kind: StepKind };
-  end: { step: string; kind: StepKind };
+  start: { step: string; kind: StepKind; inputs: Record<string, string> };
+  end: { step: string; kind: StepKind; inputs: Record<string, string> };
   steps: Record<string, StepKind>;
+  /** Per decision: `fallback` and the questions whose confidence it emits. */
+  decisions: Record<string, { fallback: boolean; confidence: string[] }>;
+  /** Per router: its branch key and its check, with `to` the step's name. */
+  routers: Record<string, { branch_on: string; confidence: ConfidenceCheck | null }>;
   step_details: StepDetail[];
   edges: Edge[];
   branches: Branch[];
@@ -105,6 +129,8 @@ export interface ProcedureInfo {
   requires: Requires | null;
   questions: Question[];
   resources: Resource[];
+  /** The validator's warnings and infos at publish (unmeasured routes, a key with several producers). */
+  issues: PublishIssue[];
   files: FileEntry[];
 }
 
@@ -114,15 +140,13 @@ export interface ApiErrorBody {
 
 // ---------------------------------------------------------------- run history (GET /runs/{id})
 
-/** Who answered a decision (B4): the client's decision model, or the client by hand. */
+/** Who answered a decision: the client's decision model, or the client by hand (`fallback: true` on the step). */
 export interface Attribution {
   resolver: "typesafe" | "manual";
   model: string | null;
-  /** Per question, the model's confidence in the answer it chose. */
+  /** Per question, the probability the model put on the answer it gave: TypeSafe's confidence for a choice or
+   *  score, `|2p - 1|` for a yes/no. Null for a manual answer: nobody invents a number. */
   confidence: Record<string, number> | null;
-  reviewed: boolean;
-  /** The model's answers before review, when reviewed. */
-  proposed?: Record<string, boolean | string | number>;
 }
 
 /** A decision's recorded result: one collapsed value per question. */
@@ -137,7 +161,12 @@ export interface ClientTaskResult {
   answer: Record<string, unknown>;
 }
 
-/** One history entry: what a step received and produced. Routers record the branch they took. */
+/** What a router's confidence check made of the state: whether it fired, and why (`low`: the key was under the
+ *  bound; `absent`: a manual answer wrote no confidence; `null`: the key was null). */
+export interface CheckOutcome { fired: boolean; reason: "low" | "absent" | "null" | null }
+
+/** One history entry: what a step received and produced. The first is the start step's, its `input` the start
+ *  input. Routers record the branch they took (`result.to`) and, with a check, `result.confidence`. */
 export interface HistoryEntry {
   step: string;
   kind: StepKind | "error";
@@ -151,15 +180,6 @@ export interface HistoryEntry {
   host?: string;
   /** Errors: the kind of the step that failed. */
   step_kind?: StepKind;
-}
-
-export interface ReviewItem {
-  question: string;
-  type: "noul" | "choice" | "score";
-  reason: string;
-  noul?: number;
-  confidence?: number;
-  probabilities?: Record<string, number>;
 }
 
 export type RunStatus = "running" | "paused" | "done" | "failed";
@@ -212,8 +232,8 @@ export interface ValidationIssue {
   kind: string;
   message: string;
   location?: string;
-  /** Absent on an error. */
-  severity?: "warning";
+  /** Absent on an error. An info never fails a publish. */
+  severity?: "warning" | "info";
 }
 
 /** `POST /catalog`: the revision the files became (the existing one when nothing changed). */

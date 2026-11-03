@@ -9,12 +9,12 @@ import { FIRST_REVISION_DIR } from "./aip";
 import { aipSpec, specErrors } from "./aip-spec";
 
 // The Studio tab (S1): build the billing-support graph by hand through the page, reload, and find the draft kept
-// and the wired part of the graph lint-clean. Inputs and outputs have no editor until S2, so the draft still has
-// the issues that need them (a client task with no outputs, an unfinished script); only the wiring rules are
-// asserted clean here.
+// and the wired part of the graph lint-clean. The first step added brings the `start` step with it. Inputs and
+// outputs are left for the S2 tests below, so the draft still has the issues that need them (a client task with no
+// outputs, an unfinished script); only the wiring rules are asserted clean here.
 
-const WIRING = ["duplicate_step_name", "invalid_start_step", "missing_end_step", "multiple_end_steps", "unknown_step_reference",
-  "unreachable_step", "no_path_to_end", "unknown_branch_value"];
+const WIRING = ["duplicate_step_name", "missing_start_step", "multiple_start_steps", "edge_into_start", "missing_end_step", "multiple_end_steps",
+  "unknown_step_reference", "unreachable_step", "no_path_to_end", "unknown_branch_value"];
 
 const node = (page: Page, name: string) => page.getByRole("button", { name: new RegExp(`^${name} \\(`) });
 const panel = (page: Page) => page.getByTestId("step-panel");
@@ -32,9 +32,13 @@ test("build billing-support by hand, reload, and the draft and its wiring are ke
   await page.goto("./#/studio");
   await expect(page.getByTestId("studio-empty")).toBeVisible();
 
-  // triage: a decision with one choice question, whose labels become the router's branches
+  // triage: a decision with one choice question, whose labels become the router's branches; the start step comes
+  // with it, handing to triage
   await page.getByRole("group", { name: "Add the first step" }).getByRole("button", { name: "+ decision" }).click();
   await rename(page, "triage");
+  await expect(node(page, "start")).toBeVisible();
+  await expect(await edge(page, "start", "triage")).toHaveCount(1);
+  await expect(panel(page).getByText("the start hands to this step")).toBeVisible();
   await page.getByRole("group", { name: "Add question" }).getByRole("button", { name: "+ choice" }).click();
   const q = panel(page).getByTestId("question");
   await q.locator("input").first().fill("tone");
@@ -66,12 +70,20 @@ test("build billing-support by hand, reload, and the draft and its wiring are ke
   await node(page, "reply").click();
   await panel(page).getByLabel("next step").selectOption({ label: "end" });
 
-  await expect(page.getByTestId("step-node")).toHaveCount(5);
-  await expect(page.getByTestId("step-edge")).toHaveCount(5);
-  for (const [from, to] of [["triage", "by-tone"], ["by-tone", "escalate"], ["by-tone", "reply"], ["escalate", "end"], ["reply", "end"]]) {
+  await expect(page.getByTestId("step-node")).toHaveCount(6);
+  await expect(page.getByTestId("step-edge")).toHaveCount(6);
+  for (const [from, to] of [["start", "triage"], ["triage", "by-tone"], ["by-tone", "escalate"], ["by-tone", "reply"], ["escalate", "end"], ["reply", "end"]]) {
     await expect(await edge(page, from, to)).toHaveCount(1);
   }
   await expect(page.getByTestId("branch-label")).toHaveText(["angry", "calm"]);
+
+  // the start step's panel: the inputs the client supplies, and the first step
+  await node(page, "start").click();
+  await expect(panel(page).getByRole("heading", { name: /^start/ })).toContainText("start");
+  await expect(panel(page).getByTestId("io-inputs").getByText("inputs: what the client supplies")).toBeVisible();
+  await expect(panel(page).getByLabel("first step")).toHaveValue(await idOf(page, "triage"));
+  await panel(page).getByRole("button", { name: "add new input" }).click();
+  await panel(page).getByLabel("inputs 1 name").fill("message");
 
   // the lint panel shows no wiring errors, and a click on an issue selects its step
   const lintPanel = page.getByTestId("lint-panel");
@@ -88,10 +100,10 @@ test("build billing-support by hand, reload, and the draft and its wiring are ke
   await expect(page.getByTestId("studio-saved")).toHaveAttribute("data-state", "saved");
   await page.reload();
 
-  await expect(page.getByTestId("step-node")).toHaveCount(5);
-  await expect(page.getByTestId("step-edge")).toHaveCount(5);
-  for (const name of ["triage", "by-tone", "escalate", "reply", "end"]) await expect(node(page, name)).toBeVisible();
-  for (const [from, to] of [["by-tone", "escalate"], ["by-tone", "reply"], ["reply", "end"]]) {
+  await expect(page.getByTestId("step-node")).toHaveCount(6);
+  await expect(page.getByTestId("step-edge")).toHaveCount(6);
+  for (const name of ["start", "triage", "by-tone", "escalate", "reply", "end"]) await expect(node(page, name)).toBeVisible();
+  for (const [from, to] of [["start", "triage"], ["by-tone", "escalate"], ["by-tone", "reply"], ["reply", "end"]]) {
     await expect(await edge(page, from, to)).toHaveCount(1);
   }
   await page.getByRole("button", { name: "procedure settings" }).click();
@@ -106,28 +118,44 @@ test("deleting a middle step re-links its neighbours; a step with no name still 
   await addAfter(page, "first", "execution");
   await rename(page, "middle");
   await addAfter(page, "middle", "end");
-  await expect(page.getByTestId("step-edge")).toHaveCount(2);
+  await expect(page.getByTestId("step-edge")).toHaveCount(3);
 
   await node(page, "middle").click();
   await panel(page).getByRole("button", { name: "delete step" }).click();
-  await expect(page.getByTestId("step-node")).toHaveCount(2);
+  await expect(page.getByTestId("step-node")).toHaveCount(3);
   await expect(await edge(page, "first", "end")).toHaveCount(1);
+
+  // "make this the first step" moves the start's hand-off; deleting the start leaves a fix in the lint panel
+  await node(page, "first").click();
+  await addAfter(page, "first", "execution");
+  await rename(page, "second");
+  await panel(page).getByTestId("make-first").click();
+  await expect(await edge(page, "start", "second")).toHaveCount(1);
+  await expect(await edge(page, "start", "first")).toHaveCount(0);
+  await expect(page.getByTestId("lint-panel").locator('li[data-code="unreachable_step"]')).toHaveCount(1);   // first, now
+  await node(page, "start").click();
+  await panel(page).getByRole("button", { name: "delete step" }).click();
+  const missing = page.getByTestId("lint-panel").locator('li[data-code="missing_start_step"]');
+  await expect(missing).toHaveCount(1);
+  await missing.getByTestId("lint-autofix").click();
+  await expect(missing).toHaveCount(0);
+  await expect(node(page, "start")).toBeVisible();
 
   // an empty name is an error in the lint panel, not a crash
   await node(page, "first").click();
   await field(page, "name").fill("");
   await expect(page.getByTestId("lint-panel").locator('li[data-code="schema_violation"]').first()).toBeVisible();
-  await expect(page.getByTestId("step-node")).toHaveCount(2);
+  await expect(page.getByTestId("step-node")).toHaveCount(4);
 });
 
 // ------------------------------------------------------------------------------------------------ S2: inputs and outputs
 
-/** fetch (execution, one integer output `ticket`) -> end, with `ticket` taken as an input of the end step. */
+/** start -> fetch (execution, one integer output `ticket`) -> end, with `ticket` taken as an input of the end step. */
 async function chain(page: Page) {
   await page.goto("./#/studio");
   await page.getByRole("group", { name: "Add the first step" }).getByRole("button", { name: "+ execution" }).click();
   await rename(page, "fetch");
-  await expect(panel(page).getByTestId("io-inputs").getByText("inputs: what the client supplies")).toBeVisible();
+  await expect(panel(page).getByTestId("io-inputs").getByText("inputs", { exact: true })).toBeVisible();
   await panel(page).getByRole("button", { name: "add new output" }).click();
   await panel(page).getByLabel("outputs 1 name").fill("ticket");
   await panel(page).getByLabel("outputs 1 type").selectOption("integer");
@@ -156,7 +184,7 @@ test("a key picked from the state is never unproduced; renaming its producer's o
   // the fix: the client supplies it, as an input of the start step
   await unproduced(page).getByRole("button", { name: "declare ticket as a start input" }).click();
   await expect(unproduced(page)).toHaveCount(0);
-  await node(page, "fetch").click();
+  await node(page, "start").click();
   await expect(panel(page).getByLabel("inputs 1 name")).toHaveValue("ticket");
   await expect(panel(page).getByLabel("inputs 1 type")).toHaveValue("integer");
 });
@@ -194,39 +222,65 @@ test("a decision's outputs are read-only, one key per question, and the data vie
   await expect(arrow).toHaveAttribute("data-keys", "urgency");
   await expect(arrow).toHaveAttribute("data-from", await idOf(page, "triage"));
   await expect(arrow).toHaveAttribute("data-to", await idOf(page, "act"));
-  await expect(page.getByTestId("input-node")).toBeVisible();
+  await expect(page.getByTestId("input-node")).toHaveCount(0);        // the start step is the producer of the inputs
 });
 
-test("a decision's review threshold takes decimals, is checked against 0 to 1, and is explained per question type", async ({ page }) => {
+test("a decision emits a confidence key on request and defaults to no fallback; a router checks the key against a bound in 0 to 1", async ({ page }) => {
   await page.goto("./#/studio");
   await page.getByRole("group", { name: "Add the first step" }).getByRole("button", { name: "+ decision" }).click();
   await rename(page, "triage");
   await page.getByRole("group", { name: "Add question" }).getByRole("button", { name: "+ noul" }).click();
-  const q = panel(page).getByTestId("question");
-  const threshold = q.getByLabel("question_1 threshold");
-  const help = q.getByTestId("threshold-help");
 
-  await expect(help).toContainText("within this margin of 0.5");
-  await threshold.pressSequentially("0.35");
-  await expect(threshold).toHaveValue("0.35");
-  await expect(threshold).not.toHaveAttribute("aria-invalid", "true");
+  // fallback is off by default, and the help says what turning it on costs
+  const fallback = panel(page).getByTestId("fallback");
+  await expect(fallback.getByLabel("fallback")).not.toBeChecked();
+  await expect(fallback.getByTestId("fallback-help")).toContainText("by hand");
+  await expect(fallback.getByTestId("fallback-help")).toContainText("unmeasured");
+  await expect(fallback.getByTestId("fallback-help")).toContainText("no_decision_model");
 
-  // out of range is marked, and the linter says so
-  await threshold.fill("1.5");
-  await expect(threshold).toHaveAttribute("aria-invalid", "true");
+  // ticking a question under confidence adds its float key to the outputs
+  const outputs = panel(page).getByTestId("decision-outputs");
+  await expect(outputs).toContainText("question_1: boolean");
+  await expect(outputs).not.toContainText("question_1_confidence");
+  await panel(page).getByTestId("confidence-picker").getByLabel("emit question_1 confidence").check();
+  await expect(outputs).toContainText("question_1_confidence: float");
+
+  // a router after the decision: its check offers the key; the bound is checked against 0 to 1
+  await addAfter(page, "triage", "end");
+  await rename(page, "end");
+  await node(page, "triage").click();
+  await addAfter(page, "triage", "router");
+  await rename(page, "route");
+  const check = panel(page).getByTestId("router-check");
+  await expect(check.getByTestId("check-help")).toContainText("absent");
+  await check.getByLabel("check a confidence before branching").check();
+  await expect(check.getByLabel("check key")).toHaveValue("question_1_confidence");
+  await expect(check.getByLabel("check below")).toHaveValue("0.6");
+  await check.getByLabel("check below").fill("1.5");
+  await expect(check.getByLabel("check below")).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByTestId("lint-panel").locator('li[data-code="schema_violation"]', { hasText: "between 0 and 1" })).toHaveCount(1);
-  await threshold.fill("0.35");
+  await check.getByLabel("check below").fill("0.35");
+  await expect(check.getByLabel("check below")).not.toHaveAttribute("aria-invalid", "true");
+  await check.getByLabel("check target").selectOption({ label: "end" });
+  await expect(await edge(page, "route", "end")).toHaveCount(1);
 
-  // the meaning changes with the type: choice and score are about the model's confidence
-  await q.getByLabel("question_1 type").selectOption("choice");
-  await expect(help).toContainText("confidence");
-  await expect(threshold).toHaveValue("0.35");
+  // with fallback off and the check in place, the route is measured: no source warning on the router
+  const lintPanel = page.getByTestId("lint-panel");
+  await expect(lintPanel.locator('li[data-code="confidence_on_unmeasured_source"]')).toHaveCount(0);
+  await expect(lintPanel.locator('li[data-code="unmeasured_route"]')).toHaveCount(0);
+  await node(page, "triage").click();
+  await fallback.getByLabel("fallback").check();
+  await expect(lintPanel.locator('li[data-code="confidence_on_unmeasured_source"]')).toHaveCount(1);
 
   await expect(page.getByTestId("studio-saved")).toHaveAttribute("data-state", "saved");
   await page.reload();
   await expect(panel(page)).toBeHidden();
+  await node(page, "route").click();
+  await expect(panel(page).getByTestId("router-check").getByLabel("check below")).toHaveValue("0.35");
+  await expect(panel(page).getByTestId("router-check").getByLabel("check key")).toHaveValue("question_1_confidence");
   await node(page, "triage").click();
-  await expect(panel(page).getByTestId("question").getByLabel("question_1 threshold")).toHaveValue("0.35");
+  await expect(panel(page).getByTestId("fallback").getByLabel("fallback")).toBeChecked();
+  await expect(panel(page).getByTestId("confidence-picker").getByLabel("emit question_1 confidence")).toBeChecked();
 });
 
 // ------------------------------------------------------------------------------------------------ S3: the scaffold zip

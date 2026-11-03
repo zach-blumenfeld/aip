@@ -2,17 +2,19 @@
 // returns a changed copy; none can leave a step with a second outbound edge, since an edge is a field (`next`, a
 // router's branches), not a list.
 
-import { RUNNABLE_KINDS, newStepId, type Branch, type Draft, type Step, type StepKind } from "./draft";
-import { START_INPUT, groupFlow, type DataEdge } from "../graph/dataflow";
+import { RUNNABLE_KINDS, confidenceKey, newStepId, startOf, type Branch, type Draft, type Step, type StepKind } from "./draft";
+import { groupFlow, type DataEdge } from "../graph/dataflow";
 import type { Edge, Branch as GraphBranch, StepDetail } from "../api/types";
 
+/** The kinds a step can be added as, after another: every kind but `start`, which a draft has exactly one of. */
 export const KINDS: StepKind[] = ["decision", "execution", "client_task", "router", "end"];
 
-/** A step name not yet taken, from its kind: `client-task-2`. The `end` step is plainly `end` when it can be. */
+/** A step name not yet taken, from its kind: `client-task-2`. The `start` and `end` steps are plainly `start` and
+ *  `end` when they can be. */
 function freshName(kind: StepKind, steps: Step[]): string {
   const taken = new Set(steps.map((s) => s.name));
   const base = kind === "client_task" ? "client-task" : kind;
-  if (kind === "end" && !taken.has(base)) return base;
+  if ((kind === "end" || kind === "start") && !taken.has(base)) return base;
   let n = 1;
   while (taken.has(`${base}-${n}`)) n++;
   return `${base}-${n}`;
@@ -25,16 +27,47 @@ export function newStep(kind: StepKind, steps: Step[]): Step {
   if (kind === "execution") { step.script = `scripts/${name}.py`; step.outputs = []; }
   if (kind === "client_task") { step.template = `assets/${name}.md`; step.outputs = []; }
   if (kind === "router") step.branches = [];
-  if (kind === "end") step.inputs = [];
   return step;
 }
 
-/** The steps whose outbound edge reaches `id`: by `next`, and the router branches that target it. */
-function pointingAt(d: Draft, id: string): { steps: Step[]; branches: Branch[] } {
+/** The steps whose outbound edge reaches `id`: by `next`, the router branches that target it, and the router
+ *  confidence checks that send the run to it. */
+function pointingAt(d: Draft, id: string): { steps: Step[]; branches: Branch[]; checks: Step[] } {
   return {
     steps: d.steps.filter((s) => s.next === id),
     branches: d.steps.flatMap((s) => s.branches ?? []).filter((b) => b.target === id),
+    checks: d.steps.filter((s) => s.check?.to === id),
   };
+}
+
+/** The runnable steps no edge (a `next`, a branch, a check's `to`) reaches: what a start step is missing a hand-off
+ *  to, in step order. */
+export function unreachedRunnable(d: Draft): Step[] {
+  const reached = new Set<string>();
+  for (const s of d.steps) {
+    if (s.next) reached.add(s.next);
+    for (const b of s.branches ?? []) if (b.target) reached.add(b.target);
+    if (s.check?.to) reached.add(s.check.to);
+  }
+  return d.steps.filter((s) => RUNNABLE_KINDS.includes(s.kind) && !reached.has(s.id));
+}
+
+/** The runnable step a start step should hand to when nothing says: the first one no edge reaches, else the first
+ *  runnable step. Undefined when the draft has none. */
+function firstRunnable(d: Draft): Step | undefined {
+  return unreachedRunnable(d)[0] ?? d.steps.find((s) => RUNNABLE_KINDS.includes(s.kind));
+}
+
+/** Add the `start` step to a draft that has none, first in order, handing to the first runnable step nothing
+ *  reaches. A draft that already has one is returned unchanged. Returns the Draft and the start's id. */
+export function addStart(d: Draft): { draft: Draft; id: string } {
+  const out = structuredClone(d);
+  const have = startOf(out.steps);
+  if (have) return { draft: out, id: have.id };
+  const start = newStep("start", out.steps);
+  start.next = firstRunnable(out)?.id;
+  out.steps.unshift(start);
+  return { draft: out, id: start.id };
 }
 
 /** The one step this one leads to, when it has exactly one: `next`, or a router's single distinct target. */
@@ -71,16 +104,26 @@ export function prefillBranches(d: Draft, routerId: string): Draft {
 }
 
 /** Add a step of `kind` after `afterId`, between it and what it led to. Returns the Draft and the new step's id.
- *  With no `afterId` the step is appended; a router takes it as a new branch. */
+ *  With no `afterId` the step is appended; a draft with no `start` step gets one first, handing to the new step,
+ *  so "the first step" of an empty draft is the start and the step it names. A router takes a new step as a new
+ *  branch. */
 export function addStepAfter(d: Draft, afterId: string | undefined, kind: StepKind): { draft: Draft; id: string } {
-  const out = structuredClone(d);
-  const step = newStep(kind, out.steps);
+  let out = structuredClone(d);
   const at = afterId === undefined ? -1 : out.steps.findIndex((s) => s.id === afterId);
   if (at < 0) {
-    // The start must be runnable; a first step of another kind is the author's to fix, the linter says so.
+    if (!startOf(out.steps) && kind !== "start") {
+      out = addStart(out).draft;
+      const start = startOf(out.steps)!;
+      const step = newStep(kind, out.steps);
+      out.steps.splice(out.steps.indexOf(start) + 1, 0, step);
+      if (start.next === undefined) start.next = step.id;
+      return { draft: out, id: step.id };
+    }
+    const step = newStep(kind, out.steps);
     out.steps.push(step);
     return { draft: out, id: step.id };
   }
+  const step = newStep(kind, out.steps);
   const after = out.steps[at];
   out.steps.splice(at + 1, 0, step);
   let old: string | undefined;
@@ -135,8 +178,9 @@ export function renameStep(s: Step, name: string): void {
   s.name = name;
 }
 
-/** Remove a step. What pointed at it points at its successor when it has exactly one; otherwise the edges are
- *  left dangling (unset) for the linter to report. Removing the start makes the successor the start. */
+/** Remove a step. What pointed at it (a `next`, a branch, a check's `to`) points at its successor when it has exactly
+ *  one; otherwise the edges are left dangling (unset) for the linter to report. Removing the start step leaves the
+ *  draft without one, which the linter reports and `addStart` fixes. */
 export function deleteStep(d: Draft, id: string): Draft {
   const out = structuredClone(d);
   const at = out.steps.findIndex((s) => s.id === id);
@@ -145,20 +189,21 @@ export function deleteStep(d: Draft, id: string): Draft {
   const into = pointingAt(out, id);
   for (const s of into.steps) s.next = successor;
   for (const b of into.branches) b.target = successor;
+  for (const s of into.checks) s.check!.to = successor;
   out.steps.splice(at, 1);
-  if (at === 0 && successor) {
-    const i = out.steps.findIndex((s) => s.id === successor);
-    if (i > 0) out.steps.unshift(...out.steps.splice(i, 1));
-  }
   return out;
 }
 
-/** Make a runnable step the start, which is the first step. */
+/** Make a runnable step the first one: the start step hands to it, and it follows the start in order. The step
+ *  the start handed to before keeps its place; if nothing else reaches it, the linter says so. */
 export function setStart(d: Draft, id: string): Draft {
   const out = structuredClone(d);
+  const start = startOf(out.steps);
   const at = out.steps.findIndex((s) => s.id === id);
-  if (at <= 0 || !RUNNABLE_KINDS.includes(out.steps[at].kind)) return out;
-  out.steps.unshift(...out.steps.splice(at, 1));
+  if (!start || at < 0 || !RUNNABLE_KINDS.includes(out.steps[at].kind)) return out;
+  start.next = id;
+  const [step] = out.steps.splice(at, 1);
+  out.steps.splice(out.steps.indexOf(start) + 1, 0, step);
   return out;
 }
 
@@ -178,29 +223,41 @@ export function graphOf(d: Draft): { steps: StepDetail[]; edges: Edge[]; branche
     } else if (s.next && ids.has(s.next)) edges.push({ from: s.id, to: s.next });
   }
   return {
-    steps, edges, branches, start: d.steps[0]?.id ?? "", end: d.steps.find((s) => s.kind === "end")?.id ?? "",
+    steps, edges, branches, start: startOf(d.steps)?.id ?? "", end: d.steps.find((s) => s.kind === "end")?.id ?? "",
     labels: new Map(d.steps.map((s) => [s.id, label(s)])),
   };
 }
 
 // ------------------------------------------------------------------------------------------------ data flow
 
-/** The state keys as arrows for StepGraph's data view: one per (producer, consumer) pair, keyed by step id, the
- *  start input standing for what the client supplies. A key nothing produces has no arrow (the linter says so). */
-export function flowOf(d: Draft): { from: string; to: string; keys: string[] }[] {
-  const producer = new Map<string, string>();
-  const start = d.steps[0];
-  if (start && start.kind !== "router") for (const i of start.inputs) if (i.name) producer.set(i.name, START_INPUT);
-  for (const s of d.steps) {
-    if (s.kind === "decision") for (const q of s.questions ?? []) if (q.name && !producer.has(q.name)) producer.set(q.name, s.id);
-    for (const o of s.outputs ?? []) if (o.name && !producer.has(o.name)) producer.set(o.name, s.id);
+/** The keys a step adds to the state: the start step its inputs, a decision its question names and the confidence
+ *  keys it emits, an execution or client task its outputs. */
+export function producedBy(s: Step): string[] {
+  if (s.kind === "start") return s.inputs.map((i) => i.name).filter(Boolean);
+  if (s.kind === "decision") {
+    return [...(s.questions ?? []).map((q) => q.name), ...(s.confidence ?? []).filter(Boolean).map(confidenceKey)].filter(Boolean);
   }
+  return (s.outputs ?? []).map((o) => o.name).filter(Boolean);
+}
+
+/** The keys a step reads from the state: a router its branch key and the key its check reads, the start nothing,
+ *  every other step its inputs. */
+export function consumedBy(s: Step): string[] {
+  if (s.kind === "start") return [];
+  if (s.kind === "router") return [...(s.branchOn ? [s.branchOn] : []), ...(s.check?.key ? [s.check.key] : [])];
+  return s.inputs.map((i) => i.name).filter(Boolean);
+}
+
+/** The state keys as arrows for StepGraph's data view: one per (producer, consumer) pair, keyed by step id. The
+ *  start step produces its inputs; a key with several producers gets an arrow from each. A key nothing produces
+ *  has no arrow (the linter says so). */
+export function flowOf(d: Draft): { from: string; to: string; keys: string[] }[] {
+  const producers = new Map<string, string[]>();
+  for (const s of d.steps) for (const key of producedBy(s)) producers.set(key, [...(producers.get(key) ?? []), s.id]);
   const edges: DataEdge[] = [];
   for (const s of d.steps) {
-    const keys = s.kind === "router" ? (s.branchOn ? [s.branchOn] : []) : s.inputs.map((i) => i.name).filter(Boolean);
-    for (const key of keys) {
-      const from = producer.get(key);
-      if (from !== undefined && !(s === start && from === START_INPUT)) edges.push({ key, from, to: s.id });
+    for (const key of consumedBy(s)) {
+      for (const from of producers.get(key) ?? []) if (from !== s.id) edges.push({ key, from, to: s.id });
     }
   }
   return groupFlow(edges);
@@ -221,11 +278,12 @@ export function possibleValues(d: Draft, key: string): string[] | undefined {
 
 // ------------------------------------------------------------------------------------------------ quick fixes
 
-/** Declare a key as something the client supplies: an input of the start step. */
+/** Declare a key as something the client supplies: an input of the start step. A draft with no start step is
+ *  returned unchanged (the linter says so, and `addStart` fixes it). */
 export function declareStartInput(d: Draft, key: string, type: string): Draft {
   const out = structuredClone(d);
-  const start = out.steps[0];
-  if (start && start.kind !== "router" && !start.inputs.some((i) => i.name === key)) start.inputs.push({ name: key, type });
+  const start = startOf(out.steps);
+  if (start && !start.inputs.some((i) => i.name === key)) start.inputs.push({ name: key, type });
   return out;
 }
 

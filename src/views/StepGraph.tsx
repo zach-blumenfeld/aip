@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { START_INPUT } from "../graph/dataflow";
 import { layout, type Direction } from "../graph/layout";
 import type { Branch, Edge, StepDetail } from "../api/types";
 import type { Traffic } from "./Traffic";
@@ -22,8 +21,8 @@ interface Props {
   visited?: Set<string>;
   /** Edges a run took, as `from->to`; without it, an edge between two visited steps counts as taken. */
   taken?: Set<string>;
-  /** Draw the data flow instead: one arrow per (producer, consumer) labelled with the keys it carries
-   *  (graph/dataflow.ts), with the start input as a node of its own. Control edges stay, faint. */
+  /** Draw the data flow too: one arrow per (producer, consumer) labelled with the keys it carries
+   *  (graph/dataflow.ts); the start step produces the procedure's inputs. Control edges stay, faint. */
   flow?: { from: string; to: string; keys: string[] }[];
   /** Weight the control edges by the runs that took them and badge each step with the runs that reached it. */
   traffic?: Traffic;
@@ -45,10 +44,8 @@ export function StepGraph({ steps, edges, branches, start, end, visited, taken: 
     ];
     const nodes = steps.map((s) => ({ id: s.name }));
     const opts = { nodeWidth: W, nodeHeight: H, layerGap: LAYER_GAP[direction], direction };
-    // The start input sits before the start step; its edge to the start is only there to place it.
-    if (flow) return layout([{ id: START_INPUT }, ...nodes], [{ from: START_INPUT, to: start }, ...all], { ...opts, start: START_INPUT });
     return layout(nodes, all, { ...opts, start });
-  }, [steps, edges, branches, start, flow, direction]);
+  }, [steps, edges, branches, start, direction]);
   const byName = new Map(steps.map((s) => [s.name, s]));
   const data = useMemo(() => (flow ? route(flow, g.nodes, direction) : []), [flow, g, direction]);
   // Data lanes reach past the nodes along the order axis: the width top-down, the height left-to-right.
@@ -56,7 +53,7 @@ export function StepGraph({ steps, edges, branches, start, end, visited, taken: 
   const extra = data.length ? Math.max(0, ...data.map((d) => d.reach - across)) + 8 : 0;
   const width = g.width + 2 * PAD + (direction === "down" ? extra : 0);
   const height = g.height + 2 * PAD + (direction === "right" ? extra : 0);
-  const controlEdges = g.edges.filter((e) => e.from !== START_INPUT);
+  const controlEdges = g.edges;
   const busiest = traffic ? Math.max(1, ...traffic.edges.values()) : 1;
 
   return (
@@ -112,14 +109,6 @@ export function StepGraph({ steps, edges, branches, start, end, visited, taken: 
         </g>
       ))}
       {g.nodes.map((n) => {
-        if (n.id === START_INPUT) {
-          return (
-            <g key={n.id} className="node input-node" transform={`translate(${n.x}, ${n.y})`} data-testid="input-node">
-              <rect width={W} height={H} rx={H / 2} />
-              <text x={W / 2} y={H / 2 + 5} textAnchor="middle" className="node-name">start input</text>
-            </g>
-          );
-        }
         const step = byName.get(n.id)!;
         const isEnd = n.id === end, isStart = n.id === start;
         const text = labels?.get(n.id) ?? n.id;
@@ -136,7 +125,7 @@ export function StepGraph({ steps, edges, branches, start, end, visited, taken: 
                 onClick: () => onSelect(n.id),
                 onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(n.id); } } })}
             >
-              <rect width={W} height={H} rx={step.kind === "router" ? H / 2 : 6} />
+              <rect width={W} height={H} rx={step.kind === "router" || step.kind === "start" ? H / 2 : 6} />
               {isEnd && <rect x={3} y={3} width={W - 6} height={H - 6} rx={4} className="end-ring" />}
               {isStart && <circle cx={0} cy={H / 2} r={5} className="start-dot" />}
               <text x={W / 2} y={H / 2 - 4} textAnchor="middle" className="node-name">{text}</text>

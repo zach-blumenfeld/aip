@@ -270,7 +270,7 @@ test("a loop runs on a rail outside the steps, and the graph draws left to right
   expect(at["by-tone"].x).toBeLessThan(at.reply.x);
   expect(at.rewrite.x).toBeGreaterThan(at.check.x);
   await page.getByLabel("data flow").check();
-  await expect(graph.getByTestId("input-node")).toHaveCount(1);
+  await expect(graph.getByTestId("data-edge").first()).toBeVisible();
   await clean();
   await page.getByLabel("run traffic").check();
   await expect(page.getByTestId("traffic-summary")).toHaveAttribute("data-runs", "0");

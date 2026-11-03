@@ -1,6 +1,6 @@
 {
   "name": "aip-console",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "The AIP console (formerly inspector): catalog, source, run console, history and governance for an AIP server, or local runs of a skill folder.",
   "license": "Apache-2.0",
   "repository": {

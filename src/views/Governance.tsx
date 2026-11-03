@@ -29,8 +29,10 @@ export function Governance({ name }: { name?: string }) {
       <h1>Governance</h1>
       <p className="muted">
         What the corpus says about the procedures and their runs. Decisions, scripts and tasks run on the clients, and
-        each client reports who answered and how a script ended, so these lists cover every machine that ran a
-        procedure. Pin and retire live on each procedure's page; thresholds are the author's, in SKILL.md.
+        each client reports who answered, how sure its model was and how a script ended, so these lists cover every
+        machine that ran a procedure. Routers are walked by the server, which records when a confidence check fired.
+        Pin and retire live on each procedure's page; a router's check, a decision's <code>fallback</code> and the
+        class of each route are the author's, from SKILL.md at publish.
       </p>
       <div className="filters">
         <label>name{" "}
@@ -190,7 +192,8 @@ function Rows({ rows }: { rows: GovernanceRow[] }) {
       <tbody>
         {rows.map((row, i) => (
           <tr key={i} data-testid="governance-row" data-name={cell(row.name)} data-step={cell(row.step)} data-question={cell(row.question)}
-              data-resolver={cell(row.resolver)}>
+              data-resolver={cell(row.resolver)} data-router={cell(row.router)} data-reason={cell(row.reason)} data-code={cell(row.code)}
+              data-class={cell(row.source_class)}>
             {columns.map((c) => <td key={c} className={typeof row[c] === "number" ? "num" : undefined}>{render(c, row[c], row)}</td>)}
           </tr>
         ))}
@@ -219,6 +222,21 @@ function render(column: string, value: unknown, row: GovernanceRow): React.React
     );
   }
   if (column === "resolver" && typeof value === "string") return <span className="status-tag" data-testid="resolver">{value}</span>;
+  if (column === "reason" && typeof value === "string") {
+    const why = value === "low" ? "the confidence was below the bound" : value === "absent" ? "no confidence was recorded (answered by hand)" : value === "null" ? "the confidence was null" : "";
+    return <span className="status-tag check-fired" data-testid="reason" title={why}>{value}</span>;
+  }
+  if (column === "source_class" && typeof value === "string") return <span className={`status-tag class-${value}`} data-testid="source-class">{value}</span>;
+  if (column === "run_ids" && Array.isArray(value)) {
+    const ids = value.filter((v): v is string => typeof v === "string");
+    const shown = ids.slice(0, 5);
+    return (
+      <span data-testid="run-ids">
+        {shown.map((id, i) => <span key={id}>{i ? ", " : ""}<a href={href({ page: "run-detail", id })}><code>{id}</code></a></span>)}
+        {ids.length > shown.length && <span className="muted"> and {ids.length - shown.length} more</span>}
+      </span>
+    );
+  }
   if (column === "stderr" && typeof value === "string") return value ? <pre className="stderr" data-testid="stderr">{value}</pre> : <span className="muted">empty</span>;
   if (column === "exit_code" && typeof value === "number") return <code data-testid="exit-code">{value}</code>;
   if (column === "name" && typeof value === "string") {
@@ -228,7 +246,7 @@ function render(column: string, value: unknown, row: GovernanceRow): React.React
   if (column === "revision" && typeof value === "string") return <code>{value.slice(0, 8)}</code>;
   if (column === "rate" && typeof value === "number") return `${Math.round(value * 100)}%`;
   if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3);
-  if (typeof value === "string") return column === "step" || column === "question" || column === "script" ? <code>{value}</code> : value;
+  if (typeof value === "string") return column === "step" || column === "question" || column === "script" || column === "router" || column === "code" ? <code>{value}</code> : value;
   if (Array.isArray(value)) return value.map((v, i) => <span key={i}>{i ? ", " : ""}<code>{String(v)}</code></span>);
   return <code>{JSON.stringify(value)}</code>;
 }

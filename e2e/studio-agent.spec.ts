@@ -95,7 +95,8 @@ test("start writes the folder and one prompt; the Studio checks the agent's edit
   expect(dir).toBe(path.join(WORKDIR, "studio", "billing-support"));
   expect(readFileSync(path.join(dir, "scripts", "escalate.py"), "utf8")).toContain("AIP-STUDIO-PLACEHOLDER");
   const prompt = await panel.getByTestId("agent-prompt-text").inputValue();
-  for (const s of ["Fill the placeholders. Be brief.", `\`${dir}\``, "`escalate` (execution)", "outputs: ticket_id: integer, queue: string", "step 3 (`escalate`): the description"]) {
+  for (const s of ["Fill the placeholders. Be brief.", `\`${dir}\``, "`start` (start)", "inputs (what the client supplies): message: string", "`escalate` (execution)",
+                   "outputs: ticket_id: integer, queue: string", "fallback: true", "step 4 (`escalate`): the description"]) {
     expect(prompt, s).toContain(s);
   }
   await expect(panel.getByTestId("agent-waiting")).toContainText("0 of 5 placeholder files written");

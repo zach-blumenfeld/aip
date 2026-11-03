@@ -29,14 +29,15 @@ Open `#/studio`, click **Import a skill zip…** and pick `expense-review.zip`. 
 ### 2. Read the graph
 
 ```
-extract → check-policy → by-policy ─ true  → approve ─┐
-                                   └ false → explain ─┴→ end
+start → extract → check-policy → by-policy ─ true  → approve ─┐
+                                           └ false → explain ─┴→ end
 ```
 
 | Step | Kind | What it does |
 |---|---|---|
+| `start` | start | Holds the procedure's one input, `receipt_text`, and hands the run to `extract`. |
 | `extract` | execution | A script reads `receipt_text` and outputs `amount`, `vendor`, `category`. |
-| `check-policy` | decision | Answers one yes/no question, `within_policy`. |
+| `check-policy` | decision | Answers one yes/no question, `within_policy`. It has `fallback: true` so the finished skill runs without a decision model (the comment in the YAML says so). |
 | `by-policy` | router | Branches on `within_policy`. |
 | `approve` | execution | A script reads `assets/limits.json` and outputs `approval_id`. |
 | `explain` | client_task | The agent running the skill writes `explanation` from the template `assets/explain.md`. |
@@ -48,6 +49,11 @@ Tick **data flow** to see which keys travel along each edge.
 
 The lint panel shows no errors, only unfinished items: `check-policy`, `approve` and `explain` have no
 description, and the `within_policy` question has no instructions. Leave them: the agent fills empty prose.
+
+There is one warning, `unmeasured_route` on `by-policy`: with `fallback: true`, the agent running the skill may
+answer `within_policy` by hand, and nothing records how sure it was. That is the price of running without a
+decision model. To measure the route instead, untick **fallback** on `check-policy`, tick `within_policy` under
+**confidence**, and give `by-policy` a confidence check on `within_policy_confidence`.
 
 If you change the design now, for example adding an output, keep the lint panel free of errors. The agent
 can't start while there are errors.

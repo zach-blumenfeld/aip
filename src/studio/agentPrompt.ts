@@ -1,6 +1,6 @@
 // The prompt for "Complete with an agent" (S6a). The instructions are a shipped default the user may edit per run
 // (the edit is saved with the draft); the frozen contract is generated from the Draft and always appended, so editing
-// the instructions can never drop it. A string export rather than a `.md` import, like runtime-0.6a1.ts, so
+// the instructions can never drop it. A string export rather than a `.md` import, like runtime-0.8.ts, so
 // Playwright's Node loader can import it too.
 
 import type { Draft, Step } from "./draft";
@@ -25,17 +25,22 @@ const io = (items: Step["inputs"]) => (items.length ? items.map((i) => `${i.name
 export function contract(draft: Draft, placeholders: Placeholder[], dir?: string): string {
   const name = (id: string | undefined) => draft.steps.find((s) => s.id === id)?.name ?? "(unset)";
   const lines = dir ? ["## The skill folder", "", `\`${dir}\``, ""] : [];
-  lines.push(`## The design (frozen)`, "", `Skill \`${draft.name}\`. Steps, in order; the first is the start:`, "");
+  lines.push(`## The design (frozen)`, "", `Skill \`${draft.name}\`. Steps, in order; the \`start\` step holds the procedure's inputs and names the first step that runs:`, "");
   for (const s of draft.steps) {
     lines.push(`- \`${s.name}\` (${s.kind})`);
     if (s.kind === "router") {
       lines.push(`  - branch_on: \`${s.branchOn ?? ""}\``);
+      if (s.check) lines.push(`  - confidence check: \`${s.check.key}\` below ${s.check.below ?? "(unset)"} → \`${name(s.check.to)}\` (fires too when the key is absent or null)`);
       for (const b of s.branches ?? []) lines.push(`  - \`${b.value}\` → \`${name(b.target)}\``);
       continue;
     }
-    lines.push(`  - inputs: ${io(s.inputs)}`);
+    lines.push(`  - ${s.kind === "start" ? "inputs (what the client supplies)" : "inputs"}: ${io(s.inputs)}`);
     if (s.kind === "execution" || s.kind === "client_task") lines.push(`  - outputs: ${io(s.outputs ?? [])}`);
-    if (s.kind === "decision") for (const q of s.questions ?? []) lines.push(`  - question \`${q.name}\` (${q.type}${q.type === "choice" ? `: ${q.criteria.map((c) => c.label).join(", ")}` : q.type === "score" ? `: ${q.criteria.length} levels` : ""})`);
+    if (s.kind === "decision") {
+      for (const q of s.questions ?? []) lines.push(`  - question \`${q.name}\` (${q.type}${q.type === "choice" ? `: ${q.criteria.map((c) => c.label).join(", ")}` : q.type === "score" ? `: ${q.criteria.length} levels` : ""})`);
+      if (s.confidence?.length) lines.push(`  - confidence: ${s.confidence.map((q) => `\`${q}_confidence\``).join(", ")} written to the state`);
+      lines.push(`  - fallback: ${s.fallback ? "true (a client with no decision model may answer by hand)" : "false (a decision model is required)"}`);
+    }
     if (s.script) lines.push(`  - script: \`${s.script}\`, launched with \`python ${s.script}\``);
     if (s.template) lines.push(`  - template: \`${s.template}\``);
     if (s.assets?.length) lines.push(`  - assets: ${s.assets.map((a) => `\`${a}\``).join(", ")}`);

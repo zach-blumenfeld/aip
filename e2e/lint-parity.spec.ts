@@ -6,7 +6,7 @@ import type { Draft, Step } from "../src/studio/draft";
 import { classifySources, lint, STUDIO_ONLY_ERRORS, STUDIO_ONLY_WARNINGS, type Tier } from "../src/studio/lint";
 import { RUNTIME_BLOCK } from "../src/studio/runtime-0.8";
 import { draftToSkillMd, skillMdToDraft } from "../src/studio/serialize";
-import { AIP_REPO, FIRST_REVISION_DIR } from "./aip";
+import { AIP_REPO, EXAMPLE_DIR } from "./aip";
 import { aipSpec, specIssues } from "./aip-spec";
 
 // Parity: the same skill text goes through `aip-spec validate` and the TypeScript linter, and the sets of codes
@@ -21,7 +21,7 @@ const SCHEMA_STAGE = new Set(["schema_violation", "invalid_name", "invalid_descr
 const SKILL_DIR_ISSUES = new Set(["missing_resource"]);
 const SEVERITIES = ["error", "warning", "info"] as const;
 
-const base = () => skillMdToDraft(readFileSync(path.join(FIRST_REVISION_DIR, "SKILL.md"), "utf8"));
+const base = () => skillMdToDraft(readFileSync(path.join(EXAMPLE_DIR, "SKILL.md"), "utf8"));
 const step = (d: Draft, name: string): Step => d.steps.find((s) => s.name === name)!;
 const inputs = (...names: [string, string][]) => names.map(([name, type]) => ({ name, type }));
 /** The example with its route measured: `fallback` off, so no warning at all; every source-class case starts here. */
@@ -171,7 +171,7 @@ const FIXTURES: Record<string, (d: Draft) => void> = {
 /** A skill folder named for the skill: billing-support's files, and the given SKILL.md. */
 function folder(root: string, name: string, skillMd: string): string {
   const dir = path.join(root, name || "unnamed");
-  cpSync(path.dirname(path.join(FIRST_REVISION_DIR, "SKILL.md")), dir, { recursive: true });
+  cpSync(path.dirname(path.join(EXAMPLE_DIR, "SKILL.md")), dir, { recursive: true });
   writeFileSync(path.join(dir, "SKILL.md"), skillMd);
   return dir;
 }

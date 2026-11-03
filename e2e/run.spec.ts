@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { SERVER, WORKDIR } from "./aip";
+import { CHECKED, CHECKED_REVISION_DIR, SERVER, WORKDIR, aip } from "./aip";
 
 // The run console drives `aip run --progress` and `aip resume --progress` through the console's process. The
 // CLI has no decision model here, so `triage` pauses for the page to answer; the router then sends angry
@@ -49,6 +49,7 @@ test("an angry message runs the escalation script on this machine", async ({ pag
   const runId = await startAndTriage(page, message, "angry");
 
   await expect(page.getByTestId("run-status")).toHaveText("done", { timeout: 20_000 });
+  // the start and end steps print no progress line
   const trace = page.getByTestId("trace").getByRole("listitem");
   await expect(trace).toHaveText([/triage.*decision.*manual/, /by-tone.*router.*escalate/, /escalate.*execution.*s$/]);
   await expect(page.getByTestId("final-state")).toContainText(message);
@@ -70,7 +71,49 @@ test("an angry message runs the escalation script on this machine", async ({ pag
   await expect(triage.getByTestId("attribution")).toHaveAttribute("data-resolver", "manual");
   await expect(triage.getByTestId("attribution")).toContainText("resolver manual");
   await expect(triage.locator('[data-question="tone"] [data-testid="answer-value"]')).toHaveText('"angry"');
+  await expect(triage.locator('[data-question="tone"] [data-testid="answer-confidence"]')).toContainText("none");
   await expect(page.locator('[data-testid="run-step"][data-step="escalate"]')).toContainText("ran on the client");
+});
+
+test("a decision with fallback off stops a client that has no decision model, and says so", async ({ page }) => {
+  // The run console with no model reaches `triage` of billing-checked: its decision allows a manual answer, so the
+  // page gets the form; the check then fires with reason `absent`, whatever the tone, and the run escalates.
+  await page.goto(`./#/run/${CHECKED}`);
+  const start = page.getByTestId("pause-start");
+  await start.getByLabel("message", { exact: true }).fill("Why was I billed $12? [checked]");
+  await start.getByRole("button", { name: "Start" }).click();
+  const decision = page.getByTestId("pause-decision");
+  await expect(decision).toBeVisible({ timeout: 20_000 });
+  await expect(decision.getByTestId("manual-confidence-note")).toContainText("tone_confidence");
+  await decision.getByRole("group", { name: "billing" }).getByRole("radio", { name: /^yes/ }).check();
+  await decision.getByRole("group", { name: "tone" }).getByRole("radio", { name: /^calm/ }).check();
+  const runId = (await page.getByTestId("run-id").textContent())!.trim();
+  await decision.getByRole("button", { name: "Answer" }).click();
+  await expect(page.getByTestId("run-status")).toHaveText("done", { timeout: 20_000 });
+  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage.*manual/, /by-tone.*escalate/, /escalate.*execution/]);
+  const run = await record(page, runId);
+  const route = run.history.find((h) => h.step === "by-tone")!;
+  expect(route.result).toMatchObject({ to: "escalate", confidence: { fired: true, reason: "absent" } });
+
+  // The same skill with `fallback: false` on its decision: the CLI stops before posting anything.
+  const strict = path.join(WORKDIR, "billing-strict");
+  cpSync(CHECKED_REVISION_DIR, strict, { recursive: true });
+  const md = path.join(strict, "SKILL.md");
+  writeFileSync(md, readFileSync(md, "utf8").replace(/^name: billing-checked$/m, "name: billing-strict").replace("    fallback: true\n", "    fallback: false\n"));
+  const published = aip(["publish", strict]).trim();
+  expect(published).toMatch(/billing-strict@/);
+  await page.goto("./#/run/billing-strict");
+  await page.getByTestId("pause-start").getByLabel("message", { exact: true }).fill("Charged twice. [strict]");
+  await page.getByRole("button", { name: "Start" }).click();
+  const error = page.getByTestId("run-error");
+  await expect(error).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("run-status")).toHaveText("failed");
+  await expect(error.getByTestId("error-kind")).toHaveText("no_decision_model");
+  await expect(error).toContainText("triage");
+  await expect(error.getByTestId("no-decision-model")).toContainText("fallback: false");
+  await expect(error.getByRole("button", { name: "Retry" })).toBeVisible();      // resumable once a key is configured
+  const object = JSON.parse((await error.getByTestId("error-object").textContent())!) as Record<string, unknown>;
+  expect(object).toMatchObject({ error: "no_decision_model", step: "triage", fallback: false, resumable: true });
 });
 
 test("a calm message pauses as a client task that is answered in the page", async ({ page }) => {
@@ -96,7 +139,7 @@ test("a calm message pauses as a client task that is answered in the page", asyn
   await expect(page.getByTestId("final-state")).toContainText("billed $12");
   const run = await record(page, runId);
   expect(run.status).toBe("done");
-  expect(run.history.map((h) => h.step)).toEqual(["triage", "by-tone", "reply", "end"]);
+  expect(run.history.map((h) => h.step)).toEqual(["start", "triage", "by-tone", "reply", "end"]);
 });
 
 test("a failing script shows the error object, and retry resumes once the cause is fixed", async ({ page }) => {

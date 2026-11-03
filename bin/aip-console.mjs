@@ -39,9 +39,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The oldest `aip` this console speaks to: 0.7.0, the first release on PyPI (`agent-instruction-protocol`, with
- *  `aip-spec` beside it). The CLI JSON contract (docs/cli-json.md) and the run history it needs date from 0.6a0. */
-export const MINIMUM_AIP = "0.7.0";
+/** The oldest `aip` this console speaks to: 0.8.0, format 0.8 (`agent-instruction-protocol`, with `aip-spec` beside
+ *  it): the `start` step, decision `confidence` and `fallback`, the router's confidence check and the
+ *  `no_decision_model` stop in the CLI JSON contract (docs/cli-json.md) all date from it. */
+export const MINIMUM_AIP = "0.8.0";
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const TYPES = {
