@@ -39,6 +39,9 @@ Format `0.8`, the first format change since `0.6a1`, and it is breaking: a skill
 ### Removed
 - `thresholds` on a decision, `thresholds_of`, `flag`, `threshold` and the default margins in the engine; the `review` pause and `proposed_answers` everywhere; `reviewed` and `proposed` in a decision's attribution; `unknown_threshold_question` (now `unknown_confidence_question`); `invalid_start_step` (the start-step rules replace it); the `overridden-decisions` governance query; `Question.threshold` and `Answer.accepted|reviewed|overridden` in Neo4j. Format `0.6a1` skills no longer load; `aip upgrade` moves them.
 
+### Fixed
+- **The filesystem backend starts on native Windows** ([#24](https://github.com/zach-blumenfeld/aip/issues/24)). It imported the Unix-only `fcntl` module at load, so `aip server --backend filesystem` died with `ModuleNotFoundError` before listening. The catalog and run-file locks now go through `aip.server.backends.filelock`: `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, the same exclusive, blocking lock on both.
+
 ## [0.7.0] — 2026-11-02
 
 The format and the runtime live in one repository and ship from PyPI under one version. Nothing about the format changes: `FORMAT_VERSION` stays `0.6a1`, and skills authored for 0.6a1 need no change. Upgrading is one command, the installer, which also removes the pre-0.7.0 install and the authoring skill's old folder (`docs/upgrading.md`).

@@ -2,7 +2,7 @@
 
     <root>/
     ├── catalog.json                 names -> {pinned, revisions: [{revision, published_at, retired}]}
-    ├── catalog.lock                 flock target; catalog.json is the only file ever rewritten
+    ├── catalog.lock                 lock target; catalog.json is the only file ever rewritten
     ├── skills/<name>/<revision>/    one revision
     │   ├── .aip-manifest.json       the record minus file bytes: manifest (path, size, sha256, mode)
     │   │                            plus the projection rows, so `get` never re-parses the skill
@@ -22,7 +22,6 @@ on publish, pin, and retire. Governance queries scan the run files with the help
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -37,6 +36,7 @@ from typing import Any, Dict, Iterator, List
 
 from aip.server import governance
 from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
+from aip.server.backends.filelock import lock_exclusive, unlock
 from aip.server.search import BM25Index
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, materialize)
@@ -86,11 +86,11 @@ class FilesystemCatalog:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         with open(self.lock_path, "a+") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            lock_exclusive(fh)
             try:
                 yield
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                unlock(fh)
 
     def _read_catalog(self) -> Dict[str, JSON]:
         if not self.catalog_path.exists():
@@ -307,7 +307,7 @@ class FilesystemRuns:
         if state is not None:
             row.update(state=state, after=after)
         with open(path, "r+") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            lock_exclusive(fh)
             try:
                 version = sum(1 for line in fh.read().splitlines() if line.strip()) - 1
                 if expected is not None and expected != version:
@@ -317,7 +317,7 @@ class FilesystemRuns:
                 fh.flush()
                 os.fsync(fh.fileno())
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                unlock(fh)
         return version + 1
 
     def get(self, run_id: str) -> RunRecord:
