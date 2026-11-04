@@ -3,6 +3,8 @@ environment and the flags (`aip.server.config`)."""
 
 from pathlib import Path
 
+import os
+
 import pytest
 
 from aip.server.config import EXAMPLE, ConfigError, apply_config, load_env_file, parse_env_file, read_config
@@ -99,7 +101,8 @@ def test_init_writes_the_user_file_and_the_server_finds_it(tmp_path: Path, monke
     assert server_command(["--init"]) == 0
     target = tmp_path / "cfg" / "server.toml"
     assert user_config_path() == target and target.read_text() == EXAMPLE
-    assert (target.stat().st_mode & 0o777) == 0o600
+    if os.name != "nt":                                   # Windows has no POSIX mode bits
+        assert (target.stat().st_mode & 0o777) == 0o600
     assert str(target) in capsys.readouterr().out
     assert find_config(None) == target
     (tmp_path / "aip-server.toml").write_text("")

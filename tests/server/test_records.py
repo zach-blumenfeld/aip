@@ -98,7 +98,8 @@ def test_binary_files_and_modes_survive(tmp_path):
     assert f.encoding == "base64"
     out = materialize(b, tmp_path / "rebuilt")
     assert (out / "assets" / "logo.bin").read_bytes() == blob
-    assert (out / "scripts" / "escalate.py").stat().st_mode & 0o777 == 0o755
+    if os.name != "nt":                                   # Windows has no POSIX mode bits
+        assert (out / "scripts" / "escalate.py").stat().st_mode & 0o777 == 0o755
 
 
 def test_materialize_rejects_tampered_content(tmp_path):

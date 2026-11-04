@@ -180,7 +180,7 @@ class CliJson(unittest.TestCase):
         self.assertIn(REQUIRES, text)
         text = text.replace(REQUIRES, requires)
         if script is not None:
-            (skill / "scripts" / name).write_text(script)
+            (skill / "scripts" / name).write_text(script, newline="\n")   # a bash script needs LF on Windows too
             launch = f"    command: {json.dumps(command)}\n" if command else ""
             text = text.replace("    script: scripts/escalate.py\n", f"    script: scripts/{name}\n{launch}")
         md.write_text(text)

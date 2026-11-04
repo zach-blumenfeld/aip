@@ -424,6 +424,7 @@ class Cli(Both):
             with self.patched(h), mock.patch("sys.stdout", new=out):
                 self.assertEqual(main(["resume", "0123456789abcdef"]), EXIT_ERROR)
             self.assertIn("no run '0123456789abcdef'", json.loads(out.getvalue())["message"])
+            os.chdir(cwd)                                  # before the temp dirs go: Windows cannot delete the cwd
 
     def test_errors_are_one_json_object(self):
         """A bad start input and an unknown skill: one error object on stdout, exit 1, nothing on
