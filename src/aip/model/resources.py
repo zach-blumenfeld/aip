@@ -27,8 +27,9 @@ class Resource(ABC):
         pass
 
     def summary(self) -> Dict[str, str]:
-        """Lazy form: enough for a client to decide whether to fetch the body."""
-        return {"uri": str(self.uri), "description": self.description}
+        """Lazy form: enough for a client to decide whether to fetch the body. The uri is
+        written with forward slashes on every platform; it is shared, a path on disk is not."""
+        return {"uri": self.uri.as_posix(), "description": self.description}
 
 
 class Asset(Resource):
