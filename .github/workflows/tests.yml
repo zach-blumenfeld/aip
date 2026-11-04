@@ -2,9 +2,8 @@
 #
 # The Windows job exists because the server must start there (#24: the filesystem backend
 # imported the Unix-only `fcntl`); `tests/server/test_filelock.py` exercises the `msvcrt`
-# lock for real only on this runner. It is `continue-on-error` for now, so an unrelated
-# Windows failure reports red on the job but does not block a merge; drop that line once
-# the suite is known to pass on Windows. The Neo4j backend tests skip (no `NEO4J_URI`).
+# lock for real only on this runner. A test that needs something Windows lacks (POSIX mode
+# bits, a POSIX bash) skips there and says why. The Neo4j backend tests skip (no `NEO4J_URI`).
 name: Tests
 
 on:
@@ -16,7 +15,6 @@ jobs:
   tests:
     name: pytest (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
