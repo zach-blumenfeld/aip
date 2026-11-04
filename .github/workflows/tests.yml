@@ -36,4 +36,9 @@ jobs:
         run: uv sync --group dev
 
       - name: Run the tests
+        # The code under test names utf-8 on every text file it reads or writes; the tests' own
+        # fixtures use the platform default, which on Windows is the ANSI code page. UTF-8 mode
+        # (the default from Python 3.15) keeps the fixtures readable by the code.
+        env:
+          PYTHONUTF8: "1"
         run: uv run pytest -q

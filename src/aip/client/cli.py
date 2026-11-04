@@ -59,7 +59,7 @@ def schema_command(argv: list[str]) -> int:
 
     text = json.dumps(json_schema(), indent=2) + "\n"
     if args.write:
-        args.write.write_text(text)
+        args.write.write_text(text, encoding="utf-8")
         print(f"wrote {args.write}")
     else:
         sys.stdout.write(text)
@@ -85,7 +85,7 @@ def runtime_command(argv: list[str]) -> int:
     target = args.out / "aip-runtime" / "SKILL.md" if args.out is not None else args.write
     if target is not None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
+        target.write_text(text, encoding="utf-8")
         print(f"wrote {target}")
     else:
         sys.stdout.write(text)
@@ -209,7 +209,7 @@ def _read_input(spec: str | None) -> dict | None:
     if spec is None:
         return None
     try:
-        text = sys.stdin.read() if spec == "-" else Path(spec).read_text()
+        text = sys.stdin.read() if spec == "-" else Path(spec).read_text(encoding="utf-8")
         data = json.loads(text)
     except (OSError, ValueError) as exc:
         raise _BadInput(f"--input {spec}: {exc}") from exc

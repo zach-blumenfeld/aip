@@ -71,7 +71,7 @@ def upgrade_command(argv: list[str], prog: str = "aip-spec upgrade") -> int:
         print(f"{prog}: {skill_md} not found", file=sys.stderr)
         return 2
     try:
-        result = upgrade_skill_md(skill_md.read_text())
+        result = upgrade_skill_md(skill_md.read_text(encoding="utf-8"))
     except CannotUpgrade as exc:
         print(f"{prog}: {skill_md}: {exc}; nothing written", file=sys.stderr)
         return 2
@@ -90,12 +90,12 @@ def upgrade_command(argv: list[str], prog: str = "aip-spec upgrade") -> int:
             # Validation reads the folder (its scripts, assets, `source/`), so the result is checked on a copy.
             folder = Path(tmp) / args.skill_dir.resolve().name
             shutil.copytree(args.skill_dir, folder, ignore=agents.IGNORE)
-            (folder / "SKILL.md").write_text(result.text)
+            (folder / "SKILL.md").write_text(result.text, encoding="utf-8")
             loaded, issues = validate_skill(folder)
         verb = "would write" if result.version != FORMAT_VERSION else "unchanged"
     else:
         if result.version != FORMAT_VERSION:
-            skill_md.write_text(result.text)
+            skill_md.write_text(result.text, encoding="utf-8")
         loaded, issues = validate_skill(args.skill_dir)
         verb = "wrote" if result.version != FORMAT_VERSION else "unchanged"
     errors, suffix = _emit(issues)
@@ -115,7 +115,7 @@ def schema_command(argv: list[str]) -> int:
 
     text = json.dumps(json_schema(), indent=2) + "\n"
     if args.write:
-        args.write.write_text(text)
+        args.write.write_text(text, encoding="utf-8")
         print(f"wrote {args.write}")
     else:
         sys.stdout.write(text)
@@ -130,7 +130,7 @@ def runtime_command(argv: list[str]) -> int:
     parser.add_argument("--write", type=Path, default=None, help="write to this path instead of stdout")
     args = parser.parse_args(argv)
     if args.write:
-        args.write.write_text(runtime_text())
+        args.write.write_text(runtime_text(), encoding="utf-8")
         print(f"wrote {args.write}")
     else:
         sys.stdout.write(runtime_text())

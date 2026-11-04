@@ -710,7 +710,7 @@ def _remote_skill(server: Server, ref: str):
     text = server.file(ref, "SKILL.md").decode("utf-8")
     with tempfile.TemporaryDirectory() as tmp:
         md = Path(tmp) / "SKILL.md"
-        md.write_text(text)
+        md.write_text(text, encoding="utf-8")
         doc, issues = parse_skill_md(md)
     if doc is None:
         raise InvalidSkill(f"the server's SKILL.md for {ref} did not parse: " + "; ".join(i.message for i in issues))

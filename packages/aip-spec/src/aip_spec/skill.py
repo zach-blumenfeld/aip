@@ -62,7 +62,7 @@ def parse_skill_md(skill_md: Path) -> tuple[SkillDoc | None, list[Issue]]:
     if not skill_md.is_file():
         return None, [Issue(path, "missing_skill_md", "Skill folder is missing required SKILL.md")]
 
-    content = skill_md.read_text()
+    content = skill_md.read_text(encoding="utf-8")
     match = FRONTMATTER_PATTERN.match(content)
     if not match:
         return None, [Issue(path, "missing_frontmatter", "SKILL.md must begin with YAML frontmatter delimited by `---`")]
