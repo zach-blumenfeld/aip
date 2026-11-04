@@ -120,7 +120,7 @@ class GovernanceBackend(Protocol):
     def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50,
               repeats: int = 1) -> List[JSON]:
         """Rows for one of `aip.server.governance.QUERIES`, or a stored query, over the last `window`
-        runs (filtered to `name` when given; `repeats` is the threshold of `repeated-cycles`); raises
+        runs (filtered to `name` when given; `repeats` is the minimum count for `repeated-cycles`); raises
         NotFound for an unknown query and NotSupported for one this backend declines."""
 
     def store(self, name: str, description: str, cypher: str) -> JSON:

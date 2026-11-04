@@ -6,8 +6,11 @@ Two layers per skill revision, as in the original Neo4j projection:
   its exact bytes (text as UTF-8, anything else base64), size, sha256, and mode, plus
   the directory list. `materialize` rebuilds the folder byte for byte and verifies hashes.
 - **Projection** (queryable): the parsed procedure as plain JSON rows (`procedure`,
-  `steps`, `edges`, `branches`, `inputs`, `outputs`, `questions`, `resources`) that a graph
-  backend turns into nodes and edges and a filesystem backend simply stores.
+  `steps`, `edges`, `branches`, `inputs`, `outputs`, `questions`, `resources`, `issues`) that a
+  graph backend turns into nodes and edges and a filesystem backend simply stores. A router's
+  row carries the class of its source (`source_class`: deterministic, measured or unmeasured,
+  as the validator classifies it at publish) and its confidence check; a decision's carries
+  `fallback`; `issues` keeps the validator's warnings and infos, each named to its step.
 
 Identity: `name@revision`, where `revision` is a sha256 over every file's path and
 bytes. Publishing identical content is a no-op; changed content becomes a new
@@ -20,6 +23,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import stat
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -123,15 +127,16 @@ class SkillRecord:
     files: List[FileRecord]
     directories: List[str]
     procedure: JSON          # {"purpose", "trigger_when", "do_not_use_when", "anti_patterns", "start", "end", "requires"}
-    steps: List[JSON]
+    steps: List[JSON]        # + "fallback", "confidence" on a decision; "source_class", "check" on a router
     edges: List[JSON]        # {"from", "to"}
     branches: List[JSON]     # {"router", "value", "to"}
     inputs: List[JSON]       # {"step", "order", "name", "type", "description"}
-    questions: List[JSON]    # {"step", "order", "name", "type", "instructions", "criteria", "threshold"}
+    questions: List[JSON]    # {"step", "order", "name", "type", "instructions", "criteria", "confidence"}
     resources: List[JSON]    # {"step", "path", "role", "description"}
     published_at: str | None = None
     retired: bool = False
     outputs: List[JSON] = field(default_factory=list)   # {"step", "order", "name", "type", "description"}
+    issues: List[JSON] = field(default_factory=list)    # {"code", "severity", "step", "location", "message"}
 
     @property
     def id(self) -> str:
@@ -155,12 +160,33 @@ class SkillRecord:
         return cls(files=files, **d)
 
 
+_STEP_LOCATION = re.compile(r"body:\$\.steps\[(\d+)\]")
+
+
+def issue_rows(issues: List[Any], spec: Any) -> List[JSON]:
+    """The validator's warnings and infos as rows stored with the procedure: `{code, severity, step,
+    location, message}`, `step` the name of the step a `body:$.steps[N]` location points at."""
+    rows = []
+    for issue in issues:
+        if issue.severity == "error":
+            continue
+        m = _STEP_LOCATION.match(issue.location or "")
+        step = spec.steps[int(m.group(1))].name if m and int(m.group(1)) < len(spec.steps) else None
+        rows.append({"code": issue.kind, "severity": issue.severity, "step": step,
+                     "location": issue.location, "message": issue.message})
+    return rows
+
+
 def snapshot(skill_dir: Path) -> SkillRecord:
-    """Validate the skill and capture it: files for the artifact, the spec for the projection."""
-    from aip.spec import load_skill
+    """Validate the skill and capture it: files for the artifact, the spec for the projection, the
+    validator's warnings and infos and its class per router alongside."""
+    from aip.spec import validate_skill
 
     skill_dir = Path(skill_dir).resolve()
-    loaded = load_skill(skill_dir)
+    loaded, issues = validate_skill(skill_dir)
+    if loaded is None:
+        detail = "\n".join(f"  [{i.kind}] {i.message}" + (f" ({i.location})" if i.location else "") for i in issues)
+        raise ValueError(f"Invalid AIP skill at {skill_dir}:\n{detail}")
     fm, spec = loaded.frontmatter, loaded.spec
     files, directories = walk(skill_dir)
 
@@ -170,6 +196,9 @@ def snapshot(skill_dir: Path) -> SkillRecord:
                         "description": getattr(step, "description", None)}
         if step.kind == "router":
             record["branch_on"] = step.branch_on
+            record["source_class"] = loaded.routers.get(step.name)
+            check = step.confidence
+            record["check"] = None if check is None else {"key": check.key, "below": check.below, "to": check.to}
             for value, target in step.branches.items():
                 branches.append({"router": step.name, "value": value, "to": target})
         else:
@@ -179,12 +208,14 @@ def snapshot(skill_dir: Path) -> SkillRecord:
                 inputs.append({"step": step.name, "order": i, "name": item.name, "type": item.type.value,
                                "description": item.description})
         if step.kind == "decision":
+            record["fallback"] = step.fallback
+            record["confidence"] = list(step.confidence)
             for i, (qname, q) in enumerate(step.questions.items()):
                 criteria = q.criteria.model_dump(exclude_none=True) if hasattr(q.criteria, "model_dump") else q.criteria
                 questions.append({"step": step.name, "order": i, "name": qname, "type": q.type,
                                   "instructions": q.instructions,
                                   "criteria": json.dumps(criteria) if criteria is not None else None,
-                                  "threshold": step.thresholds.get(qname)})
+                                  "confidence": qname in step.confidence})
         if step.kind in ("execution", "client_task"):
             for i, item in enumerate(step.outputs):
                 outputs.append({"step": step.name, "order": i, "name": item.name, "type": item.type.value,
@@ -215,7 +246,7 @@ def snapshot(skill_dir: Path) -> SkillRecord:
                    "start": spec.start.name, "end": next(s.name for s in spec.steps if s.kind == "end"),
                    "requires": spec.requires.model_dump() if spec.requires is not None else None},
         steps=steps, edges=edges, branches=branches, inputs=inputs, outputs=outputs, questions=questions,
-        resources=resources,
+        resources=resources, issues=issue_rows(issues, spec),
     )
 
 

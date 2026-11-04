@@ -18,8 +18,9 @@ With no argument the client points where `aip config` points, which may be nowhe
 skill folders run. A folder argument is a skill folder or a folder of skill folders; runs are
 local and there is no catalog. A skill folder's path runs locally from any client, as on the
 command line. `decision_client=` injects a TypeSafe client; otherwise the configured key
-(`TYPESAFE_API_KEY`, `aip config --decision-model`) resolves decisions, and without one every
-decision pauses.
+(`TYPESAFE_API_KEY`, `aip config --decision-model`) resolves decisions, and without one a decision
+pauses where its author allowed a manual answer (`fallback: true`) and the run stops with a
+resumable `RunError` of kind `no_decision_model` where not.
 
 ## Running
 
@@ -34,9 +35,10 @@ print(result.state)                                     # aip.Done: the end step
 steps it until it stops; `skill` is a folder or a published `name[@revision]`, `workdir` where its
 scripts read and write files (default the current directory). It returns:
 
-- `aip.Paused`: `kind` (`decision`, `client_task`, `review`), `step`, `state` (the step's
-  declared inputs only), `run_id`, `run_file`, and the kind's own fields: `task`, `references`,
-  `answer_with`; `questions`; `proposed_answers`, `review`.
+- `aip.Paused`: `kind` (`decision`, `client_task`), `step`, `state` (the step's declared inputs
+  only), `run_id`, `run_file`, and the kind's own fields: `task`, `references`, `answer_with` for
+  a client task; `questions`, `confidence` (the questions whose `<question>_confidence` a model's
+  answer would write) and `fallback` for a decision.
 - `aip.Done`: `run_id`, `state`, `run_file`.
 
 `resume(run, answer=None)` answers a pause; `run` is the `Paused`, a run id, or a run file's path.
@@ -67,14 +69,14 @@ A resumable `RunError` is resumed like a pause, `client.resume(exc)`, once the c
 | `search(query, limit=10)` | `[Hit]`: `name`, `revision`, `score`, `description` | `aip search` |
 | `list()` | `[Entry]`: `name`, `description`, `pinned`, `latest`, `revisions`, `resolves` | `aip list` |
 | `info(skill)` | `SkillInfo`: `name`, `revision`, `start_step`, `inputs`, `result`, `example_input`, `data`, `summary()` | `aip info` |
-| `validate(folder)` | `Validation`: `valid`, `name`, `issues`, `errors`, `warnings` | `aip validate` |
+| `validate(folder)` | `Validation`: `valid`, `name`, `issues`, `errors`, `warnings`, `infos`; only errors make it invalid | `aip validate` |
 | `publish(folder)` | `Published`: `name`, `revision`, `id`, `warnings`; validates first, raising `InvalidSkill` | `aip publish` |
 | `get(ref, out=".")` | `Fetched`: `path`, `validation` | `aip get` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it) | `aip pin` |
 | `retire("name@revision")` | `Retired` | `aip retire` |
 | `runs(name=None, status=None, limit=50)` | `[RunSummary]` | `aip runs` |
 | `run_record(run_id)` | `RunRecord`: `status`, `pause`, `state`, `history`, from the server or a local run file | `aip runs <run_id>` |
-| `governance(query=None, *, name, window, limit)` | `[GovernanceQuery]`, or the query's rows | `aip governance` |
+| `governance(query=None, *, name, window, limit, repeats)` | `[GovernanceQuery]`, or the query's rows | `aip governance` |
 | `aip.settings()`, `aip.configure(server, token, decision_model, clear)` | `Settings` | `aip config` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under

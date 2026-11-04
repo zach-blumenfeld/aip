@@ -4,12 +4,14 @@ A run stops one of three ways, and the runner prints one JSON object for each; t
 are a contract, documented in `docs/cli-json.md`:
 
 - **paused**: the client must answer. `client_task` (do the step's work), `decision` (no
-  decision model on this client: answer the questions), `review` (this client's decision model
-  answered a question under its threshold: confirm or override). Each pause carries only the paused step's declared inputs
-  as `state`; the answer is merged over the state the run file holds.
+  decision model on this client and the step allows `fallback`: answer the questions). Each
+  pause carries only the paused step's declared inputs as `state`; the answer is merged over
+  the state the run file holds.
 - **done**: the end step was reached; `state` is the end step's inputs.
 - **error**: a step failed. The run file keeps the state before the failing step, and
-  `resume` with no input retries it. A bad answer to a pause leaves the pause in place.
+  `resume` with no input retries it. A bad answer to a pause leaves the pause in place, and so
+  does `no_decision_model`: a decision with `fallback: false` on a client with no decision
+  model, resumed once a model is configured.
 
 The loop itself is `aip.model.engine`, run by the backend: in this process for a skill folder,
 on the server for a published name. The SDK's `Driver` (`aip.sdk`) turns each stop into a
@@ -72,7 +74,7 @@ class RunFile:
     `after`, `state`, `history`); a served run's only a handle (`server`, `name`, `revision`,
     `version`): the server holds the rest. Both hold `run_id`, the run's working directory
     (`workdir`, where its scripts read and write files), and the pending `pause`
-    (`{"kind": "client_task"|"review"|"decision"|"error"|"done", "step", ...}`). Unset fields
+    (`{"kind": "client_task"|"decision"|"error"|"done", "step", ...}`). Unset fields
     are left out of the file."""
     pause: JSON
     run_id: str | None = None
@@ -101,7 +103,7 @@ class RunFile:
         data = json.loads(Path(path).read_text())
         if "suggested" in data:                  # written before 0.6a0
             data["state"] = data.pop("suggested")
-        data.pop("thresholds", None)             # before B1: thresholds are the author's alone now
+        data.pop("thresholds", None)             # written by a client before format 0.8
         return cls(**data)
 
 
@@ -220,7 +222,7 @@ class Runner:
         if kind == "client_task":
             self.out.write("\n" + pause["task"] + "\n\n")
             return self._prompt_inputs(pause["answer_with"])
-        return self._prompt_review(pause["review"], pause["proposed_answers"])
+        raise ValueError(f"a {kind!r} pause takes no answer")
 
     def _prompt_inputs(self, expects: JSON) -> JSON:
         """One prompt per declared key, typed from the vocabulary."""
@@ -259,21 +261,6 @@ class Runner:
                     self.out.write(f"  pick 0..{len(q['criteria']) - 1}\n")
                 answers[name] = level
         return answers
-
-    def _prompt_review(self, review: List[JSON], proposed: JSON) -> JSON:
-        """Only the overrides: an empty answer keeps the model's."""
-        overrides: JSON = {}
-        for item in review:
-            name = item["question"]
-            self.out.write(f"\n{name}: {item['reason']}  (model says {json.dumps(proposed.get(name))})\n")
-            if "probabilities" in item:
-                self.out.write("  " + json.dumps(item["probabilities"]) + "\n")
-            raw = self.prompt(f"  keep {json.dumps(proposed.get(name))}? enter to keep, or a new value: ").strip()
-            if raw:
-                current = proposed.get(name)
-                dtype = "boolean" if isinstance(current, bool) else "integer" if isinstance(current, int) else "string"
-                overrides[name] = _coerce(raw, dtype)
-        return overrides
 
 
 def _coerce(raw: str, dtype: str) -> Any:

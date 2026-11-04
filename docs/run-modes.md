@@ -37,11 +37,14 @@ racing on one run exactly one is applied (the other gets a 409). The client neve
 resends accumulated state. The client runs every script next to its data, with the run's
 working directory as `AIP_WORKDIR`, and posts the output (or the exit code and stderr); the
 server never runs user code. At a decision the server sends the questions, the step's declared
-inputs, and the author's thresholds; the client asks its own decision model (if it has a key),
-pauses for review when an answer falls under its threshold, and posts the answers with
-attribution (`resolver`, `model`, `confidence`, `reviewed`), or the agent's answers as
-`manual`. The server checks the answers against the question types and records the
-attribution in the history; it holds no model key.
+inputs, the questions whose `confidence` the step writes into the state, and whether the author
+allows a manual answer (`fallback`); the client asks its own decision model (if it has a key) and
+posts the answers with attribution (`resolver`, `model`, `confidence` per question), or, with no
+key, the agent's answers as `manual` where `fallback: true` allows it, and otherwise stops with
+`no_decision_model` until a key is configured. The server checks the answers against the question
+types, writes the `<question>_confidence` keys from a model's attribution, and records the
+attribution in the history; it holds no model key. A router's confidence check then runs on the
+server like any routing.
 
 ## Why pick each
 
@@ -52,8 +55,8 @@ in the folder, not a pinned revision. Anyone with the folder can edit it
 and nothing notices.
 
 **Served run.** Anything more than one person or one agent. You get discovery (`aip search`), a
-pinned revision per run (its thresholds are the author's, so its behaviour is fixed by the
-revision), a run history that governance queries and the console read, and a client that only
+pinned revision per run (its decisions' `fallback` and its routers' confidence checks are the
+author's, so its behaviour is fixed by the revision), a run history that governance queries and the console read, and a client that only
 ever carries what the current step needs, which is what lets a small model run a long procedure. Costs: a server to operate, a token, and
 the trust that the client runs the scripts it is handed and reports honestly, the same
 trust as a CI runner.

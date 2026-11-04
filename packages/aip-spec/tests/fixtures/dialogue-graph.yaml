@@ -1,5 +1,7 @@
 # The procedure block of aip-skillbench's dialogue-parser skill (generated-skills/dialogue-parser/
-# aip-from-curated/dialogue-graph), verbatim as authored for format 0.5a1.
+# aip-from-curated/dialogue-graph), as authored for format 0.5a1, moved to 0.8: a start step
+# carries what was the first step's inputs, the decision's thresholds are gone, and it keeps
+# `fallback: true`, since a 0.5a1 run could always be answered by hand.
 purpose: >
   Convert a text dialogue script into a dialogue graph: one node per [NodeId] block
   (type "line" with speaker and text, or type "choice" for numbered-option hubs), one edge
@@ -20,13 +22,20 @@ do_not_use_when:
   - The task is writing new narrative content rather than structuring an existing script.
 
 steps:
+  - name: start
+    kind: start
+    inputs:
+      - name: task_instructions
+        type: string
+        description: The task's own instructions/spec for the output, verbatim ("" if none were given).
+    inputs_to: conventions
+
   - name: conventions
     kind: decision
     description: Read the task's wording to fix End handling and choice-edge text before parsing.
     inputs:
       - name: task_instructions
         type: string
-        description: The task's own instructions/spec for the output, verbatim ("" if none were given).
     questions:
       end_node:
         type: choice
@@ -48,9 +57,7 @@ steps:
         criteria:
           verbatim: The full option line before "->", e.g. "4. [Observe] Study the room from the shadows."
           strip_number: Option text without the leading number, e.g. "[Observe] Study the room from the shadows."
-    thresholds:
-      end_node: 0.7
-      choice_text: 0.7
+    fallback: true
     inputs_to: build
 
   - name: build

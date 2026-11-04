@@ -38,8 +38,12 @@ paused step's declared inputs only, never the whole run's state.
 ### `decision`: answer the questions
 
 No decision model is configured on this client (`TYPESAFE_API_KEY`, or `aip config
---decision-model KEY`), so the agent answers in its place. It gets what the model would have:
-`questions` and `state`. The run's history records the answer with `"resolver": "manual"`.
+--decision-model KEY`), and the step allows a manual answer (`fallback: true` in SKILL.md), so
+the agent answers in its place. It gets what the model would have: `questions` and `state`.
+`confidence` names the questions whose confidence the step would write to the state as
+`<question>_confidence` had a model answered; a manual answer writes none, and the run's
+history records it with `"resolver": "manual"` and no confidence. A decision with `fallback:
+false` never pauses this way: with no model it is the `no_decision_model` error below.
 
 <!-- cli-json: paused-decision -->
 ```json
@@ -63,6 +67,10 @@ No decision model is configured on this client (`TYPESAFE_API_KEY`, or `aip conf
   "state": {
     "message": "I was charged twice for March. Could you check?"
   },
+  "confidence": [
+    "tone"
+  ],
+  "fallback": true,
   "run_id": "4f1c9a2e7b3d5068",
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
@@ -71,6 +79,11 @@ No decision model is configured on this client (`TYPESAFE_API_KEY`, or `aip conf
 Answer: one key per question, `{"billing": true, "tone": "calm"}`. A `noul` is `true`/`false`, a
 `choice` one of its `criteria` labels, a `score` the level number (its position in `criteria`,
 from 0). The questions define the answer's shape, so there is no `answer_with`.
+
+In `billing-support` the next step, the router `by-tone`, checks `tone_confidence` before it
+branches, and a manual answer never writes it: answered by hand, the run is escalated whichever
+tone was given. The client task below is where a decision model confident the tone is calm
+sends the run.
 
 ### `client_task`: do the step's work
 
@@ -102,47 +115,6 @@ from 0). The questions define the answer's shape, so there is no `answer_with`.
 `references` are named, not loaded. `answer_with` is the step's declared `outputs` with their
 types; the answer must hold every one of them: `{"reply": "..."}`.
 
-### `review`: confirm or override the model
-
-This client's decision model answered, but at least one question fell under its threshold (the
-author's, from SKILL.md). Nothing is recorded yet: on a served run the server still waits at the
-decision, and the review exists only in the run file. Once answered, the history records the
-final answers with `"resolver": "typesafe"`, `"reviewed": true`, and the model's
-`proposed` answers beside them.
-
-<!-- cli-json: paused-review -->
-```json
-{
-  "paused": "review",
-  "step": "triage",
-  "state": {
-    "message": "I was charged twice for March. Could you check?"
-  },
-  "proposed_answers": {
-    "billing": true,
-    "tone": "angry"
-  },
-  "review": [
-    {
-      "question": "tone",
-      "type": "choice",
-      "confidence": 0.58,
-      "probabilities": {
-        "angry": 0.58,
-        "calm": 0.42
-      },
-      "reason": "confidence below 0.6"
-    }
-  ],
-  "run_id": "4f1c9a2e7b3d5068",
-  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
-}
-```
-
-Answer: only the overrides, `{"tone": "calm"}`, or `{}` to accept every proposed answer. A
-`noul` review item carries `noul` (the probability of true) instead of `confidence` and
-`probabilities`.
-
 ## Done
 
 <!-- cli-json: done -->
@@ -159,7 +131,13 @@ Answer: only the overrides, `{"tone": "calm"}`, or `{}` to accept every proposed
 
 `state` is the procedure's result: the state projected to the end step's `inputs`. What each
 step produced along the way is in the run's history: the run file's `history` for a local run,
-`GET /runs/{run_id}` for a served one.
+`GET /runs/{run_id}` for a served one. The first entry is the start step's (`"kind": "start"`,
+its `input` the start input). A decision's entry carries the answer's `attribution`
+(`resolver`, `model`, `confidence` per question; `null` for a manual answer). A router's entry
+records the key it read and `"result": {"to": <step>}`; a router with a confidence check also
+records the key it checked under `input` and, beside `to`, `"confidence": {"fired": true|false,
+"reason": "low"|"absent"|"null"|null}`: the check fires when the key is below the bound, and
+just the same when it is absent (a manual answer) or null.
 
 ## Error
 
@@ -173,6 +151,7 @@ Every error has `error` (the kind), `step` (the failing step; `null` when no ste
 | `invalid_input` | the state lacks a key the step declares, or holds it with the wrong type, or a router's key has no branch | `missing`, `invalid` |
 | `invalid_output` | a result does not match the step's outputs: a script's (then `script` is set), or an answer to a pause | `missing`, `invalid` |
 | `requires_unmet` | the machine lacks what the skill's `requires` block names, checked before the first script runs | `missing` |
+| `no_decision_model` | the run reached a decision with `fallback: false` and this client has no decision model; the run waits at the decision | `fallback` |
 | `server` | anything else: an unknown skill or folder, an unreachable server, a bug | `status` on a served run (the HTTP status) |
 
 `missing` names keys that are absent; `invalid` names keys that are mistyped, undeclared, or
@@ -236,6 +215,24 @@ installed. Here the skill also asked for package `nosuchpkg` and tool `nosuchtoo
 }
 ```
 
+A decision whose author did not allow a manual answer needs a decision model on this client.
+With none configured the run stops before the decision, resumable: set `TYPESAFE_API_KEY` or
+run `aip config --decision-model KEY`, then `aip resume <run_id>` with no input asks the model.
+Here `billing-support` was run with `fallback: false` on `triage`:
+
+<!-- cli-json: error-no-decision-model -->
+```json
+{
+  "error": "no_decision_model",
+  "step": "triage",
+  "message": "step 'triage' is a decision with `fallback: false` and this client has no decision model: set TYPESAFE_API_KEY or run `aip config --decision-model KEY`, then resume the run",
+  "fallback": false,
+  "run_id": "4f1c9a2e7b3d5068",
+  "resumable": true,
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
+}
+```
+
 An error before any step ran (a start input missing a key, an unknown skill) is not resumable
 and writes no run file; its `run_id` is `null` on a local run: fix the input and `aip run` again.
 
@@ -243,9 +240,9 @@ and writes no run file; its `run_id` is `null` on a local run: fix the input and
 
 One line per completed step, in order: `{"event": "step", "step", "kind"}` plus `to` for a
 router (the branch taken), `resolver` for a decision (`typesafe` or `manual`), `seconds` for an
-execution step (wall time; `<seconds>` below stands for a number). A client task's or a
-reviewed decision's line is printed when its answer is accepted, by the `resume` that carries
-it. The end step has no line: the final object follows.
+execution step (wall time; `<seconds>` below stands for a number). A client task's line is
+printed when its answer is accepted, by the `resume` that carries it. The start and end steps
+have no line: the start input is what was given, and the final object follows the end.
 
 The angry branch, resumed after the decision pause with `{"billing": true, "tone": "angry"}`:
 
@@ -265,5 +262,5 @@ reads it at startup and refuses an `aip` below its minimum.
 
 <!-- cli-version -->
 ```text
-aip 0.7.0 format 0.6a1
+aip 0.8.0 format 0.8
 ```

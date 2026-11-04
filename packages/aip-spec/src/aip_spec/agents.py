@@ -97,7 +97,7 @@ def frontmatter(folder: Path) -> dict:
     import yaml
 
     try:
-        match = FRONTMATTER_PATTERN.match((folder / "SKILL.md").read_text())
+        match = FRONTMATTER_PATTERN.match((folder / "SKILL.md").read_text(encoding="utf-8"))
         front = yaml.safe_load(match.group(1)) if match else None
     except (OSError, yaml.YAMLError):
         return {}

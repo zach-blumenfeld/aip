@@ -14,6 +14,7 @@ from pathlib import Path
 from aip_spec import example_dir
 from typesafe_sdk import SystemOneResponse
 
+from aip.model import OutputValidationError
 from aip.spec.loader import load_procedure
 
 EXAMPLE = example_dir("billing-support")
@@ -48,15 +49,20 @@ class LoaderEndToEnd(unittest.TestCase):
     def test_example_loads_and_runs_through_the_server_path(self):
         jev = FakeJev()
         proc = load_procedure(EXAMPLE, client=jev)
-        self.assertEqual(proc.describe()["steps"],
-                         {"triage": "decision", "by-tone": "router", "escalate": "execution", "end": "end", "reply": "client_task"})
+        described = proc.describe()
+        self.assertEqual(described["steps"], {
+            "start": "start", "triage": "decision", "by-tone": "router", "escalate": "execution", "end": "end",
+            "reply": "client_task"})
+        self.assertEqual(described["start"], {"step": "start", "kind": "start", "inputs": {"message": "string"}})
+        self.assertEqual(described["decisions"]["triage"]["fallback"], True)   # the quickstart answers by hand
         self.assertEqual(proc.meta.name, "billing-support")
 
-        r1 = proc.run(None, {"message": "I was charged twice!"})
+        r0 = proc.run(None, {"message": "I was charged twice!"})          # the start step hands the input on
+        self.assertEqual((r0.ran, r0.next["step"]), ("start", "triage"))
+        r1 = proc.run(r0.ran, r0.suggested, r0.history)
         self.assertEqual(set(jev.questions), {"billing", "tone"})
         self.assertEqual(jev.questions["tone"].criteria["angry"], "Frustrated, demanding, or threatening to leave.")
         self.assertEqual(r1.suggested["tone"], "angry")
-        self.assertEqual(r1.review, [])
         self.assertEqual(r1.next["branch_on"], "tone")
 
         r2 = proc.run(r1.ran, r1.suggested, r1.history)  # server routes to escalate and runs the real script
@@ -71,7 +77,24 @@ class LoaderEndToEnd(unittest.TestCase):
 
         r4 = proc.run(r2.ran, r2.suggested, r2.history)
         self.assertEqual((r4.ran, r4.next), ("end", None))
-        self.assertEqual([h["step"] for h in r4.history], ["triage", "by-tone", "escalate", "end"])
+        self.assertEqual([h["step"] for h in r4.history], ["start", "triage", "by-tone", "escalate", "end"])
+
+    def test_confidence_and_fallback_load_onto_the_runtime_nodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = copy_example(tmp)
+            rewrite(skill, "    fallback: true\n", "    fallback: false\n")      # the example already names `tone` and checks it
+            proc = load_procedure(skill, client=FakeJev())
+            triage, router = proc.nodes["triage"], proc.nodes["by-tone"]
+            self.assertEqual((triage.confidence, triage.fallback), (["tone"], False))
+            self.assertEqual((router.confidence.key, router.confidence.below), ("tone_confidence", 0.6))
+            self.assertIs(router.confidence.to, proc.nodes["escalate"])
+            self.assertEqual(proc.describe()["routers"]["by-tone"]["confidence"]["to"], "escalate")
+
+            r0 = proc.run(None, {"message": "I was charged twice!"})
+            r1 = proc.run(r0.ran, r0.suggested, r0.history)
+            self.assertEqual(r1.suggested["tone_confidence"], 0.9)
+            with self.assertRaises(OutputValidationError):               # no fallback: a manual answer is refused
+                triage.accept_answers(r0.suggested, r0.history, {"billing": True, "tone": "angry"})
 
     def test_invalid_skill_raises_with_issues(self):
         with tempfile.TemporaryDirectory() as tmp:

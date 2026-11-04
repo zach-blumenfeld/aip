@@ -1,7 +1,9 @@
 """Tests for `aip run` / `aip resume`: the runner loop over both backends.
 
-Drives the bundled example skill with a stub decision model, and without one to
-exercise the manual-answer fallback. Scripts run for real. Every test runs twice: once
+Drives the bundled example skill with a stub decision model, and without one to exercise
+the manual answer its decision allows (`fallback: true`); variants of it with `fallback` off
+and with a confidence check on its router cover the stop without a model and the check.
+Scripts run for real. Every test runs twice: once
 over `LocalBackend`, once over `HttpBackend` against an in-process server (FastAPI's
 test client) with the example published, where the server holds the run, the run file
 carries only the server, revision, `run_id` and pause, and `resume` rebuilds the backend
@@ -11,6 +13,7 @@ from it.
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,7 +34,33 @@ EXAMPLE = example_dir("billing-support")
 
 def result_of(history: list, step: str) -> dict:
     """What a step produced, from the run history: the final state holds only the end step's inputs."""
-    return next(e["result"] for e in history if e["step"] == step)
+    return entry_of(history, step)["result"]
+
+
+def entry_of(history: list, step: str) -> dict:
+    return next(e for e in history if e["step"] == step)
+
+
+FALLBACK = "    fallback: true\n"
+CONFIDENCE = "    confidence: [tone]\n"
+CHECK = "    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n"
+
+
+def variant(tmp: str, fallback: bool = True, check: bool = True) -> Path:
+    """billing-support with `fallback` off on `triage`, or without the check the example ships
+    (`triage` emitting `tone_confidence` and `by-tone` sending the run to `escalate` when it is
+    below 0.6 or missing)."""
+    skill = Path(tmp) / "billing-support"
+    shutil.copytree(EXAMPLE, skill)
+    md = skill / "SKILL.md"
+    text = md.read_text()
+    assert FALLBACK in text and CONFIDENCE in text and CHECK in text
+    if not fallback:
+        text = text.replace(FALLBACK, "    fallback: false\n")
+    if not check:
+        text = text.replace(CONFIDENCE, "").replace(CHECK, "")
+    md.write_text(text)
+    return skill
 
 
 class FakeJev:
@@ -52,18 +81,18 @@ class FakeJev:
 class Harness:
     """One backend per test: the example folder in-process, or an in-process server with it published."""
 
-    def __init__(self, kind: str, tmp: str, client):
-        self.kind, self.client = kind, client
+    def __init__(self, kind: str, tmp: str, client, skill: Path = EXAMPLE):
+        self.kind, self.client, self.skill = kind, client, skill
         self.api = self.server = None
         if kind == "http":
             app = create_app(FilesystemBackend(Path(tmp) / "root"))   # holds no model: the client resolves
             self.api = TestClient(app, raise_server_exceptions=False)
-            assert self.api.post("/catalog", json=upload_of(EXAMPLE)).status_code == 201
+            assert self.api.post("/catalog", json=upload_of(skill)).status_code == 201
             self.server = Server("http://testserver", session=self.api)
 
     def backend(self, run: RunFile | None = None):
         if self.kind == "local":
-            return LocalBackend(EXAMPLE, client=self.client)
+            return LocalBackend(self.skill, client=self.client)
         if run is None:
             return HttpBackend(self.server, name="billing-support", client=self.client)
         return backend_for(run, session=self.api, client=self.client)   # what `aip resume` does
@@ -88,8 +117,8 @@ class Both(unittest.TestCase):
     """Subclasses set BACKEND; the Http* classes below re-run every test over the server."""
     BACKEND = "local"
 
-    def harness(self, tmp, client):
-        return Harness(self.BACKEND, tmp, client)
+    def harness(self, tmp, client, skill: Path = EXAMPLE):
+        return Harness(self.BACKEND, tmp, client, skill)
 
     def assert_run_file_points_at_the_server(self, run: RunFile):
         """Served, the run file is a handle: the server holds the state and history."""
@@ -117,77 +146,105 @@ class NonInteractive(Both):
             self.assertEqual(set(printed), {"done", "run_id", "state", "run_file"})
             history = h.history(outcome)                               # the run file's, or the server's
             self.assertEqual(result_of(history, "escalate")["queue"], "tier2")
-            self.assertEqual(history[2]["input"], {"message": "I was charged twice!", "tone": "angry"})
-            self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "escalate", "end"])
-            self.assertEqual(history[0]["result"], {"answers": {"billing": True, "tone": "angry"}})
-            self.assertEqual(history[0]["attribution"], {"resolver": "typesafe", "model": "jev-1",
-                                                         "confidence": {"billing": 0.97, "tone": 0.95},
-                                                         "reviewed": False})
+            self.assertEqual(entry_of(history, "escalate")["input"], {"message": "I was charged twice!", "tone": "angry"})
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "escalate", "end"])
+            self.assertEqual(history[0]["result"], {})                                 # the start step's entry
+            self.assertEqual(history[1]["result"], {"answers": {"billing": True, "tone": "angry"}})
+            self.assertEqual(history[1]["attribution"], {"resolver": "typesafe", "model": "jev-1",
+                                                         "confidence": {"billing": 0.94, "tone": 0.95}})
             if self.BACKEND == "http":                                 # the server recorded the whole run
                 run = h.server_run(printed["run_id"])
                 self.assertEqual(run["status"], "done")
                 self.assertEqual(run["state"], {"message": "I was charged twice!"})
 
-    def test_low_confidence_pauses_for_review_then_resumes(self):
+    def test_a_router_check_fires_on_low_confidence(self):
+        """`triage` emits `tone_confidence`; `by-tone` sends the run to `escalate` below 0.6. The model
+        says calm at 0.55, so the calm branch is never taken: the check fired, reason `low`."""
         with tempfile.TemporaryDirectory() as tmp:
-            h = self.harness(tmp, FakeJev(0.55, 0.97))              # tone confidence 0.55 < 0.6
+            h = self.harness(tmp, FakeJev(0.45, 0.97), variant(tmp, check=True))   # calm, confidence 0.55
+            runner, out = h.runner(tmp)
+            outcome = runner.start({"message": "hmm"})
+            self.assertEqual(outcome.code, EXIT_DONE)
+            history = h.history(outcome)
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "escalate", "end"])
+            self.assertEqual(history[1]["result"]["answers"], {"billing": True, "tone": "calm"})
+            self.assertEqual(history[1]["attribution"]["confidence"], {"billing": 0.94, "tone": 0.55})
+            self.assertEqual(history[2], {"step": "by-tone", "kind": "router", "input": {"tone_confidence": 0.55},
+                                          "result": {"to": "escalate", "confidence": {"fired": True, "reason": "low"}}})
+            self.assertEqual(entry_of(history, "escalate")["input"]["tone"], "calm")
+
+    def test_a_confident_answer_passes_the_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = self.harness(tmp, FakeJev(0.2, 0.97), variant(tmp, check=True))     # calm, confidence 0.8
             runner, out = h.runner(tmp)
             outcome = runner.start({"message": "hmm"})
             self.assertEqual(outcome.code, EXIT_PAUSED)
             block = json.loads(out.getvalue())
-            self.assertEqual((block["paused"], block["step"]), ("review", "triage"))
-            self.assertEqual(block["review"][0]["question"], "tone")
-            self.assertEqual(block["proposed_answers"], {"billing": True, "tone": "angry"})
-            self.assertEqual(block["state"], {"message": "hmm"})              # the decision's inputs only
-            self.assertNotIn("suggested", block)
-            self.assertNotIn("expects", block)
-            self.assertNotIn("resolution", block)                            # the client's, not the agent's
-            if self.BACKEND == "http":                       # the server never saw the model: it waits at the decision
-                self.assertEqual(h.server_run(block["run_id"])["pause"]["kind"], "decision")
-
+            self.assertEqual((block["paused"], block["step"]), ("client_task", "reply"))
+            self.assertEqual(block["state"], {"message": "hmm", "tone": "calm"})      # the step's inputs only
             run = RunFile.load(outcome.run_file)
-            self.assertEqual(run.pause["step"], "triage")
-            if self.BACKEND == "local":                   # nothing recorded until the review is answered
-                self.assertEqual((run.after, run.history), (None, []))
+            runner2, _ = h.runner(tmp, run=run)
+            outcome2 = runner2.resume(run, {"reply": "Sorry about that, refund issued."})
+            self.assertEqual(outcome2.code, EXIT_DONE)
+            history = h.history(outcome2)
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "reply", "end"])
+            self.assertEqual(history[2]["input"], {"tone_confidence": 0.8, "tone": "calm"})
+            self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": None}})
+
+    def test_a_manual_answer_has_no_confidence_so_the_check_fires(self):
+        """No model: the agent answers calm. No confidence key is written for it, and the check reads
+        absence as low confidence: `escalate`, reason `absent`. Nobody invents a number."""
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TYPESAFE_API_KEY", None)
+            h = self.harness(tmp, None, variant(tmp, check=True))
+            runner, out = h.runner(tmp)
+            outcome = runner.start({"message": "hmm"})
+            self.assertEqual(outcome.code, EXIT_PAUSED)
+            block = json.loads(out.getvalue())
+            self.assertEqual((block["paused"], block["confidence"], block["fallback"]), ("decision", ["tone"], True))
+            run = RunFile.load(outcome.run_file)
+            runner2, _ = h.runner(tmp, run=run)
+            outcome2 = runner2.resume(run, {"billing": True, "tone": "calm"})
+            self.assertEqual(outcome2.code, EXIT_DONE)
+            history = h.history(outcome2)
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "escalate", "end"])
+            self.assertEqual(history[1]["attribution"], {"resolver": "manual", "model": None, "confidence": None})
+            self.assertEqual(history[2]["input"], {"tone_confidence": None})
+            self.assertEqual(history[2]["result"], {"to": "escalate", "confidence": {"fired": True, "reason": "absent"}})
+
+    def test_no_model_and_no_fallback_stops_the_run_until_a_model_is_configured(self):
+        """`fallback: false` on `triage`: with no decision model the run stops with `no_decision_model`,
+        resumable; an answer by hand is refused the same way; a model configured later answers it."""
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TYPESAFE_API_KEY", None)
+            h = self.harness(tmp, None, variant(tmp, fallback=False))
+            runner, out = h.runner(tmp)
+            with mock.patch("sys.stderr", new=io.StringIO()):
+                outcome = runner.start({"message": "charged twice"})
+            self.assertEqual(outcome.code, EXIT_ERROR)
+            error = json.loads(out.getvalue())
+            self.assertEqual((error["error"], error["step"], error["fallback"], error["resumable"]),
+                             ("no_decision_model", "triage", False, True))
+            self.assertIn("aip config --decision-model", error["message"])
+            run = RunFile.load(outcome.run_file)
+            self.assertEqual((run.pause["kind"], run.pause["step"]), ("decision", "triage"))   # the run waits
             self.assert_run_file_points_at_the_server(run)
-            runner2, out2 = h.runner(tmp, run=run)
-            outcome2 = runner2.resume(run, {"tone": "calm"})          # client overrides -> client task
-            self.assertEqual(outcome2.code, EXIT_PAUSED)
-            block2 = json.loads(out2.getvalue())
-            self.assertEqual((block2["paused"], block2["step"]), ("client_task", "reply"))
-            self.assertIn("Duplicate charges are refunded", block2["task"])
-            self.assertEqual(block2["answer_with"], {"reply": "string"})    # the step's declared outputs
-            self.assertEqual(block2["state"], {"message": "hmm", "tone": "calm"})
-            self.assertNotIn("resume", block2)
-
-            run2 = RunFile.load(outcome2.run_file)
-            self.assertEqual(run2.run_id, run.run_id)                 # one run across the resumes
-            runner3, out3 = h.runner(tmp, run=run2)
-            outcome3 = runner3.resume(run2, {"reply": "Sorry about that, refund issued."})
-            self.assertEqual(outcome3.code, EXIT_DONE)
-            self.assertEqual(outcome3.payload, {"message": "hmm"})
-            history = h.history(outcome3)
-            self.assertEqual(result_of(history, "end"), {"message": "hmm"})
-            self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "reply", "end"])
-            self.assertEqual(history[0]["result"]["answers"], {"billing": True, "tone": "calm"})
-            self.assertEqual(history[0]["attribution"], {
-                "resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.55},
-                "reviewed": True, "proposed": {"billing": True, "tone": "angry"}})
             if self.BACKEND == "http":
-                recorded = h.server_run(run.run_id)
-                self.assertEqual(recorded["status"], "done")
-                self.assertEqual([x["step"] for x in recorded["history"]], ["triage", "by-tone", "reply", "end"])
-                self.assertEqual(len(h.api.get("/runs").json()), 1)
+                self.assertEqual(h.server_run(run.run_id)["pause"]["kind"], "decision")
 
-    def test_thresholds_are_the_authors(self):
-        """0.62 clears the author's 0.6 for tone; 0.58 does not. Nothing at run time moves the line."""
-        with tempfile.TemporaryDirectory() as tmp:
-            h = self.harness(tmp, FakeJev(0.62, 0.97))
-            self.assertEqual(h.runner(tmp)[0].start({"message": "hmm"}).code, EXIT_DONE)
-        with tempfile.TemporaryDirectory() as tmp:
-            h = self.harness(tmp, FakeJev(0.58, 0.97))
-            outcome = h.runner(tmp)[0].start({"message": "hmm"})
-            self.assertEqual(outcome.payload["paused"], "review")
+            runner2, out2 = h.runner(tmp, run=run)                       # by hand: still refused
+            self.assertEqual(runner2.resume(run, {"billing": True, "tone": "angry"}).code, EXIT_ERROR)
+            self.assertEqual(json.loads(out2.getvalue())["error"], "no_decision_model")
+            self.assertEqual(RunFile.load(outcome.run_file).pause["step"], "triage")
+
+            h.client = FakeJev(0.95, 0.97)                                 # a model, then resume
+            runner3, out3 = h.runner(tmp, run=run)
+            outcome3 = runner3.resume(run, None)
+            self.assertEqual(outcome3.code, EXIT_DONE)
+            self.assertEqual(json.loads(out3.getvalue())["run_id"], run.run_id)
+            history = h.history(outcome3)
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "escalate", "end"])
+            self.assertEqual(history[1]["attribution"]["resolver"], "typesafe")
 
     def test_missing_input_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +263,8 @@ class NonInteractive(Both):
             self.assertEqual((block["paused"], block["step"]), ("decision", "triage"))
             self.assertEqual(set(block["questions"]), {"billing", "tone"})
             self.assertEqual(block["questions"]["tone"]["criteria"]["angry"], "Frustrated, demanding, or threatening to leave.")
+            self.assertEqual((block["confidence"], block["fallback"]), (["tone"], True))
+            self.assertNotIn("history", block)
 
             run = RunFile.load(outcome.run_file)
             self.assertEqual(run.pause["kind"], "decision")
@@ -214,24 +273,22 @@ class NonInteractive(Both):
             outcome2 = runner2.resume(run, {"billing": True, "tone": "angry"})
             self.assertEqual(outcome2.code, EXIT_DONE)
             history = h.history(outcome2)
-            self.assertEqual([x["step"] for x in history], ["triage", "by-tone", "escalate", "end"])
-            self.assertEqual(history[0]["attribution"],
-                             {"resolver": "manual", "model": None, "confidence": None, "reviewed": False})
-            self.assertEqual(history[0]["result"]["answers"], {"billing": True, "tone": "angry"})
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "escalate", "end"])
+            self.assertEqual(history[1]["attribution"], {"resolver": "manual", "model": None, "confidence": None})
+            self.assertEqual(history[1]["result"]["answers"], {"billing": True, "tone": "angry"})
 
 
 class Interactive(Both):
-    def test_prompts_for_start_review_and_client_task(self):
-        # start: message; review: override angry -> calm; client task: one prompt per
-        # declared output, so just `reply`
+    def test_prompts_for_start_and_client_task(self):
+        # start: message; the model says calm; client task: one prompt per declared output, so just `reply`
         with tempfile.TemporaryDirectory() as tmp:
-            runner, out = self.harness(tmp, FakeJev(0.55, 0.97)).runner(
-                tmp, interactive=True, answers=["I was charged twice", "calm", "Refund issued."])
+            h = self.harness(tmp, FakeJev(0.2, 0.97))
+            runner, out = h.runner(tmp, interactive=True, answers=["I was charged twice", "Refund issued."])
             outcome = runner.start(None)
             self.assertEqual(outcome.code, EXIT_DONE)
             self.assertEqual(outcome.payload["message"], "I was charged twice")
-            self.assertIn("model says \"angry\"", out.getvalue())
             self.assertIn("Duplicate charges are refunded", out.getvalue())  # the task was shown
+            self.assertEqual(result_of(h.history(outcome), "reply")["answer"], {"reply": "Refund issued."})
 
     def test_manual_decision_prompts(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False):
@@ -263,8 +320,10 @@ class Cli(Both):
             with mock.patch("sys.stdout", new=out):
                 self.assertEqual(main(["info", self.target(h)]), EXIT_DONE)
             text = out.getvalue()
-            for needle in ("START INPUT", "message  string", '{"message": "<string>"}', "by-tone  [router on `tone`]",
-                           "? tone [choice]  (threshold 0.6)", "script: scripts/escalate.py", "RESULT",
+            for needle in ("START INPUT  (step `start`, start)", "message  string", '{"message": "<string>"}',
+                           "by-tone  [router on `tone`]", "triage  [decision]  -> by-tone  (fallback)",
+                           "? tone [choice]  (confidence): How upset", "confidence: tone_confidence below 0.6 -> escalate",
+                           "script: scripts/escalate.py", "RESULT",
                            f"run:  aip run {self.target(h)} --input start.json"):
                 self.assertIn(needle, text, needle)
 
@@ -280,7 +339,7 @@ class Cli(Both):
             out = io.StringIO()
             with mock.patch("sys.stdout", new=out):
                 self.assertEqual(main(["info", self.target(h), "--json"]), EXIT_DONE)
-            self.assertEqual(json.loads(out.getvalue())["start"]["step"], "triage")
+            self.assertEqual(json.loads(out.getvalue())["start"]["step"], "start")
 
     def test_run_and_resume_via_cli(self):
         from aip.client.cli import main
@@ -314,7 +373,7 @@ class Cli(Both):
             if self.BACKEND == "http":
                 runs = h.api.get("/runs").json()
                 self.assertEqual(len(runs), 1)
-                self.assertEqual((runs[0]["status"], runs[0]["steps"]), ("done", 4))
+                self.assertEqual((runs[0]["status"], runs[0]["steps"]), ("done", 5))
 
     def test_run_files_live_under_aip_home_keyed_by_run_id(self):
         """No `--run-file`: the run file is `$AIP_HOME/runs/<run-id>.json`, and `aip resume <run-id>`
@@ -365,6 +424,7 @@ class Cli(Both):
             with self.patched(h), mock.patch("sys.stdout", new=out):
                 self.assertEqual(main(["resume", "0123456789abcdef"]), EXIT_ERROR)
             self.assertIn("no run '0123456789abcdef'", json.loads(out.getvalue())["message"])
+            os.chdir(cwd)                                  # before the temp dirs go: Windows cannot delete the cwd
 
     def test_errors_are_one_json_object(self):
         """A bad start input and an unknown skill: one error object on stdout, exit 1, nothing on
@@ -385,7 +445,7 @@ class Cli(Both):
                 self.assertFalse(error["resumable"])
                 self.assertIn(needle, json.dumps(error))
                 if kind:
-                    self.assertEqual((error["error"], error["step"], error["missing"]), (kind, "triage", ["message"]))
+                    self.assertEqual((error["error"], error["step"], error["missing"]), (kind, "start", ["message"]))
             self.assertFalse(Path(run_file).exists())
 
 
@@ -394,17 +454,14 @@ class Failures(Both):
     state before it, and `resume` with no input retries it; served, the server records the failure."""
 
     def test_script_failure_is_resumable(self):
-        import shutil
-
         with tempfile.TemporaryDirectory() as tmp:
             skill = Path(tmp) / "billing-support"
             shutil.copytree(EXAMPLE, skill)
             script = skill / "scripts" / "escalate.py"
             script.write_text('import sys\nprint("queue down", file=sys.stderr)\nsys.exit(3)\n')
-            with mock.patch(f"{__name__}.EXAMPLE", skill):
-                h = self.harness(tmp, FakeJev(0.95, 0.97))
-                runner, out = h.runner(tmp)
-                outcome = runner.start({"message": "I was charged twice!"})
+            h = self.harness(tmp, FakeJev(0.95, 0.97), skill)
+            runner, out = h.runner(tmp)
+            outcome = runner.start({"message": "I was charged twice!"})
             self.assertEqual(outcome.code, EXIT_ERROR)
             error = json.loads(out.getvalue())
             self.assertEqual((error["error"], error["step"], error["exit_code"], error["stderr"], error["resumable"]),
@@ -417,7 +474,8 @@ class Failures(Both):
                 self.assertEqual(error["run_id"], run.run_id)
                 recorded = h.server_run(run.run_id)
                 self.assertEqual((recorded["status"], recorded["after"]), ("failed", "triage"))
-                self.assertEqual(recorded["state"], {"message": "I was charged twice!", "billing": True, "tone": "angry"})
+                self.assertEqual(recorded["state"], {"message": "I was charged twice!", "billing": True, "tone": "angry",
+                                                     "tone_confidence": 0.95})
                 self.assertEqual(h.api.get("/governance/failing-scripts").json()[0]["failed"], 1)
                 runner2, out2 = h.runner(tmp, run=run)  # the retry reaches the server: same revision, same failure
                 self.assertEqual(runner2.resume(run, None).code, EXIT_ERROR)
@@ -425,8 +483,7 @@ class Failures(Both):
                 self.assertEqual(h.api.get("/governance/failing-scripts").json()[0]["failed"], 2)
                 return                                  # the published revision cannot be fixed in place
             shutil.copy(EXAMPLE / "scripts" / "escalate.py", script)
-            runner2, _ = Harness("local", tmp, FakeJev(0.95, 0.97)).runner(tmp, run=run)
-            runner2.backend = LocalBackend(skill, client=FakeJev(0.95, 0.97))
+            runner2, _ = Harness("local", tmp, FakeJev(0.95, 0.97), skill).runner(tmp, run=run)
             self.assertEqual(runner2.resume(run, None).code, EXIT_DONE)
 
 

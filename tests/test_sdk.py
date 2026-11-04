@@ -5,6 +5,7 @@ calls). The doc's LangGraph-style tools run against the same skill."""
 
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -29,6 +30,24 @@ CALM = "I was charged twice for March. Could you check?"
 ANGRY = "This is the THIRD time you have double charged me. Fix it today or I cancel."
 REPLY = "Thanks for flagging this; duplicate charges are refunded in full within 5 business days."
 BROKEN = 'import sys\nprint("ticket service unreachable", file=sys.stderr)\nsys.exit(1)\n'
+
+
+class CalmModel:
+    """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97), the tone is calm at 0.9."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def system_one(self, state, questions, **_):
+        from typesafe_sdk import SystemOneResponse
+        return SystemOneResponse.model_validate({
+            "model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
+            "answers": {"billing": {"type": "noul", "noul": 0.97},
+                        "tone": {"type": "choice", "choice": "calm", "confidence": 0.9,
+                                 "probabilities": {"angry": 0.1, "calm": 0.9}}}})
 
 
 @pytest.fixture(autouse=True)
@@ -66,28 +85,43 @@ def history(client: aip.Client, run_id: str) -> list:
 # ------------------------------------------------------------------------ end to end
 
 
-def test_calm_branch_end_to_end(home, tmp_path):
+def test_calm_branch_end_to_end(home, tmp_path, monkeypatch):
+    """No model: the agent answers calm, no confidence is written, and `by-tone`'s check sends the
+    run to `escalate`. A model confident the tone is calm clears the check: the client task,
+    answered by id."""
     client, skill = home
     paused = client.run(skill, {"message": CALM}, workdir=tmp_path)
     assert isinstance(paused, aip.Paused)
     assert (paused.kind, paused.step, paused.state) == ("decision", "triage", {"message": CALM})
     assert set(paused.questions) == {"billing", "tone"}
+    assert (paused.confidence, paused.fallback) == (["tone"], True)
     assert paused.run_file == aip.Client.run_file(paused.run_id)          # under AIP_HOME, by id
 
-    task = client.resume(paused, {"billing": True, "tone": "calm"})
+    done = client.resume(paused, {"billing": True, "tone": "calm"})
+    assert isinstance(done, aip.Done) and done.state == {"message": CALM}
+    record = client.run_record(done.run_id)
+    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "escalate", "end"]
+    assert record.history[1]["attribution"]["resolver"] == "manual"
+    assert record.history[2]["result"] == {"to": "escalate", "confidence": {"fired": True, "reason": "absent"}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "stub")
+    with mock.patch("aip.client.resolver.TypeSafeClient", return_value=CalmModel()):
+        task = client.run(skill, {"message": CALM}, workdir=tmp_path)
+    assert isinstance(task, aip.Paused)
     assert (task.kind, task.step, task.answer_with) == ("client_task", "reply", {"reply": "string"})
-    assert task.run_id == paused.run_id and CALM in task.task
+    assert CALM in task.task
 
     done = client.resume(task.run_id, {"reply": REPLY})                   # by id, as `aip resume` does
     assert isinstance(done, aip.Done)
     assert done.state == {"message": CALM}
-    assert done.to_json() == {"done": True, "run_id": paused.run_id, "state": {"message": CALM},
-                              "run_file": str(paused.run_file)}
+    assert done.to_json() == {"done": True, "run_id": task.run_id, "state": {"message": CALM},
+                              "run_file": str(task.run_file)}
     record = client.run_record(done.run_id)
     assert record.status == "done"
-    assert [e["step"] for e in record.history] == ["triage", "by-tone", "reply", "end"]
-    assert record.history[0]["attribution"]["resolver"] == "manual"
-    assert record.history[2]["kind"] == "client_task"
+    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "reply", "end"]
+    assert record.history[1]["attribution"]["confidence"] == {"billing": 0.94, "tone": 0.9}
+    assert record.history[2]["result"] == {"to": "reply", "confidence": {"fired": False, "reason": None}}
+    assert record.history[3]["kind"] == "client_task"
 
 
 def test_angry_branch_end_to_end_with_on_pause_and_progress(home, tmp_path):
@@ -168,7 +202,7 @@ def test_catalog_runs_and_governance_are_typed(served, tmp_path):
     [entry] = served.list()
     assert entry.resolves == hit.revision
     info = served.info("billing-support")
-    assert (info.name, info.revision, info.start_step, info.inputs) == ("billing-support", hit.revision, "triage",
+    assert (info.name, info.revision, info.start_step, info.inputs) == ("billing-support", hit.revision, "start",
                                                                        {"message": "string"})
     assert info.example_input == {"message": "<string>"} and "START INPUT" in info.summary()
     local = aip.Client.over(None).info(EXAMPLE)
@@ -201,7 +235,7 @@ def _call(*argv: str) -> int:
         return main(list(argv))
 
 
-NOT_CLIENT = {"schema", "runtime", "skill", "db", "server"}       # format tooling, Neo4j loader, the server
+NOT_CLIENT = {"upgrade", "schema", "runtime", "skill", "db", "server"}   # format tooling, Neo4j loader, the server
 
 
 def test_every_cli_command_calls_the_sdk(served, api, tmp_path, monkeypatch):
@@ -259,9 +293,8 @@ def test_the_docs_tool_example_runs(served, tmp_path, monkeypatch):
     namespace["client"] = aip.Client.over(served.server)        # the configured server, here in-process
     paused = json.loads(namespace["run_procedure"]("billing-support", {"message": CALM}))
     assert (paused["paused"], paused["step"]) == ("decision", "triage")
-    task = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "calm"}))
-    assert task["paused"] == "client_task"
-    done = json.loads(namespace["answer_procedure"](paused["run_id"], {"reply": REPLY}))
+    # by hand, so no confidence: `by-tone`'s check fires and the escalate script runs here
+    done = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "calm"}))
     assert done == {"done": True, "run_id": paused["run_id"], "state": {"message": CALM}, "run_file": paused["run_file"]}
     error = json.loads(namespace["run_procedure"]("billing-support", {"msg": "wrong"}))
     assert (error["error"], error["resumable"]) == ("invalid_input", False)

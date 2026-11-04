@@ -1,0 +1,42 @@
+# Runs both packages' tests on every push and pull request, on Linux and on native Windows.
+#
+# The Windows job exists because the server must start there (#24: the filesystem backend
+# imported the Unix-only `fcntl`); `tests/server/test_filelock.py` exercises the `msvcrt`
+# lock for real only on this runner. A test that needs something Windows lacks (POSIX mode
+# bits, a POSIX bash) skips there and says why. The Neo4j backend tests skip (no `NEO4J_URI`).
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  tests:
+    name: pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Install the workspace
+        run: uv sync --group dev
+
+      - name: Run the tests
+        # The code under test names utf-8 on every text file it reads or writes; the tests' own
+        # fixtures use the platform default, which on Windows is the ANSI code page. UTF-8 mode
+        # (the default from Python 3.15) keeps the fixtures readable by the code.
+        env:
+          PYTHONUTF8: "1"
+        run: uv run pytest -q

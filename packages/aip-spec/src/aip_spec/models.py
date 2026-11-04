@@ -11,14 +11,14 @@ from typing import Annotated, Dict, List, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FORMAT_VERSION = "0.6a1"
+FORMAT_VERSION = "0.8"
 # Earlier formats this validator recognises, so it can say `runtime_block_outdated` instead of
-# `missing_runtime_block`. 0.6a0 is breaking: skills in these formats are rejected, not accepted.
-LEGACY_VERSIONS = ("0.5a1", "0.6a0")
-# Where format 0.6a1 was published: the archived aip-spec repository. Both URLs are part of the
-# 0.6a1 schema (`$id`), so they move to this repository with the next format version, not before.
-SPEC_URL = f"https://github.com/zach-blumenfeld/aip-spec/tree/v{FORMAT_VERSION}"
-SCHEMA_ID = f"https://raw.githubusercontent.com/zach-blumenfeld/aip-spec/v{FORMAT_VERSION}/assets/procedure.schema.json"
+# `missing_runtime_block`. 0.8 is breaking: skills in these formats are rejected, not accepted.
+LEGACY_VERSIONS = ("0.5a1", "0.6a0", "0.6a1")
+# Where the format is published: this repository, at the release that introduced the format
+# version (format `X.Y` ships with package `X.Y.0`, so the tag follows from the version).
+SPEC_URL = f"https://github.com/zach-blumenfeld/aip/blob/v{FORMAT_VERSION}.0/packages/aip-spec/docs/specification.md"
+SCHEMA_ID = f"https://raw.githubusercontent.com/zach-blumenfeld/aip/v{FORMAT_VERSION}.0/skills/aip-compile/assets/procedure.schema.json"
 
 STEP_NAME_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 QUESTION_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
@@ -68,7 +68,7 @@ Inputs = Annotated[List[IOItem], Field(
 )]
 
 Outputs = Annotated[List[IOItem], Field(
-    description="The keys this step adds to the state. Each key has exactly one producer in the procedure and is never a start input, so the state only grows and nothing is overwritten.",
+    description="The keys this step adds to the state. A key may have more than one producer, and a later step may overwrite one; every declaration of a key agrees on its type.",
 )]
 
 
@@ -132,9 +132,13 @@ class DecisionStep(Strict):
         min_length=1,
         description="Questions keyed by name. Answers come back under the same names and, once collapsed, become keys in the state: a decision's outputs are its question names.",
     )
-    thresholds: Dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(
-        default_factory=dict,
-        description="Per-question review thresholds, keyed by question name. For `noul`: flag when the probability is within this margin of 0.5. For `choice` and `score`: flag when the model's confidence is below this value. The client may override per call; it makes the final call on flagged answers.",
+    confidence: List[Annotated[str, Field(pattern=QUESTION_NAME_PATTERN)]] = Field(
+        default_factory=list,
+        description="Question names whose confidence the step also emits. For each, `<question>_confidence` is added to the state beside the answer as a `float` in `[0, 1]`: the probability the decision model put on the answer it gave, which is its confidence for a `choice` or `score` and `|2p - 1|` for a `noul`. An answer given by hand writes no confidence key.",
+    )
+    fallback: bool = Field(
+        default=False,
+        description="Whether the client may answer the questions by hand when no decision model is configured. Off by default: a run with no model stops at this step. On, a manual answer carries no confidence, so a router's confidence check on it fires.",
     )
     history: bool = Field(
         default=False,
@@ -225,18 +229,42 @@ class ClientTaskStep(Strict):
     inputs_to: StepName = Field(description="The step that receives this step's output.")
 
 
+class ConfidenceCheck(Strict):
+    key: str = Field(
+        min_length=1,
+        description="A `float` key in the state, declared on a path to the router: typically a decision's `<question>_confidence`.",
+    )
+    below: float = Field(
+        ge=0, le=1,
+        description="The bound. The check fires when the key's value is below it, or when the key is absent or null: unknown confidence is low confidence, and nobody invents a number.",
+    )
+    to: StepName = Field(description="The step the run goes to when the check fires.")
+
+
 class RouterStep(Strict):
     name: StepName
     kind: Literal["router"] = Field(description="Server-side branch on a value the client chose. Calls no model, has no endpoint.")
     description: str = Field(description="What the branch decides. One line.")
     branch_on: str = Field(
         min_length=1,
-        description="Key in the state whose value selects the branch. Typically a decision question name or an output of an execution or client task. The router adds nothing to the state; its choice is recorded in the run history only.",
+        description="Key in the state whose value selects the branch: a `boolean`, `string` or `integer`, typically a decision question name or an output of an execution or client task. The router adds nothing to the state; its choice is recorded in the run history only.",
+    )
+    confidence: ConfidenceCheck | None = Field(
+        default=None,
+        description="Optional confidence check, applied before `branches`: when `key` is below `below`, absent or null, the run goes to `to` and the value match is skipped. One check per router; a router that needs more is two routers.",
     )
     branches: Dict[str, StepName] = Field(
         min_length=2,
         description="Value to step name. The server resolves this after the client posts; the client never traverses. A value with no branch is a validation error.",
     )
+
+
+class StartStep(Strict):
+    name: StepName
+    kind: Literal["start"] = Field(description="Where a run begins. Holds the procedure's inputs and hands them to the first runnable step. Not runnable, adds nothing of its own.")
+    description: str | None = Field(default=None, description="What the client supplies to start a run. One line.")
+    inputs: Inputs = Field(description="The procedure's inputs: the keys the client supplies to start a run. They are the initial state.")
+    inputs_to: StepName = Field(description="The first runnable step.")
 
 
 class EndStep(Strict):
@@ -246,7 +274,7 @@ class EndStep(Strict):
     inputs: Inputs = Field(description="The procedure's result: the keys handed back to the client when the run is done.")
 
 
-Step = Annotated[Union[DecisionStep, ExecutionStep, ClientTaskStep, RouterStep, EndStep], Field(discriminator="kind")]
+Step = Annotated[Union[StartStep, DecisionStep, ExecutionStep, ClientTaskStep, RouterStep, EndStep], Field(discriminator="kind")]
 
 RUNNABLE_KINDS = frozenset({"decision", "execution", "client_task"})
 
@@ -254,14 +282,15 @@ RUNNABLE_KINDS = frozenset({"decision", "execution", "client_task"})
 class ProcedureSpec(Strict):
     """An execution graph of typed steps run by an AIP server with the client in the loop.
 
-    Step kinds are `decision` (SystemOne questions answered by a structured decision model),
-    `execution` (a script under scripts/), `client_task` (templated work the client performs
-    itself), `router` (server-side branching on a value the client chose), and `end` (the
-    procedure's result). The first step in `steps` is the start; its `inputs` are what the
-    client supplies. Edges are `inputs_to` by step name. Every runnable step declares the keys
-    it reads as `inputs`; execution and client_task steps declare the keys they add as
-    `outputs`, and a decision's outputs are its question names. Every key is produced by
-    exactly one step, so the state only grows.
+    Step kinds are `start` (the procedure's inputs, what the client supplies), `decision`
+    (SystemOne questions answered by a structured decision model), `execution` (a script under
+    scripts/), `client_task` (templated work the client performs itself), `router` (server-side
+    branching on a value the client chose) and `end` (the procedure's result). Edges are
+    `inputs_to` by step name. Every runnable step declares the keys it reads as `inputs`;
+    execution and client_task steps declare the keys they add as `outputs`, and a decision's
+    outputs are its question names plus a `<question>_confidence` for each question its
+    `confidence` list names. Keys accumulate and a later step may overwrite one; every
+    declaration of a key agrees on its type.
     """
     purpose: str = Field(description="What the procedure encapsulates as a coherent unit of work: the scope it covers and what it adds beyond general agent knowledge. One short paragraph.")
     trigger_when: List[str] = Field(
@@ -277,8 +306,8 @@ class ProcedureSpec(Strict):
         description="The environment the scripts need: interpreter and minimum version, Python packages, other tools. Required when the procedure has execution steps.",
     )
     steps: List[Step] = Field(
-        min_length=2,
-        description="The nodes of the execution graph. The first step is the start and must be runnable (decision, execution, or client_task). Exactly one step has kind `end`. Every runnable step names the node that receives its output via `inputs_to`; routers name theirs via `branches`. The validator checks that names are unique, every reference resolves, every step is reachable from the start, every step can reach the end, every consumed key is produced on every path to its consumer or declared on the start step, every key has exactly one producer, a procedure with execution steps declares `requires` and launches each script with its interpreter or one of its tools, and every referenced asset, reference, and script exists on disk.",
+        min_length=3,
+        description="The nodes of the execution graph. Exactly one step has kind `start` (by convention the first) and exactly one has kind `end`. Every runnable step names the node that receives its output via `inputs_to`; routers name theirs via `branches` and their confidence check's `to`. The validator checks that names are unique, every reference resolves, nothing points at the start, every step is reachable from the start, every step can reach the end, every consumed key is produced on every path to its consumer or declared on the start step, every declaration of a key agrees on its type, a router branches on a `boolean`, `string` or `integer` and checks a `float`, a procedure with execution steps declares `requires` and launches each script with its interpreter or one of its tools, and every referenced asset, reference, and script exists on disk.",
     )
     anti_patterns: List[str] = Field(
         default_factory=list,
@@ -286,8 +315,9 @@ class ProcedureSpec(Strict):
     )
 
     @property
-    def start(self) -> Step:
-        return self.steps[0]
+    def start(self) -> StartStep | None:
+        """The `start` step, or None when the procedure has none (the validator reports that)."""
+        return next((s for s in self.steps if s.kind == "start"), None)
 
     def step(self, name: str) -> Step | None:
         return next((s for s in self.steps if s.name == name), None)

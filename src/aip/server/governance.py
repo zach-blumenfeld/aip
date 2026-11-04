@@ -1,18 +1,27 @@
 """Governance (design §7 and §10.5): the corpus questions a server answers over its catalog and runs.
 
-Nine named queries, served as `GET /governance/{query}` with `name` (optional filter), `window`
+Ten named queries, served as `GET /governance/{query}` with `name` (optional filter), `window`
 (the last N runs considered), `limit` (rows returned), and `repeats` (for `repeated-cycles`); each
-returns a list of flat rows. Five are about runs, how the procedures behave in use; four are about
-the procedures' structure, what the control flow and the data flow say when read as one graph,
-and those four are answered by the graph backend only.
+returns a list of flat rows. Five are about runs, how the procedures behave in use; one joins the
+procedures' structure to the runs that went through it; four are about the procedures' structure
+alone, what the control flow and the data flow say when read as one graph, and those four are
+answered by the graph backend only.
 
 Decisions are resolved by clients, and each decision entry in a run's history carries its
-`attribution`: `{"resolver": "typesafe"|"manual", "model", "confidence", "reviewed"}`, plus
-`proposed`, the model's answers, when the agent reviewed them. The two decision queries read it.
+`attribution`: `{"resolver": "typesafe"|"manual", "model", "confidence"}`, where `confidence` maps
+each question to the probability the model put on its answer (`None` for a manual answer).
+Routers are walked by the server, and a router with a confidence check records what the check
+made of the state in its entry: `result.confidence: {fired, reason}`, `reason` one of `low`,
+`absent` or `null` when it fired.
 
-- `overridden-decisions`: per (name, decision step, question, resolver), how many model answers
-  were recorded and how many the agent changed at review (`proposed` differs from the answer).
-  Manual answers have no model answer and never count.
+- `confidence-fired`: per (name, router, reason), how many times in the windowed runs the
+  router's confidence check fired, with the ids of the runs it fired in. A fired check is a run
+  the decision model was not sure about (or one answered with no confidence at all), sent where
+  the author pointed it.
+- `unmeasured-routes`: routers the validator flagged at publish with `unmeasured_route` or
+  `confidence_on_unmeasured_source` on each name's resolved revision, with the router's source
+  class, how many windowed runs of that revision passed through the router, and their ids: the
+  runs a probabilistic choice steered with nothing recorded about how sure it was.
 - `manual-decisions`: per (name, decision step), how many decisions were answered with no
   model (`resolver: manual`) out of all its recorded decisions.
 - `failing-scripts`: per execution step, how many of the windowed runs it ran in and how many of
@@ -28,16 +37,16 @@ Decisions are resolved by clients, and each decision entry in a run's history ca
 - `unused-data`: keys a step produces (an output, or a decision's answer) that no step reads and
   the end step does not return. An output may be a receipt kept for the ledger; an unread answer
   is a model call per run that changes nothing. Graph only.
-- `cycles`: the control-flow cycles of each resolved revision, with the router value that keeps
-  each going and the keys its steps re-produce every time round. A loop cannot read anything
-  produced later in itself (the state rules forbid it), so what it carries is exactly those keys.
+- `cycles`: the control-flow cycles of each resolved revision, with the router value (or the
+  confidence bound) that keeps each going and the keys its steps re-produce every time round.
   Graph only.
 - `repeated-cycles`: runs in the window that went round a cycle more than `repeats` times
   (default 1), by the router at the cycle, since the format has no iteration bound. Graph only.
 
 The filesystem backend answers by scanning run files with the helpers here; the Neo4j backend
-projects the same facts at append time (`Answer` nodes) and runs Cypher
-(`aip.server.backends.neo4j.queries`). Both give the same rows for the same history.
+projects the same facts at append time (`Answer` nodes, the check's outcome on a router's
+`StepRun`) and runs Cypher (`aip.server.backends.neo4j.queries`). Both give the same rows for
+the same history.
 
 Stored queries. The Neo4j backend also keeps queries of its own: `PUT /governance/{name}` with a
 description and Cypher adds one, `DELETE /governance/{name}` removes it, and `GET /governance`
@@ -58,7 +67,8 @@ from aip.server.records import RunRecord
 JSON = Dict[str, Any]
 
 QUERIES: Dict[str, str] = {
-    "overridden-decisions": "Decision questions whose model answers the client overrode, most overridden first.",
+    "confidence-fired": "Routers whose confidence check fired in the last N runs, by reason, with the runs it sent elsewhere.",
+    "unmeasured-routes": "Routers an unmeasured source steers (flagged at publish), with the runs that passed through them.",
     "manual-decisions": "Decision steps answered with no decision model, most manual answers first.",
     "failing-scripts": "Execution steps that failed in the last N runs, most failures first, with the latest error.",
     "missing-fields": "Names whose resolved revision has an empty do_not_use_when or anti_patterns.",
@@ -69,8 +79,10 @@ QUERIES: Dict[str, str] = {
     "repeated-cycles": "Runs in the last N that went round a cycle more than `repeats` times (graph backends only).",
 }
 STRUCTURAL = ("empty-results", "unused-data", "cycles")     # over the catalog's resolved revisions, no runs involved
+RESOLVED = STRUCTURAL + ("missing-fields", "unmeasured-routes")   # given the resolved revision ids
 
 MISSING_FIELDS = ("do_not_use_when", "anti_patterns")
+UNMEASURED_CODES = ("unmeasured_route", "confidence_on_unmeasured_source")   # the validator's, on a router
 
 DEFAULT_WINDOW = 100
 DEFAULT_LIMIT = 50
@@ -94,21 +106,28 @@ def attribution(entry: JSON) -> JSON | None:
     """A decision entry's attribution (a manual one for an entry recorded without it); None otherwise."""
     if entry.get("kind") != "decision":
         return None
-    return entry.get("attribution") or {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    return entry.get("attribution") or {"resolver": "manual", "model": None, "confidence": None}
 
 
 def model_answers(entry: JSON) -> List[JSON]:
     """A decision entry's model answers, one row per question: `{question, resolver, model, value,
-    accepted, reviewed, overridden}`, where `value` is what the model proposed and `accepted` what
-    the run recorded; `[]` for a manual answer or any other entry."""
+    confidence}`, `value` the answer the run recorded and `confidence` the probability the model
+    put on it (None when the model gave none); `[]` for a manual answer or any other entry."""
     who = attribution(entry)
     if who is None or who.get("resolver") == "manual":
         return []
     answers = (entry.get("result") or {}).get("answers") or {}
-    proposed = who.get("proposed") or answers
-    return [{"question": q, "resolver": who.get("resolver"), "model": who.get("model"), "value": proposed.get(q, v),
-             "accepted": v, "reviewed": bool(who.get("reviewed")), "overridden": proposed.get(q, v) != v}
-            for q, v in answers.items()]
+    scores = who.get("confidence") or {}
+    return [{"question": q, "resolver": who.get("resolver"), "model": who.get("model"), "value": v,
+             "confidence": scores.get(q)} for q, v in answers.items()]
+
+
+def routing(entry: JSON) -> JSON | None:
+    """A router entry's confidence check as recorded, `{fired, reason}`, or None for a router with
+    no check or any other entry."""
+    if entry.get("kind") != "router":
+        return None
+    return (entry.get("result") or {}).get("confidence")
 
 
 def is_script_attempt(entry: JSON) -> tuple[bool, bool]:
@@ -125,17 +144,41 @@ def is_script_attempt(entry: JSON) -> tuple[bool, bool]:
 # ----------------------------------------------------------------- over many runs
 
 
-def overridden_decisions(runs: Iterable[RunRecord], limit: int = DEFAULT_LIMIT) -> List[JSON]:
-    counts: Dict[tuple, List[int]] = {}
+def confidence_fired(runs: Iterable[RunRecord], limit: int = DEFAULT_LIMIT) -> List[JSON]:
+    """`runs` newest first; `run_ids` keep that order."""
+    counts: Dict[tuple, JSON] = {}
     for run in runs:
         for entry in run.history:
-            for row in model_answers(entry):
-                c = counts.setdefault((run.name, entry.get("step"), row["question"], row["resolver"]), [0, 0])
-                c[0] += 1
-                c[1] += int(row["overridden"])
-    rows = [{"name": n, "step": s, "question": q, "resolver": r, "decided": d, "overridden": o, "rate": o / d}
-            for (n, s, q, r), (d, o) in counts.items() if o]
-    rows.sort(key=lambda r: (-r["overridden"], -r["rate"], r["name"], r["step"], r["question"]))
+            check = routing(entry)
+            if not check or not check.get("fired"):
+                continue
+            c = counts.setdefault((run.name, entry.get("step"), check.get("reason")), {"fired": 0, "run_ids": []})
+            c["fired"] += 1
+            if run.id not in c["run_ids"]:
+                c["run_ids"].append(run.id)
+    rows = [{"name": n, "router": r, "reason": why, "fired": c["fired"], "run_ids": c["run_ids"]}
+            for (n, r, why), c in counts.items()]
+    rows.sort(key=lambda r: (-r["fired"], r["name"], r["router"], r["reason"]))
+    return rows[:limit]
+
+
+def unmeasured_routes(procedures: Iterable[Tuple[str, str, JSON]], runs: Iterable[RunRecord],
+                      limit: int = DEFAULT_LIMIT) -> List[JSON]:
+    """`procedures` yields (name, revision, manifest) for each name's resolved revision, the manifest
+    holding its `steps` and `issues` rows; `runs` is the window, newest first."""
+    runs = list(runs)
+    rows = []
+    for name, revision, manifest in procedures:
+        classes = {s["name"]: s.get("source_class") for s in manifest.get("steps", []) if s.get("kind") == "router"}
+        for issue in manifest.get("issues", []):
+            if issue.get("code") not in UNMEASURED_CODES or issue.get("step") not in classes:
+                continue
+            router = issue["step"]
+            ids = [run.id for run in runs if run.name == name and run.revision == revision
+                   and any(e.get("step") == router and e.get("kind") == "router" for e in run.history)]
+            rows.append({"name": name, "revision": revision, "router": router, "code": issue["code"],
+                         "source_class": classes[router], "runs": len(ids), "run_ids": ids})
+    rows.sort(key=lambda r: (-r["runs"], r["name"], r["router"]))
     return rows[:limit]
 
 
@@ -191,6 +234,7 @@ def missing_fields(procedures: Iterable[Tuple[str, str, JSON]], limit: int = DEF
     return rows[:limit]
 
 
-__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "MISSING_FIELDS", "NOT_FOUND", "QUERIES",
-           "STORED_NAME_PATTERN", "STORED_QUERY_TIMEOUT", "STRUCTURAL", "listing", "attribution", "failing_scripts",
-           "is_script_attempt", "manual_decisions", "missing_fields", "model_answers", "overridden_decisions"]
+__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "MISSING_FIELDS", "NOT_FOUND", "QUERIES", "RESOLVED",
+           "STORED_NAME_PATTERN", "STORED_QUERY_TIMEOUT", "STRUCTURAL", "UNMEASURED_CODES", "listing", "attribution",
+           "confidence_fired", "failing_scripts", "is_script_attempt", "manual_decisions", "missing_fields",
+           "model_answers", "routing", "unmeasured_routes"]

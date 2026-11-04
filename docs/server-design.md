@@ -1,6 +1,6 @@
 # AIP server design
 
-Status: implemented in format 0.5a0, the client-server line; in 0.6a0 `client-execution.md` supersedes §6 and §7 (scripts and decisions run on the client) and the server holds each run's state. 0.4a0 is the last folder-only format. Companion to `running.md`, which
+Status: implemented in format 0.5a0, the client-server line; in 0.6a0 `client-execution.md` supersedes §6 and §7 (scripts and decisions run on the client) and the server holds each run's state; in 0.8 the step protocol lost `thresholds` and `review` (a decision pause carries `confidence` and `fallback`, routers check confidence keys, and `overridden-decisions` became `confidence-fired` and `unmeasured-routes`), so the mentions of them below are the design as it was. 0.4a0 is the last folder-only format. Companion to `running.md`, which
 describes the step protocol and the local runner this design extends.
 
 ## 1. Goal

@@ -22,11 +22,6 @@ from aip.model.types import (
 
 DecisionQuestion: TypeAlias = Noul | Choice | Score
 
-# Default decision thresholds. Noul: flag when |p - 0.5| < margin.
-# Choice / Score: flag when the model's confidence < min_confidence.
-DEFAULT_NOUL_MARGIN = 0.15
-DEFAULT_MIN_CONFIDENCE = 0.6
-
 @dataclass
 class State:
     """
@@ -51,12 +46,10 @@ class StepResponse:
     What the server returns after running a step.
 
     ran:       name of the step that ran
-    kind:      "decision" | "client_task" | "execution" | "end"
+    kind:      "start" | "decision" | "client_task" | "execution" | "end"
     result:    raw output of the step
     suggested: the full state after this step: the posted state plus the keys this step
                produced. The client posts it as the next input (answers merged over it)
-    review:    items the client should look at before accepting `suggested`
-               (e.g. low-confidence decision answers); empty means safe to pass through
     next:      description of what comes next (see `describe_next`); None at the end
     history:   the carried-in history plus this step's entry
     """
@@ -64,14 +57,13 @@ class StepResponse:
     kind: str
     result: JSON
     suggested: JSON
-    review: List[JSON]
     next: JSON | None
     history: List[JSON]
 
     def to_dict(self) -> JSON:
         return {
             "ran": self.ran, "kind": self.kind, "result": self.result, "suggested": self.suggested,
-            "review": self.review, "next": self.next, "history": self.history,
+            "next": self.next, "history": self.history,
         }
 
 
@@ -92,6 +84,22 @@ def branch_key(value: Any) -> str:
 
 
 @dataclass(kw_only=True)
+class ConfidenceCheck:
+    """
+    A router's confidence check, applied before its branches: when `key` is below `below`,
+    absent from the state, or null, the run goes to `to` and the value match is skipped.
+    Unknown confidence is low confidence; nobody invents a number.
+
+    key: a float key in the state, typically a decision's `<question>_confidence`
+    below: the bound, in [0, 1]
+    to: the node the run goes to when the check fires
+    """
+    key: str
+    below: float
+    to: "Node"
+
+
+@dataclass(kw_only=True)
 class Router:
     """
     Dumb router: maps the value the client posted under `branch_on` to the next node.
@@ -100,13 +108,36 @@ class Router:
 
     branch_on: key in the posted input whose value selects the branch
     branches: branch value -> node; needs two or more
+    confidence: the optional check applied first (`ConfidenceCheck`)
     """
     kind: ClassVar[str] = "router"
     name: str
     branch_on: str
     branches: Dict[str, "Node"]
+    confidence: ConfidenceCheck | None = None
+
+    def check(self, payload: JSON) -> JSON | None:
+        """What the confidence check made of `payload`: `{"fired": bool, "reason": "low" | "absent" |
+        "null" | None}`, or None when the router has no check. `reason` is None when it did not fire."""
+        if self.confidence is None:
+            return None
+        key = self.confidence.key
+        if key not in payload:
+            return {"fired": True, "reason": "absent"}
+        value = payload[key]
+        if value is None:
+            return {"fired": True, "reason": "null"}
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise InputValidationError(
+                self.name, [f"confidence key {key}={value!r} is not a number"], invalid=[key])
+        low = value < self.confidence.below
+        return {"fired": low, "reason": "low" if low else None}
 
     def route(self, payload: JSON) -> "Node":
+        """The node `payload` goes to: the check's `to` when it fires, else the branch its value selects."""
+        fired = self.check(payload)
+        if fired is not None and fired["fired"]:
+            return self.confidence.to
         if self.branch_on not in payload:
             raise InputValidationError(self.name, [f"missing routing key {self.branch_on!r}"], missing=[self.branch_on])
         value = payload[self.branch_on]
@@ -144,13 +175,13 @@ class BaseStep(ABC):
         """The keys this step adds to the state, with their types."""
         return dict(self.outputs)
 
+    def required_outputs(self) -> Inputs:
+        """The keys the state must hold once this step is answered: its outputs, by default."""
+        return self.output_types()
+
     def produced(self, result: JSON) -> JSON:
         """The keys this step's result adds to the state. By default the (validated) result itself."""
         return dict(result)
-
-    def review(self, result: JSON) -> List[JSON]:
-        """Items the client should look at before passing `suggested` through."""
-        return []
 
     def accept(self, payload: JSON, history: List[JSON]) -> StepResponse:
         """
@@ -169,7 +200,6 @@ class BaseStep(ABC):
             kind=self.kind,
             result=result,
             suggested={**payload, **self.produced(result)},
-            review=self.review(result),
             next=describe_next(self.inputsTo),
             history=[*history, entry],
         )
@@ -178,6 +208,20 @@ class BaseStep(ABC):
         if self.loader is None:
             raise RuntimeError(f"{type(self).__name__} {self.name!r} needs a ResourceLoader to resolve resources")
         return self.loader
+
+
+@dataclass(kw_only=True)
+class Start(BaseStep):
+    """
+    Where a run begins. `inputs` are the procedure's inputs, what the client supplies; the
+    step checks them, writes its history entry, and hands the state on to `inputsTo`. It
+    adds nothing of its own.
+    """
+    kind: ClassVar[str] = "start"
+    name: str = "start"
+
+    def _invoke(self, state: State) -> JSON:
+        return {}
 
 
 Node: TypeAlias = BaseStep | Router | EndStep
@@ -192,10 +236,14 @@ def describe_next(node: Node | None) -> JSON | None:
     if node is None:
         return None
     if isinstance(node, Router):
-        return {
+        described = {
             "step": node.name, "kind": node.kind, "branch_on": node.branch_on,
             "branches": {value: describe_next(target) for value, target in node.branches.items()},
         }
+        if node.confidence is not None:
+            described["confidence"] = {"key": node.confidence.key, "below": node.confidence.below,
+                                       "to": describe_next(node.confidence.to)}
+        return described
     described: JSON = {"step": node.name, "kind": node.kind, "inputs": describe_inputs(node.inputs)}
     if isinstance(node, Decision):
         described["questions"] = {name: q.model_dump(exclude_none=True) for name, q in node.questions.items()}
@@ -212,20 +260,29 @@ class Decision(BaseStep):
 
     questions: keyed by name; answers come back under the same names and, after
                collapse, become state keys of the same name: a decision's outputs
+    confidence: question names whose confidence the step also emits, each as the state key
+                `<question>_confidence`, a float in [0, 1]: the probability the model put on
+                the answer it gave (`confidence()`). A manual answer writes no confidence key.
+    fallback: whether the client may answer by hand when it has no decision model. Off by
+              default: `accept_answers` then rejects a manual attribution.
     history: send the run history to the decision model too; off unless the author asks
-    thresholds: per-question, the author's, and the only ones applied. Noul: margin around 0.5.
-                Choice / Score: minimum confidence. Unset questions use the type's default.
     client: optional injected TypeSafe client (tests, connection reuse); otherwise one
             is opened per invoke using TYPESAFE_API_KEY from the environment
     """
     kind: ClassVar[str] = "decision"
     questions: Dict[str, DecisionQuestion] = field(default_factory=dict)
-    thresholds: Dict[str, float] = field(default_factory=dict)
+    confidence: List[str] = field(default_factory=list)
+    fallback: bool = False
     history: bool = False
     client: TypeSafeClient | None = None
 
     ANSWER_TYPES: ClassVar[Dict[str, DataType]] = {
         "noul": DataType.BOOLEAN, "choice": DataType.STRING, "score": DataType.INTEGER}
+
+    def __post_init__(self) -> None:
+        unknown = [q for q in self.confidence if q not in self.questions]
+        if unknown:
+            raise ValueError(f"Decision {self.name!r} names {unknown} in `confidence`, which are not its questions")
 
     def render(self, state: State) -> JSON:
         """Pure projection of state into the JSON `state` sent to Jev: the declared inputs,
@@ -236,7 +293,12 @@ class Decision(BaseStep):
         return payload
 
     def output_types(self) -> Inputs:
-        """One key per question, typed by what its answer collapses to."""
+        """One key per question, typed by what its answer collapses to, and a float
+        `<question>_confidence` for each question the `confidence` list names."""
+        return {**self.required_outputs(), **{confidence_key(name): DataType.FLOAT for name in self.confidence}}
+
+    def required_outputs(self) -> Inputs:
+        """The answers alone: a confidence key is written by a model and absent after a manual answer."""
         return {name: self.ANSWER_TYPES[q.type] for name, q in self.questions.items()}
 
     def _invoke(self, state: State) -> JSON:
@@ -261,28 +323,34 @@ class Decision(BaseStep):
         """
         The client resolved the decision: `answers` holds one collapsed value per question (bool
         for noul, label for choice, int level for score), and `attribution` says how it got them,
-        `{"resolver": "typesafe"|"manual", "model", "confidence": {question: float}|None,
-        "reviewed"}`, plus `proposed` (the model's answers before review) when reviewed. None is
-        a manual answer. Both are checked and recorded in the history entry.
+        `{"resolver": "typesafe"|"manual", "model", "confidence": {question: float}|None}`. None
+        is a manual answer. Both are checked and recorded in the history entry. A model's
+        confidence for each question the step's `confidence` list names is also written to the
+        state as `<question>_confidence`; a manual answer writes none, and is rejected when the
+        step does not allow `fallback`.
         """
         validate_input(self.name, self.inputs, payload)
         missing = [q for q in self.questions if q not in answers]
         if missing:
             raise OutputValidationError(self.name, [f"missing answers for {missing}"], missing=missing)
         self.check_answers(answers)
-        attribution = manual() if attribution is None else self.check_attribution(attribution)
+        attribution = self.check_attribution(manual() if attribution is None else attribution)
         result = {"answers": {name: answers[name] for name in self.questions}}
         entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs),
                  "result": result, "attribution": attribution}
+        scores = attribution["confidence"] or {}
+        emitted = {confidence_key(name): scores[name] for name in self.confidence if name in scores}
         return StepResponse(
             ran=self.name, kind=self.kind, result=result,
-            suggested={**payload, **result["answers"]},
-            review=[], next=describe_next(self.inputsTo), history=[*history, entry],
+            suggested={**payload, **result["answers"], **emitted},
+            next=describe_next(self.inputsTo), history=[*history, entry],
         )
 
     def check_attribution(self, attribution: JSON) -> JSON:
-        """The attribution as recorded: a known resolver, a model name, a confidence in 0..1 for
-        questions of this step, whether the answers were reviewed, and what was proposed before."""
+        """The attribution as recorded: a known resolver, a model name, and a confidence in 0..1 for
+        questions of this step. A manual answer has no model and no confidence, and is refused
+        unless the step allows `fallback`; a model's answer must carry a confidence for every
+        question the step emits one for."""
         errors: List[str] = []
         if not isinstance(attribution, dict):
             raise OutputValidationError(self.name, ["attribution must be an object"], invalid=["attribution"])
@@ -297,30 +365,23 @@ class Decision(BaseStep):
                 k in self.questions and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1
                 for k, v in scores.items())):
             errors.append("attribution.confidence must map this step's questions to numbers in 0..1")
-        reviewed = attribution.get("reviewed", False)
-        if not isinstance(reviewed, bool):
-            errors.append("attribution.reviewed must be true or false")
-        proposed = attribution.get("proposed")
-        if proposed is not None:
-            if not isinstance(proposed, dict) or set(proposed) != set(self.questions):
-                errors.append("attribution.proposed must answer every question of this step")
-            else:
-                try:
-                    self.check_answers(proposed)
-                except OutputValidationError as exc:
-                    errors += [f"attribution.proposed: {e}" for e in exc.errors]
-        if resolver == "manual" and (model is not None or scores is not None or proposed is not None):
-            errors.append("a manual answer has no model, confidence, or proposed answers")
+        if resolver == "manual":
+            if model is not None or scores is not None:
+                errors.append("a manual answer has no model or confidence")
+            if not self.fallback:
+                errors.append(f"fallback_not_allowed: decision {self.name!r} does not allow a manual answer "
+                              "(`fallback: false`); it needs a decision model")
+        elif resolver in RESOLVERS and self.confidence:
+            unscored = [q for q in self.confidence if q not in (scores or {})]
+            if unscored:
+                errors.append(f"attribution.confidence must give the confidence of {unscored}, which this step emits")
         if errors:
             raise OutputValidationError(self.name, errors, invalid=["attribution"])
-        out = {"resolver": resolver, "model": model, "confidence": scores, "reviewed": reviewed}
-        if proposed is not None:
-            out["proposed"] = proposed
-        return out
+        return {"resolver": resolver, "model": model, "confidence": scores}
 
     def check_answers(self, answers: JSON) -> None:
         """Collapsed answers must name only this step's questions and fit each question's type."""
-        validate_output(self.name, self.output_types(), {k: v for k, v in answers.items() if k in self.questions},
+        validate_output(self.name, self.required_outputs(), {k: v for k, v in answers.items() if k in self.questions},
                         strict=False)
         invalid = [key for key in answers if key not in self.questions]
         errors = [f"undeclared output {key!r} (not a question of this step)" for key in invalid]
@@ -348,43 +409,27 @@ class Decision(BaseStep):
         raise ValueError(f"unknown answer type {answer['type']!r}")
 
     def produced(self, result: JSON) -> JSON:
-        """Each answer collapsed to a discrete value under its question name."""
+        """Each answer collapsed to a discrete value under its question name, plus the model's
+        confidence under `<question>_confidence` for each question the step names."""
         missing = [name for name in self.questions if name not in result["answers"]]
         if missing:
             raise OutputValidationError(self.name, [f"no answer for {missing}"])
-        return {name: self.collapse(result["answers"][name]) for name in self.questions}
-
-    def review(self, result: JSON) -> List[JSON]:
-        """Answers whose uncertainty crosses the threshold, with what the client needs to decide."""
-        return flag(result["answers"], self.thresholds)
+        answers = result["answers"]
+        return {**{name: self.collapse(answers[name]) for name in self.questions},
+                **{confidence_key(name): confidence(answers[name]) for name in self.confidence}}
 
 
-def threshold(question_type: str, thresholds: Dict[str, float], name: str) -> float:
-    """A question's threshold: the author's, else its type's default."""
-    return thresholds.get(name, DEFAULT_NOUL_MARGIN if question_type == "noul" else DEFAULT_MIN_CONFIDENCE)
-
-
-def flag(answers: JSON, thresholds: Dict[str, float]) -> List[JSON]:
-    """The model's answers (`{name: {"type", ...}}`) whose uncertainty crosses their threshold: a noul
-    within its margin of 0.5, a choice or score under its minimum confidence."""
-    flagged: List[JSON] = []
-    for name, answer in answers.items():
-        limit = threshold(answer["type"], thresholds, name)
-        if answer["type"] == "noul":
-            if abs(answer["noul"] - 0.5) < limit:
-                flagged.append({"question": name, "type": "noul", "noul": answer["noul"],
-                                "reason": f"within {limit} of 0.5"})
-        elif answer["confidence"] < limit:
-            flagged.append({"question": name, "type": answer["type"], "confidence": answer["confidence"],
-                            "probabilities": answer["probabilities"], "reason": f"confidence below {limit}"})
-    return flagged
+def confidence_key(question: str) -> str:
+    """The state key a decision's `confidence` list emits for a question. Fixed, not configurable."""
+    return f"{question}_confidence"
 
 
 def confidence(answer: JSON) -> float:
-    """How sure the model is of its collapsed answer: a noul's probability of the side it chose, a
-    choice's or score's own confidence."""
+    """The probability the model put on its collapsed answer, in [0, 1]: `|2p - 1|` for a noul
+    (https://docs.typesafe.ai/confidence#noul), a choice's or score's own confidence. The one
+    number recorded in the history attribution and written to the state."""
     if answer["type"] == "noul":
-        return round(max(answer["noul"], 1 - answer["noul"]), 4)
+        return round(abs(2 * answer["noul"] - 1), 4)
     return answer["confidence"]
 
 
@@ -393,7 +438,7 @@ RESOLVERS = ("typesafe", "manual")
 
 def manual() -> JSON:
     """The attribution of a decision answered with no model: by the client, or the agent at a pause."""
-    return {"resolver": "manual", "model": None, "confidence": None, "reviewed": False}
+    return {"resolver": "manual", "model": None, "confidence": None}
 
 
 class _SafeMap(dict):
@@ -579,7 +624,7 @@ class Execution(BaseStep):
         if isinstance(report.get("host"), str):
             entry["host"] = report["host"]
         return StepResponse(ran=self.name, kind=self.kind, result=result, suggested={**payload, **result},
-                            review=[], next=describe_next(self.inputsTo), history=[*history, entry])
+                            next=describe_next(self.inputsTo), history=[*history, entry])
 
     def reported_error(self, report: JSON) -> Exception:
         """The error a client's failure report stands for; `host` is the machine that reported it."""
