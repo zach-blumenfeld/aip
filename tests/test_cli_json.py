@@ -324,6 +324,7 @@ class CliJson(unittest.TestCase):
         self.assertEqual(len(error["missing"]), 1)
         self.assertTrue(error["missing"][0].startswith("interpreter python>=99.0 (found 3."), error["missing"])
 
+    @unittest.skipIf(os.name == "nt", "needs a POSIX bash; on Windows the first `bash` on PATH is the WSL launcher")
     def test_command_launches_the_script(self):
         script = 'cat > /dev/null\necho \'{"ticket_id": 7, "queue": "from-bash"}\'\n'
         skill = self.variant(REQUIRES + "  tools:\n    - bash\n", script, "x.sh", ["bash", "x.sh"])
