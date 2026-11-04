@@ -41,6 +41,8 @@ Format `0.8`, the first format change since `0.6a1`, and it is breaking: a skill
 
 ### Fixed
 - **The filesystem backend starts on native Windows** ([#24](https://github.com/zach-blumenfeld/aip/issues/24)). It imported the Unix-only `fcntl` module at load, so `aip server --backend filesystem` died with `ModuleNotFoundError` before listening. The catalog and run-file locks now go through `aip.server.backends.filelock`: `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, the same exclusive, blocking lock on both.
+- **Skill files are read and written as UTF-8 on every platform.** The validator read `SKILL.md` with the platform default encoding, which on Windows is the ANSI code page, so the em dash in the runtime block heading was mangled and every skill failed with `missing_runtime_block`. Every text read or write of a skill file, the runtime block, a run input or the server's config files now names UTF-8.
+- **Reference URIs use forward slashes on every platform.** A client-task pause on Windows said `billing-support\references\help.md` where the API promises `billing-support/references/help.md`; the shared form is now always POSIX, as record and script paths already were. The tests run on Linux and native Windows in CI (`.github/workflows/tests.yml`).
 
 ## [0.7.0] — 2026-11-02
 
