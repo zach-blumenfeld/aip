@@ -91,12 +91,28 @@ export function navigate(route: Route): void {
   window.location.hash = href(route);
 }
 
+/** A hash with no leading slash (`#step-triage`) names an element on the current page, not a route. */
+const isAnchor = (hash: string) => /^#[^/]/.test(hash);
+
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parseHash(window.location.hash));
   useEffect(() => {
-    const onChange = () => setRoute(parseHash(window.location.hash));
+    // An in-page anchor must not become a route: the page would unmount and show "No page at", and
+    // the element it names would be gone before the browser could scroll to it. Clicks on such links
+    // scroll instead and leave the route's hash in the address bar; a hash typed in by hand keeps the
+    // current route.
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const link = (e.target as Element | null)?.closest("a");
+      const target = link?.getAttribute("href");
+      if (!target || !isAnchor(target)) return;
+      e.preventDefault();
+      document.getElementById(decodeURIComponent(target.slice(1)))?.scrollIntoView({ block: "start" });
+    };
+    const onChange = () => { if (!isAnchor(window.location.hash)) setRoute(parseHash(window.location.hash)); };
+    document.addEventListener("click", onClick);
     window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
+    return () => { document.removeEventListener("click", onClick); window.removeEventListener("hashchange", onChange); };
   }, []);
   return route;
 }

@@ -15,6 +15,9 @@ Targets aip 0.8.0 and format 0.8 (explicit start step, free producers, confidenc
 - **Lint parity covers every severity.** `e2e/lint-parity.spec.ts` compares the linter with `aip-spec validate` on errors, warnings and infos over the migrated fixtures.
 - **The embedded runtime block is format 0.8** (`src/studio/runtime-0.8.ts`); an imported 0.5a1, 0.6a0 or 0.6a1 skill gets aip-spec's upgrade note, which names `aip upgrade`.
 
+### Fixed
+- **Clicking a step box on the procedure page** (or a step's "go to" link in a card) no longer lands on "No page at `#step-…`". The hash router now treats a hash without a leading slash as an in-page anchor: it scrolls to the step's card and leaves the page's route in the address bar.
+
 ### Added
 - **`POST /console/upgrade`**: the launcher runs `aip upgrade` on a skill's files and answers with the rewritten SKILL.md, the command's report and the validator's issues; `upgradeDraft` in `src/studio/import.ts` re-imports the result. The Studio's button for it comes with the views.
 

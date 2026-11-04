@@ -44,6 +44,20 @@ test("the procedure page draws every step and the router's branches", async ({ p
   await expect(page.getByRole("combobox", { name: "revision" })).toContainText("latest");
 });
 
+test("a step box scrolls to the step's card and keeps the page's route", async ({ page }) => {
+  await page.goto("./#/p/billing-support");
+  const graph = page.getByRole("img", { name: "step graph" });
+  await expect(graph).toBeVisible();
+  await graph.locator('[data-testid="step-node"][data-step="reply"]').click();
+  await expect(page).toHaveURL(/#\/p\/billing-support$/);
+  await expect(page.locator("#step-reply")).toBeInViewport();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("billing-support");
+  // the "go to" links inside the cards are the same kind of anchor
+  await page.locator("#step-by-tone").getByRole("link", { name: "escalate" }).first().click();
+  await expect(page).toHaveURL(/#\/p\/billing-support$/);
+  await expect(page.locator("#step-escalate")).toBeInViewport();
+});
+
 test("the revision switcher re-fetches the page", async ({ page }) => {
   await page.goto("./#/p/billing-support");
   const picker = page.getByRole("combobox", { name: "revision" });
