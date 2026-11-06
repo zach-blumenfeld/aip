@@ -64,6 +64,28 @@ look-alike of an existing project); its module and command are `aip`. The runtim
   milestone; run its proof, tick it, comment `Done <date>, commit <sha>: <one sentence>`, commit.
   Product-visible questions sit under "Open items" with a default; take the default and say so.
 
+## Changing what a run does
+
+A change to run semantics (how a step kind behaves, what a router reads, what a decision
+writes, what the history records) is never one file. Before touching the code, list the
+places below and change them in the same commit; the drift tests catch some, not all.
+
+| Where | What to change |
+|---|---|
+| `src/aip/model/steps.py` | the step's behaviour; `procedure.py` (`resolve`) walks routers, `engine.py` drives the loop |
+| `src/aip/server/app.py` | the server's own `resolve` call sites (`execute`, `peek`) mirror the engine |
+| `packages/aip-spec/src/aip_spec/runtime.md` | the runtime block: the same rule in words an agent executes by hand. This is the format: it moves the format version unless the release is still unreleased |
+| `skills/aip-runtime/SKILL.md` and `src/aip/client/aip-runtime/SKILL.md` | the runtime skill, both copies, including the worked example at the end |
+| `packages/aip-spec/docs/specification.md` | the prose for the step kind, and the route-class table if what counts as measured changes |
+| `packages/aip-spec/src/aip_spec/skill.py` | `classify_sources` and the issue texts, when the change alters what a router can trust |
+| `examples/billing-support/SKILL.md` | the runtime block copy and the comments that explain the run |
+| `docs/running.md`, `docs/state.md`, `docs/cli-json.md`, `docs/client-execution.md`, `README.md` | every walkthrough that narrates the old behaviour; grep for the old history `reason` values and the old wording |
+| `tests/` and `packages/aip-spec/tests/` | the assertions on history entries, `--progress` lines, and validator issues |
+| `CHANGELOG.md` | under `## [Unreleased]`, in the user's terms |
+
+Governance queries (`src/aip/server/`) read history entries, so a new `reason` or attribution
+value needs a look there too.
+
 ## Versioning
 
 The rules, decided 2026-11-01 in the roadmap (#20):
