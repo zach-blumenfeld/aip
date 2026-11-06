@@ -223,7 +223,7 @@ function render(column: string, value: unknown, row: GovernanceRow): React.React
   }
   if (column === "resolver" && typeof value === "string") return <span className="status-tag" data-testid="resolver">{value}</span>;
   if (column === "reason" && typeof value === "string") {
-    const why = value === "low" ? "the confidence was below the bound" : value === "absent" ? "no confidence was recorded (answered by hand)" : value === "null" ? "the confidence was null" : "";
+    const why = value === "low" ? "the confidence was below the bound" : value === "absent" ? "no confidence was in the state" : value === "null" ? "the confidence was null" : "";
     return <span className="status-tag check-fired" data-testid="reason" title={why}>{value}</span>;
   }
   if (column === "source_class" && typeof value === "string") return <span className={`status-tag class-${value}`} data-testid="source-class">{value}</span>;

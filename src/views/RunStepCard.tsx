@@ -135,17 +135,18 @@ function Decision({ step, result, info, attribution }: { step: string; result: D
 
 const REASONS: Record<string, string> = {
   low: "the confidence was below the bound",
-  absent: "no confidence was in the state (the decision was answered by hand)",
+  absent: "no confidence was in the state",
   null: "the confidence was null",
 };
 
 /** A router's entry: the branch key it read and where it went; with a check, the key it checked and whether the
- *  check fired, and why. */
+ *  check fired, and why, or that it was skipped because the branch key was answered by hand. */
 function Router({ entry, info }: { entry: HistoryEntry; info: ProcedureInfo }) {
   const detail = info.step_details.find((s) => s.name === entry.step);
   const key = detail?.branch_on ?? Object.keys(entry.input)[0] ?? "?";
   const check = detail?.check ?? null;
   const outcome = (entry.result.confidence as CheckOutcome | undefined) ?? null;
+  const skipped = outcome?.reason === "manual";
   // A fired check decides before the branch key is read, so the entry records only the key it checked.
   return (
     <>
@@ -155,10 +156,12 @@ function Router({ entry, info }: { entry: HistoryEntry; info: ProcedureInfo }) {
       </p>
       {check && (
         <p className="small" data-testid="check-outcome" data-fired={outcome?.fired ? "true" : "false"} data-reason={outcome?.reason ?? undefined}>
-          <span className={`status-tag ${outcome?.fired ? "check-fired" : "check-held"}`}>{outcome?.fired ? "check fired" : "check held"}</span>{" "}
-          <code>{check.key}</code> = <code>{JSON.stringify(entry.input[check.key] ?? null)}</code>, bound <code>{check.below}</code>
+          <span className={`status-tag ${outcome?.fired ? "check-fired" : "check-held"}`}>{outcome?.fired ? "check fired" : skipped ? "check skipped" : "check held"}</span>{" "}
+          {skipped
+            ? <><code>{check.key}</code> was not checked: the decision was answered by hand, which records no confidence, so the answer took its branch</>
+            : <><code>{check.key}</code> = <code>{JSON.stringify(entry.input[check.key] ?? null)}</code>, bound <code>{check.below}</code></>}
           {outcome?.fired && outcome.reason && <>: {REASONS[outcome.reason] ?? outcome.reason}</>}
-          {!outcome?.fired && <>: at or above the bound, so the branches decided</>}
+          {!outcome?.fired && !skipped && <>: at or above the bound, so the branches decided</>}
         </p>
       )}
     </>

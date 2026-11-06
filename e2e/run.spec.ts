@@ -77,7 +77,7 @@ test("an angry message runs the escalation script on this machine", async ({ pag
 
 test("a decision with fallback off stops a client that has no decision model, and says so", async ({ page }) => {
   // The run console with no model reaches `triage` of billing-checked: its decision allows a manual answer, so the
-  // page gets the form; the check then fires with reason `absent`, whatever the tone, and the run escalates.
+  // page gets the form; a hand answer is not checked (reason `manual`), so `calm` takes its branch to the reply task.
   await page.goto(`./#/run/${CHECKED}`);
   const start = page.getByTestId("pause-start");
   await start.getByLabel("message", { exact: true }).fill("Why was I billed $12? [checked]");
@@ -89,11 +89,17 @@ test("a decision with fallback off stops a client that has no decision model, an
   await decision.getByRole("group", { name: "tone" }).getByRole("radio", { name: /^calm/ }).check();
   const runId = (await page.getByTestId("run-id").textContent())!.trim();
   await decision.getByRole("button", { name: "Answer" }).click();
-  await expect(page.getByTestId("run-status")).toHaveText("done", { timeout: 20_000 });
-  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage.*manual/, /by-tone.*escalate/, /escalate.*execution/]);
+  await expect(page.getByTestId("pause-client-task")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage.*manual/, /by-tone.*reply/]);
   const run = await record(page, runId);
   const route = run.history.find((h) => h.step === "by-tone")!;
-  expect(route.result).toMatchObject({ to: "escalate", confidence: { fired: true, reason: "absent" } });
+  expect(route.result).toMatchObject({ to: "reply", confidence: { fired: false, reason: "manual" } });
+  // the history page says the check was skipped, and why
+  await page.goto(`./#/runs/${runId}`);
+  const skipped = page.locator('[data-testid="run-step"][data-step="by-tone"]').getByTestId("check-outcome");
+  await expect(skipped).toHaveAttribute("data-fired", "false");
+  await expect(skipped).toHaveAttribute("data-reason", "manual");
+  await expect(skipped).toContainText("check skipped");
 
   // The same skill with `fallback: false` on its decision: the CLI stops before posting anything.
   const strict = path.join(WORKDIR, "billing-strict");

@@ -561,8 +561,8 @@ export function classifySources(draft: Draft): Map<string, SourceClass> {
   return out;
 }
 
-/** What the class of a route says to its author (aip-spec's `check_sources`): a router whose check reads a number
- *  nothing calibrated (`confidence_on_unmeasured_source`), a router an LLM steers with nothing recorded
+/** What the class of a route says to its author (aip-spec's `check_sources`): a router whose check guards a number
+ *  its source does not give (`confidence_on_unmeasured_source`), a router an LLM steers with nothing recorded
  *  (`unmeasured_route`), both warnings; a router checking a confidence a script or client task declared itself
  *  (`declared_confidence`), information. A deterministic route says nothing. */
 function sources(steps: R[], byName: Map<string, R>, add: Add): void {
@@ -572,7 +572,7 @@ function sources(steps: R[], byName: Map<string, R>, add: Add): void {
     const worst = worstOf(found);
     const reasons = found.filter((f) => f.cls === "unmeasured").map((f) => f.why).join("; ");
     if (worst === "unmeasured" && s.check) {
-      add("warning", "confidence_on_unmeasured_source", `router \`${router.name}\` checks \`${s.check.key}\`, but its branch key \`${s.branchOn}\` is unmeasured: ${reasons}; the check reads a number nothing calibrated. To measure the route, ${fix}`, s, "check");
+      add("warning", "confidence_on_unmeasured_source", `router \`${router.name}\` checks \`${s.check.key}\`, but its branch key \`${s.branchOn}\` is unmeasured: ${reasons}; the check guards a model's confidence, which this source does not give: a decision answered by hand bypasses it, and a client task's output writes nothing for it to read. To measure the route, ${fix}`, s, "check");
     } else if (worst === "unmeasured") {
       add("warning", "unmeasured_route", `router \`${router.name}\` branches on \`${s.branchOn}\`, which is unmeasured: ${reasons}; a probabilistic choice routes the run and nothing records how sure it was. To measure the route, ${fix}`, s, "branchOn");
     }

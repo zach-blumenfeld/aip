@@ -30,7 +30,7 @@ export function contract(draft: Draft, placeholders: Placeholder[], dir?: string
     lines.push(`- \`${s.name}\` (${s.kind})`);
     if (s.kind === "router") {
       lines.push(`  - branch_on: \`${s.branchOn ?? ""}\``);
-      if (s.check) lines.push(`  - confidence check: \`${s.check.key}\` below ${s.check.below ?? "(unset)"} → \`${name(s.check.to)}\` (fires too when the key is absent or null)`);
+      if (s.check) lines.push(`  - confidence check: \`${s.check.key}\` below ${s.check.below ?? "(unset)"} → \`${name(s.check.to)}\` (fires too when the key is absent or null; skipped when the branch key was answered by hand)`);
       for (const b of s.branches ?? []) lines.push(`  - \`${b.value}\` → \`${name(b.target)}\``);
       continue;
     }

@@ -361,7 +361,7 @@ function DecisionForm({ pause, onAnswer }: { pause: Extract<Paused, { paused: "d
       {pause.confidence?.length > 0 && (
         <p className="muted small" data-testid="manual-confidence-note">
           A model would also write {pause.confidence.map((q, i) => <span key={q}>{i ? ", " : ""}<code>{q}_confidence</code></span>)} to the state;
-          a manual answer writes none, so a router that checks it fires with reason <code>absent</code>.
+          a manual answer writes none, and a router that checks it skips the check: your answer takes its branch.
         </p>
       )}
       <StateBlock state={pause.state} />

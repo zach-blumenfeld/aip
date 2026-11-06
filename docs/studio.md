@@ -58,7 +58,8 @@ Edges are fields (`next step`, router branches), so a step can never have two ou
 | router | `branch_on`, branches; **confidence check**: a float key (a decision's `<question>_confidence`, or a declared float output), a bound in 0 to 1, and the step the run goes to when the key is below it, or absent or null. Checked before the branches; one check per router |
 | end | inputs: the procedure's result |
 
-A decision answered by hand records no confidence, so a router's check on it fires with reason `absent`. The
+A decision answered by hand records no confidence, and a router's check is skipped for it: the answer takes its
+branch, recorded with reason `manual`. The
 linter classifies what feeds each router as deterministic, measured or unmeasured and warns where an unmeasured
 source routes the run ([studio-lint.md](studio-lint.md)); the procedure page shows the class the server stored
 at publish.

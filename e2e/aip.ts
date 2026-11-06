@@ -26,7 +26,7 @@ export const EXAMPLE_DIR = path.join(E2E, "example", "billing-support");
 export const FIRST_REVISION_DIR = path.join(E2E, "v1", "billing-support");
 export const SECOND_REVISION_DIR = path.join(E2E, "v2", "billing-support");
 
-/** The example as shipped, under another name: its router checks `tone_confidence` (below 0.6, or absent, to
+/** The example as shipped, under another name: its router checks `tone_confidence` (a model's, below 0.6, or absent, to
  *  `escalate`), so the specs that need a check to fire or hold drive this one. */
 export const CHECKED = "billing-checked";
 export const CHECKED_REVISION_DIR = path.join(E2E, "checked", CHECKED);

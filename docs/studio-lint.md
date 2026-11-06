@@ -55,7 +55,7 @@ server stores and the Procedure page shows.
 
 | Code | Tier | When |
 |---|---|---|
-| `confidence_on_unmeasured_source` | warning | a router with a confidence check whose source is unmeasured: the check reads a number nothing calibrated. The shipped billing-support example trips this on purpose: it keeps `fallback: true` so the quickstart runs without a decision model |
+| `confidence_on_unmeasured_source` | warning | a router with a confidence check whose source is unmeasured: the check guards a model's confidence, and a decision answered by hand bypasses it. The shipped billing-support example trips this on purpose: it keeps `fallback: true` so the quickstart runs without a decision model |
 | `unmeasured_route` | warning | a router with no check whose source is unmeasured: a probabilistic choice routes the run and nothing records how sure it was |
 | `declared_confidence` | info | a router checks a confidence a script (legitimate when the code is calibrated) or a client task (discouraged: an agent cannot calibrate itself) declared itself |
 | `duplicate_producer` | info | a key has more than one producer (the start step counts as the producer of its inputs); where a run passes through both, the later one overwrites the value |

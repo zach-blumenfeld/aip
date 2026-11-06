@@ -82,8 +82,8 @@ const example = path.join(E2E, "example", "billing-support");
 const v1 = path.join(E2E, "v1", "billing-support");
 cpSync(example, v1, { recursive: true });
 writeFileSync(path.join(v1, "scripts", "escalate.py"), ESCALATE);
-// The router's check and the comment above it: two lines of the shipped example.
-const CHECK = /^    # Checked before the branches.*\n    confidence: \{key: tone_confidence, below: 0\.6, to: escalate\}\n/m;
+// The router's check and the comment above it, as the shipped example writes them.
+const CHECK = /^    # Checked before the branches.*\n(?:    #.*\n)*    confidence: \{key: tone_confidence, below: 0\.6, to: escalate\}\n/m;
 const skillMd = readFileSync(path.join(v1, "SKILL.md"), "utf8");
 if (!CHECK.test(skillMd)) {
   console.error("prepare: the example's SKILL.md no longer holds the router check these lines remove");

@@ -564,7 +564,7 @@ function StepPanel({ draft, step, available, edit, onAdd, onDelete, onStart, onP
 }
 
 /** The help on a router's confidence check, in the panel. */
-const CHECK_HELP = "Checked before the branches: when the key is below the bound, or absent (a decision answered by hand writes no confidence) or null, the run goes to the named step instead. One check per router.";
+const CHECK_HELP = "Checked before the branches: when the key is below the bound, or absent or null, the run goes to the named step instead. It guards a decision model's answer: a decision answered by hand writes no confidence and is not checked, so that answer takes its branch. One check per router.";
 
 function RouterFields({ draft, step, available, set, target, onPrefill, onAddOnBranch }: {
   draft: Draft; step: Step; available: AvailableKey[]; set: (c: (s: Step) => void) => void; onPrefill: () => void; onAddOnBranch: (index: number, kind: StepKind) => void;
@@ -663,7 +663,7 @@ function blankQuestion(type: Question["type"], name: string, instructions = ""):
 }
 
 /** The help on a decision's `fallback`, in the panel. */
-const FALLBACK_HELP = "On: a client with no decision model may answer the questions by hand; a manual answer writes no confidence, so any route on this step's answers is unmeasured (the linter says so) and a router's check on its confidence fires with reason `absent`. Off (the default): a client with no decision model stops at this step with `no_decision_model` until one is configured.";
+const FALLBACK_HELP = "On: a client with no decision model may answer the questions by hand; a manual answer writes no confidence, so any route on this step's answers is unmeasured (the linter says so) and a router's check on its confidence is skipped for it: the answer takes its branch. Off (the default): a client with no decision model stops at this step with `no_decision_model` until one is configured.";
 
 function DecisionFields({ step, set }: { step: Step; set: (c: (s: Step) => void) => void }) {
   const questions = step.questions ?? [];

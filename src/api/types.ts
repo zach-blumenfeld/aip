@@ -30,7 +30,8 @@ export type StepKind = "start" | "decision" | "router" | "execution" | "client_t
  *  probabilistic choice with no calibrated number behind it (`unmeasured`). */
 export type SourceClass = "deterministic" | "measured" | "unmeasured";
 
-/** A router's confidence check: below `below`, or with `key` absent or null, the run goes to `to`. */
+/** A router's confidence check: below `below`, or with `key` absent or null, the run goes to `to`. A branch key
+ *  the client answered by hand is not checked. */
 export interface ConfidenceCheck { key: string; below: number; to: string }
 
 export interface StepDetail {
@@ -162,8 +163,9 @@ export interface ClientTaskResult {
 }
 
 /** What a router's confidence check made of the state: whether it fired, and why (`low`: the key was under the
- *  bound; `absent`: a manual answer wrote no confidence; `null`: the key was null). */
-export interface CheckOutcome { fired: boolean; reason: "low" | "absent" | "null" | null }
+ *  bound; `absent`: nothing wrote the key; `null`: the key was null). `manual`, never fired: the branch key was
+ *  answered by hand, so the check was skipped and the answer took its branch. */
+export interface CheckOutcome { fired: boolean; reason: "low" | "absent" | "null" | "manual" | null }
 
 /** One history entry: what a step received and produced. The first is the start step's, its `input` the start
  *  input. Routers record the branch they took (`result.to`) and, with a check, `result.confidence`. */

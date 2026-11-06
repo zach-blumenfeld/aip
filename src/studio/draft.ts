@@ -34,7 +34,8 @@ export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 export interface Branch { value: string; target?: string }
 
 /** A router's confidence check (`confidence` in the YAML): below the bound, or with the key absent or null, the run
- *  goes to `to`, the id of a step. `below` is unset while it is being typed; the linter says so. */
+ *  goes to `to`, the id of a step; a branch key answered by hand is not checked. `below` is unset while it is being
+ *  typed; the linter says so. */
 export interface ConfidenceCheck { key: string; below?: number; to?: string }
 
 /** One step of any kind. The fields a kind does not use are left unset. */
