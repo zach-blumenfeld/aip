@@ -69,7 +69,7 @@ elif the step sets fallback: true:                 PAUSE decision    -> agent an
 else:                                              ERROR no_decision_model, resumable once a key is configured
 ```
 
-A pause is stored on the cursor; an answer is merged over the cursor's state and the loop re-enters at `after`. A paused step has no history entry until it is answered: a decision's entry records the answers and their attribution, a client task's the task it was given and the answer (`{"task", "references", "answer": {...}}`). What a low confidence means is the author's, from SKILL.md: a router with a `confidence` check (`key`, `below`, `to`) sends the run to `to` when the key is below the bound, or absent (a manual answer), or null, and records `confidence: {fired, reason}` on its history entry. Nothing at run time overrides the check or `fallback`.
+A pause is stored on the cursor; an answer is merged over the cursor's state and the loop re-enters at `after`. A paused step has no history entry until it is answered: a decision's entry records the answers and their attribution, a client task's the task it was given and the answer (`{"task", "references", "answer": {...}}`). What a low confidence means is the author's, from SKILL.md: a router with a `confidence` check (`key`, `below`, `to`) sends the run to `to` when the key is below the bound, or absent, or null; a manual answer is not checked and takes its branch (`reason: manual`). The entry records `confidence: {fired, reason}`. Nothing at run time overrides the check or `fallback`.
 
 Every stop prints one JSON object and, unless it is an error before any step ran, writes the run file: the shapes, field by field, are in [`docs/cli-json.md`](cli-json.md). A pause carries only the paused step's declared inputs as `state`. `aip resume <run-id> --input answer.json` sends the answer to the run, which merges it over the state it holds and re-enters the loop at `after`. With `--interactive`, a pause becomes terminal prompts instead. `--progress` adds one JSON line per completed step before the final object; `--debug` puts the traceback of a failure on stderr.
 
@@ -169,7 +169,7 @@ $ echo $?
 0
 ```
 
-The client answers and resumes by run id, from any directory. A manual answer writes no `tone_confidence`, so the router's check fires (`reason: absent`) and sends the run to the script, which runs for real, on this machine; it would have gone there on `angry` anyway, and a hand-typed `calm` goes there too:
+The client answers and resumes by run id, from any directory. A manual answer writes no `tone_confidence`, and the router does not check one for it (`reason: manual`): `angry` sends the run to the script, which runs for real, on this machine (a hand-typed `calm` would pause at the reply task instead):
 
 ```bash
 $ echo '{"billing": true, "tone": "angry"}' > answers.json
@@ -188,15 +188,15 @@ The ticket is in the run file's `history`, the run's ledger (`aip runs 4f1c9a2e7
   { "step": "triage",   "kind": "decision",  "input": { "message": "..." },
     "result": { "answers": { "billing": true, "tone": "angry" } },
     "attribution": { "resolver": "manual", "model": null, "confidence": null } },
-  { "step": "by-tone",  "kind": "router",    "input": { "tone_confidence": null },
-    "result": { "to": "escalate", "confidence": { "fired": true, "reason": "absent" } } },
+  { "step": "by-tone",  "kind": "router",    "input": { "tone": "angry" },
+    "result": { "to": "escalate", "confidence": { "fired": false, "reason": "manual" } } },
   { "step": "escalate", "kind": "execution", "input": { "message": "...", "tone": "angry" },
     "result": { "ticket_id": 54926, "queue": "tier2" }, "seconds": 0.013, "host": "laptop.local" },
   { "step": "end",      "kind": "end",       "input": { "message": "..." }, "result": { "message": "..." } }
 ]
 ```
 
-The router's entry records what it read: the check's key (`null`, nothing wrote it) when the check fires, the branch key when it does not.
+The router's entry records what it read: the check's key when it read one (`null` when nothing wrote it, and the check fires), the branch key when the check passed or, as here, was skipped for a hand answer.
 
 ### With a decision model
 
@@ -351,7 +351,7 @@ POST /runs  {"name": "billing-support", "input": {"message": "I was charged twic
      "run_id": "4f1c9a2e7b3d5068", "name": "billing-support", "revision": "3f9c2a7d1e5b8c04", "version": 1, "steps": []}
 ```
 
-Post the answers with their attribution, naming the step and version they answer. The server checks them against the question types, records them, routes (here the check fires: a manual answer wrote no `tone_confidence`), and stops at the script, which is the client's to run:
+Post the answers with their attribution, naming the step and version they answer. The server checks them against the question types, records them, routes (a manual answer wrote no `tone_confidence` and is not checked: `angry` takes its branch), and stops at the script, which is the client's to run:
 
 ```
 POST /runs/4f1c9a2e7b3d5068/result

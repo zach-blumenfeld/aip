@@ -12,7 +12,7 @@ Decisions are resolved by clients, and each decision entry in a run's history ca
 each question to the probability the model put on its answer (`None` for a manual answer).
 Routers are walked by the server, and a router with a confidence check records what the check
 made of the state in its entry: `result.confidence: {fired, reason}`, `reason` one of `low`,
-`absent` or `null` when it fired.
+`absent` or `null` when it fired, `manual` when it was skipped for an answer given by hand.
 
 - `confidence-fired`: per (name, router, reason), how many times in the windowed runs the
   router's confidence check fired, with the ids of the runs it fired in. A fired check is a run

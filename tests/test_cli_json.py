@@ -198,13 +198,15 @@ class CliJson(unittest.TestCase):
         self.assert_documented("error-invalid-output", error)
         self.assertEqual(RunFile.load(self.run_file).pause["kind"], "decision", "a bad answer leaves the pause")
 
-        code, [done], _ = self.resume({"billing": True, "tone": "calm"})   # by hand: no confidence, the check fires
-        self.assertEqual((code, done.get("done")), (0, True))
+        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})  # by hand: no confidence, no check
+        self.assertEqual((code, pause.get("paused")), (0, "client_task"))
         history = RunFile.load(self.run_file).history
-        self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone", "escalate", "end"])
+        self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone"])
         self.assertEqual(history[1]["attribution"],                     # no key: answered by the agent
                          {"resolver": "manual", "model": None, "confidence": None})
-        self.assertEqual(history[2]["result"], {"to": "escalate", "confidence": {"fired": True, "reason": "absent"}})
+        self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": "manual"}})
+        code, [done], _ = self.resume({"reply": REPLY})
+        self.assertEqual((code, done.get("done")), (0, True))
 
         with self.decision_model(), mock.patch.object(FakeTypeSafe, "TONE", 0.1):   # calm at 0.9: the check passes
             code, [pause], _ = self.run_(EXAMPLE, MESSAGE)

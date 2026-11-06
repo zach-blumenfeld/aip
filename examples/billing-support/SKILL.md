@@ -23,7 +23,7 @@ The state starts as the `start` step's `inputs`, which you supply, and flows alo
 - **`execution`**: before the first one, check that this machine has everything `requires` names (the interpreter at its minimum version, the packages, the tools); if anything is missing, stop and name all of it. Run `script` from its folder, launched with the step's `command` when it has one and `python <script>` otherwise, with one JSON object on stdin, `{"state": <the step's inputs>, "assets": {<file stem>: <content>}, "expects": <the next step's inputs>}`. The script writes one JSON object to stdout holding exactly the step's `outputs`; add them to the state. A non-zero exit, or output missing a declared key, fails the step: stop there and report it rather than doing the step by hand.
 - **`decision`**: answer each question from the step's inputs, and from the run so far only when the step sets `history: true`. Each answer collapses to one value under its question name and is added to the state: a noul to `true`/`false`, a choice to its label, a score to its level number. For each question the step's `confidence` list names, a decision model also adds `<question>_confidence`, the probability it put on its answer, in `[0, 1]`; an answer given by your own judgment adds no confidence key. You may answer by your own judgment only when the step sets `fallback: true`; otherwise the step needs a decision model, and without one you stop there and say so.
 - **`client_task`**: render `template` with `{key}` from the step's inputs, `{assets[stem]}` for its assets, and `{meta.name}` for the skill name. Perform the task, loading `references` if their descriptions apply, and produce the step's `outputs`; add them to the state.
-- **`router`**: when the step has a `confidence` check, read the state's `confidence.key` first: if it is absent, null, or below `confidence.below`, continue at `confidence.to`. Otherwise read the state's `branch_on` key and continue at `branches[value]`. A value with no branch is an error.
+- **`router`**: when the step has a `confidence` check, read the state's `confidence.key` first: if it is absent, null, or below `confidence.below`, continue at `confidence.to`. Skip the check when the `branch_on` key is a decision question you answered by your own judgment: that answer has no confidence to check, and it is yours to stand behind, so it takes its branch. Then read the state's `branch_on` key and continue at `branches[value]`. A value with no branch is an error.
 - **`end`**: the state must hold `end`'s `inputs`. Those keys are the procedure's result.
 
 ```yaml
@@ -73,7 +73,7 @@ steps:
     # Emits `tone_confidence`, the probability the decision model put on its answer; `by-tone` checks it.
     confidence: [tone]
     # The quickstart keeps fallback on so the walkthrough runs without a TypeSafe key: the agent answers
-    # by hand, which writes no confidence, so the router's check fires. A production skill turns it off.
+    # by hand, which writes no confidence, and the router takes the branch it chose. A production skill turns it off.
     fallback: true
     inputs_to: by-tone
 
@@ -81,7 +81,8 @@ steps:
     kind: router
     description: Angry customers go to a human queue; calm ones get a drafted reply.
     branch_on: tone
-    # Checked before the branches: below the bound, or with no confidence recorded, the run escalates.
+    # Checked before the branches when a model answered: below the bound, or with no confidence recorded,
+    # the run escalates. An answer given by hand is not checked.
     confidence: {key: tone_confidence, below: 0.6, to: escalate}
     branches:
       angry: escalate

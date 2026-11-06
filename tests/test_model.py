@@ -199,17 +199,32 @@ class ProcedureRunTest(unittest.TestCase):
         with self.assertRaises(InputValidationError):
             router.check({"tone_confidence": "high"})
 
-    def test_router_check_fires_on_an_absent_or_null_confidence(self):
-        triage, router = self.proc.nodes["triage"], self.proc.nodes["by_tone"]
+    def test_a_hand_answer_skips_the_check_and_takes_its_branch(self):
+        """A manual answer writes no confidence (nobody invents a number), and the router does not
+        check one for it: the client's own call takes the branch, recorded as `reason: manual`."""
+        triage = self.proc.nodes["triage"]
         r0 = self.proc.run(None, {"message": "x"})
         manual = triage.accept_answers(r0.suggested, r0.history, {"billing": True, "tone": "angry"})
-        self.assertNotIn("tone_confidence", manual.suggested)        # nobody invents a number
+        self.assertNotIn("tone_confidence", manual.suggested)
         r = self.proc.run(manual.ran, manual.suggested, manual.history)
-        self.assertEqual(r.ran, "reply")
-        self.assertEqual(r.history[-2]["result"]["confidence"], {"fired": True, "reason": "absent"})
-        self.assertEqual(r.history[-2]["input"], {"tone_confidence": None})
+        self.assertEqual(r.ran, "escalate")
+        self.assertEqual(r.history[-2]["result"], {"to": "escalate", "confidence": {"fired": False, "reason": "manual"}})
+        self.assertEqual(r.history[-2]["input"], {"tone": "angry"})
+
+    def test_router_check_fires_on_an_absent_or_null_confidence(self):
+        """Without a hand answer behind the key, no confidence is low confidence: the check fires."""
+        router = self.proc.nodes["by_tone"]
         self.assertEqual(router.check({"tone_confidence": None}), {"fired": True, "reason": "null"})
+        self.assertEqual(router.check({"tone": "angry"}), {"fired": True, "reason": "absent"})
         self.assertIs(router.route({"tone": "angry", "tone_confidence": None}), self.proc.nodes["reply"])
+        self.assertIs(router.route({"tone": "angry"}, by_hand=True), self.proc.nodes["escalate"])
+        # a script that rewrote the key after the hand answer owns it: the check applies again
+        r0 = self.proc.run(None, {"message": "x"})
+        manual = self.proc.nodes["triage"].accept_answers(r0.suggested, r0.history, {"billing": True, "tone": "angry"})
+        rewritten = [*manual.history, {"step": "s", "kind": "execution", "input": {}, "result": {"tone": "angry"}}]
+        node, entries = self.proc.resolve(manual.ran, manual.suggested, rewritten)
+        self.assertIs(node, self.proc.nodes["reply"])
+        self.assertEqual(entries[0]["result"]["confidence"], {"fired": True, "reason": "absent"})
 
     def test_fallback_off_refuses_a_manual_answer(self):
         triage = self.proc.nodes["triage"]

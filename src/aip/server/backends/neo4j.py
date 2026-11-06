@@ -60,7 +60,8 @@ answer the run recorded (JSON-encoded) and `confidence` the probability the mode
 this is what `aip.server.governance.model_answers` computes from a history entry, written at
 append time so the decision queries are plain Cypher. A router's step run is the run's passage
 through the router, and when the router has a confidence check it carries what the check made of
-the state: `confidence_fired` and `confidence_reason` (`low`, `absent` or `null`), from the entry's
+the state: `confidence_fired` and `confidence_reason` (`low`, `absent`, `null`, or `manual` for a
+check skipped on a hand answer), from the entry's
 `result.confidence`. An error entry's `step` is the step that failed and
 `step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Run.state` is the
 run's full state (JSON) and `Run.version` its number of appends: an append takes the run's

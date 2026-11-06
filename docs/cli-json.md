@@ -81,9 +81,9 @@ Answer: one key per question, `{"billing": true, "tone": "calm"}`. A `noul` is `
 from 0). The questions define the answer's shape, so there is no `answer_with`.
 
 In `billing-support` the next step, the router `by-tone`, checks `tone_confidence` before it
-branches, and a manual answer never writes it: answered by hand, the run is escalated whichever
-tone was given. The client task below is where a decision model confident the tone is calm
-sends the run.
+branches when a model answered; a manual answer never writes it and is not checked, so the tone
+you give picks the branch. The client task below is where `calm` sends the run, by hand or from
+a confident model.
 
 ### `client_task`: do the step's work
 
@@ -136,8 +136,9 @@ its `input` the start input). A decision's entry carries the answer's `attributi
 (`resolver`, `model`, `confidence` per question; `null` for a manual answer). A router's entry
 records the key it read and `"result": {"to": <step>}`; a router with a confidence check also
 records the key it checked under `input` and, beside `to`, `"confidence": {"fired": true|false,
-"reason": "low"|"absent"|"null"|null}`: the check fires when the key is below the bound, and
-just the same when it is absent (a manual answer) or null.
+"reason": "low"|"absent"|"null"|"manual"|null}`: the check fires when the key is below the bound, and
+just the same when it is absent or null; it is skipped, not fired, with `reason: manual` when the
+branch key was answered by hand, and then `input` holds the branch key instead.
 
 ## Error
 

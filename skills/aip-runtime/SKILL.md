@@ -83,8 +83,8 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 - **Decisions are resolved here too.** With a TypeSafe key on this machine (`TYPESAFE_API_KEY`, or
   `aip config --decision-model KEY`) `aip` asks the model, which records its confidence where the
   step asks for it; without one, a decision that allows it pauses as `decision` for you, and one that
-  does not stops the run with `no_decision_model`. Your own answer has no confidence, so a router that
-  checks one treats it as low. The history records who answered (`resolver`: `typesafe` or `manual`). Do not set a key unless asked.
+  does not stops the run with `no_decision_model`. Your own answer has no confidence, and a router's
+  check skips it: the branch you chose is taken. The history records who answered (`resolver`: `typesafe` or `manual`). Do not set a key unless asked.
 - **One run, one run id.** Every outcome prints `run_id`; `aip resume <run_id>` finds the
   run file (`run_file`, under `~/.aip/runs/`) from any directory and rewrites it. Do not edit it. Do not start a second run of the same task.
 - **Report the result** from `state` (the end step's declared keys) in the task's terms,
@@ -115,5 +115,5 @@ $ aip resume 4f1c9a2e7b3d5068 --input answer.json
 
 The angry branch ran the procedure's script here and opened the ticket (its `ticket_id` is in
 the run's history); you answered one pause. The router checks the model's confidence in the tone
-before it branches, and an answer by hand has none, so without a key every message goes this way;
-with a key, a message the model is confident is calm pauses with `client_task` asking you to draft the reply, and your `{"reply": "..."}` ends the run.
+before it branches and escalates an unsure one; your own answer has none to check, so by hand the
+branch you chose is taken. A calm message, by hand or from a confident model, pauses with `client_task` asking you to draft the reply, and your `{"reply": "..."}` ends the run.

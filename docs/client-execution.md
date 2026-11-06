@@ -126,8 +126,9 @@ nothing else could answer.
   state as `<question>_confidence` for the questions its `confidence` list names, and a router
   downstream can check it (`confidence: {key, below, to}`): below the bound, or absent, the run
   goes where the author said. With no key, the agent answers only where the author allowed it
-  (`fallback: true`), with a manual attribution and no confidence key, so a router's check fires
-  on `absent`; otherwise the run stops with `no_decision_model` until a key is configured.
+  (`fallback: true`), with a manual attribution and no confidence key; a router's check skips a
+  hand answer and takes its branch (`reason: manual`); otherwise the run stops with
+  `no_decision_model` until a key is configured.
 - **Server:** validates the answer against the declared question type, writes the confidence
   keys from the attribution, routes on the state, and records in the run history: resolver kind
   (`typesafe` or `manual`), model name, confidence per question if any, and the final answer;

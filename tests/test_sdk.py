@@ -97,12 +97,14 @@ def test_calm_branch_end_to_end(home, tmp_path, monkeypatch):
     assert (paused.confidence, paused.fallback) == (["tone"], True)
     assert paused.run_file == aip.Client.run_file(paused.run_id)          # under AIP_HOME, by id
 
-    done = client.resume(paused, {"billing": True, "tone": "calm"})
+    task = client.resume(paused, {"billing": True, "tone": "calm"})      # by hand: no confidence, no check
+    assert isinstance(task, aip.Paused) and (task.kind, task.step) == ("client_task", "reply")
+    done = client.resume(task, {"reply": REPLY})
     assert isinstance(done, aip.Done) and done.state == {"message": CALM}
     record = client.run_record(done.run_id)
-    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "escalate", "end"]
+    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "reply", "end"]
     assert record.history[1]["attribution"]["resolver"] == "manual"
-    assert record.history[2]["result"] == {"to": "escalate", "confidence": {"fired": True, "reason": "absent"}}
+    assert record.history[2]["result"] == {"to": "reply", "confidence": {"fired": False, "reason": "manual"}}
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "stub")
     with mock.patch("aip.client.resolver.TypeSafeClient", return_value=CalmModel()):
@@ -293,8 +295,10 @@ def test_the_docs_tool_example_runs(served, tmp_path, monkeypatch):
     namespace["client"] = aip.Client.over(served.server)        # the configured server, here in-process
     paused = json.loads(namespace["run_procedure"]("billing-support", {"message": CALM}))
     assert (paused["paused"], paused["step"]) == ("decision", "triage")
-    # by hand, so no confidence: `by-tone`'s check fires and the escalate script runs here
-    done = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "calm"}))
+    # by hand, so no confidence and no check: the calm branch asks for the reply
+    task = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "calm"}))
+    assert (task["paused"], task["step"]) == ("client_task", "reply")
+    done = json.loads(namespace["answer_procedure"](paused["run_id"], {"reply": REPLY}))
     assert done == {"done": True, "run_id": paused["run_id"], "state": {"message": CALM}, "run_file": paused["run_file"]}
     error = json.loads(namespace["run_procedure"]("billing-support", {"msg": "wrong"}))
     assert (error["error"], error["resumable"]) == ("invalid_input", False)

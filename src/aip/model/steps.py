@@ -88,7 +88,9 @@ class ConfidenceCheck:
     """
     A router's confidence check, applied before its branches: when `key` is below `below`,
     absent from the state, or null, the run goes to `to` and the value match is skipped.
-    Unknown confidence is low confidence; nobody invents a number.
+    Unknown confidence is low confidence; nobody invents a number. The check guards a model's
+    answer: when the client answered the branch key by hand (`answered_by_hand`), the check is
+    skipped and the client's own call takes the branch.
 
     key: a float key in the state, typically a decision's `<question>_confidence`
     below: the bound, in [0, 1]
@@ -116,11 +118,15 @@ class Router:
     branches: Dict[str, "Node"]
     confidence: ConfidenceCheck | None = None
 
-    def check(self, payload: JSON) -> JSON | None:
+    def check(self, payload: JSON, by_hand: bool = False) -> JSON | None:
         """What the confidence check made of `payload`: `{"fired": bool, "reason": "low" | "absent" |
-        "null" | None}`, or None when the router has no check. `reason` is None when it did not fire."""
+        "null" | "manual" | None}`, or None when the router has no check. `reason` is None when it did
+        not fire, and `manual` when it was skipped because the client answered the branch key by hand
+        (`by_hand`): a hand answer has no confidence to check, and the client stands behind it."""
         if self.confidence is None:
             return None
+        if by_hand:
+            return {"fired": False, "reason": "manual"}
         key = self.confidence.key
         if key not in payload:
             return {"fired": True, "reason": "absent"}
@@ -133,9 +139,9 @@ class Router:
         low = value < self.confidence.below
         return {"fired": low, "reason": "low" if low else None}
 
-    def route(self, payload: JSON) -> "Node":
+    def route(self, payload: JSON, by_hand: bool = False) -> "Node":
         """The node `payload` goes to: the check's `to` when it fires, else the branch its value selects."""
-        fired = self.check(payload)
+        fired = self.check(payload, by_hand)
         if fired is not None and fired["fired"]:
             return self.confidence.to
         if self.branch_on not in payload:
@@ -434,6 +440,27 @@ def confidence(answer: JSON) -> float:
 
 
 RESOLVERS = ("typesafe", "manual")
+
+
+def answered_by_hand(history: List[JSON], key: str) -> bool:
+    """Whether the latest producer of `key` in `history` is a decision answered with no model
+    (`attribution.resolver` of `manual`). A later script, task or start input that wrote the key
+    makes it theirs again; a key no entry produced is not a hand answer."""
+    for entry in reversed(history):
+        result = entry.get("result") or {}
+        match entry.get("kind"):
+            case "decision":
+                if key in (result.get("answers") or {}):
+                    return (entry.get("attribution") or {}).get("resolver") == "manual"
+            case "client_task":
+                if key in (result.get("answer") or {}):
+                    return False
+            case "router" | "end":
+                continue
+            case _:
+                if key in result:
+                    return False
+    return False
 
 
 def manual() -> JSON:

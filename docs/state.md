@@ -60,8 +60,9 @@ the working object; the history is the ledger.
   only. The client's answer must contain the step's declared `outputs` with their types; the
   pause's `answer_with` lists them.
 - **router**: reads one key and picks the next step. With a `confidence` check it first reads
-  the check's key: below the bound, or absent, or null, the run goes to the check's `to`; the
-  history entry records `"confidence": {"fired", "reason"}` beside the branch taken. Adds nothing.
+  the check's key: below the bound, or absent, or null, the run goes to the check's `to`; a key
+  answered by hand is not checked (`reason: manual`). The history entry records
+  `"confidence": {"fired", "reason"}` beside the branch taken. Adds nothing.
 - **end**: stops. The state projected to its `inputs` is the run's output.
 
 ## Typed inputs, typed outputs
@@ -179,8 +180,8 @@ Decision, no model configured on the client and `fallback: true` on the step (th
 Answer: one key per question, `{"billing": true, "tone": "calm"}`. No `answer_with`: the
 questions block already defines the answer shape. Recorded as `"resolver": "manual"` with no
 confidence, and `tone_confidence` is not written: `confidence` names the keys a model's answer
-would have added. A router that checks `tone_confidence` then fires with `reason: absent`; a
-manual answer never gets a number invented for it. With a model, nothing pauses here: it answers,
+would have added. A router that checks `tone_confidence` skips the check for it (`reason: manual`)
+and takes the branch you chose; a manual answer never gets a number invented for it. With a model, nothing pauses here: it answers,
 the keys are written, and the router's check decides what a low confidence means.
 
 ## Three ways a run stops
@@ -203,9 +204,9 @@ The aip-spec package ships a tiny example, `billing-support`: a start step holdi
 a decision (is it billing, how upset) that emits `tone_confidence`, a router on tone that first
 checks that confidence, then either a script that opens a ticket (angry, or unsure) or a client
 task that drafts a reply (calm). Its decision sets `fallback: true`, so with no decision model
-configured it pauses to you, which is exactly what an agent sees; and since your answer carries
-no confidence, the router's check fires and every message is escalated. The calm branch, and
-its client task, need a key (`aip config --decision-model KEY`).
+configured it pauses to you, which is exactly what an agent sees; your answer carries no
+confidence, and the router does not check one for it, so the tone you give picks the branch. With
+a key (`aip config --decision-model KEY`) the model answers and the router checks its confidence.
 
 ```sh
 cd "$(mktemp -d)"
@@ -217,33 +218,32 @@ EX=./billing-support
 echo '{"message":"This is the THIRD time you have double charged me. Fix it today or I cancel."}' > start.json
 aip run "$EX" --input start.json --run-file run.json
 
-# 2. answer both questions; the router's check reads `tone_confidence`, which your answer did
-#    not write, so it fires (`reason: absent`) and the script runs with no pause; done.
+# 2. answer both questions; your answer writes no `tone_confidence`, and the router does not check
+#    one for it (`reason: manual`): `angry` sends the run to the script, which runs with no pause; done.
 #    `state` is the end step's inputs (just `message` here); run.json's `history` is the ledger:
 #    the start entry, the decision with `"resolver": "manual"`, the router with
-#    `"confidence": {"fired": true, "reason": "absent"}`, and the ticket on the `escalate` entry.
+#    `"confidence": {"fired": false, "reason": "manual"}`, and the ticket on the `escalate` entry.
 echo '{"billing": true, "tone": "angry"}' > answer1.json
 aip resume run.json --input answer1.json --progress   # a line per step, then done
 
-# 3. answering "calm" by hand ends the same way: no confidence, so the check fires and escalates.
+# 3. answering "calm" by hand takes the calm branch, unchecked: the run pauses at the client task.
+#    Note `state`: only the step's inputs (message, tone; not billing), `answer_with`: the step's
+#    outputs ({"reply": "string"}), and `task`: the template rendered from the step's declared
+#    inputs. Answer it with those outputs and the run ends.
 echo '{"message":"Hi, I think I was charged twice for March. Could you check?"}' > start2.json
 aip run "$EX" --input start2.json --run-file run2.json
 echo '{"billing": true, "tone": "calm"}' > answer2.json
 aip resume run2.json --input answer2.json
-
-# 4. the calm branch needs a model: with a TypeSafe key (aip config --decision-model KEY) the
-#    decision does not pause; a confident "calm" writes tone_confidence, the check passes, and
-#    the run pauses at the client task. Note `state`: only the step's inputs (message, tone; not
-#    billing), `answer_with`: the step's outputs ({"reply": "string"}), and `task`: the template
-#    rendered from the step's declared inputs. Answer it with those outputs and the run ends.
-aip run "$EX" --input start2.json --run-file run3.json
 echo '{"reply":"Thanks for flagging this; duplicate charges are refunded in full within 5 business days."}' > answer3.json
-aip resume run3.json --input answer3.json
+aip resume run2.json --input answer3.json
+
+# 4. with a TypeSafe key (aip config --decision-model KEY) the decision does not pause: the model
+#    answers and writes tone_confidence, and the router checks it; a confident "calm" reaches the
+#    client task as above, an unsure one is escalated.
+aip run "$EX" --input start2.json --run-file run3.json
 ```
 
 Things to notice: `--input` takes a file, not inline JSON. Answering only one of two questions
 is an `invalid_output` error naming the missing one (`"missing": ["tone"]`), and the pause stays
 put for a second try. At the client-task pause, `answer_with` lists the step's declared outputs,
-which is what your answer must contain. To see the client task without a key, copy the example
-and remove the router's `confidence` line: the validator then warns `unmeasured_route` instead,
-and a hand-typed `calm` reaches `reply`.
+which is what your answer must contain.

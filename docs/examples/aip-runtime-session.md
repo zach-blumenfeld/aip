@@ -5,7 +5,7 @@
 > confirmation; a router checks its confidence instead), `aip info` shows a `start` step and marks questions
 > `(confidence)` and decisions `(fallback)` where it showed thresholds, and a decision's attribution has no
 > `reviewed`. The loop the agent follows is unchanged, and the shipped example still escalates a message
-> answered by hand (`skills/aip-runtime/SKILL.md` is the current skill).
+> answered `angry` by hand (`skills/aip-runtime/SKILL.md` is the current skill).
 
 The fresh-agent check for the `aip-runtime` skill, re-recorded for the 0.6a0 release (milestone C1), where the
 server holds the run and the client runs its scripts and resolves its decisions. It doubles as step 5 of the

@@ -109,15 +109,14 @@ class ApiError(Exception):
 class PeekBody(BaseModel):
     after: str | None = None
     payload: JSON = Field(default_factory=dict)
+    history: List[JSON] = Field(default_factory=list)
 
 
 class StepBody(PeekBody):
-    history: List[JSON] = Field(default_factory=list)
     run_id: str | None = None
 
 
 class AnswerBody(PeekBody):
-    history: List[JSON] = Field(default_factory=list)
     answers: JSON
     attribution: JSON | None = None
     run_id: str | None = None
@@ -312,7 +311,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
         node = None
         try:
             if answers is None:
-                node, _ = proc.resolve(body.after, body.payload)
+                node, _ = proc.resolve(body.after, body.payload, body.history)
                 if isinstance(node, Execution):
                     raise ApiError(409, "runs_on_client",
                                    f"step {node.name!r} is an execution step and scripts run on the client; "
@@ -323,7 +322,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
                                    "answer its questions through /answer", location=node.name)
                 response = proc.run(body.after, body.payload, body.history).to_dict()
             else:
-                node, entries = proc.resolve(body.after, body.payload)
+                node, entries = proc.resolve(body.after, body.payload, body.history)
                 if not isinstance(node, Decision):
                     raise ApiError(422, "not_a_decision", f"the step after {body.after!r} is not a decision",
                                    location=getattr(node, "name", None))
@@ -483,7 +482,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
     def peek(ref: str, body: PeekBody) -> JSON | None:
         name, revision = resolve(ref)
         try:
-            node, _ = procedure(name, revision).resolve(body.after, body.payload)
+            node, _ = procedure(name, revision).resolve(body.after, body.payload, body.history)
         except KeyError as exc:
             raise ApiError(422, "invalid_request", str(exc)) from exc
         return describe_next(node)

@@ -191,9 +191,9 @@ class NonInteractive(Both):
             self.assertEqual(history[2]["input"], {"tone_confidence": 0.8, "tone": "calm"})
             self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": None}})
 
-    def test_a_manual_answer_has_no_confidence_so_the_check_fires(self):
-        """No model: the agent answers calm. No confidence key is written for it, and the check reads
-        absence as low confidence: `escalate`, reason `absent`. Nobody invents a number."""
+    def test_a_manual_answer_has_no_confidence_and_the_check_is_skipped(self):
+        """No model: the agent answers calm. No confidence key is written for it (nobody invents a
+        number), and the router does not check one: the agent's call takes the calm branch, `manual`."""
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("TYPESAFE_API_KEY", None)
             h = self.harness(tmp, None, variant(tmp, check=True))
@@ -205,12 +205,13 @@ class NonInteractive(Both):
             run = RunFile.load(outcome.run_file)
             runner2, _ = h.runner(tmp, run=run)
             outcome2 = runner2.resume(run, {"billing": True, "tone": "calm"})
-            self.assertEqual(outcome2.code, EXIT_DONE)
+            self.assertEqual(outcome2.code, EXIT_PAUSED)
+            self.assertEqual(RunFile.load(outcome2.run_file).pause["step"], "reply")
             history = h.history(outcome2)
-            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone", "escalate", "end"])
+            self.assertEqual([x["step"] for x in history], ["start", "triage", "by-tone"])
             self.assertEqual(history[1]["attribution"], {"resolver": "manual", "model": None, "confidence": None})
-            self.assertEqual(history[2]["input"], {"tone_confidence": None})
-            self.assertEqual(history[2]["result"], {"to": "escalate", "confidence": {"fired": True, "reason": "absent"}})
+            self.assertEqual(history[2]["input"], {"tone": "calm"})
+            self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": "manual"}})
 
     def test_no_model_and_no_fallback_stops_the_run_until_a_model_is_configured(self):
         """`fallback: false` on `triage`: with no decision model the run stops with `no_decision_model`,

@@ -248,7 +248,7 @@ def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON
     while True:
         node = None
         try:
-            node, routed = procedure.resolve(after, payload)
+            node, routed = procedure.resolve(after, payload, history)
             if answers is not None:
                 if not isinstance(node, Decision):
                     raise KeyError(f"the step after {after!r} is not a decision")

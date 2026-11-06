@@ -236,7 +236,7 @@ class ConfidenceCheck(Strict):
     )
     below: float = Field(
         ge=0, le=1,
-        description="The bound. The check fires when the key's value is below it, or when the key is absent or null: unknown confidence is low confidence, and nobody invents a number.",
+        description="The bound. The check fires when the key's value is below it, or when the key is absent or null: unknown confidence is low confidence, and nobody invents a number. A branch key the client answered by hand is not checked: that answer takes its branch.",
     )
     to: StepName = Field(description="The step the run goes to when the check fires.")
 
@@ -251,7 +251,7 @@ class RouterStep(Strict):
     )
     confidence: ConfidenceCheck | None = Field(
         default=None,
-        description="Optional confidence check, applied before `branches`: when `key` is below `below`, absent or null, the run goes to `to` and the value match is skipped. One check per router; a router that needs more is two routers.",
+        description="Optional confidence check, applied before `branches`: when `key` is below `below`, absent or null, the run goes to `to` and the value match is skipped. It guards a model's answer: a branch key the client answered by hand is not checked. One check per router; a router that needs more is two routers.",
     )
     branches: Dict[str, StepName] = Field(
         min_length=2,

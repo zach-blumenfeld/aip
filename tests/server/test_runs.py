@@ -230,7 +230,7 @@ def drive(backend, start: dict, answers: list, tmp: Path) -> RunFile:
 
 @pytest.mark.parametrize("start, answers", [
     ({"message": ANGRY}, [{"billing": True, "tone": "angry"}]),
-    ({"message": CALM}, [{"billing": True, "tone": "calm"}]),        # by hand: no confidence, the check fires, escalate
+    ({"message": CALM}, [{"billing": True, "tone": "calm"}, {"reply": "Refund issued."}]),   # by hand: no check, reply
 ], ids=["angry", "calm"])
 def test_the_servers_record_is_what_a_local_run_writes(api, tmp_path, monkeypatch, start, answers):
     monkeypatch.setenv("PYTHONHASHSEED", "0")         # the escalate script's ticket id hashes the message
@@ -252,7 +252,10 @@ def test_a_served_run_file_is_a_handle(api, tmp_path):
     run = RunFile.load(outcome.run_file)
     outcome = Runner(backend, run_file=outcome.run_file, out=out, run_id=run.run_id).resume(
         run, {"billing": True, "tone": "calm"})
-    assert (outcome.code, outcome.payload) == (0, {"message": CALM})   # by hand: the check fired, escalate ran here, done
+    assert outcome.code == 0 and RunFile.load(outcome.run_file).pause["step"] == "reply"   # by hand: no check, calm
+    run = RunFile.load(outcome.run_file)
+    outcome = Runner(backend, run_file=outcome.run_file, out=out, run_id=run.run_id).resume(run, {"reply": "Done."})
+    assert (outcome.code, outcome.payload) == (0, {"message": CALM})
     data = json.loads(Path(outcome.run_file).read_text())
     assert "history" not in data and "state" not in data and "after" not in data
     assert set(data) == {"pause", "run_id", "server", "name", "revision", "version", "workdir", "created"}

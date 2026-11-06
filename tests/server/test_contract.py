@@ -462,7 +462,7 @@ def test_governance_confidence_fired_and_manual_decisions(catalog, runs, governa
     seed(runs, rev, decision(), route("angry"), escalate(), end())
     # the model said calm at 0.4: the check fired and sent the run to escalate
     low = seed(runs, rev, decision(tone="calm", tone_p=0.4), route("calm", fired="low"), escalate(), end())
-    # a manual answer carries no confidence: the check fired on the absent key
+    # a key that arrived with no confidence: the check fired on absence (seeded; a live run skips the check for a hand answer)
     absent = seed(runs, rev, decision(tone="calm", manual=True), route("calm", fired="absent"), escalate())
     # another low one, still running
     low2 = seed(runs, rev, decision(tone="calm", tone_p=0.3), route("calm", fired="low"), status="running")

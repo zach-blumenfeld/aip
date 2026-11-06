@@ -7,7 +7,7 @@ from typing import Dict, List
 from aip.model.environment import Requires
 from aip.model.resources import ResourceLoader
 from aip.model.steps import (
-    BaseStep, Decision, EndStep, Execution, Meta, Node, Router, Start, StepResponse, describe_next,
+    BaseStep, Decision, EndStep, Execution, Meta, Node, Router, Start, StepResponse, answered_by_hand, describe_next,
 )
 from aip.model.types import JSON, project, validate_input, validate_output
 
@@ -79,12 +79,14 @@ class Procedure:
                         for name, node in self.nodes.items() if isinstance(node, Router)},
         }
 
-    def resolve(self, after: str | None, payload: JSON) -> tuple[Node | None, List[JSON]]:
+    def resolve(self, after: str | None, payload: JSON, history: List[JSON] | None = None) -> tuple[Node | None, List[JSON]]:
         """
         The node that receives `payload` after step `after`, walking routers on the
         payload. Returns the node and the router history entries the walk produced: each
         records the key it read and where it went, and, when the router has a confidence
         check, the key it checked and `confidence: {fired, reason}` beside the branch taken.
+        `history` is the run so far: a router's check is skipped (`reason: manual`) when the
+        branch key's latest producer is a decision the client answered by hand.
         """
         if after is None:
             node: Node | None = self.start
@@ -96,11 +98,13 @@ class Procedure:
 
         entries: List[JSON] = []
         while isinstance(node, Router):
-            target = node.route(payload)
-            checked = node.check(payload)
+            by_hand = node.confidence is not None and answered_by_hand(history or [], node.branch_on)
+            target = node.route(payload, by_hand)
+            checked = node.check(payload, by_hand)
             entry: JSON = {"step": node.name, "kind": node.kind, "input": {}, "result": {"to": target.name}}
             if checked is not None:
-                entry["input"][node.confidence.key] = payload.get(node.confidence.key)
+                if not by_hand:
+                    entry["input"][node.confidence.key] = payload.get(node.confidence.key)
                 entry["result"]["confidence"] = checked
             if node.branch_on in payload and not (checked or {}).get("fired"):
                 entry["input"][node.branch_on] = payload[node.branch_on]
@@ -123,7 +127,7 @@ class Procedure:
         """
         if after is not None and isinstance(prev := self.nodes.get(after), BaseStep):
             validate_output(prev.name, prev.required_outputs(), payload, strict=False)
-        node, entries = self.resolve(after, payload)
+        node, entries = self.resolve(after, payload, history)
         history = [*(history or []), *entries]
 
         if node is None or isinstance(node, EndStep):

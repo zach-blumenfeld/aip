@@ -478,8 +478,8 @@ def classify_sources(spec: ProcedureSpec) -> dict[str, str]:
 
 
 def check_sources(spec: ProcedureSpec, path: str) -> list[Issue]:
-    """What the class of a route says to its author. A router whose check reads a number
-    nothing calibrated (`confidence_on_unmeasured_source`), a router an LLM steers with
+    """What the class of a route says to its author. A router whose check guards a number its
+    source does not give (`confidence_on_unmeasured_source`), a router an LLM steers with
     nothing recorded (`unmeasured_route`), both warnings; a router checking a confidence a
     script or client task declared itself (`declared_confidence`), information. A
     deterministic route says nothing."""
@@ -497,7 +497,9 @@ def check_sources(spec: ProcedureSpec, path: str) -> list[Issue]:
         if worst == UNMEASURED and router.confidence is not None:
             issues.append(Issue(path, "confidence_on_unmeasured_source",
                                 f"router `{name}` checks `{router.confidence.key}`, but its branch key `{router.branch_on}` is "
-                                f"unmeasured: {reasons}; the check reads a number nothing calibrated. To measure the route, {fix}",
+                                f"unmeasured: {reasons}; the check guards a model's confidence, which this source does not give: "
+                                f"a decision answered by hand bypasses it, and a client task's output writes nothing for it to read. "
+                                f"To measure the route, {fix}",
                                 f"{where}.confidence", severity="warning"))
         elif worst == UNMEASURED:
             issues.append(Issue(path, "unmeasured_route",

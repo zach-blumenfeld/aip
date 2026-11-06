@@ -571,21 +571,23 @@ def test_governance_queries_over_http(backend, no_key, example, tmp_path):
     assert r.status_code == 422 and r.json()["error"]["kind"] == "invalid_output"
     assert r.json()["error"]["invalid"] == ["attribution"]
     assert api.get(f"/runs/{second['run_id']}").json()["pause"]["kind"] == "decision"
-    # answered with no model (no attribution posted means manual): no confidence key, so the check fires on absence
+    # answered with no model (no attribution posted means manual): no confidence key, and the check is skipped
     r = api.post(f"/runs/{second['run_id']}/result", json={"answer": {"billing": True, "tone": "calm"}})
     assert r.status_code == 200 and "tone_confidence" not in r.json()["state"]
+    assert api.get(f"/runs/{second['run_id']}").json()["history"][2] == {
+        "step": "by-tone", "kind": "router", "input": {"tone": "calm"},
+        "result": {"to": "reply", "confidence": {"fired": False, "reason": "manual"}}}
     assert api.get("/governance/manual-decisions").json() == [
         {"name": "checked-support", "step": "triage", "decided": 2, "manual": 1, "rate": 0.5}]
     assert api.get("/governance/confidence-fired").json() == [
-        {"name": "checked-support", "router": "by-tone", "reason": "absent", "fired": 1, "run_ids": [second["run_id"]]},
         {"name": "checked-support", "router": "by-tone", "reason": "low", "fired": 1, "run_ids": [opened["run_id"]]}]
     # both routes are unmeasured, each because its check reads a number a hand answer never gives (`triage`
     # allows one in the example and in the variant); the query counts the runs that went through
     third = api.post("/runs", json={"name": "billing-support", "input": start}).json()
     r = api.post(f"/runs/{third['run_id']}/result", json={"answer": {"billing": True, "tone": "calm"}})
-    assert r.status_code == 200 and (r.json()["paused"], r.json()["step"]) == ("execute", "escalate")   # by hand: the check fired
-    r = api.post(f"/runs/{third['run_id']}/result", json={"answer": {"output": {"ticket_id": 1, "queue": "tier2"}, "seconds": 0.1}})
-    assert r.status_code == 200 and r.json()["done"] is True                   # the router's passage is recorded with the report
+    assert r.status_code == 200 and (r.json()["paused"], r.json()["step"]) == ("client_task", "reply")   # by hand: no check
+    r = api.post(f"/runs/{third['run_id']}/result", json={"answer": {"reply": "Refund issued."}})
+    assert r.status_code == 200 and r.json()["done"] is True                   # the router's passage is recorded with the answer
     rows = api.get("/governance/unmeasured-routes").json()
     assert rows == [
         {"name": "checked-support", "revision": rows[0]["revision"], "router": "by-tone",

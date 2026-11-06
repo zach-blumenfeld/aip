@@ -144,7 +144,7 @@ name, plus `<question>_confidence` for each question in `confidence`: a `float` 
 probability the model put on the answer it gave, its own confidence for a `choice` or `score`
 and `|2p - 1|` for a `noul`. It is the same number the run's history records in the answer's
 attribution. An answer given by hand writes no confidence key; nobody invents a number, and a
-router that checks the key treats its absence as low confidence. With `fallback: false` a run
+router that checks the key skips the check for it: the hand answer takes its branch. With `fallback: false` a run
 with no decision model stops at the step (`no_decision_model`); with `true` the questions go to
 the agent, and a router fed by the answer is an unmeasured route (below).
 
@@ -182,10 +182,13 @@ Quote labels that YAML would read as booleans (`"yes"`, `"no"`, `"on"`, `"off"`)
 | `confidence` | no | one check, `{key, below, to}`: `key` a `float` in the state (typically a `<question>_confidence`), `below` a bound in `[0, 1]`, `to` a step |
 
 A router with a `confidence` check reads `key` first: when the value is below `below`, or the key
-is absent, or null, the run continues at `to` and the branches are not consulted. Otherwise, and
-on a router with no check, it reads `branch_on` and continues at `branches[value]`; a value with
-no branch is an error. It adds nothing to the state; its history entry records the branch taken
-and, with a check, whether it fired and why (`low`, `absent`, `null`). One check per router: a
+is absent, or null, the run continues at `to` and the branches are not consulted. The check guards
+a model's answer: when the latest producer of `branch_on` in the run's history is a decision
+answered by hand (`resolver: manual`), the check is skipped and the hand answer takes its branch.
+Otherwise, and on a router with no check, it reads `branch_on` and continues at `branches[value]`;
+a value with no branch is an error. It adds nothing to the state; its history entry records the
+branch taken and, with a check, whether it fired and why (`low`, `absent`, `null`), or `manual`
+when it was skipped. One check per router: a
 router that needs more is two routers. When `branch_on` is a decision question, the branch keys
 must be values that question can produce: its labels, `true`/`false`, or level numbers written
 as strings (`"0"`, `"1"`).
@@ -240,7 +243,8 @@ from which the router can be reached; with several producers the worst class win
 | unmeasured | a decision with `fallback: true`, a decision whose confidence is not emitted or not checked, or a client task output the router does not check: probabilistic, with no calibrated number behind it |
 
 A router with a confidence check on an unmeasured source gets `confidence_on_unmeasured_source`
-(a warning: the check reads a number nothing calibrated); a router with no check on an
+(a warning: the check guards a model's number and this source gives none, so a hand answer
+bypasses it and only the runs a model answered are measured); a router with no check on an
 unmeasured source gets `unmeasured_route` (a warning: a probabilistic choice routed the run and
 nothing recorded how sure it was); a router checking a confidence a script or client task
 declared itself gets `declared_confidence` (information: legitimate for calibrated code,

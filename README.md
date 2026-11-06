@@ -147,7 +147,7 @@ curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh
 ```
 Installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with `aip-spec`, and both Agent Skills, `aip-compile` for compiling and `aip-runtime` for running, into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). Open a new terminal afterwards if `aip` is not found.
 
-**2. Run the example locally.** The bundled `billing-support` skill triages a customer message. With no decision model configured you answer its questions on the terminal: the example opts into that (`fallback: true` on its decision) so this step needs no TypeSafe key. An answer by hand carries no confidence, and the skill's router escalates an unsure tone, so the run ends by running the escalation script. With a key the model answers, and a message it is confident is calm pauses with a task for you to draft the reply.
+**2. Run the example locally.** The bundled `billing-support` skill triages a customer message. With no decision model configured you answer its questions on the terminal: the example opts into that (`fallback: true` on its decision) so this step needs no TypeSafe key. An answer by hand carries no confidence and is not checked, so the tone you give picks the branch: `angry` runs the escalation script, `calm` pauses with a task for you to draft the reply. With a key the model answers, and the router escalates a tone it is unsure of.
 
 ```bash
 aip-spec example billing-support --out .     # writes ./billing-support
@@ -212,7 +212,7 @@ Extended example with Neo4j backend for deeper audit and governance.
 
 - macOS or Linux with `curl`.
 - A Neo4j database. [Aura](https://console.neo4j.io) works.
-- A [TypeSafe](https://typesafe.ai) API key, set on the client. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model (the example allows that with `fallback: true`), and since an answer by hand carries no confidence, `billing-support` escalates every message.
+- A [TypeSafe](https://typesafe.ai) API key, set on the client. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model (the example allows that with `fallback: true`), and an answer by hand takes the branch you chose, unchecked.
 - [Claude Code](https://claude.com/claude-code) for steps 5 and 6. Any agent `aip skill list` names works the same way.
 
 ### 1. Install or upgrade
