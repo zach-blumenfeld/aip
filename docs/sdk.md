@@ -11,11 +11,15 @@ import aip
 
 client = aip.Client()                                        # the configured server, if any (`aip config`)
 client = aip.Client("https://aip.example.com", token="...")  # a server
+client = aip.Client("local")                                 # this machine's, started by the first call that needs it
 client = aip.Client(agent="my-framework 2.1")                 # who the record says ran it
 ```
 
 With no argument the client points where `aip config` points, which may be nowhere: then runs
-work and are not recorded, and the catalog methods raise `NoServer`. The decision model is an
+work and are not recorded, and the catalog methods raise `NoServer`. `local` (`aip config server
+local`) is a server on this machine that the first call starts and that stops when idle
+(`docs/server-design.md`, The local server); a run does not fail when it cannot be started, it
+is `recorded=False`. The decision model is an
 endpoint with the TypeSafe API shape: the configured one decides (`aip config --decision-model
 URL --decision-model-key KEY`, or `AIP_DECISION_MODEL` and `AIP_DECISION_MODEL_KEY`; the URL
 defaults to TypeSafe's), and `decision_client=` injects a client with the SDK's shape instead
@@ -39,7 +43,7 @@ on_pause=None)` runs a target until it stops. The target is a program directory 
 here), an `.rl` bundle, or a catalog reference `name[@rev]` (fetched from the server, or from
 the bundle cache when `pull` put it there); every run runs on this machine from the bundle
 cache, and when a server is configured it is recorded there at every stop (a folder or file as
-a run of a *draft*). `workdir` is where its scripts read and write files (default the current
+a run of a *draft*, unless the server holds that very bundle as a published revision). `workdir` is where its scripts read and write files (default the current
 directory); `batch` how many `For` passes run at once (default 10, `aip config --batch`);
 `agent` and `session` the run's identity (default `AIP_AGENT` / the client's `agent`, and
 `AIP_SESSION`). It returns:
@@ -102,13 +106,15 @@ catalog reference still runs from the bundle cache.
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it) | `aip pin` |
 | `retire("name@revision")` | `Retired` | `aip retire` |
-| `runs(name=None, status=None, agent=None, session=None, limit=50)` | `[RunSummary]`: `run_id`, `name`, `revision`, `status`, `draft`, `identity`, `started`, `updated`; the server's runs when one is configured, else this machine's run files | `aip runs` |
+| `runs(name=None, status=None, agent=None, session=None, limit=50, user=None, draft=None)` | `[RunSummary]`: `run_id`, `name`, `revision`, `status`, `draft`, `identity`, `started`, `updated`; the server's runs when one is configured, else this machine's run files | `aip runs` |
 | `run_record(run_id)` | `RunRecord`: `status`, `identity`, `started`, `finished`, `pause`, `error`, `result`, `history` (the entries, one per step run), `table()` (the step table), from this machine's run file or the server; `InvalidInput` when neither has it | `aip runs <run_id>` |
-| `governance(query=None, **params)` | `[GovernanceQuery]`, or the query's rows | `aip governance` |
-| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server`, `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
+| `audit(query=None, **params)` | `[AuditQuery]` (`query`, `description`, `builtin`), or the query's rows; `params` are `name`, `agent`, `session`, `user`, `draft`, `window`, `limit`, `repeats`, `key` | `aip audit` |
+| `save_audit(name, cypher, description="")`, `delete_audit(name)` | `AuditQuery`; a query of your own kept on the server and run by name | `aip audit --save`, `--delete` |
+| `export_runs(output, name=None, *, since=None, agent=None, session=None, user=None, draft=None, force=False)` | `Exported`: `path`, `runs`, `bundles`; the runs that match and the procedures they ran, as one Relate file | `aip export runs` |
+| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server` (the URL), `local` (it is this machine's, started on demand), `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under
-`--json`. `aip export` and `aip fmt` are the language's tooling, and `aip server` serves: none
+`--json`. `aip export <bundle.rl>` and `aip fmt` are the language's tooling, and `aip server` serves: none
 of them is a client call, so none is on `Client`. (`aip db`, which wrote Neo4j with no server, is
 gone: the server is the store's only writer, so loading is `publish`, listing is `list`, and
 getting a revision's folder back is `get`.)

@@ -16,8 +16,16 @@ stopped. So the API is the contract `aip.client.server` lists, and nothing else:
   be held, else 404 `unknown_bundle`; the reply names the `user` the token stands for, which the
   server writes into the run's identity whatever the client claimed), `GET /runs` (newest first;
   `name`, `status`, `agent`, `session`, `user`, `draft`, `limit`), `GET /runs/{run_id}`.
-- **governance**: `GET /governance` lists the named queries of `aip.server.governance` and
-  `GET /governance/{query}?name=&agent=&session=&user=&window=&limit=` answers one.
+  The reply also says what the store made of it: `draft` (the bundle has no revision) and the
+  `revision` the bundle is published as.
+- **audit**: `GET /audit` lists the named queries of `aip.server.audit` and the ones stored
+  here, `GET /audit/{query}?name=&agent=&session=&user=&draft=&window=&limit=&repeats=&key=`
+  answers one, `PUT /audit/{name}` (`{"description", "cypher"}`) stores a query and
+  `DELETE /audit/{name}` removes it.
+- **export**: `GET /export/runs?name=&since=&agent=&session=&user=&draft=` hands back one
+  Relate file holding the runs that match and the procedures they ran (`aip export runs`).
+- **health**: `GET /health`, with no token: `{"aip", "language", "backend", "local"}`, which is
+  how a client tells an aip server from whatever else answers on a port (a local server adds its `pid`).
 
 An upload is a bundle file and is treated as one: it is read and verified exactly as `aip run
 file.rl` would (`aip.compiler.read_bundle`), and a file that is not a bundle, was edited, or is
@@ -32,13 +40,15 @@ client, from its own origin. So the server answers CORS for pages served from a 
 
 Errors are `{"error": {"kind", "message", "location"?, ...}}`. Auth is a bearer token. A token
 has scopes (`read`: every GET; `run`: upload a draft and record runs; `publish`: publish, pin,
-retire) and may have a name, which is the `user` of the runs recorded with it. With no tokens
+retire, store or remove an audit query) and may have a name, which is the `user` of the runs recorded with it. With no tokens
 configured the server is open, and a loopback client may call without a token either way.
 """
 
 from __future__ import annotations
 
+import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,7 +61,7 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from aip.compiler.bundle import BUNDLE_SUFFIX, Bundle, BundleError
-from aip.server import governance
+from aip.server import audit
 from aip.server.store import InvalidRun, NotFound, UnknownBundle
 
 JSON = dict[str, Any]
@@ -91,6 +101,24 @@ class RevisionBody(BaseModel):
     revision: str | int | None = None
 
 
+class QueryBody(BaseModel):
+    cypher: str
+    description: str = ""
+
+
+def since_of(value: str | None) -> str | None:
+    """`since` as the store compares it: an ISO 8601 date or timestamp, checked."""
+    if value is None or not value.strip():
+        return None
+    from datetime import datetime
+
+    try:
+        datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise ApiError(422, "invalid_request", f"since is a date or a timestamp (2026-11-01, 2026-11-01T09:00:00), not {value!r}") from None
+    return value.strip()
+
+
 def describe_bundle(bundle: Bundle) -> JSON:
     """The description stored with a bundle, the one `aip info` prints for a folder: computed
     once, when the bundle arrives, by loading it as a run would."""
@@ -120,13 +148,17 @@ def read_upload(data: bytes) -> Bundle:
 
 
 def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]] | None = None, localhost_open: bool = True,
-               allow_origins: list[str] | None = None, builtins: bool = True) -> FastAPI:
+               allow_origins: list[str] | None = None, builtins: bool = True, local: bool = False) -> FastAPI:
     """Build the server over `backend`.
 
     tokens:          bearer token -> `Token` (or just its scopes); empty or None means no auth
     localhost_open:  a loopback client needs no token even when tokens are configured
     allow_origins:   origins besides loopback ones whose pages may call this server (CORS)
     builtins:        publish the package's built-in bundles this store has not been offered yet
+    local:           this is the server a client started for itself (`aip server --local`); `GET /health` says so
+
+    `app.state.last_request` is the monotonic time of the last request, which is how a local
+    server knows it has been idle.
     """
     store = backend.store
     known = {t: v if isinstance(v, Token) else Token(frozenset(v)) for t, v in (tokens or {}).items()}
@@ -138,6 +170,13 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
     app = FastAPI(title="aip server", version="0.9", docs_url=None, redoc_url=None)
     app.add_middleware(CORSMiddleware, allow_origins=list(allow_origins or []), allow_origin_regex=LOOPBACK_ORIGINS,
                        allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "Accept"])
+
+    app.state.last_request = time.monotonic()
+
+    @app.middleware("http")
+    async def _stamp(request: Request, call_next):
+        app.state.last_request = time.monotonic()
+        return await call_next(request)
 
     # ------------------------------------------------------------------ errors
 
@@ -158,6 +197,10 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
 
     @app.exception_handler(InvalidRun)
     async def _invalid_run(_: Request, exc: InvalidRun):
+        return answer(ApiError(422, "invalid_request", str(exc)))
+
+    @app.exception_handler(audit.InvalidQuery)
+    async def _invalid_query(_: Request, exc: audit.InvalidQuery):
         return answer(ApiError(422, "invalid_request", str(exc)))
 
     @app.exception_handler(RequestValidationError)
@@ -200,6 +243,20 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
             return Response(content=store.bundle_file(bundle_id), media_type=BUNDLE_MEDIA_TYPE,
                             headers={"Content-Disposition": f'attachment; filename="{filename}{BUNDLE_SUFFIX}"'})
         return described
+
+    # ------------------------------------------------------------------- health
+
+    @app.get("/health")
+    def health() -> JSON:
+        from importlib.metadata import version
+
+        from aip.compiler import LANGUAGE_VERSION
+
+        about = {"aip": version("agent-instruction-protocol"), "language": LANGUAGE_VERSION,
+                 "backend": getattr(backend, "kind", None), "local": local}
+        if local:                                    # loopback only: the client that started it may stop it
+            about["pid"] = os.getpid()
+        return about
 
     # ------------------------------------------------------------------ catalog
 
@@ -261,7 +318,7 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
 
     @app.post("/runs", dependencies=[require(RUN)])
     def record(body: JSON, request: Request) -> JSON:
-        return store.record(body, user=token_of(request).name)
+        return store.record(dict(body), user=token_of(request).name)
 
     @app.get("/runs", dependencies=[require(READ)])
     def list_runs(name: str | None = Query(None), status: str | None = Query(None), agent: str | None = Query(None),
@@ -273,20 +330,52 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
     def get_run(run_id: str) -> JSON:
         return store.run(run_id)
 
-    # --------------------------------------------------------------- governance
+    # -------------------------------------------------------------------- audit
 
-    @app.get("/governance", dependencies=[require(READ)])
-    def list_governance() -> list[JSON]:
-        return [{**row, "path": f"/governance/{row['query']}"} for row in governance.listing()]
+    @app.get("/audit", dependencies=[require(READ)])
+    def list_audit() -> list[JSON]:
+        return [{**row, "path": f"/audit/{row['query']}"} for row in audit.listing(store)]
 
-    @app.get("/governance/{query}", dependencies=[require(READ)])
-    def governance_query(query: str, name: str | None = Query(None), agent: str | None = Query(None),
-                         session: str | None = Query(None), user: str | None = Query(None),
-                         window: int = Query(governance.DEFAULT_WINDOW, ge=1, le=100000),
-                         limit: int = Query(governance.DEFAULT_LIMIT, ge=1, le=10000)) -> list[JSON]:
-        if query not in governance.QUERIES:
-            raise ApiError(404, "not_found", f"no governance query {query!r}; GET /governance lists them")
-        return governance.run(store, query, name=name, agent=agent, session=session, user=user, window=window, limit=limit)
+    @app.get("/audit/{query}", dependencies=[require(READ)])
+    def audit_query(query: str, name: str | None = Query(None), agent: str | None = Query(None),
+                    session: str | None = Query(None), user: str | None = Query(None), draft: bool | None = Query(None),
+                    window: int = Query(audit.DEFAULT_WINDOW, ge=1, le=100000), limit: int = Query(audit.DEFAULT_LIMIT, ge=1, le=10000),
+                    repeats: int = Query(audit.DEFAULT_REPEATS, ge=0, le=100000), key: str | None = Query(None)) -> list[JSON]:
+        try:
+            return audit.run(store, query, name=name, agent=agent, session=session, user=user, draft=draft, window=window,
+                             limit=limit, repeats=repeats, key=key)
+        except KeyError:
+            raise ApiError(404, "not_found", f"no audit query {query!r}; GET /audit lists them") from None
+        except audit.InvalidQuery:
+            raise
+        except Exception as exc:
+            if query in audit.QUERIES:
+                raise
+            raise ApiError(422, "invalid_request", f"the stored query {query} failed: {type(exc).__name__}: {exc}") from exc
+
+    @app.put("/audit/{name}", dependencies=[require(PUBLISH)])
+    def store_query(name: str, body: QueryBody) -> JSON:
+        return {**audit.save(store, name, body.cypher, body.description), "path": f"/audit/{name}"}
+
+    @app.delete("/audit/{name}", dependencies=[require(PUBLISH)])
+    def remove_query(name: str) -> JSON:
+        try:
+            audit.delete(store, name)
+        except KeyError:
+            raise ApiError(404, "not_found", f"no stored audit query {name!r}") from None
+        return {"query": name, "deleted": True}
+
+    # ------------------------------------------------------------------- export
+
+    @app.get("/export/runs", dependencies=[require(READ)])
+    def export_runs(name: str | None = Query(None), since: str | None = Query(None), agent: str | None = Query(None),
+                    session: str | None = Query(None), user: str | None = Query(None), draft: bool | None = Query(None)):
+        with tempfile.TemporaryDirectory(prefix="aip-export-") as tmp:
+            path = Path(tmp) / f"runs{BUNDLE_SUFFIX}"
+            counted = store.export_runs(path, name=name, since=since_of(since), agent=agent, session=session, user=user, draft=draft)
+            return Response(content=path.read_bytes(), media_type=BUNDLE_MEDIA_TYPE,
+                            headers={"Content-Disposition": f'attachment; filename="runs{BUNDLE_SUFFIX}"',
+                                     "X-AIP-Runs": str(counted["runs"]), "X-AIP-Bundles": str(counted["bundles"])})
 
     app.state.backend = backend
     return app

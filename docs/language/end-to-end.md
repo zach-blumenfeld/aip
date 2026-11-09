@@ -61,7 +61,7 @@ a graph layer (the projection of bundles and runs); bundles immutable by id; the
 
 ## Scene 5: ask governance questions
 
-In the console, or by query: which routes fired their confidence check this week and on which
+In the console, with `aip audit`, or by query: which routes fired their confidence check this week and on which
 revision; which routes branch on an agent's answer (the `source` on the route's `READ_BY` edge);
 which policy fails the aggregation most often; what the lineage of the `End` step's `reply` is, back to
 the decision and the ticket. Each question is one query over the projected graph, and the
@@ -70,8 +70,8 @@ answer names bundle ids.
 `aip export runs ticket-triage --since DATE -o audit.rl` writes those runs as one queryable
 file an auditor can open without the server.
 
-Needs: the graph schema the compiler writes; the fixed governance queries; the
-console's governance view; export of runs and procedures as a standalone graph file.
+Needs: the graph schema the compiler writes; the named audit queries (`aip audit`); the
+console's audit view; export of runs and procedures as a standalone graph file.
 
 ## Scene 6: change it and see the difference
 

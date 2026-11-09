@@ -3,19 +3,22 @@
     aip run <target> --inputs JSON      run a program directory, an .rl bundle or a catalog name; pauses print as JSON
     aip resume <run_id> --answers JSON  answer a pause (or, with no answers, retry a failed run)
     aip compile | export | fmt          the language's tooling (aip.compiler)
+    aip export runs [name] -o FILE      the server's runs and the procedures they ran, as one Relate file
     aip info <target>                   what a procedure is and what to give it
     aip pull | publish | get            move bundles between the cache and the catalog
     aip search | list | pin | retire    the catalog
     aip runs                            this machine's runs, or the server's; one run step by step
-    aip governance                      the server's governance queries
-    aip config                          where the client points: the server, the token, the decision model's endpoint and key, the batch size
+    aip audit                           the server's audit queries over the runs and the catalog
+    aip config                          where the client points: the server (`aip config server local | URL | none`), the token,
+                                        the decision model's endpoint and key, the batch size
     aip server                          serve the catalog and the record of runs
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
 object (`docs/cli-json.md`); the rest print text, or JSON with `--json`. `aip run` with no
 server configured ends with one line on stderr saying the run is not recorded and how to change
-that; the run's resumes do not repeat it.
+that; the run's resumes do not repeat it. With `aip config server local` nothing has to be
+started first: the first command that needs the server starts it (`aip.client.local`).
 """
 
 from __future__ import annotations
@@ -42,7 +45,10 @@ def compile_command(argv: list[str]) -> int:
 
 
 def export_command(argv: list[str]) -> int:
-    """`aip export <bundle.rl> --out DIR`: the program directory back from a bundle."""
+    """`aip export <bundle.rl> --out DIR`: the program directory back from a bundle.
+    `aip export runs [name] -o FILE`: the server's runs and the procedures they ran, as one file."""
+    if argv and argv[0] == "runs":
+        return export_runs_command(argv[1:])
     from aip.compiler.cli import export_command as compiler_export
 
     return compiler_export(argv, prog="aip export")
@@ -351,8 +357,7 @@ def runs_command(argv: list[str]) -> int:
     parser.add_argument("run_id", nargs="?", default=None)
     parser.add_argument("--name", default=None, help="only runs of this procedure")
     parser.add_argument("--status", default=None, help="only runs with this status (paused, done, failed)")
-    parser.add_argument("--agent", default=None, help="only runs this agent made")
-    parser.add_argument("--session", default=None, help="only runs of this session")
+    _run_filters(parser)
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--json", action="store_true", help="the list, or the run's whole record, as JSON")
     args = parser.parse_args(argv)
@@ -366,7 +371,7 @@ def runs_command(argv: list[str]) -> int:
             else:
                 sys.stdout.write(record.table())
             return 0
-        rows = client.runs(args.name, args.status, args.agent, args.session, args.limit)
+        rows = client.runs(args.name, args.status, args.agent, args.session, args.limit, args.user, args.draft)
         if args.json:
             print(json.dumps([r.data for r in rows], indent=2))
             return 0
@@ -385,25 +390,77 @@ def runs_command(argv: list[str]) -> int:
     return _serving(go)
 
 
-def governance_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip governance", description="The server's governance queries; with a query, its rows as JSON.")
+def _run_filters(parser: argparse.ArgumentParser) -> None:
+    """The flags that say which runs: by who ran them and whether the bundle was a draft."""
+    parser.add_argument("--agent", default=None, help="only runs this agent made")
+    parser.add_argument("--session", default=None, help="only runs of this session")
+    parser.add_argument("--user", default=None, help="only runs recorded with this user's token")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--draft", dest="draft", action="store_const", const=True, default=None,
+                       help="only runs of a draft (a folder or a file that is not a published revision)")
+    which.add_argument("--published", dest="draft", action="store_const", const=False, help="only runs of a published revision")
+
+
+def audit_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip audit", description="The server's audit queries over the record of runs and the "
+                                     "catalog. With no query, list them; with one, print its rows as JSON. --save keeps a "
+                                     "query of your own on the server, --delete removes it.")
     parser.add_argument("query", nargs="?", default=None)
     parser.add_argument("--name", default=None, help="only this procedure")
-    parser.add_argument("--agent", default=None)
-    parser.add_argument("--session", default=None)
-    parser.add_argument("--window", type=int, default=None, help="how many recent runs to look at")
-    parser.add_argument("--limit", type=int, default=None)
+    _run_filters(parser)
+    parser.add_argument("--window", type=int, default=None, help="how many recent runs to look at (default 100)")
+    parser.add_argument("--limit", type=int, default=None, help="how many rows to print (default 50)")
+    parser.add_argument("--repeats", type=int, default=None, help="repeated-cycles: more passes than this (default 1)")
+    parser.add_argument("--key", default=None, help="lineage: the key to trace")
+    parser.add_argument("--save", default=None, metavar="NAME", help="store --cypher on the server as the query NAME")
+    parser.add_argument("--cypher", default=None, metavar="CYPHER", help="with --save: the query, inline or @path for a file")
+    parser.add_argument("--description", default="", help="with --save: one line on what the query answers")
+    parser.add_argument("--delete", default=None, metavar="NAME", help="remove a stored query")
+    parser.add_argument("--json", action="store_true", help="the list of queries as JSON")
+    args = parser.parse_args(argv)
+    if args.save and not args.cypher:
+        parser.error("--save needs --cypher")
+
+    def go() -> int:
+        client = _client()
+        if args.save:
+            cypher = Path(args.cypher[1:]).read_text(encoding="utf-8") if args.cypher.startswith("@") else args.cypher
+            saved = client.save_audit(args.save, cypher, args.description)
+            print(f"stored {saved.query}; run it with: aip audit {saved.query}")
+            return 0
+        if args.delete:
+            client.delete_audit(args.delete)
+            print(f"removed {args.delete}")
+            return 0
+        rows = client.audit(args.query, name=args.name, agent=args.agent, session=args.session, user=args.user, draft=args.draft,
+                            window=args.window, limit=args.limit, repeats=args.repeats, key=args.key)
+        if args.query is not None:
+            print(json.dumps(rows, indent=2))
+        elif args.json:
+            print(json.dumps([q.data for q in rows], indent=2))
+        else:
+            width = max((len(q.query) for q in rows), default=0)
+            for q in rows:
+                print(f"{q.query.ljust(width)}  {q.description}" + ("" if q.builtin else "  (stored)"))
+        return 0
+    return _serving(go)
+
+
+def export_runs_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip export runs", description="Write the server's runs, and the procedures they ran, "
+                                     "as one Relate file: every run's record beside the graph of the bundle it ran, to open "
+                                     "with the engine's own tools and the queries of docs/language/queries.md.")
+    parser.add_argument("name", nargs="?", default=None, help="only runs of this procedure")
+    parser.add_argument("--since", default=None, metavar="DATE", help="only runs started on or after this date or timestamp (2026-11-01)")
+    _run_filters(parser)
+    parser.add_argument("-o", "--output", type=Path, required=True, metavar="FILE", help="the file to write (an .rl)")
+    parser.add_argument("--force", action="store_true", help="replace FILE if it exists")
     args = parser.parse_args(argv)
 
     def go() -> int:
-        rows = _client().governance(args.query, name=args.name, agent=args.agent, session=args.session, window=args.window,
-                                    limit=args.limit)
-        if args.query is None:
-            width = max((len(q.query) for q in rows), default=0)
-            for q in rows:
-                print(f"{q.query.ljust(width)}  {q.description}")
-            return 0
-        print(json.dumps(rows, indent=2))
+        e = _client().export_runs(args.output, args.name, since=args.since, agent=args.agent, session=args.session, user=args.user,
+                                  draft=args.draft, force=args.force)
+        print(f"wrote {e.runs} run(s) of {e.bundles} procedure(s) to {e.path}")
         return 0
     return _serving(go)
 
@@ -412,11 +469,15 @@ def config_command(argv: list[str]) -> int:
     from aip.model.typesafe import DEFAULT_URL
     from aip.sdk import configure, settings
 
-    parser = argparse.ArgumentParser(prog="aip config", description="Where the client points and how it runs. With no flags, "
-                                     "show it. AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY and AIP_BATCH "
+    parser = argparse.ArgumentParser(prog="aip config", description="Where the client points and how it runs. With no arguments, "
+                                     "show it. `aip config server local` records runs on this machine: a server is started "
+                                     "when a command needs one and stops when idle. `aip config server URL` points at a server "
+                                     "elsewhere (give its bearer token with --token); `aip config server none` records nothing. "
+                                     "AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY and AIP_BATCH "
                                      "override the file. The decision model is an endpoint with the TypeSafe API shape; without "
                                      "one a Decide step fails the run (no_decision_model) until one is set and the run is resumed.")
-    parser.add_argument("--server", default=None, metavar="URL", help="the server that records runs and holds the catalog (an empty string forgets it)")
+    parser.add_argument("setting", nargs="*", metavar="server local|URL|none", help="where runs are recorded and the catalog is")
+    parser.add_argument("--server", default=None, metavar="URL", help="the same as `server URL` (an empty string forgets it)")
     parser.add_argument("--token", default=None, help="the bearer token for the server (an empty string forgets it)")
     parser.add_argument("--decision-model", default=None, metavar="URL",
                         help=f"the decision model's endpoint (default {DEFAULT_URL}, TypeSafe's; an empty string forgets it)")
@@ -425,6 +486,11 @@ def config_command(argv: list[str]) -> int:
     parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once by default")
     parser.add_argument("--clear", action="store_true", help="forget everything")
     args = parser.parse_args(argv)
+    if args.setting:
+        if len(args.setting) != 2 or args.setting[0] != "server" or args.server is not None:
+            parser.error("the one setting given by name is the server: `aip config server local`, `aip config server URL` or "
+                         "`aip config server none`; the rest are flags")
+        args.server = args.setting[1]
     writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model, args.decision_model_key, args.batch))
     try:
         s = configure(args.server, args.token, args.decision_model, args.decision_model_key, args.batch, clear=args.clear) if writes else settings()
@@ -434,6 +500,10 @@ def config_command(argv: list[str]) -> int:
         print(f"{'cleared' if args.clear else 'wrote'} {s.path}")
     if s.server is None:
         print(f"server: none (runs are not recorded; {CONFIGURE_HINT})")
+    elif s.local:
+        from aip.client import local
+
+        print(f"server: local  {s.server}, started when a command needs it; its store is {local.store_path()}  (from {s.source})")
     else:
         print(f"server: {s.server}  (from {s.source})")
         print(f"token:  {'set' if s.token_set else 'none'}")
@@ -480,6 +550,12 @@ def server_command(argv: list[str]) -> int:
                         help="a web origin whose pages may call this server (CORS); repeatable. Loopback origins, "
                              "where the console runs, always may")
     parser.add_argument("--log-level", default="info")
+    parser.add_argument("--local", action="store_true",
+                        help="the server a client starts for itself (`aip config server local`): loopback only, the Relate store "
+                             "under the user data directory, no config file read, and it stops when idle")
+    parser.add_argument("--stop", action="store_true", help="with --local: stop the local server if it is running, and exit")
+    parser.add_argument("--idle-exit", type=float, default=None, metavar="SECONDS",
+                        help="stop when no request has arrived for this long (--local: AIP_LOCAL_IDLE, default 900; 0 never stops)")
 
     # Files first, so their values become the defaults the flags override.
     pre, _ = parser.parse_known_args(argv)
@@ -497,6 +573,23 @@ def server_command(argv: list[str]) -> int:
         return 0
     env_file = pre.env_file if pre.env_file is not None else (Path(ENV_FILE) if Path(ENV_FILE).is_file() else None)
     config_file = find_config(pre.config)
+    if pre.stop and not pre.local:
+        parser.error("--stop stops the local server: aip server --local --stop")
+    if pre.local:                                     # the same server whichever directory the client stood in
+        from aip.client import local
+        from aip.errors import AipError
+
+        if pre.stop:
+            try:
+                pid = local.stop()
+            except AipError as exc:
+                print(f"aip server: {exc}", file=sys.stderr)
+                return 1
+            print(f"stopped the local server (pid {pid}) at {local.url()}" if pid else f"no local server is running at {local.url()}")
+            return 0
+        env_file = config_file = None
+        parser.set_defaults(host=local.HOST, port=local.port(), path=local.store_path(), idle_exit=local.idle_seconds(),
+                            log_level="warning")
     loaded: list[str] = []
     try:
         if env_file is not None:
@@ -555,19 +648,31 @@ def server_command(argv: list[str]) -> int:
     if not tokens and args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"aip server: warning: listening on {args.host} with no --token; anyone who can reach it can publish "
               "and record here", file=sys.stderr)
-    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost, allow_origins=args.allow_origin)
+    app = create_app(backend, tokens=tokens, localhost_open=not args.no_localhost, allow_origins=args.allow_origin, local=args.local)
     if loaded:
         print(f"aip server: configured from {', '.join(loaded)}", file=sys.stderr)
     print(f"aip server: {where}; http://{args.host}:{args.port}", file=sys.stderr)
     if tokens:
         print(f"aip server: {len(tokens)} bearer token(s); loopback clients "
               f"{'need one too' if args.no_localhost else 'need none'}", file=sys.stderr)
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level=args.log_level))
+    if args.idle_exit:
+        import threading
+        import time
+
+        def stop_when_idle() -> None:
+            while not server.should_exit:
+                time.sleep(min(1.0, args.idle_exit / 4))
+                if time.monotonic() - app.state.last_request > args.idle_exit:
+                    print(f"aip server: no request for {args.idle_exit:g}s; stopping", file=sys.stderr)
+                    server.should_exit = True
+        threading.Thread(target=stop_when_idle, name="aip-idle", daemon=True).start()
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+        server.run()
     finally:
         if hasattr(backend, "close"):
             backend.close()
-    return 0
+    return 0 if server.started or server.should_exit else 1
 
 
 COMMANDS = {
@@ -585,18 +690,19 @@ COMMANDS = {
     "pin": pin_command,
     "retire": retire_command,
     "runs": runs_command,
-    "governance": governance_command,
+    "audit": audit_command,
     "config": config_command,
     "server": server_command,
 }
 ALIASES = {"describe": "info"}
+RENAMED = {"governance": "audit"}       # said once, so a 0.8 habit lands somewhere
 
 # One line per command, for `aip --help`.
 SUMMARIES = {
     "run": "run a procedure (a folder, an .rl bundle or a published name) until it pauses or is done",
     "resume": "answer a paused run, or retry the step a failed run stopped at",
     "compile": "check a program directory and write its .rl bundle",
-    "export": "write a bundle's program directory back",
+    "export": "write a bundle's program directory back; `export runs`: the server's runs as one Relate file",
     "fmt": "rewrite procedure.aip in the canonical form",
     "info": "what a procedure does: its inputs, its steps and loops, its result",
     "pull": "put a published procedure's bundle in this machine's cache",
@@ -607,8 +713,8 @@ SUMMARIES = {
     "pin": "make a name resolve to one revision",
     "retire": "stop a revision resolving",
     "runs": "list runs (this machine's, or the server's), or show one run step by step",
-    "governance": "the server's governance queries over the runs",
-    "config": "where this client points: the server, the decision model, the batch size",
+    "audit": "the server's audit queries over the runs and the catalog",
+    "config": "where this client points: the server (local, a URL or none), the decision model, the batch size",
     "server": "serve the catalog and the record of runs over HTTP",
 }
 
@@ -632,11 +738,15 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: aip <command> [args]\n       aip <command> --help\n       aip --version\n\ncommands:\n"
               + "\n".join(f"  {c.ljust(width)}  {SUMMARIES[c]}" for c in COMMANDS)
               + "\n\n`run` and `info` take a program directory, an .rl bundle, or a published name "
-              "(`aip pull` caches one; a server is configured with `aip config --server URL`).")
+              "(`aip pull` caches one; `aip config server local` records runs on this machine, "
+              "`aip config server URL` on a server elsewhere).")
         return 0
     command, rest = ALIASES.get(argv[0], argv[0]), argv[1:]
     if command in COMMANDS:
         return COMMANDS[command](rest)
+    if command in RENAMED:
+        print(f"aip: `aip {command}` is `aip {RENAMED[command]}` since 0.9", file=sys.stderr)
+        return 2
     print(f"aip: unknown command {command!r}", file=sys.stderr)
     return 2
 

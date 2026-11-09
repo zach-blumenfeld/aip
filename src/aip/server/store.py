@@ -15,6 +15,7 @@ and a bundle in an `.rl` are the same nodes and edges), and beside it the server
     (:Run)-[:HAS_ENTRY]->(:Entry {run_id, seq, step, kind, pass, at, seconds, ...})-[:THEN]->(:Entry)
     (:Entry)-[:AT]->(:Step | :Loop)                      the node of the bundle's graph the entry ran
     (:Entry)-[:GAVE]->(:Answer {name, value, confidence, source, ...})-[:ANSWERS]->(:Question | :Aggregation)
+    (:AuditQuery {name, description, cypher, stored_at})   a query someone stored (`aip.server.audit`)
 
 A bundle is merged by its id: storing one the store holds is a no-op. A `Bundle` with no
 `Revision` is a *draft* (uploaded so that runs of a folder or a file can be recorded);
@@ -25,9 +26,16 @@ graph can be read back whole and handed out as an `.rl` that verifies (`Store.bu
 **Runs.** The client posts the whole run at every stop and `record` upserts it by `run_id`: the
 run's own fields on the `Run` node, one `Entry` per history entry (only the entries that are
 new or changed are written), and one `Answer` per answer an entry produced. Each node keeps
-the fields governance asks about as properties (who, when, how long, where a route went and
+the fields an audit asks about as properties (who, when, how long, where a route went and
 whether its check fired, why a loop exited) and the entry itself as JSON, so `run(run_id)`
-returns the record as it was posted.
+returns the record as it was posted. Two fields are the server's to say, whatever the client
+claimed: `user`, the name of the token the run was posted with, and `draft`, whether the bundle
+the run ran has a revision, with the `revision` it is published as (a folder whose bundle is
+published is a run of that revision; a bundle with none is a draft whatever the client said).
+
+**An export** (`export_runs`) is a second store in a new Relate file: the runs that match, the
+bundles they ran and those bundles' revisions, written by the same statements, so every query
+that works on the store works on the file.
 """
 
 from __future__ import annotations
@@ -48,7 +56,7 @@ JSON = dict[str, Any]
 T = TypeVar("T")
 
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{4,64}")
-SERVER_LABELS = ("Name", "Revision", "Bundle", "Run", "Entry", "Answer", "Meta")
+SERVER_LABELS = ("Name", "Revision", "Bundle", "Run", "Entry", "Answer", "Meta", "AuditQuery")
 SEARCH_WEIGHTS = {"name": 10.0, "description": 3.0, "use_when": 2.0, "steps": 1.0}
 NAME_BOOST = 100.0                       # a query that is exactly a published name wins outright
 LOOP_KINDS = ("For", "Loop")
@@ -106,6 +114,7 @@ SCHEMA = [
     "CREATE CONSTRAINT aip_bundle IF NOT EXISTS FOR (b:Bundle) REQUIRE b.bundle_id IS UNIQUE",
     "CREATE CONSTRAINT aip_revision IF NOT EXISTS FOR (r:Revision) REQUIRE r.id IS UNIQUE",
     "CREATE CONSTRAINT aip_run IF NOT EXISTS FOR (r:Run) REQUIRE r.run_id IS UNIQUE",
+    "CREATE CONSTRAINT aip_audit_query IF NOT EXISTS FOR (q:AuditQuery) REQUIRE q.name IS UNIQUE",
     "CREATE INDEX aip_entry IF NOT EXISTS FOR (e:Entry) ON (e.run_id, e.seq)",
     *[f"CREATE INDEX aip_{label.lower()}_id IF NOT EXISTS FOR (n:{label}) ON (n.bundle_id, n.id)" for label in BUNDLE_LABELS],
 ]
@@ -236,6 +245,28 @@ ORDER BY updated DESC, run_id
 LIMIT $limit
 """
 
+EXPORT_RUNS = RUN_FILTER + """  AND ($since IS NULL OR coalesce(r.started, r.created) >= $since)
+RETURN r.run_id AS run_id, r.bundle_id AS bundle_id
+ORDER BY r.updated DESC, run_id
+"""
+BUNDLE_ROW = """
+MATCH (b:Bundle {bundle_id: $bundle})
+RETURN b.name AS name, b.description AS description, b.stored_at AS stored_at, b.described AS described
+"""
+REVISIONS_OF = """
+MATCH (r:Revision {bundle_id: $bundle})
+RETURN r.name AS name, r.revision AS revision, r.number AS number, r.published_at AS published_at, r.retired AS retired
+ORDER BY name, number
+"""
+
+STORED_QUERIES = """
+MATCH (q:AuditQuery)
+RETURN q.name AS name, q.description AS description, q.cypher AS cypher, q.stored_at AS stored_at
+ORDER BY name
+"""
+SAVE_QUERY = "MERGE (q:AuditQuery {name: $name}) SET q.description = $description, q.cypher = $cypher, q.stored_at = $at"
+DELETE_QUERY = "MATCH (q:AuditQuery {name: $name}) DELETE q"
+
 OFFERED = "MATCH (m:Meta {key: 'builtins'}) RETURN m.offered AS offered"
 SET_OFFERED = "MERGE (m:Meta {key: 'builtins'}) SET m.offered = $offered"
 
@@ -255,7 +286,7 @@ def _clean(properties: JSON) -> JSON:
 
 
 def run_properties(run: JSON) -> JSON:
-    """The `Run` node of a posted run: the fields a list or a governance query filters on, and
+    """The `Run` node of a posted run: the fields a list or an audit query filters on, and
     the run without its history as JSON (the history is the `Entry` nodes)."""
     identity = run.get("identity") or {}
     pause, error = run.get("pause") or {}, run.get("error") or {}
@@ -515,9 +546,14 @@ class Store:
 
     # ------------------------------------------------------------------- runs
 
-    def record(self, run: JSON, user: str | None = None) -> JSON:
+    def record(self, run: JSON, user: str | None = None, settle: bool = True) -> JSON:
         """Upsert a run by `run_id` where it stopped. The bundle must be held (`UnknownBundle`
-        otherwise); `user` is who the server says posted it, whatever the run claims."""
+        otherwise); `user` is who the server says posted it, whatever the run claims. `draft`
+        and `revision` are the store's to say too: a run is a draft's when its bundle has no
+        revision, and otherwise it is a run of the revision the bundle is published as, whether
+        the client ran it by name or from a folder. `settle=False` keeps both as the run has
+        them (an export copies records, it does not judge them).
+        `{"run_id", "user", "draft", "revision"}`."""
         run_id, bundle_id = run.get("run_id"), run.get("bundle_id")
         if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
             raise InvalidRun(f"a run is posted with its run_id (4 to 64 letters, digits, - or _), not {run_id!r}")
@@ -527,13 +563,18 @@ class Store:
         if not isinstance(history, list) or not all(isinstance(e, dict) for e in history):
             raise InvalidRun("a run's history is a list of entries")
         run = {**run, "identity": {**(run.get("identity") or {}), "user": user}}
-        properties = run_properties(run)
         entries = [entry_properties(run_id, bundle_id, seq, entry) for seq, entry in enumerate(history)]
 
-        def tx_fn(tx: Tx) -> None:
-            if not tx.run(HELD, bundle=bundle_id):
+        def tx_fn(tx: Tx) -> JSON:
+            held = tx.run(HELD, bundle=bundle_id)
+            if not held:
                 raise UnknownBundle(f"the store holds no bundle {bundle_id}; upload it first (POST /bundles)")
-            tx.run(UPSERT_RUN, run_id=run_id, props=properties)
+            if settle:
+                published = tx.run(REVISION_OF, bundle=bundle_id)
+                run["draft"] = not published
+                run["revision"] = published[0]["revision"] if published else None
+            reply = {"run_id": run_id, "user": user, "draft": bool(run.get("draft")), "revision": run.get("revision")}
+            tx.run(UPSERT_RUN, run_id=run_id, props=run_properties(run))
             tx.run(LINK_RUN, run_id=run_id, bundle=bundle_id)
             have = {row["seq"]: row["sha"] for row in tx.run(ENTRY_HASHES, run_id=run_id)}
             stale = sorted(seq for seq, sha in have.items() if seq >= len(entries) or entries[seq]["sha"] != sha)
@@ -541,7 +582,7 @@ class Store:
             if stale:
                 tx.run(DROP_ENTRIES, run_id=run_id, seqs=stale)
             if not new:
-                return
+                return reply
             tx.run(CREATE_ENTRIES, run_id=run_id, rows=new)
             written = {e["seq"] for e in new}
             at = [{"seq": e["seq"], "step": e.get("step")} for e in new]
@@ -557,8 +598,8 @@ class Store:
                     targets = [{"seq": a["seq"], "name": a["name"], "target": a["target"]} for a in answers if a["kind"] == kind]
                     if targets:
                         tx.run(link, run_id=run_id, bundle=bundle_id, rows=targets)
-        self.graph.write(tx_fn)
-        return {"run_id": run_id, "user": user}
+            return reply
+        return self.graph.write(tx_fn)
 
     def run(self, run_id: str) -> JSON:
         """One run's record, as it was posted (with the server's `user`)."""
@@ -578,11 +619,71 @@ class Store:
                  "started": r["started"], "finished": r["finished"], "created": r["created"], "updated": r["updated"],
                  "entries": r["entries"]} for r in rows]
 
-    # ------------------------------------------------------------ everything else
+    # ---------------------------------------------------------------- export
+
+    def export_runs(self, path: Path, name: str | None = None, since: str | None = None, agent: str | None = None,
+                    session: str | None = None, user: str | None = None, draft: bool | None = None) -> JSON:
+        """Write the runs that match, and the procedures they ran, as one Relate file at `path`:
+        a store of its own, with each run's record, the graph of every bundle among them and
+        those bundles' revisions, so the queries of `docs/language/queries.md` answer on it as
+        they do here. `since` is a date or a timestamp (ISO 8601) a run started at or after.
+        `{"runs", "bundles"}`, how many of each; `NotFound` when no run matches."""
+        from aip.compiler import relate
+        from aip.server.backends.relate import ConnectionGraph
+
+        found = self.graph.read(EXPORT_RUNS, name=name, status=None, agent=agent, session=session, user=user, draft=draft, since=since)
+        if not found:
+            raise NotFound("no runs match" + (f" since {since}" if since else ""))
+        bundle_ids = list(dict.fromkeys(row["bundle_id"] for row in found))
+        with relate.create(path) as conn:
+            target = Store(ConnectionGraph(conn))
+            for bundle_id in bundle_ids:
+                target.adopt(bundle_id, self.bundle_graph(bundle_id), self.graph.read(BUNDLE_ROW, bundle=bundle_id)[0],
+                             self.graph.read(REVISIONS_OF, bundle=bundle_id))
+            for row in found:
+                run = self.run(row["run_id"])
+                target.record(run, user=(run.get("identity") or {}).get("user"), settle=False)
+        return {"runs": len(found), "bundles": len(bundle_ids)}
+
+    def adopt(self, bundle_id: str, graph: BundleGraph, row: JSON, revisions: list[JSON]) -> None:
+        """Hold a bundle as another store holds it: its graph, when it was stored, and the
+        revisions it is published as there (the file's side of `export_runs`)."""
+        def tx_fn(tx: Tx) -> None:
+            if tx.run(HELD, bundle=bundle_id):
+                return
+            write_graph(tx, graph, bundle_id)
+            tx.run(HOLD, bundle=bundle_id, name=row["name"], description=row["description"] or "", at=row["stored_at"],
+                   described=row["described"])
+            for r in revisions:
+                tx.run(TOUCH_NAME, name=r["name"], at=r["published_at"])
+                tx.run(CREATE_REVISION, name=r["name"], bundle=bundle_id, id=f"{r['name']}@{r['revision']}", revision=r["revision"],
+                       number=r["number"], at=r["published_at"])
+                if r["retired"]:
+                    tx.run(RETIRE, id=f"{r['name']}@{r['revision']}")
+        self.graph.write(tx_fn)
+
+    # ------------------------------------------------------------ audit queries
 
     def rows(self, cypher: str, /, **params: Any) -> list[JSON]:
-        """Rows of a read query over the store (the governance queries)."""
-        return self.graph.read(cypher, **params)
+        """Rows of a read query over the store (the audit queries), run in a transaction that
+        is never committed, so a query cannot change the store."""
+        return self.graph.reading(lambda tx: tx.run(cypher, **params))
+
+    def stored_queries(self) -> list[JSON]:
+        """The queries someone stored: `{"name", "description", "cypher", "stored_at"}`, by name."""
+        return self.graph.read(STORED_QUERIES)
+
+    def save_query(self, name: str, description: str, cypher: str) -> None:
+        self.graph.write(lambda tx: tx.run(SAVE_QUERY, name=name, description=description, cypher=cypher, at=utc_now()))
+
+    def delete_query(self, name: str) -> bool:
+        """Remove a stored query; False when there is none of that name."""
+        if not any(q["name"] == name for q in self.stored_queries()):
+            return False
+        self.graph.write(lambda tx: tx.run(DELETE_QUERY, name=name))
+        return True
+
+    # ------------------------------------------------------------ everything else
 
     def resolved_bundles(self, name: str | None = None) -> list[str]:
         """The bundle id each published name resolves to (one name's when given)."""

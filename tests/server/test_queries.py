@@ -2,19 +2,23 @@
 
 `docs/language/queries.md` is run whole: each `cypher` block must execute against a store
 holding the examples and a run of each kind (`scenes.record`), and the blocks of its second
-half, the server's store, must answer what their headings say. The named governance queries
-(`aip.server.governance`) are checked the same way, so the document, the server and the two
-databases cannot drift apart unnoticed."""
+half, the server's store, must answer what their headings say. The named audit queries
+(`aip.server.audit`) are checked the same way, so the document, the server and the two
+databases cannot drift apart unnoticed; so are the queries someone stores, and the file
+`aip export runs` writes, which must answer the document's queries as the store does."""
 
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 import pytest
 
-from aip.server import governance
-from scenes import POLICIES, record
+import aip
+from aip.compiler import example_dir, relate
+from aip.server import audit
+from scenes import CALM, POLICIES, client, record
 
 DOC = Path(__file__).parent.parent.parent / "docs" / "language" / "queries.md"
 
@@ -172,31 +176,181 @@ def test_what_the_store_keeps_of_a_run(scene):
                      {"name": "tone", "value": "angry", "source": "agent", "confidence": None}], "an agent's answer has no confidence"
 
 
-def test_the_named_governance_queries(scene, served):
+def test_the_named_audit_queries(scene, served):
     store, ids = scene
-    assert [q["query"] for q in governance.listing()] == list(governance.QUERIES)
-    fired = governance.run(store, "confidence-fired")
+    assert [q["query"] for q in audit.listing()] == list(audit.QUERIES)
+    fired = audit.run(store, "confidence-fired")
     assert fired == [{"name": "billing_support", "route": "by_tone", "reason": "below", "fired": 1, "run_ids": [ids["fired"]]}]
-    assert governance.run(store, "confidence-fired", agent="codex") == [] and governance.run(store, "confidence-fired", session="s1") == fired
-    assert governance.run(store, "confidence-fired", window=1) == [], "only the newest run is looked at"
+    assert audit.run(store, "confidence-fired", agent="codex") == [] and audit.run(store, "confidence-fired", session="s1") == fired
+    assert audit.run(store, "confidence-fired", window=1) == [], "only the newest run is looked at"
+    assert audit.run(store, "confidence-fired", draft=False) == fired and audit.run(store, "confidence-fired", draft=True) == []
 
-    failing = governance.run(store, "failing-aggregations")
+    failing = audit.run(store, "failing-aggregations")
     assert [(r["name"], r["step"], r["aggregation"], r["computed"], r["failed"]) for r in failing] == [
         ("fixed_policy", "summarize_check", "all_hold", 5, 4), ("dynamic_policy", "summarize_check", "all_hold", 2, 1)]
-    assert [r["name"] for r in governance.run(store, "failing-aggregations", user="ci")] == ["dynamic_policy"]
+    assert [r["name"] for r in audit.run(store, "failing-aggregations", user="ci")] == ["dynamic_policy"]
+    assert [r["name"] for r in audit.run(store, "failing-aggregations", draft=True)] == ["fixed_policy"], "the folder's runs are a draft's"
+    assert [r["name"] for r in audit.run(store, "failing-aggregations", draft=False)] == ["dynamic_policy"]
 
-    asked = governance.run(store, "model-answers", name="billing_support")
+    asked = audit.run(store, "model-answers", name="billing_support")
     assert [(r["question"], r["answers"], r["lowest_confidence"]) for r in asked] == [("tone", 2, 0.6), ("billing", 2, 0.94)]
     assert asked[0]["mean_confidence"] == pytest.approx((0.6 + 0.95) / 2)
 
-    assert governance.run(store, "agent-routes") == [
+    assert audit.run(store, "agent-routes") == [
         {"name": "billing_support_agent", "route": "by_tone", "reads": "tone", "labels": ["angry", "calm"], "runs": 1}]
 
     from aip.client.server import Server, ServerError
 
     api = Server("http://testserver", token="reader", session=served)
-    assert [q["path"] for q in api.governance()] == [f"/governance/{q}" for q in governance.QUERIES]
-    assert api.governance("confidence-fired", name="billing_support", limit=5) == fired
+    assert [q["path"] for q in api.audit()] == [f"/audit/{q}" for q in audit.QUERIES]
+    assert api.audit("confidence-fired", name="billing_support", limit=5) == fired
     with pytest.raises(ServerError) as unknown:
-        api.governance("hand-answers")
-    assert (unknown.value.status, unknown.value.kind) == (404, "not_found")
+        api.audit("manual-decisions")
+    assert (unknown.value.status, unknown.value.kind) == (404, "not_found"), "retired with the fallback: no answer is given by hand"
+    with pytest.raises(ServerError) as old:
+        api.get("/governance")
+    assert old.value.status == 404, "the endpoint is /audit"
+
+
+def test_the_audit_of_what_runs_did(scene, served, tmp_path):
+    """The queries over the windowed runs that 0.8 had and the new record answers again."""
+    store, ids = scene
+    untaken = audit.run(store, "untaken-branches")
+    assert [(r["name"], r["route"], r["branch"], r["to"]) for r in untaken] == [
+        ("billing_support", "by_tone", "angry", "escalate"), ("billing_support_agent", "by_tone", "calm", "reply")], \
+        "the model never said angry (the check sent the unsure run to escalate, which is the Confidence_Below line taken)"
+    assert audit.run(store, "untaken-branches", name="billing_support", session="none-such") == [], "a bundle no windowed run ran is not judged"
+
+    repeated = audit.run(store, "repeated-cycles")
+    assert [(r["name"], r["loop"], r["exit"], r["most_passes"], r["run_ids"]) for r in repeated] == [
+        ("fixed_policy", "revise", "cap", 3, [ids["capped"]]), ("dynamic_policy", "revise", "until", 2, [ids["batched"]]),
+        ("fixed_policy", "revise", "until", 2, [ids["policy"]])]
+    assert [r["exit"] for r in audit.run(store, "repeated-cycles", repeats=2)] == ["cap"]
+    assert {r["loop"] for r in repeated} == {"revise"}, "a For's passes are its list's length, not a repeat"
+
+    assert audit.run(store, "failing-scripts") == []
+    folder = tmp_path / "billing-support-agent"
+    shutil.copytree(example_dir("billing-support-agent"), folder)
+    (folder / "scripts" / "escalate.py").write_text("import sys\nprint('ticket service unreachable', file=sys.stderr)\nsys.exit(3)\n")
+    c = client(served, agent="codex")
+    paused = c.run(folder, {"message": CALM}, workdir=tmp_path)
+    with pytest.raises(aip.RunError) as failed:
+        c.resume(paused, {"billing": True, "tone": "angry"})
+    [row] = audit.run(store, "failing-scripts")
+    assert (row["name"], row["step"], row["script"], row["error"], row["failed"], row["run_ids"]) == (
+        "billing_support_agent", "escalate", "scripts/escalate.py", "script_failed", 1, [failed.value.run_id])
+    assert "exit" in row["last_message"] or "3" in row["last_message"]
+    assert audit.run(store, "failing-scripts", draft=False) == [] and len(audit.run(store, "failing-scripts", draft=True)) == 1
+
+
+def test_the_audit_of_what_is_published(scene):
+    """The queries over the revision each name resolves to: no run is needed to ask them."""
+    store, _ = scene
+    assert audit.run(store, "missing-fields") == [{"name": "dynamic_policy", "use_when": 1, "do_not_use_when": 0, "avoid": 1}]
+    assert audit.run(store, "missing-fields", name="billing_support") == []
+    assert audit.run(store, "empty-results") == [], "every example returns something a step made"
+    unused = audit.run(store, "unused-data")
+    assert [(r["name"], r["step"], r["kind"], r["data"]) for r in unused] == [
+        ("billing_support_agent", "triage", "Task_Agent", "billing"), ("billing_support", "triage", "Decide", "triage_decision.billing")], \
+        "billing is asked and nothing reads it; an answer a For collects is used"
+    loops = {r["loop"]: r for r in audit.run(store, "cycles")}
+    assert set(loops) == {"review", "revise"}
+    assert (loops["review"]["kind"], loops["review"]["over"], loops["review"]["reproduces"]) == ("For", "policies", ["verdict"])
+    assert (loops["revise"]["mode"], loops["revise"]["until"], loops["revise"]["at_most"], loops["revise"]["at_cap"]) == (
+        "Until", "check_summary.all_hold", 3, "Else_Fail")
+    assert sorted(loops["revise"]["reproduces"]) == ["check_summary", "work"]
+
+    with pytest.raises(audit.InvalidQuery):
+        audit.run(store, "lineage")
+    lineage = audit.run(store, "lineage", key="check_summary")
+    assert [(r["derived_from"], r["steps_back"], r["produced_by"]) for r in lineage] == [
+        ("verdicts", 1, ["review"]), ("policies", 2, ["start"]), ("verdict", 2, ["check"]), ("policy", 3, []),
+        ("work", 3, ["draft", "fix"]), ("task", 4, ["start"])], "through the For: the list from each pass's verdict"
+    assert {r["name"] for r in lineage} == {"dynamic_policy"} and audit.run(store, "lineage", key="no_such_key") == []
+
+
+def test_a_stored_query_is_listed_run_and_removed(scene, served):
+    from aip.client.server import Server, ServerError
+
+    store, ids = scene
+    api, reader = Server("http://testserver", token="secret", session=served), Server("http://testserver", token="reader", session=served)
+    cypher = """
+        MATCH (r:Run)-[:HAS_ENTRY]->(e:Entry)
+        WHERE ($name IS NULL OR r.name = $name) AND e.seconds IS NOT NULL
+        RETURN r.name AS name, e.step AS step, count(e) AS ran ORDER BY ran DESC, name, step LIMIT $limit"""
+    assert api.save_audit("busiest-steps", cypher, "Steps by how often they ran.") == {
+        "query": "busiest-steps", "description": "Steps by how often they ran.", "builtin": False, "path": "/audit/busiest-steps"}
+    listed = reader.audit()
+    assert listed[-1] == {"query": "busiest-steps", "description": "Steps by how often they ran.", "builtin": False, "needs": [],
+                          "path": "/audit/busiest-steps"}
+    assert all(q["builtin"] for q in listed[:-1]) and len(listed) == len(audit.QUERIES) + 1
+    rows = reader.audit("busiest-steps", name="fixed_policy", limit=2)
+    assert rows == [{"name": "fixed_policy", "step": "check", "ran": 5}, {"name": "fixed_policy", "step": "summarize_check", "ran": 5}]
+
+    for name, body, why in (("confidence-fired", cypher, "built-in"), ("Busiest", cypher, "kebab-case"),
+                            ("wipe", "MATCH (r:Run) DETACH DELETE r", "only reads"), ("blank", "  ", "its Cypher")):
+        with pytest.raises(ServerError) as refused:
+            api.save_audit(name, body)
+        assert (refused.value.status, refused.value.kind) == (422, "invalid_request") and why in refused.value.message, name
+    with pytest.raises(ServerError) as forbidden:
+        reader.save_audit("mine", cypher)
+    assert forbidden.value.status == 403
+    api.save_audit("broken", "MATCH (r:Run) RETURN r.nope.deeper AS x LIMIT")
+    with pytest.raises(ServerError) as broken:
+        reader.audit("broken")
+    assert (broken.value.status, broken.value.kind) == (422, "invalid_request") and "stored query broken" in broken.value.message
+
+    assert api.delete_audit("busiest-steps") == {"query": "busiest-steps", "deleted": True}
+    with pytest.raises(ServerError) as gone:
+        api.delete_audit("busiest-steps")
+    assert gone.value.status == 404
+    with pytest.raises(ServerError) as builtin:
+        api.delete_audit("confidence-fired")
+    assert builtin.value.status == 422
+    assert len(store.rows("MATCH (r:Run) RETURN r.run_id AS id")) == len(ids), "nothing a query did was kept"
+
+
+def test_an_export_is_a_store_of_its_own(scene, served, tmp_path):
+    """`aip export runs`: the runs that match and the procedures they ran, as one Relate file
+    the document's queries answer on."""
+    from aip.client.server import Server, ServerError
+
+    store, ids = scene
+    c = aip.Client(Server("http://testserver", token="reader", session=served))
+    everything = c.export_runs(tmp_path / "audit.rl")
+    assert (everything.runs, everything.bundles, everything.path) == (6, 4, tmp_path / "audit.rl")
+    doc = blocks()
+    with relate.open(everything.path) as conn:
+        def ask(cypher, **params):
+            return [dict(r) for r in conn.execute(cypher, params)]
+
+        assert ask("MATCH (r:Run) RETURN count(r) AS runs") == [{"runs": 6}]
+        for heading, queries in doc.items():
+            for cypher in queries:
+                ask(cypher, run_id=ids["policy"], key="check_summary")
+        path = ask(doc["A run's path"][0], run_id=ids["policy"])
+        assert path == store.rows(doc["A run's path"][0], run_id=ids["policy"]), "the same record, entry for entry"
+        assert ask(doc["Routes whose check fired, and why"][0]) == store.rows(doc["Routes whose check fired, and why"][0])
+        assert ask(doc["Revisions"][0]) == store.rows(doc["Revisions"][0])
+        assert [(d["name"], d["runs"]) for d in ask(doc["Drafts"][0])] == [("fixed_policy", 2)]
+        [kept] = ask("MATCH (r:Run {run_id: $id}) RETURN r.user AS user, r.agent AS agent, r.draft AS draft, r.json AS json", id=ids["batched"])
+        assert (kept["user"], kept["agent"], kept["draft"]) == ("ci", "tests", False)
+    assert store.run(ids["batched"])["identity"]["user"] == "ci"
+
+    one = c.export_runs(tmp_path / "policy.rl", "fixed_policy")
+    assert (one.runs, one.bundles) == (2, 1)
+    with relate.open(one.path) as conn:
+        assert [dict(r) for r in conn.execute("MATCH (p:Procedure) RETURN p.name AS name")] == [{"name": "fixed_policy"}]
+        assert [dict(r) for r in conn.execute("MATCH (n:Name) RETURN count(n) AS names")] == [{"names": 0}], "a draft has no revision"
+    assert c.export_runs(tmp_path / "codex.rl", agent="codex", since="2026-01-01").runs == 3
+    assert c.export_runs(tmp_path / "published.rl", draft=False, session="s1").runs == 2
+    with pytest.raises(ServerError) as none:
+        c.export_runs(tmp_path / "none.rl", since="2999-01-01")
+    assert (none.value.status, none.value.kind) == (404, "not_found") and not (tmp_path / "none.rl").exists()
+    with pytest.raises(ServerError) as bad:
+        c.export_runs(tmp_path / "bad.rl", since="last tuesday")
+    assert (bad.value.status, bad.value.kind) == (422, "invalid_request")
+    with pytest.raises(aip.AipError) as exists:
+        c.export_runs(tmp_path / "audit.rl")
+    assert "exists" in str(exists.value)
+    assert c.export_runs(tmp_path / "audit.rl", "billing_support", force=True).runs == 2

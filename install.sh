@@ -44,6 +44,12 @@ info "Installing agent-instruction-protocol ${AIP_REF} (the aip command)…"
 uv tool install --force "agent-instruction-protocol[server]==$AIP_REF"
 hash -r 2>/dev/null || true
 
+# 3b. Record runs on this machine unless the user already points somewhere: `local` is a server
+#     the first `aip run` starts and that stops when idle (`aip config server none` turns it off).
+if aip config 2>/dev/null | grep -q '^server: none'; then
+  aip config server local >/dev/null && ok "runs are recorded on this machine (aip config server local)"
+fi
+
 # 4. Both skills, into every detected agent (Claude Code, Cursor, …), then `prune`, which
 #    removes skill folders installed under a name this tool has retired (`aip`, the authoring
 #    skill's name before 0.7.0). Non-fatal: a machine with no agent directory yet should not

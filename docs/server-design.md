@@ -42,10 +42,14 @@ retired or not) or `name@latest` (the newest live one, whatever is pinned).
 | `POST /bundles` (the `.rl` bytes) | hold a bundle with no revision, a draft: `{"bundle_id", "name", "existed", "draft"}` |
 | `GET /bundles?drafts=` | every bundle held, newest first, each with `draft` and its `revision` if it has one; `drafts=true` for the drafts alone |
 | `GET /bundles/{bundle_id}` | describe a bundle by id, or with `Accept: application/octet-stream` hand it back |
-| `POST /runs` (the run as JSON) | record a run where it stopped: the whole run each time, upserted by `run_id`. The bundle it names must be held (404 `unknown_bundle` otherwise). Replies `{"run_id", "user"}` |
+| `POST /runs` (the run as JSON) | record a run where it stopped: the whole run each time, upserted by `run_id`. The bundle it names must be held (404 `unknown_bundle` otherwise). Replies `{"run_id", "user", "draft", "revision"}`: who the token stands for, and what the store holds the bundle as |
 | `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently updated first: `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries` |
 | `GET /runs/{run_id}` | one run's record, as it was posted |
-| `GET /governance`, `GET /governance/{query}?name=&agent=&session=&user=&window=&limit=` | the named queries of `aip.server.governance` and their rows |
+| `GET /audit` | the audit queries: the built-ins of `aip.server.audit`, then the ones stored here, each `query`, `description`, `builtin`, `needs` (parameters it cannot run without) and `path` |
+| `GET /audit/{query}?name=&agent=&session=&user=&draft=&window=&limit=&repeats=&key=` | one query's rows (section 4) |
+| `PUT /audit/{name}` `{"description", "cypher"}`, `DELETE /audit/{name}` | store a query of one's own, remove it |
+| `GET /export/runs?name=&since=&agent=&session=&user=&draft=` | one Relate file holding the runs that match and the procedures they ran (`aip export runs`); `X-AIP-Runs` and `X-AIP-Bundles` count them; 404 when no run matches |
+| `GET /health` | `{"aip", "language", "backend", "local"}`, with no token: how a client tells an aip server from whatever else answers on a port. A local server (section 6) adds its `pid` |
 
 **An upload is read as a bundle is read anywhere** (`aip.compiler.read_bundle`): every file's
 bytes against its hash, the source and files against the bundle id, and the stored graph against
@@ -62,7 +66,7 @@ content's, and the client verifies what it receives the same way.
 `invalid_request` or a bundle error's kind, 500 `internal`.
 
 **Auth** is a bearer token. A token has scopes, `read` (every GET), `run` (upload a draft, record
-a run) and `publish` (publish, pin, retire), and may have a name. `--token` grants all three and
+a run) and `publish` (publish, pin, retire, store or remove an audit query), and may have a name. `--token` grants all three and
 `--read-token` only `read`; the config file's `[tokens]` table gives one token per person
 (`zach = "..."`), with every scope, and that name is the `user` of the runs recorded with it.
 With no token configured the server is open, and a loopback client needs none either way
@@ -72,6 +76,13 @@ the console runs, and for the origins in `allow_origins`.
 **Identity.** A run says who ran it: `agent` and `session` are the client's claim (`--agent`,
 `AIP_AGENT`, `--session`, `AIP_SESSION`); `user` is the server's, the name of the token the run
 was posted with, written into the record whatever the client sent, and `null` on an open server.
+
+**Draft or published** is the server's to say as well. A run is a *draft's* when the bundle it
+ran has no revision in the store, and otherwise it is a run of the revision the bundle is
+published as, whether the client ran it by name or from a folder that compiles to the same id:
+`draft` and `revision` are written into the record at every stop from what the store holds, and
+the reply carries them, so the client's run file says the same. A run recorded while its bundle
+was a draft stays a draft's run once it is over; publishing the bundle later does not rewrite it.
 
 ## 3. The store
 
@@ -91,6 +102,7 @@ server writes its own nodes, told from a bundle's by label:
 | `Entry` | one per history entry: `run_id`, `bundle_id`, `seq`, `step`, `kind`, `pass`, `loop` (the innermost), `loops` (each enclosing loop and pass, `revise 0`), `at`, `seconds`; a `Decide`: `model`, `endpoint`, `model_seconds`, `history_sent`, `batched`, `batch_size`; a `Task_Agent`: `agent`, `session`, `waited_seconds`; a `Route`: `read`, `value`, `to`, `check_fired`, `check_reason`, `check_confidence`, `check_below`; an `Execute`: `script`; a loop's exit: `exit` (`until`, `items`, `times`, `cap`), `exit_where`, `iterations`; the first entry of a `Loop` pass: `until_holds`, `until_where`; `sha` and `json` (the entry as posted) |
 | `Answer` | one per answer object an entry produced: `run_id`, `bundle_id`, `seq`, `step`, `name`, `value`, `source` (`measured`, `scripted`, `agent`, `aggregated`), `confidence`, `score`, `probabilities` (JSON); an aggregation's: `answers` (how many it judged), `held`, `barred` |
 | `Meta` | `key: 'builtins'`, `offered` (the ids of the built-in bundles this store has been offered) |
+| `AuditQuery` | a stored audit query: `name`, `description`, `cypher`, `stored_at` |
 
 | Edge | From → to | Meaning |
 |---|---|---|
@@ -137,7 +149,51 @@ same on both backends; an exact name wins outright.
 remembers the ids it has been offered, so a built-in appears on a store's first start and is not
 brought back after someone retires it. None ships yet; `make_procedure` is the first (plan K1).
 
-## 4. Configuration
+## 4. Audit
+
+`aip audit` asks the store questions by name (`src/aip/server/audit.py`, one Cypher statement
+each, the same on both backends; "governance" is what the record, the pins and the retirements
+add up to, and none of these decides who may do what, so the command says what it does). Every
+query takes the same parameters: `name`, `agent`, `session`, `user` and `draft` filter the runs
+(`draft=true` the runs of a bundle with no revision, `false` those of a published one), `window`
+is how many of the most recent matching runs are looked at (default 100), `limit` how many rows
+come back (default 50).
+
+| Query | Rows |
+|---|---|
+| `confidence-fired` | per procedure, route and reason (`below`, `absent`): how often the route's `Confidence_Below` fired in the windowed runs, and in which |
+| `failing-aggregations` | per aggregation: how often it was computed, how often it did not hold, how many answers its bar turned |
+| `model-answers` | per question: how many answers the decision model gave, their mean and lowest confidence, the mean time of the call |
+| `failing-scripts` | per `Execute` step and error (`script_failed`, `timeout`, `requires_unmet`): the windowed runs that stand failed there, the script, the latest message. A run that was resumed past the failure no longer counts: the record keeps where a run stands, not the attempts before |
+| `untaken-branches` | branches of a route (its `Confidence_Below` line included) that none of the windowed runs took, in the bundles those runs ran |
+| `repeated-cycles` | per `Loop` and how it ended (`until`, `times`, `cap`): the runs where it went round more than `repeats` times (default 1), and the most passes |
+| `agent-routes` | routes an agent's answer steers (the source class on the route's `READ_BY` edge), with the runs through each |
+| `missing-fields` | procedures whose header has no `Use_When`, `Do_Not_Use_When` or `Avoid` line, with how many of each it has |
+| `empty-results` | procedures whose `End` returns only `Start` inputs |
+| `unused-data` | keys a step produces, and questions a `Decide` asks, that nothing reads |
+| `cycles` | every `For` and `Loop`: what bounds it and which keys its body produces again on every pass |
+| `lineage` | for `key=`: every key it is derived from, how many steps back, and the steps that produce each, through a `For`'s collected list too |
+
+The first six read the windowed runs. The last six read the revision each published name
+resolves to (`name` narrows them; the run filters do not apply). Two 0.8 queries are gone with
+the agent fallback: `manual-decisions` (no answer is given by hand) and `unmeasured-routes` (a
+route an agent steers is a design, not a flag; `agent-routes` lists them).
+
+**Stored queries.** `PUT /audit/{name}` keeps a query of your own in the store (`aip audit --save
+NAME --cypher '...'`), listed after the built-ins with `builtin: false` and run by name like
+them, with the same parameters bound (`$name`, `$agent`, `$session`, `$user`, `$draft`,
+`$window`, `$limit`, `$repeats`, `$key`, and `$bundles`, the ids of the resolved revisions). The
+name is kebab-case and not a built-in's. Every audit query runs in a transaction that is never
+committed (Neo4j's read transaction, a rolled-back one on Relate), and Cypher with a writing
+clause is refused when it is stored (422). A stored query that fails answers 422 with the
+database's message.
+
+**Export.** `GET /export/runs` writes the runs that match, the graph of every bundle among them
+and those bundles' revisions into a new Relate file with the statements the store itself uses,
+so the file is a small store: every query of `docs/language/queries.md` answers on it as it
+does here, with no server. `since` is a date or a timestamp a run started at or after.
+
+## 5. Configuration
 
 `aip server --init` writes `~/.config/aip/server.toml` with every setting commented;
 `--example-config` prints it. Precedence: flags, the environment (a `.env` is loaded into it
@@ -147,8 +203,33 @@ without overriding), the file, defaults (`src/aip/server/config.py`). `[server]`
 with `uri`, `user`, `password`, `database`). A file that still says `kind = "filesystem"` or
 `root` is refused with where the store is now.
 
-## 5. Still to come
+## 6. The local server
 
-The local server started on demand by `aip run`, the rest of the governance queries under their
-new name `aip audit`, stored queries, and `aip export runs` (plan S2); the console on this API
-(C1); `aip mcp` (M1).
+`aip config server local` (what the installer sets) points a client at a server on its own
+machine that nobody starts by hand (`src/aip/client/local.py`). The first request that finds
+nothing answering starts `aip server --local` as a process of its own and is sent again; every
+later command reuses it; it stops when no request has arrived for 15 minutes, and the next
+command starts it again. Nothing is lost in between: the store is the Relate file `aip server`
+opens by default.
+
+| | Default | Moved by |
+|---|---|---|
+| address | `http://127.0.0.1:8247` | `AIP_LOCAL_PORT` |
+| store and log | `~/.local/share/aip/server/store.rl`, `local.log` beside it | `AIP_LOCAL_DATA` (the directory) |
+| idle before it stops | 900 seconds | `AIP_LOCAL_IDLE` (0: never) |
+
+`--local` means loopback only, the Relate backend, no token, and no config file or `.env` read,
+so it is the same server whichever directory the client stood in. The port is not 8000, where
+`aip server` listens by default, so a server started by hand and the local one do not collide;
+they do share the default store file, which one process holds at a time. A client tells its
+server from anything else on the port by `GET /health`, and reports what it found when it is not
+one. A run never fails because of this: when the local server cannot be started (the server
+extra or Relate is missing, the port is taken, another process holds the store), the stop is
+reported as not recorded with the reason, and the last line of the log. `aip server --local
+--stop` stops it by hand, which an upgrade needs: a running server keeps the code it started
+with. A remote server is `aip config server URL --token T`; the token's name on the server is
+the `user` of the runs.
+
+## 7. Still to come
+
+The console on this API (C1); `aip mcp` (M1), which starts the local server the same way.

@@ -16,7 +16,10 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
   AGENTS.md's repo map describes it. Read the piece you replace before replacing it; the records,
   the governance queries and the HTTP contract carry over in shape.
 - **The server is on the new store since S1** (2026-11-09): `src/aip/server/store.py` and the two
-  backends, described in `docs/server-design.md`. The branch `cypherlite-backend` on the mirror was
+  backends, described in `docs/server-design.md`. Since S2 a client set to `aip config server local`
+  starts one for itself (`src/aip/client/local.py`: port 8247, the default store file, stops when
+  idle; `aip server --local --stop` stops it, and `AIP_LOCAL_PORT`, `AIP_LOCAL_DATA` move it for a
+  proof that must not touch the real store). The branch `cypherlite-backend` on the mirror was
   the 0.8 attempt at a Relate backend and is only history now. The server's tests want a Neo4j to run their
   second half: on this machine the container `aip-test-neo4j` (bolt `localhost:17687`, user
   `neo4j`; the password is in its `NEO4J_AUTH`) is kept for that, and the suite deletes every node

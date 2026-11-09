@@ -64,7 +64,7 @@ class RunFile:
     origin: str                            # folder | file | name
     run: JSON
     workdir: str
-    revision: str | None = None            # the catalog revision a name resolved to
+    revision: str | None = None            # the catalog revision: the one a name resolved to, or the one the server holds the bundle as
     server: str | None = None              # where the run is recorded
     recorded: bool = False                 # whether the last stop reached the server
     created: str = field(default_factory=utc_now)
@@ -76,7 +76,14 @@ class RunFile:
 
     @property
     def draft(self) -> bool:
-        """A run of a folder or a file is recorded as a run of a draft bundle."""
+        """A run of a bundle with no revision. A folder or a file has none, unless the server
+        it was recorded on holds that very bundle as a published revision and said so."""
+        return self.revision is None
+
+    @property
+    def uploads(self) -> bool:
+        """A run of a folder or a file: its bundle is uploaded before the run is recorded, since
+        the server may not hold it."""
         return self.origin != "name"
 
     def save(self, path: Path | None = None, home: Path | None = None) -> Path:

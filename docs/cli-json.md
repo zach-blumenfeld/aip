@@ -36,15 +36,21 @@ history, the loop frames, the pending pause or the error (The run file, below). 
 run is of the exact bundle it started on, whatever happened to the folder since. `aip runs`
 lists the runs and `aip runs <run_id>` prints one step by step (below).
 
-**Recording.** When a server is configured (`aip config --server URL`, or `AIP_SERVER`) the run
-is posted there at every stop, a folder or file run as a run of a *draft* bundle, and the object
+**Recording.** When a server is configured the run is posted there at every stop and the object
 carries `"recorded": true` (or `false` when the server did not take it, with the reason on
-stderr; the next stop tries again). With no server the object has no `recorded` key, the run
-works, and `aip run` ends with one line on stderr, once for the run: its resumes do not repeat
-it, and a command that changed nothing (a refused answer) prints no line about recording at all.
+stderr; the next stop tries again). `aip config server local`, which the installer sets, records
+on this machine with nothing to start: the first command that needs the server starts one
+(`http://127.0.0.1:8247`, its store one file under the user data directory), later commands
+reuse it, and it stops when idle (`docs/server-design.md`, The local server). `aip config server
+URL --token T` records on a server elsewhere, `aip config server none` nowhere, and `AIP_SERVER`
+overrides the file with any of the three. A folder or file run is recorded as a run of a *draft*
+bundle, unless the server already holds that very bundle as a published revision: then it is a
+run of that revision. With no server the object has no `recorded` key, the run works, and `aip
+run` ends with one line on stderr, once for the run: its resumes do not repeat it, and a command
+that changed nothing (a refused answer) prints no line about recording at all.
 
 ```text
-aip: not recorded: no server is configured; run `aip config --server URL` to record runs on a server
+aip: not recorded: no server is configured; run `aip config server local` to record runs on this machine, or `aip config server URL` for a server elsewhere
 ```
 
 ## Paused
@@ -453,8 +459,8 @@ no step paused, so one `run` printed the whole record and the final object.
 ## `aip runs`
 
 `aip runs` lists runs, newest first: the server's when one is configured, else this machine's
-run files, so a run id is never lost. `--name`, `--status`, `--agent`, `--session` and `--limit`
-filter either list, and `--json` prints it as JSON.
+run files, so a run id is never lost. `--name`, `--status`, `--agent`, `--session`, `--user`,
+`--draft` or `--published`, and `--limit` filter either list, and `--json` prints it as JSON.
 
 ```text
 RUN               NAME                           STATUS  AGENT  STARTED                        UPDATED
@@ -493,11 +499,36 @@ answered and after how long a wait; a loop's why and where it exited and after h
 A paused run ends with the step it waits at and since when, a failed one with the error and
 whether a retry can help.
 
+## `aip audit` and `aip export runs`
+
+`aip audit` lists the server's audit queries, one per line with what it answers, and `aip audit
+<query>` prints one query's rows as a JSON list (`docs/server-design.md`, Audit, has each
+query's rows). The flags are the queries' parameters: `--name`, `--agent`, `--session`, `--user`,
+`--draft` or `--published` (which runs), `--window N` (how many recent runs), `--limit N`,
+`--repeats N` (`repeated-cycles`), `--key K` (`lineage`). `aip audit --save NAME --cypher
+'MATCH ...'` (or `@file`) keeps a query of your own on the server, listed with `(stored)` and
+run by its name; `--delete NAME` removes it.
+
+```text
+$ aip audit confidence-fired --agent claude
+[
+  {"name": "billing_support", "route": "by_tone", "reason": "below", "fired": 1, "run_ids": ["4f1c9a2e7b3d5068"]}
+]
+```
+
+`aip export runs [name] [--since DATE] [--agent A] [--session S] [--user U] [--draft |
+--published] -o audit.rl` writes the server's runs that match, and the procedures they ran, as
+one Relate file: each run's record beside the graph of the bundle it ran, which the engine's
+own tools open with no server and the queries of `docs/language/queries.md` answer on. It prints
+`wrote 3 run(s) of 2 procedure(s) to audit.rl`, and refuses a file that exists without `--force`.
+
 ## The run file
 
 `~/.aip/runs/<run_id>.json` is the run, whole; `aip runs <run_id> --json` prints it flat. At the
 top: `run_id`, `bundle_id` (once, here; the bundle is in the cache under that id), `name`,
-`target` and `origin` (what `aip run` was given: a `folder`, a `file` or a `name`), `revision`,
+`target` and `origin` (what `aip run` was given: a `folder`, a `file` or a `name`), `revision`
+(the one a name resolved to, or the one the server said the bundle is published as; a run with
+none is a draft's),
 `workdir`, `server` and `recorded` (where it is recorded, and whether the last stop got there),
 `created` and `updated` (the file's own times), and `run`, which holds:
 

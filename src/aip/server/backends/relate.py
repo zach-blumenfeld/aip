@@ -42,6 +42,47 @@ class _Tx:
         return [dict(r) for r in self.conn.execute(cypher, params or {})]
 
 
+def _transaction(conn, fn: Callable[[_Tx], T], keep: bool) -> T:
+    """`fn(tx)` in one transaction on `conn`: committed when `keep` and it returns, rolled back otherwise."""
+    conn.autocommit = False
+    try:
+        out = fn(_Tx(conn))
+        if keep:
+            conn.commit()
+        else:
+            conn.rollback()
+        return out
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.autocommit = True
+
+
+class ConnectionGraph:
+    """`aip.server.store.Graph` over a connection its caller opened and closes, on the caller's
+    thread: the file an export writes (`Store.export_runs`)."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def read(self, cypher: str, /, **params: Any) -> list[JSON]:
+        return _Tx(self.conn).run(cypher, **params)
+
+    def reading(self, fn: Callable[[_Tx], T]) -> T:
+        return _transaction(self.conn, fn, keep=False)
+
+    def write(self, fn: Callable[[_Tx], T]) -> T:
+        return _transaction(self.conn, fn, keep=True)
+
+    def schema(self, statements: list[str]) -> None:
+        for statement in statements:
+            self.conn.execute(statement)
+
+    def close(self) -> None:
+        pass
+
+
 class RelateGraph:
     """`aip.server.store.Graph` over one Relate connection, owned by one worker thread."""
 
@@ -60,21 +101,7 @@ class RelateGraph:
         return self._on_worker(lambda: _Tx(self.conn).run(cypher, **params))
 
     def _transaction(self, fn: Callable[[_Tx], T], keep: bool) -> T:
-        def tx() -> T:
-            self.conn.autocommit = False
-            try:
-                out = fn(_Tx(self.conn))
-                if keep:
-                    self.conn.commit()
-                else:
-                    self.conn.rollback()
-                return out
-            except BaseException:
-                self.conn.rollback()
-                raise
-            finally:
-                self.conn.autocommit = True
-        return self._on_worker(tx)
+        return self._on_worker(lambda: _transaction(self.conn, fn, keep))
 
     def reading(self, fn: Callable[[_Tx], T]) -> T:
         return self._transaction(fn, keep=False)
@@ -121,4 +148,4 @@ class RelateBackend:
         self.close()
 
 
-__all__ = ["DEFAULT_DATA_DIR", "STORE_FILE", "RelateBackend", "RelateGraph", "default_path"]
+__all__ = ["DEFAULT_DATA_DIR", "STORE_FILE", "ConnectionGraph", "RelateBackend", "RelateGraph", "default_path"]

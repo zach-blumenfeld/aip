@@ -217,7 +217,12 @@ def test_a_run_needs_a_bundle_the_store_holds(served, tmp_path):
         api.get("/runs/run-0001")
     assert missing.value.status == 404
     api.draft(data)
-    assert api.record(run_of(bundle_id)) == {"run_id": "run-0001", "user": "zach"}
+    assert api.record(run_of(bundle_id)) == {"run_id": "run-0001", "user": "zach", "draft": True, "revision": None}, \
+        "the store says what the bundle is: held with no revision, whatever the run claimed"
+    assert (api.run("run-0001")["draft"], api.run("run-0001")["revision"]) == (True, None)
+    assert api.publish(data)["revision"] == "1"
+    assert api.record(run_of(bundle_id, draft=True, revision=None)) == {"run_id": "run-0001", "user": "zach", "draft": False, "revision": "1"}, \
+        "and once it is published, a run of it is a run of that revision"
     for bad in ({"run_id": "x"}, {"bundle_id": None}, {"history": "nope"}):
         with pytest.raises(ServerError) as invalid:
             api.record({**run_of(bundle_id), **bad})
@@ -315,7 +320,7 @@ def test_tokens_have_scopes_and_names(served, tmp_path):
             call()
         assert (forbidden.value.status, forbidden.value.kind) == (403, "forbidden")
     assert runner.draft(data)["draft"] is True
-    assert runner.record(run_of(bundle_id)) == {"run_id": "run-0001", "user": "ci"}
+    assert runner.record(run_of(bundle_id)) == {"run_id": "run-0001", "user": "ci", "draft": True, "revision": None}
     assert reader.run("run-0001")["identity"]["user"] == "ci"
 
 

@@ -12,11 +12,17 @@ here and nowhere else:
     POST /catalog        (the `.rl` bytes)   publish: merge the bundle by id, assign the next revision under its name
     POST /bundles        (the `.rl` bytes)   upload a bundle with no revision, a draft, so runs of it can be recorded
     POST /runs           (the run as JSON)   record a run at every stop: the whole run each time, upserted by `run_id`
-    GET  /runs?name=&status=&agent=&session=&limit=      runs, newest first (the server also filters by `user` and `draft`)
+    GET  /runs?name=&status=&agent=&session=&user=&draft=&limit=      runs, newest first
     GET  /runs/{run_id}                   one run's record
     POST /catalog/{name}/pin  {"revision"}   make a name resolve to a revision (null clears)
     POST /catalog/{name}/retire {"revision"}  stop a revision resolving
-    GET  /governance, GET /governance/{query}?…   the governance queries and their rows
+    GET  /audit, GET /audit/{query}?…     the audit queries and their rows
+    PUT  /audit/{name} {"description", "cypher"}, DELETE /audit/{name}   store a query of one's own, remove it
+    GET  /export/runs?name=&since=&…      the runs that match and the procedures they ran, as one Relate file
+    GET  /health                          what the server is; how the local server is told from anything else on its port
+
+When the client points at `local` (`aip config server local`), nothing has to be running: a
+request that finds no server starts one and is sent again (`aip.client.local`, the `starter`).
 
 A reply with status 400 or above carries `{"error": {"kind", "message", "location"?, ...}}`.
 Where the client points comes from `aip.client.config`.
@@ -24,7 +30,7 @@ Where the client points comes from `aip.client.config`.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from aip.errors import AipError
 
@@ -46,11 +52,14 @@ class ServerError(AipError):
 
 class Server:
     """One HTTP session against an AIP server. `session` is any httpx-style client (FastAPI's
-    test client qualifies); by default a real one on `url`."""
+    test client qualifies); by default a real one on `url`. `starter`, when given, is called
+    once when the server does not answer, and the request is sent again: the local server,
+    started on demand."""
 
-    def __init__(self, url: str, token: str | None = None, session: Any = None):
+    def __init__(self, url: str, token: str | None = None, session: Any = None, starter: Callable[[], Any] | None = None):
         self.url = url.rstrip("/")
         self.token = token
+        self.starter = starter
         if session is None:
             import httpx
 
@@ -65,14 +74,25 @@ class Server:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         try:
-            response = self._session.request(method, path, headers=headers, **kwargs)
+            response = self._send(method, path, headers, kwargs)
+        except ServerError:
+            if self.starter is None:
+                raise
+            starter, self.starter = self.starter, None
+            starter()                            # raises when the server cannot be started, and is not asked again
+            self.starter = starter
+            response = self._send(method, path, headers, kwargs)
+        if response.status_code >= 400:
+            raise self._error(response)
+        return response
+
+    def _send(self, method: str, path: str, headers: JSON, kwargs: JSON):
+        try:
+            return self._session.request(method, path, headers=headers, **kwargs)
         except Exception as exc:  # httpx.HTTPError, or whatever the injected session raises on no connection
             if type(exc).__module__.split(".")[0] not in ("httpx", "httpcore", "anyio", "socket", "builtins"):
                 raise
             raise ServerError(0, "unreachable", f"{self.url}: {exc}") from exc
-        if response.status_code >= 400:
-            raise self._error(response)
-        return response
 
     @staticmethod
     def _error(response) -> ServerError:
@@ -124,20 +144,46 @@ class Server:
     # --------------------------------------------------------------------- runs
 
     def record(self, run: JSON) -> JSON:
-        """Record a run where it stopped; the server upserts by `run_id` and answers `{"run_id", "user"?}`."""
+        """Record a run where it stopped; the server upserts by `run_id` and answers `{"run_id", "user",
+        "draft", "revision"}`: who the token stands for, and what the store holds the run's bundle as."""
         return self.post("/runs", run)
 
     def runs(self, name: str | None = None, status: str | None = None, agent: str | None = None, session: str | None = None,
-             limit: int = 50) -> list[JSON]:
-        return self.get("/runs", name=name, status=status, agent=agent, session=session, limit=limit)
+             limit: int = 50, user: str | None = None, draft: bool | None = None) -> list[JSON]:
+        return self.get("/runs", name=name, status=status, agent=agent, session=session, user=user, draft=draft, limit=limit)
 
     def run(self, run_id: str) -> JSON:
         return self.get(f"/runs/{run_id}")
 
-    # --------------------------------------------------------------- governance
+    # -------------------------------------------------------------------- audit
 
-    def governance(self, query: str | None = None, **params: Any) -> Any:
-        return self.get("/governance" if query is None else f"/governance/{query}", **params)
+    def audit(self, query: str | None = None, **params: Any) -> Any:
+        """With no query, the queries the server answers; with one, its rows."""
+        return self.get("/audit" if query is None else f"/audit/{query}", **params)
+
+    def save_audit(self, name: str, cypher: str, description: str = "") -> JSON:
+        return self.request("PUT", f"/audit/{name}", json={"cypher": cypher, "description": description}).json()
+
+    def delete_audit(self, name: str) -> JSON:
+        return self.request("DELETE", f"/audit/{name}").json()
+
+    def export_runs(self, **filters: Any) -> tuple[bytes, int, int]:
+        """The runs that match (`name`, `since`, `agent`, `session`, `user`, `draft`) and the
+        procedures they ran, as one Relate file: its bytes, how many runs, how many bundles."""
+        response = self.request("GET", "/export/runs", params={k: v for k, v in filters.items() if v is not None})
+        return response.content, int(response.headers.get("X-AIP-Runs", 0)), int(response.headers.get("X-AIP-Bundles", 0))
+
+    def health(self) -> JSON:
+        return self.get("/health")
+
+
+def connect(url: str, token: str | None = None, session: Any = None, local: bool = False) -> Server:
+    """A `Server` on `url`; with `local`, one that starts the local server when it does not
+    answer (never through an injected session, which stands for a server that is there)."""
+    starter = None
+    if local and session is None:
+        from aip.client.local import ensure as starter
+    return Server(url, token, session=session, starter=starter)
 
 
 def configured(session: Any = None) -> Server | None:
@@ -145,7 +191,7 @@ def configured(session: Any = None) -> Server | None:
     from aip.client.config import settings
 
     s = settings()
-    return Server(s.server, s.token, session=session) if s.server else None
+    return connect(s.server, s.token, session, s.local) if s.server else None
 
 
-__all__ = ["BUNDLE_MEDIA_TYPE", "Server", "ServerError", "configured"]
+__all__ = ["BUNDLE_MEDIA_TYPE", "Server", "ServerError", "configured", "connect"]

@@ -122,6 +122,9 @@ in Neo4j alike; `docs/server-design.md` has the properties):
 (:Entry)-[:GAVE]->(:Answer {name, value, confidence, source})-[:ANSWERS]->(:Question or :Aggregation)
 ```
 
+A run's `draft` and `revision` are the server's word: a run is a draft's when the bundle it ran
+had no revision when the run was recorded, whatever the client ran it from.
+
 An `Entry` is one entry of a run's history, in order (`seq`, and `THEN` to the next one), tied by
 `AT` to the step or loop of the procedure it ran, so a question about runs can walk into the
 procedure and back. The queries below are run against both backends by
@@ -275,6 +278,15 @@ RETURN e.seq AS seq, e.step AS first_step, e.loops AS passes, e.until_where AS t
 ORDER BY seq
 ```
 
-The server answers four questions of this kind by name, over the last N runs and filtered by
-procedure, agent, session or user: `aip governance` lists them (`confidence-fired`,
-`failing-aggregations`, `model-answers`, `agent-routes`; `src/aip/server/governance.py`).
+The server answers twelve questions of this kind by name, over the last N runs and filtered by
+procedure, agent, session, user, and draft or published: `aip audit` lists them
+(`confidence-fired`, `failing-aggregations`, `model-answers`, `failing-scripts`,
+`untaken-branches`, `repeated-cycles`, `agent-routes`, `missing-fields`, `empty-results`,
+`unused-data`, `cycles`, `lineage`; `src/aip/server/audit.py`, and `docs/server-design.md`, Audit,
+for each one's rows). `aip audit lineage --key K` follows a key through a `For`'s collected list,
+which the path above does not: `COLLECTS` points from the loop to the key each pass gathers. A
+query of your own is stored with `aip audit --save NAME --cypher '...'` and run by name.
+
+`aip export runs [name] --since DATE -o audit.rl` writes the runs that match and the procedures
+they ran as one Relate file with exactly these nodes and edges, so every query on this page runs
+on the file with no server: `relate query --database audit.rl "MATCH (r:Run) RETURN count(r)"`.

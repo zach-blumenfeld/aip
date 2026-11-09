@@ -33,10 +33,10 @@ from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 from aip.client import bundles, config
 from aip.client.config import CONFIGURE_HINT, Settings, configure, settings
 from aip.client.runs import RunFile, error_outcome, local_runs, new_run_id, outcome, progress_line, run_path, RUN_ID
-from aip.client.server import Server, ServerError
+from aip.client.server import Server, ServerError, connect
 from aip.errors import AipError
 from aip.model import DONE, FAILED, PAUSED, Engine, InvalidOutput, NotPaused, Procedure, Run, StepError, TypeSafeResolver
-from aip.model.engine import _where
+from aip.model.engine import _where, utc_now
 from aip.model.types import resumable
 
 JSON = dict[str, Any]
@@ -379,10 +379,20 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
-class GovernanceQuery:
+class AuditQuery:
+    """One query `aip audit` lists: a built-in, or one stored on the server (`builtin` False)."""
     query: str
     description: str
+    builtin: bool | None
     data: JSON = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class Exported:
+    """Runs and the procedures they ran, written as one Relate file (`aip export runs`)."""
+    path: Path
+    runs: int
+    bundles: int
 
 
 OnStep = Callable[[JSON], None]
@@ -395,9 +405,10 @@ OnPause = Callable[[Paused], Any]
 class Client:
     """The AIP client.
 
-    `server` is a URL, a `Server`, or None for the configured one (`aip config`; `AIP_SERVER`
-    and `AIP_TOKEN` override), which may be none: then runs work and are not recorded, and
-    catalog calls raise `NoServer`. `token` is the bearer token. `decision_client` injects a
+    `server` is a URL, `"local"`, a `Server`, or None for the configured one (`aip config`;
+    `AIP_SERVER` and `AIP_TOKEN` override), which may be none: then runs work and are not
+    recorded, and catalog calls raise `NoServer`. `local` is the server on this machine, started
+    by the first call that needs it and stopped when idle (`aip.client.local`). `token` is the bearer token. `decision_client` injects a
     client with the TypeSafe SDK's shape (tests); otherwise the configured endpoint and key
     decide (`aip config --decision-model URL --decision-model-key KEY`; `AIP_DECISION_MODEL`
     and `AIP_DECISION_MODEL_KEY` override), and with neither a `Decide` fails the run
@@ -418,7 +429,11 @@ class Client:
             self.server: Server | None = server
         elif server is None:
             s = self.settings
-            self.server = Server(s.server, token if token is not None else s.token, session=session) if s.server else None
+            self.server = connect(s.server, token if token is not None else s.token, session, s.local) if s.server else None
+        elif str(server).strip().lower() == config.LOCAL:
+            from aip.client import local
+
+            self.server = connect(local.url(), token, session, True)
         else:
             self.server = Server(str(server), token, session=session)
 
@@ -639,13 +654,16 @@ class Client:
         if self.server is None:
             return None
         handle.server = self.server.url
+        handle.updated = utc_now()                # this stop's time, not the last save's: the server lists by it
         try:
-            if handle.draft and handle.bundle_id not in self._uploaded:
+            if handle.uploads and handle.bundle_id not in self._uploaded:
                 self.server.draft(bundles.read_bytes(handle.bundle_id, self.home))
                 self._uploaded.add(handle.bundle_id)
             reply = self.server.record(handle.recording())
             if isinstance(reply, dict) and reply.get("user"):
                 handle.run.setdefault("identity", {})["user"] = reply["user"]
+            if isinstance(reply, dict) and "draft" in reply:      # the store says which revision the bundle is, if any
+                handle.revision = reply.get("revision")
         except ServerError as exc:
             self.recording_error = str(exc)
             handle.recorded = False
@@ -671,16 +689,16 @@ class Client:
         return path
 
     def runs(self, name: str | None = None, status: str | None = None, agent: str | None = None, session: str | None = None,
-             limit: int = 50) -> list[RunSummary]:
-        """Runs, newest first, filtered by name, status, agent or session: the server's when one
-        is configured, else this machine's run files."""
+             limit: int = 50, user: str | None = None, draft: bool | None = None) -> list[RunSummary]:
+        """Runs, newest first, filtered by name, status, agent, session, user, or whether the
+        run was of a draft: the server's when one is configured, else this machine's run files."""
         if self.server is not None:
-            return [_record(RunSummary, r) for r in self.server.runs(name, status, agent, session, limit)]
+            return [_record(RunSummary, r) for r in self.server.runs(name, status, agent, session, limit, user, draft)]
         rows = [r.summary() for r in local_runs(self.home)]
-        for key, wanted in (("name", name), ("status", status)):
-            if wanted:
+        for key, wanted in (("name", name), ("status", status), ("draft", draft)):
+            if wanted is not None:
                 rows = [r for r in rows if r.get(key) == wanted]
-        for key, wanted in (("agent", agent), ("session", session)):
+        for key, wanted in (("agent", agent), ("session", session), ("user", user)):
             if wanted:
                 rows = [r for r in rows if (r.get("identity") or {}).get(key) == wanted]
         return [_record(RunSummary, r) for r in rows[:limit]]
@@ -751,14 +769,37 @@ class Client:
         self._server().retire(name, revision)
         return Retired(name, revision)
 
-    # ------------------------------------------------------------------- governance
+    # ------------------------------------------------------------------- audit
 
-    def governance(self, query: str | None = None, **params: Any) -> list[Any]:
-        """With no query, the queries the server answers (`GovernanceQuery`); with one, its rows."""
+    def audit(self, query: str | None = None, **params: Any) -> list[Any]:
+        """With no query, the queries the server answers (`AuditQuery`); with one, its rows.
+        `params` are the query's: `name`, `agent`, `session`, `user`, `draft` (filters on the
+        runs), `window` (how many recent runs), `limit`, `repeats`, `key`."""
         server = self._server()
         if query is None:
-            return [_record(GovernanceQuery, q) for q in server.governance()]
-        return server.governance(query, **params)
+            return [_record(AuditQuery, q) for q in server.audit()]
+        return server.audit(query, **params)
+
+    def save_audit(self, name: str, cypher: str, description: str = "") -> AuditQuery:
+        """Store a query of your own on the server under `name`; `aip audit <name>` runs it."""
+        return _record(AuditQuery, self._server().save_audit(name, cypher, description))
+
+    def delete_audit(self, name: str) -> None:
+        """Remove a stored query."""
+        self._server().delete_audit(name)
+
+    def export_runs(self, output: str | Path, name: str | None = None, *, since: str | None = None, agent: str | None = None,
+                    session: str | None = None, user: str | None = None, draft: bool | None = None, force: bool = False) -> Exported:
+        """Write the server's runs that match, and the procedures they ran, as one Relate file
+        at `output`: the record and the bundles' graphs side by side, for whoever audits them
+        with the engine's own tools. `since` is a date or a timestamp a run started at or after."""
+        path = Path(output)
+        if path.exists() and not force:
+            raise InvalidInput(f"{path} exists; give another path, or force")
+        data, runs, exported = self._server().export_runs(name=name, since=since, agent=agent, session=session, user=user, draft=draft)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return Exported(path, runs, exported)
 
 
 # --------------------------------------------------------------------------- describing
@@ -779,7 +820,7 @@ def describe_procedure(procedure: Procedure) -> JSON:
 
 
 __all__ = [
-    "AipError", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Fetched", "GovernanceQuery", "Hit",
+    "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
     "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired",
     "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "Task", "configure", "describe_procedure", "settings",
 ]

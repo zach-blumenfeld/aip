@@ -91,14 +91,14 @@ flowchart LR
     end
     subgraph clients["Clients"]
         agent["any agent +<br/>aip-runtime meta-skill"] --> cli["aip CLI<br/>search · info · run · resume"]
-        insp["aip-console<br/>catalog · run console · history · governance"]
+        insp["aip-console<br/>catalog · run console · history · audit"]
         scripts["scripts run here,<br/>next to the data"]
         model["decision model (TypeSafe)<br/>answers questions, records its confidence"]
         cli --> scripts
         cli --> model
     end
     subgraph server["aip server (one HTTP API)"]
-        api["/catalog · /runs · /governance"]
+        api["/catalog · /runs · /audit"]
         engine["execution engine<br/>steps · routing · validation"]
         api --> engine
     end
@@ -135,7 +135,7 @@ One Python package lives in this repository, and the console is its own reposito
 | package | where | what it holds | install |
 |---|---|---|---|
 | `agent-instruction-protocol` | this repo's root (`src/aip/`) | the `aip` command and Python SDK: the language's compiler (`aip compile`, `fmt`, `export`; `src/aip/compiler/`), the runtime, `aip server` with its backends, the skills ([`skills/`](skills/)) and the example programs ([`examples/`](examples/)). Through 0.8 the language was a second package, `aip-spec`; it is part of this one since 0.9 | `uv tool install "agent-instruction-protocol[server]"` |
-| `aip-console` | [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
+| `aip-console` | [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and audit views over a running `aip server` | `npx aip-console --server URL` |
 
 ## Quick Start
 Minimal prerequisites. 
@@ -276,7 +276,7 @@ Four tabs across the top plus the server link at the right:
 - **catalog**: every published name with its step graph drawn. Click `billing-support` for the procedure page: purpose, triggers, each step with its inputs and questions, the files it ships (source viewer), the diff between any two revisions, and the governance controls (pin a revision, retire one).
 - **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a task it needs the client to do, or the questions themselves when there is no model and the decision allows it.
 - **history**: every run, step by step, with what each step got and produced.
-- **governance**: corpus queries across all runs: routes where a router's confidence check fired and why, routers an unmeasured source steers and the runs that went through them, decisions answered by hand, scripts that failed (with the client's stderr), skills missing fields, branches no run has taken.
+- **audit**: corpus queries across all runs: routes where a router's confidence check fired and why, routers an unmeasured source steers and the runs that went through them, decisions answered by hand, scripts that failed (with the client's stderr), skills missing fields, branches no run has taken.
 - **server link** (top right): the server URL and bearer token the page uses.
 
 Try two runs of `billing-support`. Message `I was charged twice this month and I am furious, fix it or I cancel`: the model marks it billing and angry (with no decision-model key, you answer the two questions on the page), the router sends it to the escalation script, which runs on your machine, and the run ends; its ticket id and the tier2 queue are on the escalate step in the history tab. Message `Hi, could you tell me whether my March invoice was a duplicate?`: the model is confident it is calm, so the run pauses with a client task asking you to draft the reply from the policy; type one and the run ends, with your reply recorded on the reply step. The router checks the model's confidence in the tone before it branches (`tone_confidence`, written by the decision), and sends an unsure run, or one with no confidence recorded because you answered by hand, to the escalation script too; the history shows the check firing and why on the router step.
@@ -392,14 +392,14 @@ aip run <name> --input start.json                      # runs on the server; sam
 aip get <name>[@revision] --out ./restored             # the folder back, hash-verified and validated
 aip pin <name> <revision>  /  aip retire <name>@<revision>
 aip runs [<run-id>]                                    # the server's runs; one run's state and history
-aip governance [<query>]                               # the governance queries, or one query's rows
+aip audit [<query>]                                    # the audit queries, or one query's rows
 ```
 
 Every one of these is a thin wrapper over the Python SDK, `aip.Client` ([`docs/sdk.md`](docs/sdk.md)): `aip.Client().run("billing-support", {...})` returns the same pause or done the CLI prints, as typed objects, and shares its run files.
 
 The web client, the console ([aip-console](https://github.com/zach-blumenfeld/aip-console), formerly aip-inspector),
 is its own npm package: `npx aip-console --server URL` serves the catalog, source, run console, history and
-governance views from a local Node process, and its page calls the server directly (the server answers CORS for
+audit views from a local Node process, and its page calls the server directly (the server answers CORS for
 loopback origins; `aip server --allow-origin ORIGIN` adds others). The server serves no UI. The console checks
 `aip --version` (`aip <version> format <format>`) at startup, since interactive runs go through the `aip` CLI.
 
@@ -411,7 +411,7 @@ loopback origins; `aip server --allow-origin ORIGIN` adds others). The server se
 
 The file has two tables. `[server]` is the listener and tokens; `[backend]` picks `filesystem` (`root`) or `neo4j` (`uri`, `user`, `password`, `database`, `cache_dir`). Secrets can live in the file, in `.env`, or in the environment as `NEO4J_*`; the file never overrides a variable that is already set. The server holds no decision-model key, and a `[decision_model]` table is refused with a pointer to the client setting below.
 
-**Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, on the client: `aip config --decision-model KEY` stores the key in `~/.config/aip/config.json`, and `TYPESAFE_API_KEY` overrides it. That holds for `aip run <name>` against a server as much as for `aip run <folder>`. Without a key, a decision step whose author allowed it (`fallback: true`) pauses with its `questions` for you to answer by hand, and one that did not stops the run with `no_decision_model` until a key is set. With a key the model answers and never pauses; for the questions the step names in its `confidence` list, its confidence in the answer is written into the state as `<question>_confidence`, and a router downstream can check it (`confidence: {key, below, to}`) and send a low one, or an absent one from an answer by hand, where the author says. The server records each decision with its attribution (`resolver` `typesafe` or `manual`, `model`, `confidence` per question), and each router with whether its check fired and why, which the `confidence-fired` and `manual-decisions` governance queries read; `unmeasured-routes` lists the routers the validator flagged as steered by an unmeasured source, with the runs that went through them.
+**Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, on the client: `aip config --decision-model KEY` stores the key in `~/.config/aip/config.json`, and `TYPESAFE_API_KEY` overrides it. That holds for `aip run <name>` against a server as much as for `aip run <folder>`. Without a key, a decision step whose author allowed it (`fallback: true`) pauses with its `questions` for you to answer by hand, and one that did not stops the run with `no_decision_model` until a key is set. With a key the model answers and never pauses; for the questions the step names in its `confidence` list, its confidence in the answer is written into the state as `<question>_confidence`, and a router downstream can check it (`confidence: {key, below, to}`) and send a low one, or an absent one from an answer by hand, where the author says. The server records each decision with its attribution (`resolver` `typesafe` or `manual`, `model`, `confidence` per question), and each router with whether its check fired and why, which the `confidence-fired` and `manual-decisions` audit queries read; `unmeasured-routes` lists the routers the validator flagged as steered by an unmeasured source, with the runs that went through them.
 
 **Scripts and trust.** A procedure's execution steps are scripts, and they run on the client, in the `aip` process's user account, never on the server: `aip run <name>` fetches the revision's `scripts/` and `assets/` into `~/.aip/cache/<name>@<revision>/`, checks each file against the server's manifest, and runs the script with whatever that user can read, write, or reach. `aip` does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters. The server runs no user code and holds no model key, so publishing no longer means code execution on the server; it still decides what every client runs, so keep it on localhost or behind a token.
 

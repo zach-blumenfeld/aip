@@ -275,6 +275,35 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     release needs that suffix. (h) `write_graph` matches an edge's ends by label, read off the
     node id's prefix, so Neo4j can use an index; `.rl` files are unchanged by it.
 
+44. **Decided in S2 (2026-11-09), where the plan left a choice.** (a) `local` is a value of the
+    server setting, and a client with nothing configured still records nowhere: `aip config
+    server local` is what the installer sets, `aip config server none` turns it off, and
+    `AIP_SERVER` takes any of the three for one command. A config that defaulted to `local`
+    would have made "no server configured" (item 3 of the plan's summary, R3's proof)
+    unreachable, and would start a process for anyone who only ran `aip run` once. (b) The
+    local server listens on 8247, not on 8000 where `aip server` does, so the two do not
+    collide and a 0.8 server on 8000 is not mistaken for it; it opens the default store file,
+    reads no config file, and is told from anything else on its port by `GET /health`. (c) Any
+    request starts it, not only `aip run`: `aip runs` after an idle stop has to work too. It
+    stops after 15 minutes without a request. A run never fails for want of it. (d) "Draft" is
+    the store's word (S1 left this open): a run is a draft's when its bundle has no revision at
+    the time it is recorded, so a folder that compiles to a published bundle's id is recorded
+    as a run of that revision, and the client's run file takes the server's answer. (e) The
+    audit queries keep their 0.8 names where the question is the same (`cycles`,
+    `repeated-cycles`), though what they read is now `For` and `Loop` blocks; `repeated-cycles`
+    counts `Loop`s only, since a `For`'s passes are its list's length. `missing-fields` reads
+    the three header lists (`Use_When`, `Do_Not_Use_When`, `Avoid`). (f) `failing-scripts`
+    counts the runs that stand failed at a script. The record keeps where a run stands and not
+    the attempts before, so a failure that was retried past leaves no trace; keeping attempts
+    would be a change to the record (R-track), not to a query. (g) `lineage` is the one
+    built-in that is not a single statement: a collected list is derived from the key each pass
+    gathered, and `COLLECTS` points from the loop to that key, so no directed path in the
+    bundle's graph runs through a `For`. (h) Stored queries live in the store on both backends
+    (`AuditQuery` nodes); every audit query runs in a transaction that is never committed, and
+    one with a writing clause is refused when stored. (i) An export is a second store written
+    by the store's own statements, served as bytes by `GET /export/runs`, so it works the same
+    from a remote server and on Neo4j, and every query in `queries.md` runs on the file.
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show

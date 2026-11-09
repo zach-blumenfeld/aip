@@ -38,7 +38,8 @@ REPLY = "Thanks for flagging this; duplicate charges are refunded in full within
 SAMPLE_ID = "4f1c9a2e7b3d5068"
 TICKETS = ["Can I get a copy of my March invoice?", "You charged me twice, fix it NOW", "How do I move to the annual plan?"]
 POLICY = "Duplicate charges are refunded in full within 5 business days. Plan changes take effect next cycle."
-NOT_RECORDED = "aip: not recorded: no server is configured; run `aip config --server URL` to record runs on a server\n"
+NOT_RECORDED = ("aip: not recorded: no server is configured; run `aip config server local` to record runs on this machine, "
+                "or `aip config server URL` for a server elsewhere\n")
 # A script that fails until the "ticket service" is up: a marker file in the run's working directory.
 FLAKY = ('import json, os, sys\n'
          'if not os.path.exists(os.path.join(os.environ["AIP_WORKDIR"], "ticket-service-up")):\n'
@@ -435,7 +436,7 @@ class CliJson(unittest.TestCase):
         self.assertEqual((code, error["error"], error["kind"], error["resumable"]), (1, "invalid_input", "not_found", False))
         code, [error], _ = self.aip("run", "billing_support", "--inputs", "{}")
         self.assertEqual((error["error"], error["kind"]), ("invalid_input", "no_server"))
-        self.assertIn("aip config --server URL", error["message"])
+        self.assertIn("aip config server local", error["message"])
         code, [error], _ = self.aip("run", str(EXAMPLE), "--inputs", "not json")
         self.assertEqual((code, error["error"]), (1, "invalid_input"))
         self.assertIn("--inputs", error["message"])

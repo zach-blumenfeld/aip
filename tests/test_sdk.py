@@ -409,27 +409,48 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     assert handle.run["identity"]["user"] == "zach"
 
     before = list(fake.requests)
-    paused = served.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)           # a folder: a draft
+    paused = served.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)           # a folder, whose bundle is the published one
     assert isinstance(paused, aip.Paused) and paused.recorded is True
-    assert ("POST", "/bundles") in fake.requests[len(before):], "the folder's bundle is uploaded as a draft before the run is recorded"
-    assert fake.runs[paused.run_id]["draft"] is True and fake.runs[paused.run_id]["status"] == "paused"
-    assert (paused.kind, paused.step) == ("task", "reply") and fake.runs[paused.run_id]["status"] == "paused"
+    assert ("POST", "/bundles") in fake.requests[len(before):], "the folder's bundle is uploaded before the run is recorded"
+    stored = fake.runs[paused.run_id]
+    assert (stored["draft"], stored["revision"], stored["status"]) == (False, "1", "paused"), \
+        "the store holds that very bundle as billing_support@1, so the run is a run of it (plan S2)"
+    handle = RunFile.load(paused.run_file)
+    assert (handle.origin, handle.revision, handle.draft) == ("folder", "1", False), "and the run file says what the server said"
+    assert (paused.kind, paused.step) == ("task", "reply")
     done2 = served.resume(paused, {"reply": "Sorry about that; refunded."})
     assert fake.runs[paused.run_id]["status"] == "done" and done2.recorded is True
     assert fake.requests.count(("POST", "/bundles")) == 1, "one upload per bundle id per client"
 
+    drafted = served.run(AGENT, {"message": CALM}, workdir=tmp_path)            # a folder nobody published: a draft
+    stored = fake.runs[drafted.run_id]
+    assert (stored["draft"], stored["revision"], stored["status"]) == (True, None, "paused")
+    assert RunFile.load(drafted.run_file).draft is True
+
     rows = served.runs(agent="tests")
-    assert [r.run_id for r in rows] == [paused.run_id, done.run_id] and all(isinstance(r, sdk.RunSummary) for r in rows)
+    assert [r.run_id for r in rows] == [drafted.run_id, paused.run_id, done.run_id] and all(isinstance(r, sdk.RunSummary) for r in rows)
     assert [r.run_id for r in served.runs(session="demo")] == [done.run_id]
-    assert served.runs(status="paused") == []
+    assert [r.run_id for r in served.runs(status="paused")] == [drafted.run_id]
+    assert [r.run_id for r in served.runs(draft=True)] == [drafted.run_id] and len(served.runs(draft=False)) == 2
+    assert len(served.runs(user="zach")) == 3 and served.runs(user="nobody") == []
     run_path(done.run_id).unlink()
     remote = served.run_record(done.run_id)                                      # no run file here: the server's record
     assert isinstance(remote, sdk.RunRecord) and remote.identity["user"] == "zach" and remote.status == "done"
-    queries = served.governance()
-    assert [q.query for q in queries] == ["confidence-fired", "failing-aggregations", "model-answers", "agent-routes"]
-    asked = served.governance("model-answers", name="billing_support", agent="tests")
+    queries = served.audit()
+    assert [q.query for q in queries] == [
+        "confidence-fired", "failing-aggregations", "model-answers", "failing-scripts", "untaken-branches", "repeated-cycles",
+        "agent-routes", "missing-fields", "empty-results", "unused-data", "cycles", "lineage"]
+    assert all(isinstance(q, sdk.AuditQuery) and q.builtin and q.description for q in queries)
+    asked = served.audit("model-answers", name="billing_support", agent="tests")
     assert [(r["step"], r["question"], r["model"], r["answers"]) for r in asked] == [("triage", "tone", "jev-1", 2), ("triage", "billing", "jev-1", 2)]
-    assert served.governance("model-answers", name="billing_support", agent="someone-else") == []
+    assert served.audit("model-answers", name="billing_support", agent="someone-else") == []
+    assert served.audit("model-answers", name="billing_support", draft=True) == [], "both are runs of the published revision"
+    assert [r["derived_from"] for r in served.audit("lineage", key="ticket_id")] == ["message", "triage_decision"], "what escalate read"
+    mine = served.save_audit("runs-by-agent", "MATCH (r:Run) RETURN r.agent AS agent, count(r) AS runs ORDER BY agent", "Who runs.")
+    assert (mine.query, mine.builtin) == ("runs-by-agent", False) and served.audit()[-1].query == "runs-by-agent"
+    assert served.audit("runs-by-agent") == [{"agent": "tests", "runs": 3}]
+    served.delete_audit("runs-by-agent")
+    assert len(served.audit()) == len(queries)
 
 
 def test_a_server_that_is_down_does_not_stop_the_run(tmp_path):
@@ -487,7 +508,11 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
         ("pin", "pin", ["billing_support", "1"]),
         ("runs", "runs", []),
         ("runs", "run_record", [first.run_id]),
-        ("governance", "governance", ["confidence-fired"]),
+        ("audit", "audit", ["confidence-fired", "--published"]),
+        ("audit", "save_audit", ["--save", "by-agent", "--cypher", "MATCH (r:Run) RETURN r.agent AS agent, count(r) AS runs"]),
+        ("audit", "audit", ["by-agent"]),
+        ("audit", "delete_audit", ["--delete", "by-agent"]),
+        ("export", "export_runs", ["runs", "billing_support_agent", "--since", "2026-01-01", "-o", str(tmp_path / "audit.rl")]),
         ("retire", "retire", ["billing_support@1"]),
     ]
     assert {c for c, _, _ in cases} | NOT_CLIENT == set(COMMANDS)
@@ -503,6 +528,9 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
     assert code == 0 and json.loads(out) == {"message": "<string>"}
     code, out, _ = _call("config")
     assert code == 0 and "server: none" in out and "decision model: none" in out and "batch: 10" in out
+    assert (tmp_path / "audit.rl").is_file()
+    code, _, err = _call("governance")
+    assert code == 2 and err == "aip: `aip governance` is `aip audit` since 0.9\n"
 
 
 def test_config_writes_and_reads_the_file(monkeypatch):
@@ -528,6 +556,28 @@ def test_config_writes_and_reads_the_file(monkeypatch):
     monkeypatch.delenv("AIP_DECISION_MODEL_KEY")
     code, out, _ = _call("config", "--clear")
     assert code == 0 and aip.settings().server is None and "cleared" in out
+    assert "server: none (runs are not recorded; run `aip config server local` to record runs on this machine" in out
+
+    from aip.client import local
+
+    code, out, _ = _call("config", "server", "local")                    # this machine's server, started when needed
+    s = aip.settings()
+    assert code == 0 and (s.server, s.local) == (local.url(), True) and json.loads(s.path.read_text()) == {"server": "local"}
+    assert f"server: local  {local.url()}, started when a command needs it; its store is {local.store_path()}" in out and "token" not in out
+    code, out, _ = _call("config", "server", "https://aip.example.com/", "--token", "t")
+    s = aip.settings()
+    assert (s.server, s.local, s.token) == ("https://aip.example.com", False, "t") and "token:  set" in out
+    monkeypatch.setenv("AIP_SERVER", "none")                             # one command with no recording, whatever the file says
+    assert aip.settings().server is None
+    monkeypatch.setenv("AIP_SERVER", "local")
+    assert aip.settings().local is True and aip.settings().source == "AIP_SERVER"
+    monkeypatch.delenv("AIP_SERVER")
+    code, out, _ = _call("config", "server", "none")
+    assert aip.settings().server is None and "server: none" in out and "server" not in json.loads(aip.settings().path.read_text())
+    for bad in (["config", "token", "t"], ["config", "server"], ["config", "server", "local", "--server", "http://x"]):
+        with pytest.raises(SystemExit) as exit:
+            _call(*bad)
+        assert exit.value.code == 2, bad
     with pytest.raises(SystemExit) as exit:
         _call("config", "--batch", "0")
     assert exit.value.code == 2
