@@ -13,7 +13,7 @@ together under one version:
 | package | where | what |
 |---|---|---|
 | `agent-instruction-protocol` | the root (`src/aip/`) | the runtime: the `aip` command, the Python SDK, `aip server`, the Neo4j and filesystem backends, the `aip-runtime` skill |
-| `aip-spec` | `packages/aip-spec/` | the format: pydantic models, the JSON Schema generated from them, the runtime block every skill carries, the `aip-spec` validator CLI, the `aip-compile` skill and the example |
+| `aip-spec` | `packages/aip-spec/` | the language: the parser, the syntax tree, the formatter (`aip-spec fmt`), the example programs; the checker and the bundle arrive with the 0.9 milestones. Until 0.9 ships it still bundles the `aip-compile` skill |
 
 The distribution name of the runtime is `agent-instruction-protocol` (PyPI blocks `aip` as a
 look-alike of an existing project); its module and command are `aip`. The runtime depends on
@@ -54,9 +54,9 @@ look-alike of an existing project); its module and command are `aip`. The runtim
 | `src/aip/spec/` | loads a skill folder through `aip_spec` into the runtime's model |
 | `src/aip/sdk.py` | `aip.Client`, the runtime as a library; the CLI is a thin wrapper over it (`docs/sdk.md`) |
 | `tests/` | the runtime's tests; `tests/server/` drives the HTTP API; the Neo4j backend tests skip unless `NEO4J_URI` is set |
-| `packages/aip-spec/src/aip_spec/` | **where the format lives**: `models.py` (the pydantic models, `FORMAT_VERSION`, `SCHEMA_ID`, `SPEC_URL`), `runtime.md` (the runtime block; `runtime-0.5a1.md`, `runtime-0.6a0.md` and `runtime-0.6a1.md` are the earlier ones the validator still recognises), `cli.py` (`aip-spec validate`, `schema`, `runtime`, `skill`, `example`), `resources.py` (finds the skill and the example in a checkout or a wheel, `SKILL_NAME`, `LEGACY_SKILL_NAMES`), `agents.py` (the agent skills directories), `skill.py` |
-| `packages/aip-spec/docs/specification.md` | the format specification as prose; the models are the source of truth |
-| `packages/aip-spec/tests/` | the format's tests, including the schema-sync and runtime-block drift checks |
+| `packages/aip-spec/src/aip_spec/` | **where the language lives**: `keywords.py` (every keyword with its aliases, the executable copy of the spec's glossary; the type vocabulary), `lexer.py`, `parser.py` (recursive descent; `ParseError` in `errors.py`), `syntax.py` (the tree every later pass reads), `formatter.py` (canonical form), `cli.py` (`aip-spec fmt`), `resources.py` (finds the example programs and, for now, the `aip-compile` skill in a checkout or a wheel), `agents.py` (the agent skills directories). `LANGUAGE_VERSION` is in `__init__.py` |
+| `packages/aip-spec/docs/specification.md` | the prose of the 0.8 YAML format, which this package no longer implements; its fate is the docs milestone's (D4). The language's spec is `docs/language/spec.md` |
+| `packages/aip-spec/tests/` | the language's tests: the examples parse and round-trip, a test per syntax error with its position, the formatter and `fmt` |
 | `packages/aip-spec/hatch_build.py` | bundles `skills/aip-compile/` and `examples/` into the `aip_spec` wheel from the checkout or from the sdist |
 | `skills/aip-compile/` | the authoring skill (`SKILL.md`, `references/`, `assets/procedure.schema.json`); reviewed line by line, keep diffs small |
 | `skills/aip-runtime/` | the runtime skill agents read to run published procedures; `tests/test_runtime_skill.py` fails if it drifts from the copy under `src/aip/client/` or lags `FORMAT_VERSION` |
@@ -74,10 +74,10 @@ look-alike of an existing project); its module and command are `aip`. The runtim
 - **One version, two pyprojects.** `pyproject.toml` and `packages/aip-spec/pyproject.toml` carry
   the same `version`, and the root's dependency pin `aip-spec==<version>` matches. The workflow
   refuses to release if the three differ.
-- **Change the format in one place and let the tests find the rest.** `models.py` is normative;
-  `aip-spec schema` regenerates the JSON Schema, and the schema-sync test fails until
-  `skills/aip-compile/assets/procedure.schema.json` matches. The runtime block in `runtime.md`
-  is copied into every skill under its own heading; the drift tests compare the copies.
+- **Change the language in one place and let the tests find the rest.** `docs/language/spec.md`
+  is normative and its glossary is the only list of keywords in prose; `keywords.py` is the
+  executable copy, and a keyword or alias added to one is added to the other in the same commit.
+  The examples under `examples/language/` must parse and round-trip through the formatter.
 - **Do not change behaviour in a release branch.** If a test must change for a path, say so in
   the commit; if it must change for a behaviour, stop and write it down in the plan issue.
 - **Plans live in issues, not in the repo.** The roadmap is
@@ -97,10 +97,8 @@ places below and change them in the same commit; the drift tests catch some, not
 |---|---|
 | `src/aip/model/steps.py` | the step's behaviour; `procedure.py` (`resolve`) walks routers, `engine.py` drives the loop |
 | `src/aip/server/app.py` | the server's own `resolve` call sites (`execute`, `peek`) mirror the engine |
-| `packages/aip-spec/src/aip_spec/runtime.md` | the runtime block: the same rule in words an agent executes by hand. This is the format: it moves the format version unless the release is still unreleased |
-| `skills/aip-runtime/SKILL.md` and `src/aip/client/aip-runtime/SKILL.md` | the runtime skill, both copies, including the worked example at the end |
-| `packages/aip-spec/docs/specification.md` | the prose for the step kind, and the route-class table if what counts as measured changes |
-| `packages/aip-spec/src/aip_spec/skill.py` | `classify_sources` and the issue texts, when the change alters what a router can trust |
+| `docs/language/spec.md` and `docs/language/runtime.md` | the language and what running it requires: the same rule in words. This is the language: it moves `LANGUAGE_VERSION` unless the release is still unreleased |
+| `skills/aip-runtime/SKILL.md` and `src/aip/client/aip-runtime/SKILL.md` | the runtime skill, both copies, including the worked example at the end (replaced by one `aip` skill at K1) |
 | `examples/billing-support/SKILL.md` | the runtime block copy and the comments that explain the run |
 | `docs/running.md`, `docs/state.md`, `docs/cli-json.md`, `docs/client-execution.md`, `README.md` | every walkthrough that narrates the old behaviour; grep for the old history `reason` values and the old wording |
 | `tests/` and `packages/aip-spec/tests/` | the assertions on history entries, `--progress` lines, and validator issues |
@@ -162,8 +160,8 @@ The tags `vX.Y.Z` are shared by both packages; never move or force-push a publis
 
 ## When you're unsure
 
-- For what a procedure may contain, `packages/aip-spec/docs/specification.md` is the prose and
-  `models.py` is the law.
+- For what a procedure may contain, `docs/language/spec.md` is the law and `aip_spec/syntax.py`
+  is the tree it parses to.
 - For how a run moves, `docs/running.md`, `docs/state.md` and `docs/run-modes.md`; for the
   server, `docs/server-design.md` with `docs/client-execution.md` on top.
 - For what agents see, the two `SKILL.md` files are the contract; a change to the runtime's

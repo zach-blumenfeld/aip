@@ -1,14 +1,11 @@
 [project]
 name = "aip-spec"
 version = "0.8.0"
-description = "Agent Instruction Protocol: the procedure format, its validator, and the authoring skill"
+description = "Agent Instruction Protocol: the procedure language, its parser and formatter, and the example programs"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-dependencies = [
-    "pydantic>=2.11",
-    "pyyaml>=6.0.3",
-]
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/zach-blumenfeld/aip/tree/main/packages/aip-spec"

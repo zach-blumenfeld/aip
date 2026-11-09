@@ -68,10 +68,6 @@ dev = [
 name = "aip-spec"
 version = "0.8.0"
 source = { editable = "packages/aip-spec" }
-dependencies = [
-    { name = "pydantic" },
-    { name = "pyyaml" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -79,10 +75,6 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "pydantic", specifier = ">=2.11" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]

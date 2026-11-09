@@ -43,6 +43,13 @@ def validate_command(argv: list[str]) -> int:
     return 1
 
 
+def fmt_command(argv: list[str]) -> int:
+    """`aip fmt <path>...`: `aip-spec fmt`, the language's formatter, under this command's name."""
+    from aip_spec.cli import fmt_command as spec_fmt
+
+    return spec_fmt(argv, prog="aip fmt")
+
+
 def upgrade_command(argv: list[str]) -> int:
     """`aip upgrade <folder>`: `aip-spec upgrade`, the format's own upgrader, under this command's name."""
     from aip_spec.cli import upgrade_command as spec_upgrade
@@ -660,6 +667,7 @@ def server_command(argv: list[str]) -> int:
 
 
 COMMANDS = {
+    "fmt": fmt_command,
     "validate": validate_command,
     "upgrade": upgrade_command,
     "schema": schema_command,
@@ -683,11 +691,12 @@ COMMANDS = {
 
 
 def version_line() -> str:
-    """`aip --version`: `aip <version> format <format>` on one line, which the console checks at startup."""
-    import aip
-    from aip.spec import FORMAT_VERSION
+    """`aip --version`: `aip <version> language <language version>` on one line, which the console checks at startup."""
+    from importlib.metadata import version
 
-    return f"aip {aip.__version__} format {FORMAT_VERSION}"
+    from aip_spec import LANGUAGE_VERSION
+
+    return f"aip {version('agent-instruction-protocol')} language {LANGUAGE_VERSION}"
 
 
 def main(argv: list[str] | None = None) -> int:

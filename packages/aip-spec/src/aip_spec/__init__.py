@@ -1,15 +1,19 @@
-"""The AIP procedure format: pydantic spec models, skill-folder validation, the runtime block
-every skill carries, and the bundled authoring skill and example. Needs only pydantic and pyyaml.
+"""The AIP procedure language: the parser, the syntax tree and the formatter for `procedure.aip`
+(`docs/language/spec.md`), and the bundled example programs. No dependencies.
 
-The runtime (`Procedure.run`, the client, the server) is the `aip` package, which depends
-on this one."""
+    from aip_spec import parse, format_program, ParseError
+    program = parse(Path("procedure.aip").read_text())   # syntax.Program, or ParseError with line and column
+    text = format_program(program)                        # canonical text; parse(text) == program
 
-from aip_spec.models import FORMAT_VERSION, SCHEMA_ID, SPEC_URL, DataType, ProcedureSpec, json_schema, runtime_text
-from aip_spec.resources import example_dir, skill_dir
-from aip_spec.skill import Issue, LoadedSkill, check_graph, classify_sources, load_skill, parse_skill_md, parse_spec, validate_skill
+The checker, the graph and the bundle (the plan's L2 and L3) build on the tree in `aip_spec.syntax`.
+Running a procedure is the `aip` package, which depends on this one."""
 
-__all__ = [
-    "FORMAT_VERSION", "SCHEMA_ID", "SPEC_URL", "DataType", "ProcedureSpec", "json_schema", "runtime_text",
-    "Issue", "LoadedSkill", "check_graph", "classify_sources", "load_skill", "parse_skill_md", "parse_spec", "validate_skill",
-    "skill_dir", "example_dir",
-]
+from aip_spec.errors import ParseError
+from aip_spec.formatter import format_program, format_source
+from aip_spec.parser import parse
+from aip_spec.resources import example_dir, example_names
+
+# The language version: the package's major.minor at the last release that changed the language.
+LANGUAGE_VERSION = "0.9"
+
+__all__ = ["LANGUAGE_VERSION", "ParseError", "parse", "format_program", "format_source", "example_dir", "example_names"]

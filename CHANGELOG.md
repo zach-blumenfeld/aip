@@ -13,7 +13,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-Add notable changes here as you make them. On release, rename this section to the new version with a date and start a new `[Unreleased]` above it.
+The 0.9 release replaces the YAML procedure format with a text language, `procedure.aip`
+(`docs/language/spec.md`). 0.8 skills do not load in 0.9 and there is no upgrade tool; the plan
+is aip-dev#1. The milestones land one at a time below.
+
+### Added
+- **The language's parser and formatter** (`aip_spec.parse`, `aip_spec.format_program`; `aip fmt <path>...` and `aip-spec fmt`, with `--check`). A hand-written parser for the grammar in the spec's section 2.1 and glossary: every step kind, `For` and `Loop` in every header form, `Answer_Questions`, `Aggregations` with the condition grammar, `Confidence_Below` routes, named strings, triple-quoted strings, `{key}` interpolation, comments. Keywords match in any case and every glossary alias is accepted (`Task` for `Task_Agent`, `Next` for `Next_Step`, `w/ Conf` for `With Confidence_Above`); the formatter writes the canonical spelling, two-space indent, one clause per line, and keeps every comment. Every node carries its line and column; a syntax error names the line, the column and what was expected. `aip --version` prints `aip <version> language 0.9`.
+
+### Removed
+- From `aip-spec`: the pydantic models of the YAML format, the JSON Schema, the runtime block and the commands `validate`, `schema`, `runtime`, `skill`, `example` and `upgrade`. The package now depends on nothing. The `aip` runtime still carries the 0.8 engine until its own milestones replace it; `aip run` and the other 0.8 commands do not work in the meantime.
 
 ## [0.8.0] — 2026-11-03
 
