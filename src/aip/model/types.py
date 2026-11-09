@@ -26,7 +26,7 @@ JSON: TypeAlias = dict[str, Any]
 VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "integer"}
 
 ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "requires_unmet",
-               "no_decision_model", "decision_model_failed", "not_paused", "server")
+               "no_decision_model", "decision_model_failed", "loop_cap", "not_paused", "server")
 
 
 def is_plain(type: str, value: Any) -> bool:
@@ -242,6 +242,20 @@ class DecisionModelFailed(StepError):
         return {"model": self.model, "cause": self.cause}
 
 
+class LoopCap(StepError):
+    """A loop reached its cap: a `For` (or a fold) given more items than `At_Most`, or an `Until`
+    loop that ran `At_Most` passes without its condition holding and says `Else_Fail`."""
+
+    kind = "loop_cap"
+
+    def __init__(self, loop: str, cap: int, count: int, message: str):
+        self.loop, self.cap, self.count = loop, cap, count
+        super().__init__(loop, message)
+
+    def fields(self) -> JSON:
+        return {"loop": self.loop, "cap": self.cap, "count": self.count}
+
+
 class NotPaused(StepError):
     """An answer arrived for a run that is not waiting for one, or does not fit its pause."""
 
@@ -249,5 +263,5 @@ class NotPaused(StepError):
 
 
 __all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "StepError", "KeysError", "InvalidInput", "InvalidOutput", "NoBranch",
-           "ScriptFailed", "ScriptTimeout", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed", "NotPaused",
+           "ScriptFailed", "ScriptTimeout", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed", "LoopCap", "NotPaused",
            "is_plain", "normalise", "conforms", "describe", "branch_key"]

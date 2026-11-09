@@ -15,10 +15,10 @@ Nothing in the language changes to fix it. `For` passes are independent by defin
 runtime batches them: `aip run --batch N` (default 10) turns a batch of single-`Decide` passes
 into **one** model call carrying one question per item, the keys made distinct by the runtime
 and mapped back, same answers, same record, fewer calls. The author writes a loop; the runtime
-writes the multi-question request. The
-requirement is written in `docs/language/runtime.md` under "Batching `For` passes". The limitation that
-remains is that a body with more than one step in it runs its passes concurrently rather than
-as one call.
+writes the multi-question request. The requirement is written in `docs/language/runtime.md`
+under "Batching `For` passes". Two limitations remain: a body with more than one step in it
+runs its passes together rather than as one call, and so does a `Decide` that `Read`s the item
+instead of interpolating it into its question, since each pass then judges something different.
 
 ## Loading data saved with the procedure into the state
 

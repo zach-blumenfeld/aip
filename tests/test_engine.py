@@ -203,10 +203,18 @@ class BillingSupport(EngineCase):
         engine = self.engine(ScriptedResolver({"triage": angry()}))
         run = engine.start(self.load(self.bundle), {"message": self.message})
         for entry in run.history:
-            self.assertEqual((entry["bundle_id"], entry["at"], entry["pass"]), (self.bundle.id, CLOCK(), None))
+            self.assertEqual((entry["bundle_id"], entry["at"], entry["pass"], entry["passes"]), (self.bundle.id, CLOCK(), None, []))
             self.assertIn(entry["kind"], ("Start", "Decide", "Route", "Execute", "End"))
-        self.assertEqual(run.history[0], {"bundle_id": self.bundle.id, "step": "start", "kind": "Start", "pass": None,
+        self.assertEqual(run.history[0], {"bundle_id": self.bundle.id, "step": "start", "kind": "Start", "pass": None, "passes": [],
                                           "at": CLOCK(), "input": {"message": self.message}, "result": {}})
+        self.assertEqual(run.identity, {"agent": None, "session": None, "user": None})
+
+    def test_the_identity_is_the_run_s(self):
+        engine = self.engine(ScriptedResolver({"triage": angry()}))
+        run = engine.start(self.load(self.bundle), {"message": self.message}, identity={"agent": "claude-code 2.1", "session": "s-1"})
+        self.assertEqual(run.identity, {"agent": "claude-code 2.1", "session": "s-1", "user": None})
+        self.assertEqual(run.to_dict()["identity"], run.identity)
+        self.assertEqual(run.to_dict()["batch"], 10)
 
     def test_a_run_survives_a_round_trip_through_json(self):
         engine = self.engine(ScriptedResolver({"triage": calm()}))
@@ -541,15 +549,509 @@ class Scores(EngineCase):
         self.assertEqual(run.history[2]["check"]["reason"], "below")
 
 
+def without_timestamps(history):
+    """The record less what the clock wrote: `at`, and a script's `seconds`."""
+    return [{k: v for k, v in e.items() if k not in ("at", "seconds")} for e in history]
+
+
+def policy_verdicts(request):
+    """dynamic-policy's `check`: the question carries the policy; a policy mentioning "short"
+    fails until the work says it was fixed. Deterministic per pass, whatever the batch."""
+    out = {}
+    for q in request.questions:
+        fails = "short" in q.instruction and "fixed" not in request.state["work"]
+        out[q.name] = answers.true_or_false(0.2 if fails else 0.95)
+    return out
+
+
 @needs_relate
-class Loops(EngineCase):
-    def test_a_flow_into_a_loop_fails_until_the_next_milestone(self):
-        engine = self.engine()
-        run = engine.start(self.load(compiled("dynamic-policy")), {"task": "write", "policies": ["short"]})
+class DynamicPolicy(EngineCase):
+    """The proof: `dynamic-policy` with the scripted resolver gives byte-identical records at
+    `--batch 1` and `--batch 10` apart from timestamps; a batch of the single-`Decide` body is
+    one model call."""
+
+    POLICIES = ["be polite", "be short", "use no names"]
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = compiled("dynamic-policy")
+
+    def drive(self, batch, resolver=None, clock=None):
+        resolver = resolver or ScriptedResolver({"check": policy_verdicts})
+        engine = Engine(resolver, home=self.home, workdir=self.tmp, batch=batch, **({"clock": clock} if clock else {}))
+        run = engine.start(self.load(self.bundle), {"task": "write a note", "policies": self.POLICIES})
         self.assertEqual((run.status, run.pause["step"]), (PAUSED, "draft"))
         run = engine.resume(run, {"work": "a draft"})
-        self.assertEqual((run.status, run.error["step"]), (FAILED, "revise"))
-        self.assertIn("R2", run.error["message"])
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"), run.error)
+        run = engine.resume(run, {"work": "a fixed draft"})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        return engine, resolver, run
+
+    def test_the_record_is_the_same_at_every_batch_size_and_a_batch_is_one_call(self):
+        _, one, run_1 = self.drive(1)
+        _, ten, run_10 = self.drive(10)
+        self.assertEqual(without_timestamps(run_1.history), without_timestamps(run_10.history))
+        self.assertEqual(run_1.result, run_10.result)
+        self.assertEqual([len(r.questions) for r in one.requests], [1, 1, 1, 1, 1, 1], "batch 1: one call per policy per revise pass")
+        self.assertEqual([len(r.questions) for r in ten.requests], [3, 3], "batch 10: one call per revise pass")
+        self.assertEqual([q.name for q in ten.requests[0].questions], ["follows__0", "follows__1", "follows__2"])
+        self.assertIn("be short", ten.requests[0].questions[1].instruction, "each copy of the question is rendered with its pass's item")
+        self.assertEqual(ten.requests[0].state, {"work": "a draft"}, "the Read keys once")
+        _, two, run_2 = self.drive(2)
+        self.assertEqual(without_timestamps(run_2.history), without_timestamps(run_10.history))
+        self.assertEqual([len(r.questions) for r in two.requests], [2, 1, 2, 1])
+
+    def test_what_the_record_and_the_state_say(self):
+        _, _, run = self.drive(10, clock=CLOCK)
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history],
+                         [("start", None), ("draft", None), ("check", 0), ("check", 1), ("check", 2), ("review", 0),
+                          ("summarize_check", 0), ("fix", 0), ("check", 0), ("check", 1), ("check", 2), ("review", 1),
+                          ("summarize_check", 1), ("revise", None), ("end", None)])
+        check = run.history[3]
+        self.assertEqual(check["passes"], [{"loop": "revise", "pass": 0}, {"loop": "review", "pass": 1}])
+        self.assertEqual(check["answered_by"], {"model": "scripted"})
+        self.assertEqual(check["result"], {"follows": answers.true_or_false(0.2)}, "recorded as if the pass had called alone")
+        self.assertEqual(check["input"], {"work": "a draft"})
+        review = run.history[5]
+        self.assertEqual((review["kind"], review["pass"], review["passes"]), ("For", 0, [{"loop": "revise", "pass": 0}]))
+        self.assertEqual(review["input"], {"policies": self.POLICIES})
+        self.assertEqual(review["exit"], {"reason": "items"})
+        self.assertEqual(review["result"]["iterations"], 3)
+        self.assertEqual([v["follows"]["value"] for v in review["result"]["verdicts"]], [True, False, True], "collected in input order")
+        summary = run.history[6]
+        self.assertEqual(summary["result"], {"all_hold": {"value": False}})
+        self.assertEqual([r["source"] for r in summary["resolutions"]["all_hold"]], ["verdicts[0].follows", "verdicts[1].follows", "verdicts[2].follows"])
+        fix = run.history[7]
+        self.assertEqual(fix["kind"], "Task_Agent")
+        self.assertEqual(set(fix["input"]), {"task", "work", "policies", "verdicts"})
+        revise = run.history[13]
+        self.assertEqual((revise["kind"], revise["pass"], revise["passes"]), ("Loop", None, []))
+        self.assertEqual(revise["exit"], {"reason": "until", "where": "summarize_check", "resolution": {
+            "answer": "check_summary.all_hold", "value": True, "holds": True, "probability": None, "barred": False}},
+            "the loop ends the moment the aggregate is produced and holds; fix does not run again")
+        self.assertEqual(revise["result"], {"iterations": 2})
+        self.assertEqual(run.state["iterations"], 2)
+        self.assertNotIn("index", run.state, "the pass index is gone after the loop")
+        self.assertEqual(set(run.result), {"work", "verdicts"})
+        self.assertEqual(run.result["work"], "a fixed draft")
+
+    def test_the_cap_fails_the_run_with_else_fail_and_a_retry_hits_it_again(self):
+        resolver = ScriptedResolver({"check": {"follows": answers.true_or_false(0.2)}})  # never passes
+        engine = self.engine(resolver)
+        run = engine.start(self.load(self.bundle), {"task": "t", "policies": ["p"]})
+        run = engine.resume(run, {"work": "w"})
+        for _ in range(3):
+            self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"))
+            run = engine.resume(run, {"work": "w2"})
+        self.assertEqual(run.status, FAILED)
+        self.assertEqual({k: run.error[k] for k in ("error", "step", "loop", "cap", "count", "pass")},
+                         {"error": "loop_cap", "step": "revise", "loop": "revise", "cap": 3, "count": 3, "pass": 3})
+        self.assertEqual([e["step"] for e in run.history].count("fix"), 3)
+        self.assertEqual(run.at, "loop:revise")
+        run = engine.retry(run)
+        self.assertEqual((run.status, run.error["error"], run.error["count"]), (FAILED, "loop_cap", 3), "the count does not move on a retry")
+
+    def test_a_list_longer_than_the_cap_fails_before_the_first_pass(self):
+        engine = self.engine(ScriptedResolver({"check": policy_verdicts}))
+        run = engine.start(self.load(self.bundle), {"task": "t", "policies": [f"p{i}" for i in range(21)]})
+        run = engine.resume(run, {"work": "w"})
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["count"], run.error["cap"]),
+                         (FAILED, "loop_cap", "review", 21, 20))
+        self.assertEqual([e["step"] for e in run.history], ["start", "draft"])
+
+    def test_without_a_model_one_pause_carries_every_pass_and_a_missing_answer_fails_its_pass(self):
+        source = self.bundle.source.replace("Produce verdict", "Agent_Fallback true\n      Produce verdict")
+        bundle = program(source, {f.path: f.data.decode() for f in self.bundle.files})
+        engine = self.engine(None)
+        run = engine.start(self.load(bundle), {"task": "t", "policies": self.POLICIES})
+        run = engine.resume(run, {"work": "w"})
+        self.assertEqual((run.status, run.pause["kind"], run.pause["step"], run.pause["reason"]), (PAUSED, "decision", "check", "no_decision_model"))
+        tasks = run.pause["tasks"]
+        self.assertEqual([(t["index"], t["pass"]) for t in tasks], [(0, 0), (1, 1), (2, 2)])
+        self.assertEqual(tasks[1]["passes"], [{"loop": "revise", "pass": 0}, {"loop": "review", "pass": 1}])
+        self.assertIn("be short", tasks[1]["questions"][0]["instruction"])
+        self.assertEqual(tasks[1]["answer_with"], {"follows": "true_or_false"})
+        self.assertEqual(tasks[1]["state"], {"work": "w"})
+        # a bad answer is refused and the pause stands
+        with self.assertRaises(InvalidOutput):
+            engine.resume(run, {"0": {"follows": True}, "1": {"follows": "yes"}, "2": {"follows": True}})
+        self.assertEqual(run.status, PAUSED)
+        # a missing one fails its pass, and the run; the answered passes are recorded
+        run = engine.resume(run, {"0": {"follows": True}, "2": {"follows": True}})
+        self.assertEqual((run.status, run.error["error"], run.error["pass"], run.error["missing"]), (FAILED, "invalid_output", 1, ["1"]))
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history], [("start", None), ("draft", None), ("check", 0), ("check", 2)])
+        self.assertEqual(run.history[2]["answered_by"], "agent")
+        # a retry asks for the missing pass alone
+        run = engine.retry(run)
+        self.assertEqual((run.status, [(t["index"], t["pass"]) for t in run.pause["tasks"]]), (PAUSED, [(0, 1)]))
+        run = engine.resume(run, {"follows": False})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"))
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history][4:],
+                         [("check", 1), ("review", 0), ("summarize_check", 0)], "the retried pass is recorded after the others")
+        self.assertEqual([v["follows"] for v in run.state["verdicts"]], [{"value": True}, {"value": False}, {"value": True}])
+
+    def test_a_failing_model_hands_the_batch_to_the_agent_or_fails_it(self):
+        source = self.bundle.source.replace("Produce verdict", "Agent_Fallback true\n      Produce verdict")
+        bundle = program(source, {f.path: f.data.decode() for f in self.bundle.files})
+        resolver = ScriptedResolver({})
+        engine = self.engine(resolver)
+        run = engine.start(self.load(bundle), {"task": "t", "policies": self.POLICIES})
+        run = engine.resume(run, {"work": "w"})
+        self.assertEqual((run.status, run.pause["kind"], len(run.pause["tasks"])), (PAUSED, "decision", 3))
+        self.assertTrue(run.pause["reason"].startswith("decision_model_failed: KeyError"))
+        self.assertEqual(len(resolver.requests), 1, "one call for the batch")
+        run = engine.start(self.load(self.bundle), {"task": "t", "policies": self.POLICIES})
+        run = engine.resume(run, {"work": "w"})
+        self.assertEqual((run.status, run.error["error"], run.error["pass"]), (FAILED, "decision_model_failed", 0))
+        self.assertEqual(len(resolver.requests), 2)
+        run = engine.retry(run)
+        self.assertEqual((run.status, len(resolver.requests)), (FAILED, 3), "a retry makes one call for the batch again")
+
+    def test_a_stray_or_missing_key_in_the_batched_reply_is_invalid_output(self):
+        resolver = ScriptedResolver({"check": lambda r: {q.name: answers.true_or_false(0.9) for q in r.questions} | {"other__0": answers.true_or_false(0.9)}})
+        engine = self.engine(resolver)
+        run = engine.resume(engine.start(self.load(self.bundle), {"task": "t", "policies": self.POLICIES}), {"work": "w"})
+        self.assertEqual((run.status, run.error["error"], run.error["pass"], run.error["invalid"]), (FAILED, "invalid_output", 0, ["other"]))
+        resolver = ScriptedResolver({"check": lambda r: {q.name: answers.true_or_false(0.9) for q in r.questions[1:]}})
+        engine = self.engine(resolver)
+        run = engine.resume(engine.start(self.load(self.bundle), {"task": "t", "policies": self.POLICIES}), {"work": "w"})
+        self.assertEqual((run.status, run.error["error"], run.error["pass"], run.error["missing"]), (FAILED, "invalid_output", 0, ["follows"]))
+
+    def test_a_paused_run_inside_a_loop_survives_a_round_trip_through_json(self):
+        from aip.model import Run
+
+        engine = self.engine(ScriptedResolver({"check": policy_verdicts}))
+        procedure = self.load(self.bundle)
+        run = engine.resume(engine.start(procedure, {"task": "t", "policies": self.POLICIES}), {"work": "a draft"})
+        self.assertEqual((run.status, run.at), (PAUSED, "step:fix"))
+        restored = Run.from_dict(procedure, json.loads(json.dumps(run.to_dict())))
+        self.assertEqual(restored.frames[0]["count"], 0)
+        restored = engine.resume(restored, {"work": "a fixed draft"})
+        self.assertEqual((restored.status, restored.state["iterations"]), (DONE, 2))
+
+
+@needs_relate
+class FixedPolicy(EngineCase):
+    """The proof: `fixed-policy` exits the revise loop where `check_summary.all_hold` is produced."""
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = compiled("fixed-policy")
+
+    def test_the_loop_exits_where_the_aggregate_is_produced(self):
+        calls = []
+
+        def check(request):
+            calls.append(request.state["work"])
+            sure = request.state["work"].endswith("!")
+            return {q.name: answers.true_or_false(0.9 if sure else 0.6) for q in request.questions}
+
+        engine = self.engine(ScriptedResolver({"check": check}))
+        run = engine.start(self.load(self.bundle), {"request": "a welcome note"})
+        run = engine.resume(run, {"work": "Welcome"})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"), "every answer true but under the 0.7 bar: all_hold is false")
+        self.assertEqual(run.pause["tasks"][0]["passes"], [{"loop": "revise", "pass": 0}])
+        self.assertEqual(run.pause["tasks"][0]["state"]["policy_check"]["pii"]["noul"], 0.6)
+        run = engine.resume(run, {"work": "Welcome!"})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history],
+                         [("start", None), ("draft", None), ("check", 0), ("summarize_check", 0), ("fix", 0), ("check", 1),
+                          ("summarize_check", 1), ("revise", None), ("end", None)])
+        revise = run.history[7]
+        self.assertEqual((revise["exit"]["reason"], revise["exit"]["where"], revise["result"]), ("until", "summarize_check", {"iterations": 2}))
+        self.assertEqual(calls, ["Welcome", "Welcome!"])
+        self.assertEqual(run.result["work"], "Welcome!")
+        self.assertEqual(run.result["policy_check"]["tone"]["noul"], 0.9, "End returns the last pass's decision")
+
+    def test_else_exit_leaves_the_loop_at_the_cap(self):
+        source = self.bundle.source.replace("Else_Fail", "Else_Exit")
+        bundle = program(source, {f.path: f.data.decode() for f in self.bundle.files})
+        engine = self.engine(ScriptedResolver({"check": lambda r: {q.name: answers.true_or_false(0.3) for q in r.questions}}))
+        run = engine.start(self.load(bundle), {"request": "r"})
+        run = engine.resume(run, {"work": "w"})
+        for _ in range(3):
+            run = engine.resume(run, {"work": "w"})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        self.assertEqual(run.history[-2]["exit"], {"reason": "cap", "where": "head"})
+        self.assertEqual(run.state["iterations"], 3)
+
+
+def triage_answers(request):
+    """ticket-triage's `classify`, from the ticket's text."""
+    ticket = request.state["ticket"]
+    tone = {"calm": 0.9, "angry": 0.1} if "please" in ticket.lower() else {"calm": 0.1, "angry": 0.9}
+    return {"billing": answers.true_or_false(0.8), "tone": answers.choice(tone)}
+
+
+@needs_relate
+class TicketTriage(EngineCase):
+    """A `For` whose body is a route, a task, a script and a review loop with `Again`: passes
+    drive on until each pauses, one pause carries the passes waiting at the same step, and the
+    record is the same at every batch size."""
+
+    TICKETS = ["Please refund me", "Charged twice, fix it now", "Could you please check my plan"]
+    POLICY = "We refund within 30 days. Be kind."
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = compiled("ticket-triage")
+
+    def drive(self, batch):
+        engine = Engine(ScriptedResolver({"classify": triage_answers}), home=self.home, workdir=self.tmp, batch=batch, clock=CLOCK)
+        run = engine.start(self.load(self.bundle), {"tickets": self.TICKETS, "policy": self.POLICY})
+        # the calm tickets wait at draft, the angry one ran the script to the end of its pass
+        self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "draft"))
+        self.assertEqual([(t["index"], t["pass"], t["state"]["ticket"]) for t in run.pause["tasks"]],
+                         [(0, 0, self.TICKETS[0]), (1, 2, self.TICKETS[2])][:1 if batch == 1 else 2])
+        if batch == 1:
+            run = engine.resume(run, {"reply": "We refund within 30 days, of course."})
+            self.assertEqual([(t["index"], t["pass"]) for t in run.pause["tasks"]], [(0, 2)])
+            run = engine.resume(run, {"reply": "Sure, I will check."})
+        else:
+            run = engine.resume(run, {"0": {"reply": "We refund within 30 days, of course."}, "1": {"reply": "Sure, I will check."}})
+        # the second reply fails the policy check, so its pass is in the revise loop
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"))
+        [task] = run.pause["tasks"]
+        self.assertEqual((task["index"], task["pass"], task["passes"]), (0, 0, [{"loop": "each_ticket", "pass": 2}, {"loop": "revise", "pass": 0}]))
+        self.assertEqual(task["state"]["reply"], "Sure, I will check.")
+        run = engine.resume(run, {"reply": "We refund within 30 days. I checked your plan."})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "summarize"))
+        [task] = run.pause["tasks"]
+        self.assertEqual(task["passes"], [])
+        self.assertEqual(task["state"]["replies"][1], "Your request has been escalated to our tier-2 team: " + self.TICKETS[1])
+        run = engine.resume(run, {"summary": "two replies, one escalation"})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        return run
+
+    def test_passes_pause_together_and_the_record_is_in_input_order(self):
+        run = self.drive(10)
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history], [
+            ("start", None),
+            ("classify", 0), ("by_tone", 0), ("draft", 0), ("check", 0), ("revise", 0),
+            ("classify", 1), ("by_tone", 1), ("escalate", 1),
+            ("classify", 2), ("by_tone", 2), ("draft", 2), ("check", 2), ("fix", 0), ("check", 0), ("revise", 2),
+            ("each_ticket", None), ("summarize", None), ("end", None)])
+        self.assertEqual(run.history[5]["exit"], {"reason": "until", "where": "head", "resolution": {
+            "answer": "passed", "value": True, "holds": True, "probability": None, "barred": False}})
+        self.assertEqual(run.history[5]["result"], {"iterations": 0}, "the check passed before the first pass")
+        fix, check_again, revise = run.history[13], run.history[14], run.history[15]
+        self.assertEqual(fix["passes"], [{"loop": "each_ticket", "pass": 2}, {"loop": "revise", "pass": 0}])
+        self.assertEqual(check_again["passes"], fix["passes"], "Again check re-runs check at the loop's level, during the pass")
+        self.assertEqual(check_again["result"], {"passed": {"value": True}})
+        self.assertEqual((revise["exit"]["reason"], revise["exit"]["where"], revise["result"]), ("until", "head", {"iterations": 1}))
+        self.assertEqual(run.history[8]["result"]["queue"], "tier-2")
+        each = run.history[16]
+        self.assertEqual((each["kind"], each["exit"], each["result"]["iterations"]), ("For", {"reason": "items"}, 3))
+        self.assertEqual(each["result"]["replies"][0], "We refund within 30 days, of course.")
+        self.assertEqual(sorted(run.result), ["replies", "summary"])
+        self.assertNotIn("queue", run.state, "a For pass's keys are gone unless collected")
+
+    def test_the_record_matches_at_batch_one(self):
+        self.assertEqual(without_timestamps(self.drive(1).history), without_timestamps(self.drive(10).history))
+
+
+LOOPS = '''
+Procedure loops "Counted and fold loops, the runtime's keys, a branch to Continue."
+  Requires python 3.10
+
+Start "In." {
+  n: integer
+  items: list
+  Next_Step rounds
+}
+
+Loop rounds 3 Times {
+  Execute bump "n + index + 1." {
+    Read n, index
+    Run_Script scripts/bump.py
+    Produce n: integer
+    Continue
+  }
+  Next_Step total
+}
+
+Loop total Over items As item, At_Most 5 {
+  Execute add "n + item." {
+    Read n, item
+    Run_Script scripts/add.py
+    Produce n: integer
+    Next_Step gate
+  }
+  Route gate "Stop early on a big n." {
+    Read big
+    true -> Continue
+    false -> Continue
+  }
+  Next_Step poll
+}
+
+Loop poll Until ready With Confidence_Above 0.5, At_Most 2, Else_Exit {
+  Execute probe "Never sure." {
+    Read n
+    Run_Script scripts/probe.py
+    Produce ready: true_or_false, big: true_or_false
+    Continue
+  }
+  Next_Step end
+}
+
+End "Out." {
+  Read n, iterations, ready
+}
+'''
+
+NESTED = '''
+Procedure nested "A loop in the body exits having produced the watched answer."
+  Requires python 3.10
+
+Start "In." {
+  n: integer
+  Next_Step outer
+}
+
+Loop outer Until done, At_Most 3 {
+  Loop inner 2 Times {
+    Execute mark "done when n reaches 3." {
+      Read n
+      Run_Script scripts/mark.py
+      Produce n: integer, done: true_or_false
+      Continue
+    }
+    Next_Step tail
+  }
+  Execute tail "Never runs once done." {
+    Read n
+    Run_Script scripts/tail.py
+    Produce tail: string
+    Continue
+  }
+  Next_Step end
+}
+
+End "Out." {
+  Read n, done, iterations
+}
+'''
+
+STDIN = "import json, sys\np = json.load(sys.stdin)\ns = p['state']\n"
+
+
+@needs_relate
+class LoopForms(EngineCase):
+    def test_times_fold_the_runtime_keys_and_a_branch_to_continue(self):
+        # `add` reads item; `gate` reads `big`, which `probe` produces later: a fold's gate needs it before the loop, so give it at Start
+        source = LOOPS.replace("  items: list\n", "  items: list\n  big: true_or_false\n")
+        bundle = program(source, {
+            "scripts/bump.py": STDIN + "print(json.dumps({'n': s['n'] + s['index'] + 1}))",
+            "scripts/add.py": STDIN + "print(json.dumps({'n': s['n'] + s['item']}))",
+            "scripts/probe.py": STDIN + "print(json.dumps({'ready': True, 'big': s['n'] > 100}))",
+        })
+        run = self.engine().start(self.load(bundle), {"n": 0, "items": [10, 20], "big": False})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        # rounds: 0 -> 1 -> 3 -> 6 (n + index + 1, three times); total: 6 + 10 + 20 = 36
+        self.assertEqual([(e["step"], e["pass"], e["result"].get("n")) for e in run.history if e["step"] in ("bump", "add")],
+                         [("bump", 0, 1), ("bump", 1, 3), ("bump", 2, 6), ("add", 0, 16), ("add", 1, 36)])
+        exits = {e["step"]: (e["exit"], e["result"]["iterations"]) for e in run.history if e["kind"] == "Loop"}
+        self.assertEqual(exits["rounds"], ({"reason": "times", "where": "head"}, 3))
+        self.assertEqual(exits["total"], ({"reason": "items", "where": "head"}, 2))
+        # `ready` is a script's answer with no probability, so the bar never lets it hold; Else_Exit leaves at the cap
+        self.assertEqual(exits["poll"], ({"reason": "cap", "where": "head"}, 2))
+        self.assertEqual([e["pass"] for e in run.history if e["step"] == "probe"], [0, 1])
+        self.assertEqual(run.result, {"n": 36, "iterations": 2, "ready": {"value": True}})
+        self.assertEqual([e["to"] for e in run.history if e["step"] == "gate"], ["Continue", "Continue"])
+
+    def test_a_fold_longer_than_its_cap_fails_before_the_first_pass(self):
+        source = LOOPS.replace("  items: list\n", "  items: list\n  big: true_or_false\n")
+        bundle = program(source, {"scripts/bump.py": STDIN + "print(json.dumps({'n': 1}))", "scripts/add.py": "", "scripts/probe.py": ""})
+        run = self.engine().start(self.load(bundle), {"n": 0, "items": [1, 2, 3, 4, 5, 6], "big": False})
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["count"]), (FAILED, "loop_cap", "total", 6))
+        self.assertEqual([e["step"] for e in run.history][-2:], ["bump", "rounds"])
+
+    def test_an_inner_loop_exiting_with_the_watched_answer_ends_the_outer_one(self):
+        bundle = program(NESTED, {
+            "scripts/mark.py": STDIN + "n = s['n'] + 1\nprint(json.dumps({'n': n, 'done': n >= 3}))",
+            "scripts/tail.py": STDIN + "print(json.dumps({'tail': 'ran'}))",
+        })
+        run = self.engine().start(self.load(bundle), {"n": 0})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history],
+                         [("start", None), ("mark", 0), ("mark", 1), ("inner", 0), ("tail", 0), ("mark", 0), ("mark", 1), ("inner", 1),
+                          ("outer", None), ("end", None)], "mark produces done inside the inner loop, which the outer sees when inner exits")
+        outer = run.history[8]
+        self.assertEqual((outer["exit"]["reason"], outer["exit"]["where"], outer["result"]), ("until", "inner", {"iterations": 2}))
+        self.assertEqual(run.history[6]["passes"], [{"loop": "outer", "pass": 1}, {"loop": "inner", "pass": 1}])
+        self.assertEqual(run.result, {"n": 4, "done": {"value": True}, "iterations": 2})
+        self.assertEqual([e["step"] for e in run.history].count("tail"), 1, "the rest of the pass does not run")
+
+
+HISTORY = '''
+Procedure hist "A pass sees the record from before the loop and its own."
+
+Start "In." {
+  items: list
+  Next_Step each
+}
+
+For each Over items As item, At_Most 5, Collect judgement Into judgements {
+  Decide judge "Judge it." {
+    Read item
+    Answer_Questions {
+      ok: true_or_false "Is it ok?"
+    }
+    History true
+    Produce judgement
+    Continue
+  }
+  Next_Step end
+}
+
+End "Out." {
+  Read judgements
+}
+'''
+
+
+@needs_relate
+class Independence(EngineCase):
+    def test_a_pass_reading_the_item_calls_alone_and_sees_only_the_record_before_the_loop(self):
+        seen = {}
+        for batch in (1, 10):
+            resolver = ScriptedResolver(lambda r: {"ok": answers.true_or_false(0.9 if r.state["item"] else 0.1)})
+            engine = Engine(resolver, home=self.home, clock=CLOCK, batch=batch)
+            run = engine.start(self.load(program(HISTORY)), {"items": [True, False, True]})
+            self.assertEqual((run.status, run.error), (DONE, None))
+            self.assertEqual([len(r.questions) for r in resolver.requests], [1, 1, 1], "the Decide reads the item: one call per pass")
+            self.assertEqual([[e["step"] for e in r.history] for r in resolver.requests], [["start"]] * 3)
+            seen[batch] = run.history
+        self.assertEqual(seen[1], seen[10])
+        self.assertEqual([j["ok"]["value"] for j in run.state["judgements"]], [True, False, True])
+
+
+class Batching(unittest.TestCase):
+    """The suffix scheme needs no store."""
+
+    def test_split_answers(self):
+        from aip.model.procedure import Step
+        from aip.model.steps import split_answers
+
+        step = Step("step:check", "check", "Decide", "", {})
+        self.assertEqual(split_answers(step, {"follows__0": 1, "follows__2": 2, "other__2": 3}, [0, 2]),
+                         {0: {"follows": 1}, 2: {"follows": 2, "other": 3}})
+        with self.assertRaises(InvalidOutput) as caught:
+            split_answers(step, {"follows": 1}, [0])
+        self.assertEqual(caught.exception.invalid, ["follows"])
+        with self.assertRaises(InvalidOutput):
+            split_answers(step, {"follows__7": 1}, [0])
+
+    def test_the_scripted_resolver_answers_suffixed_questions_from_the_plain_name(self):
+        from aip.model.procedure import Question
+        from aip.model.resolver import DecisionRequest, question_base
+
+        request = DecisionRequest("check", [Question("follows__0", "true_or_false", None, "", [], 0),
+                                            Question("follows__1", "true_or_false", None, "", [], 0)], {})
+        decision = ScriptedResolver({"check": {"follows": answers.true_or_false(0.9)}}).decide(request)
+        self.assertEqual(set(decision.answers), {"follows__0", "follows__1"})
+        self.assertEqual((question_base("follows__12"), question_base("follows"), question_base("a__b")), ("follows", "follows", "a__b"))
 
 
 class Answers(unittest.TestCase):

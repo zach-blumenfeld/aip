@@ -51,13 +51,15 @@ nothing mentioning it leaves the mirrors.**
 
 ## The decision model
 
-TypeSafe. The current resolver is `src/aip/client/resolver.py` (`typesafe_sdk`: `TypeSafeClient`,
-`Noul`, `Choice`, `Score`; dependency `typesafe-sdk>=0.7.1` in `pyproject.toml`). Answer shapes the
-language expects are spec 2.4; the mapping from the SDK's `NoulAnswer`, `ChoiceAnswer`,
-`ScoreAnswer` is: `value`, `confidence` (`|2·noul−1|` for noul, the SDK's own for the others),
-`probabilities`, and `score` for a score question. Docs: https://docs.typesafe.ai/ (returned 308
-to its new home on 2026-11-09; follow the redirect). The key lives in `aip config`, never in the
-repo. Tests use the scripted resolver, so no key is needed for any proof before D1.
+TypeSafe. The resolver is `src/aip/model/typesafe.py` (`TypeSafeResolver`, since R2; `typesafe_sdk`:
+`TypeSafeClient`, `Noul`, `Choice`, `Score`; dependency `typesafe-sdk>=0.7.1` in `pyproject.toml`).
+`src/aip/client/resolver.py` is the 0.8 one, dead until R3 rewrites the client around the new
+resolver and the key in `aip config`. Answer shapes the language expects are spec 2.4; the mapping
+from the SDK's `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer` is in `typesafe.answer_object`: `value`,
+`confidence` (`|2·noul−1|` for noul, the SDK's own for the others), `probabilities`, and `score` for
+a score question. Docs: https://docs.typesafe.ai/ (returned 308 to its new home on 2026-11-09;
+follow the redirect). The key lives in `aip config`, never in the repo. Tests use the scripted
+resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for any proof before D1.
 
 ## Agent frameworks (track D2)
 

@@ -106,6 +106,55 @@ class FileUse:
         return self.path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
 
+@dataclass(frozen=True)
+class Until:
+    """A `Loop`'s `Until` condition (`WATCHES` edge): the answer's path, the comparison and the bar."""
+    path: list[str]
+    operator: str | None
+    value: str | None
+    confidence_above: float | None
+
+    @property
+    def dotted(self) -> str:
+        return ".".join(self.path)
+
+
+@dataclass
+class Loop:
+    """One loop as the graph describes it (`docs/language/bundle.md`, `Loop`). `body` is the
+    body's node ids in written order, `enters` the first of them, `exit` the loop's exit line
+    (`NEXT` to a step or loop, or `CONTINUES` to the enclosing loop)."""
+    id: str
+    name: str
+    kind: str                 # For | Loop
+    mode: str                 # Over | Until | Times
+    properties: JSON
+    item: str | None = None
+    at_most: int | None = None
+    times: int | None = None
+    at_cap: str | None = None  # Else_Fail | Else_Exit
+    collect_key: str | None = None
+    collect_into: str | None = None
+    over: list[str] | None = None
+    until: Until | None = None
+    enters: str | None = None
+    body: list[str] = field(default_factory=list)
+    exit: Flow | None = None
+
+    @property
+    def cap(self) -> int | None:
+        """The most passes the loop may run: `At_Most`, or the count of a `Times` loop."""
+        return self.times if self.mode == "Times" else self.at_most
+
+    @property
+    def produced_keys(self) -> set[str]:
+        """What the loop itself writes when it exits: `iterations`, and a `For`'s collected list."""
+        keys = {"iterations"}
+        if self.collect_into:
+            keys.add(self.collect_into)
+        return keys
+
+
 @dataclass
 class Step:
     """One step as the graph describes it."""
@@ -160,6 +209,7 @@ class Procedure:
         self.bundle_id = bundle_id
         self._owns = owns_connection
         self._steps: dict[str, Step] = {}
+        self._loops: dict[str, Loop] = {}
         self._labels: dict[tuple[str, ...], list[str] | None] = {}
         header = self._one("MATCH (p:Procedure {bundle_id: $b, id: $id}) RETURN properties(p) AS p", id=PROCEDURE_ID)
         if header is None:
@@ -221,6 +271,35 @@ class Procedure:
 
     def is_loop(self, id: str) -> bool:
         return id.startswith("loop:")
+
+    def loop(self, id: str) -> Loop:
+        """The loop with node id `id` (`loop:<name>`), read once."""
+        if id not in self._loops:
+            self._loops[id] = self._read_loop(id)
+        return self._loops[id]
+
+    def _read_loop(self, id: str) -> Loop:
+        row = self._one("MATCH (l:Loop {bundle_id: $b, id: $id}) RETURN properties(l) AS p", id=id)
+        if row is None:
+            raise KeyError(f"no loop {id} in bundle {self.bundle_id}")
+        p = dict(row["p"])
+        loop = Loop(id, p["name"], p["kind"], p["mode"], p, p.get("item"), p.get("at_most"), p.get("times"), p.get("at_cap"),
+                    p.get("collect_key"), p.get("collect_into"))
+        over = self._one("MATCH (l {bundle_id: $b, id: $id})-[o:OVER]->(k:Key) RETURN k.name AS name, o.field AS field", id=id)
+        if over is not None:
+            loop.over = [over["name"], *(over["field"].split(".") if over.get("field") else [])]
+        watch = self._one("MATCH (l {bundle_id: $b, id: $id})-[w:WATCHES]->(k:Key) RETURN k.name AS name, properties(w) AS w", id=id)
+        if watch is not None:
+            w = watch["w"]
+            loop.until = Until([watch["name"], *(w["field"].split(".") if w.get("field") else [])], w.get("operator"), w.get("value"),
+                               w.get("confidence_above"))
+        enters = self._one("MATCH (l {bundle_id: $b, id: $id})-[:ENTERS]->(t) RETURN t.id AS id", id=id)
+        loop.enters = enters["id"] if enters else None
+        loop.body = [r["id"] for r in self._rows("MATCH (l {bundle_id: $b, id: $id})-[c:CONTAINS]->(t) RETURN t.id AS id ORDER BY c.order",
+                                                 id=id)]
+        exit = self._one("MATCH (l {bundle_id: $b, id: $id})-[e:NEXT|CONTINUES]->(t) RETURN type(e) AS type, t.id AS to", id=id)
+        loop.exit = Flow(exit["type"], exit["to"]) if exit else None
+        return loop
 
     def _read_step(self, id: str) -> Step:
         row = self._one("MATCH (s:Step {bundle_id: $b, id: $id}) RETURN properties(s) AS p", id=id)
@@ -299,4 +378,5 @@ class Procedure:
                 "steps": {r["name"]: r["kind"] for r in rows}}
 
 
-__all__ = ["Procedure", "Step", "Read", "Produce", "Flow", "Question", "Aggregation", "FileUse", "STEP_KINDS", "FLOW_TYPES"]
+__all__ = ["Procedure", "Step", "Loop", "Until", "Read", "Produce", "Flow", "Question", "Aggregation", "FileUse", "STEP_KINDS",
+           "FLOW_TYPES"]

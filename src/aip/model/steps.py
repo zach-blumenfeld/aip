@@ -21,15 +21,17 @@ from pathlib import Path
 from typing import Any
 
 from aip.model.answers import probability_of
-from aip.model.procedure import Aggregation, Procedure, Question, Step
+from aip.model.procedure import Aggregation, Flow, Loop, Procedure, Question, Step
 from aip.model.resolver import DecisionRequest
 from aip.model.types import (
-    JSON, VALUE_KIND, InvalidInput, InvalidOutput, NoBranch, ScriptFailed, ScriptTimeout, branch_key, conforms, describe,
-    normalise,
+    JSON, VALUE_KIND, InvalidInput, InvalidOutput, LoopCap, NoBranch, ScriptFailed, ScriptTimeout, branch_key, conforms,
+    describe, normalise,
 )
 
 WORKDIR = "AIP_WORKDIR"
 PYTHON = "python"
+INDEX, ITERATIONS = "index", "iterations"   # the runtime's keys (spec 2.1, Loops)
+PASS_SUFFIX = "__"                           # `follows__3`: question `follows` of pass 3 in a batched call (runtime.md)
 
 _FIELD = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
 _ASSET = re.compile(r"\{assets\[([^\]]+)\]\}")
@@ -219,14 +221,59 @@ def questions_for_agent(request: DecisionRequest) -> list[JSON]:
              "criteria": [{"label": label, "text": text} for label, text in q.criteria]} for q in request.questions]
 
 
+def batch_request(step: Step, requests: list[tuple[int, DecisionRequest]]) -> DecisionRequest:
+    """One model call for a batch of `For` passes whose body is this one `Decide` (runtime.md,
+    Batching): the `Read` keys once (the same on every pass) and every pass's rendered questions,
+    each key suffixed with the pass index, `follows__3`. `split_answers` maps the reply back."""
+    first = requests[0][1]
+    questions = [Question(f"{q.name}{PASS_SUFFIX}{i}", q.type, q.labels, q.instruction, q.criteria, q.order)
+                 for i, request in requests for q in request.questions]
+    return DecisionRequest(step.name, questions, first.state, first.history)
+
+
+def split_answers(step: Step, answers: Any, indexes: list[int]) -> dict[int, JSON]:
+    """The batched reply as one answer set per pass: `follows__3` becomes `follows` of pass 3.
+    A key with no suffix, or an index the batch did not send, is an `invalid_output`."""
+    if not isinstance(answers, dict):
+        raise InvalidOutput(step.name, [f"the answers are an object with one entry per question, not {describe(answers)}"])
+    out: dict[int, JSON] = {i: {} for i in indexes}
+    stray = []
+    for name, answer in answers.items():
+        base, sep, suffix = str(name).rpartition(PASS_SUFFIX)
+        if not sep or not suffix.isdigit() or int(suffix) not in out:
+            stray.append(str(name))
+            continue
+        out[int(suffix)][base] = answer
+    if stray:
+        raise InvalidOutput(step.name, [f"{n} is not a question of {step.name} for any pass in the batch" for n in stray], invalid=stray)
+    return out
+
+
+def is_batched_decide(procedure: Procedure, loop: Loop) -> Step | None:
+    """The one `Decide` a `For` body consists of, when a batch of its passes is one model call:
+    the body is that step alone, it ends the pass (`Continue`), and its `Read` keys are the same
+    on every pass, so it reads neither the item nor `index` (an interpolation of either is fine:
+    the question is rendered per pass). None otherwise."""
+    if len(loop.body) != 1 or procedure.is_loop(loop.body[0]):
+        return None
+    step = procedure.step(loop.body[0])
+    if step.kind != "Decide" or step.next is None or step.next.type != "CONTINUES":
+        return None
+    per_pass = {loop.item, INDEX}
+    if any(r.key in per_pass for r in step.declared_reads):
+        return None
+    return step
+
+
 # ---------------------------------------------------------------- Route
 
-def route(procedure: Procedure, step: Step, state: JSON) -> tuple[str, JSON]:
-    """Where the route sends the run and what its record says: the node id of the target, and
-    `{"read": dotted, "answer", "check": {"below", "confidence", "fired", "reason"} | None,
-    "value": the branch word | None, "to": name}`. The check reads the answer's `confidence` and
-    fires when it is below the bound or absent; otherwise the branch for `value` is taken, and a
-    value with no branch fails the step (`no_branch`)."""
+def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
+    """Where the route sends the run and what its record says: the flow taken (its `to` is the
+    target's node id; `continues` marks a branch to `Continue`), and `{"read": dotted, "answer",
+    "check": {"below", "confidence", "fired", "reason"} | None, "value": the branch word | None,
+    "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound
+    or absent; otherwise the branch for `value` is taken, and a value with no branch fails the
+    step (`no_branch`)."""
     [read] = step.declared_reads
     answer = lookup(state, read.path)
     if not isinstance(answer, dict) or "value" not in answer:
@@ -239,19 +286,20 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[str, JSON]:
         record["check"] = {"below": check.below, "confidence": confidence, "fired": fired,
                            "reason": None if not fired else "absent" if confidence is None else "below"}
         if fired:
-            record["to"] = _name(check.to)
-            return check.to, record
+            record["to"] = _name(check)
+            return check, record
     key = branch_key(answer["value"], procedure.labels_of(read.path))
     for b in step.branches:
         if b.value == key or b.value == str(answer["value"]):
             record["value"] = b.value
-            record["to"] = _name(b.to)
-            return b.to, record
+            record["to"] = _name(b)
+            return b, record
     raise NoBranch(step.name, read.dotted, answer["value"], [b.value or "" for b in step.branches])
 
 
-def _name(node_id: str) -> str:
-    return node_id.split(":", 1)[1]
+def _name(flow: Flow) -> str:
+    """What the record calls a branch's target: the step or loop name, or `Continue`."""
+    return "Continue" if flow.continues else flow.to.split(":", 1)[1]
 
 
 # ---------------------------------------------------------------- Aggregate
@@ -333,6 +381,42 @@ def aggregate(procedure: Procedure, step: Step, state: JSON) -> tuple[JSON, JSON
         produced[agg.name] = {"value": value}
         resolutions[agg.name] = rows
     return produced, resolutions
+
+
+# ---------------------------------------------------------------- loops
+
+def loop_items(loop: Loop, state: JSON) -> list:
+    """The list a `For` or a fold runs over, and the cap check before the first pass: a list
+    longer than `At_Most` is `loop_cap` (spec 2.1, Loops)."""
+    assert loop.over is not None
+    try:
+        items = lookup(state, loop.over)
+    except KeyError as err:
+        raise InvalidInput(loop.name, [f"{'.'.join(loop.over)} is not in the state ({err.args[0]} is missing)"], missing=[".".join(loop.over)])
+    if not isinstance(items, list):
+        raise InvalidInput(loop.name, [f"{'.'.join(loop.over)} is {describe(items)}, not a list"], invalid=[".".join(loop.over)])
+    if loop.at_most is not None and len(items) > loop.at_most:
+        raise LoopCap(loop.name, loop.at_most, len(items),
+                      f"{'.'.join(loop.over)} has {len(items)} items, more than the {loop.at_most} that {loop.name} allows (At_Most)")
+    return items
+
+
+def until_holds(procedure: Procedure, loop: Loop, state: JSON) -> tuple[bool, JSON | None]:
+    """Whether a `Loop`'s `Until` condition holds on the state, and the answer's resolution for
+    the record. An absent answer does not hold and resolves to None; otherwise the condition is
+    the spec's (2.1, Conditions): `== value`, `!= value`, `== true` for a bare `true_or_false`,
+    and with `With Confidence_Above` a probability below the bar, or none, does not hold."""
+    until = loop.until
+    assert until is not None
+    try:
+        answer = lookup(state, until.path)
+    except KeyError:
+        return False, None
+    if not isinstance(answer, dict) or "value" not in answer:
+        raise InvalidInput(loop.name, [f"{until.dotted} is {describe(answer)}, not an answer with a value"], invalid=[until.dotted])
+    resolution = resolve_condition(answer, _answer_type(answer), until.operator, until.value, until.confidence_above,
+                                   procedure.labels_of(until.path), fails_as=False)
+    return bool(resolution["holds"]), {"answer": until.dotted, **resolution}
 
 
 # ---------------------------------------------------------------- Execute
@@ -423,6 +507,7 @@ def task(procedure: Procedure, step: Step, state: JSON, root: Path) -> JSON:
             "answer_with": answer_with(step)}
 
 
-__all__ = ["WORKDIR", "lookup", "project", "check_reads", "check_outputs", "answer_with", "expects", "render", "start", "end",
-           "decision_request", "check_decision", "questions_for_agent", "route", "aggregate", "resolve_condition", "assets_of",
+__all__ = ["WORKDIR", "INDEX", "ITERATIONS", "PASS_SUFFIX", "lookup", "project", "check_reads", "check_outputs", "answer_with",
+           "expects", "render", "start", "end", "decision_request", "check_decision", "questions_for_agent", "batch_request",
+           "split_answers", "is_batched_decide", "route", "aggregate", "resolve_condition", "loop_items", "until_holds", "assets_of",
            "launch", "run_script", "execute", "task"]

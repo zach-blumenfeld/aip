@@ -7,9 +7,14 @@ resolver once per decision, checks the answers against the questions and writes 
 decision key. A resolver that raises fails the step, or hands it to the agent when the step says
 `Agent_Fallback true`.
 
-`ScriptedResolver` is the test resolver this milestone ships: the answers are given up front,
-per step, as answer objects or as a function of the request. The TypeSafe resolver arrives with
-the next milestone and implements the same two members."""
+A batch of `For` passes whose body is one `Decide` is one request with every pass's questions,
+each name suffixed with the pass index (`follows__3`; `aip.model.steps.batch_request`), and the
+resolver answers each as it would any question; the engine maps the names back and the record
+never shows them (runtime.md, Batching).
+
+`ScriptedResolver` is the test resolver: the answers are given up front, per step, as answer
+objects or as a function of the request. `aip.model.typesafe.TypeSafeResolver` is the decision
+model, implementing the same two members."""
 
 from __future__ import annotations
 
@@ -56,7 +61,11 @@ class ScriptedResolver:
     """Answers decisions from a script: `answers` maps a step name to its answer objects, or to
     a function of the request that returns them; a function alone answers every step. A step
     with no script raises `KeyError`, which the engine treats as the model failing. Every
-    request is kept in `requests` for assertions."""
+    request is kept in `requests` for assertions.
+
+    In a batched request the questions are `follows__0`, `follows__1`, ...; answer objects given
+    under the plain name answer every pass alike, and a function sees the suffixed names and
+    each question's own rendered instruction (`question_base` strips the suffix)."""
 
     answers: dict[str, Script] | Callable[[DecisionRequest], JSON]
     name: str = "scripted"
@@ -69,7 +78,24 @@ class ScriptedResolver:
         else:
             script = self.answers[request.step]
             given = script(request) if callable(script) else script
-        return Decision(self.name, dict(given))
+        given = dict(given)
+        out: JSON = {}
+        for q in request.questions:
+            if q.name in given:
+                out[q.name] = given[q.name]
+            elif question_base(q.name) in given:
+                out[q.name] = given[question_base(q.name)]
+        bases = {question_base(q.name) for q in request.questions}
+        for name, answer in given.items():  # anything else the script gave stays, for the engine to refuse
+            if name not in out and name not in bases:
+                out[name] = answer
+        return Decision(self.name, out)
 
 
-__all__ = ["DecisionRequest", "Decision", "Resolver", "ScriptedResolver"]
+def question_base(name: str) -> str:
+    """The author's question name under a batch suffix: `follows__3` → `follows`."""
+    base, sep, suffix = name.rpartition("__")
+    return base if sep and suffix.isdigit() else name
+
+
+__all__ = ["DecisionRequest", "Decision", "Resolver", "ScriptedResolver", "question_base"]
