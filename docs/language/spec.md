@@ -2,7 +2,7 @@
 
 The text form of an AIP procedure: a small, readable file that a person can follow like a runbook, an agent can write one step at a time, and a compiler can check completely before anything runs. This document is the language on its own terms. How it lands in the AIP runtime, server and console is the AIP repository's business; see `AGENTS.md` for where the two meet.
 
-Written 2026-11-03, revised 2026-11-06. Examples: `examples/language/`. What the language does not do yet: `docs/language/limitations.md`. Why it has no expressions, decided and not to be re-derived: `docs/language/no-expressions.md`. What running a bundle requires of a runtime: `docs/language/runtime.md`.
+Written 2026-11-03, revised 2026-11-09. Examples: `examples/language/`. What the language does not do yet: `docs/language/limitations.md`. Why it has no expressions, decided and not to be re-derived: `docs/language/no-expressions.md`. What running a bundle requires of a runtime: `docs/language/runtime.md`.
 
 ---
 
@@ -15,6 +15,8 @@ Written 2026-11-03, revised 2026-11-06. Examples: `examples/language/`. What the
 ```aip
 Procedure ticket_triage
   "Classify a batch of support tickets, draft replies, escalate the uncertain ones."
+
+  Requires python 3.10
 
 classify_question = "What kind of ticket is this and how does the customer sound?"
 
@@ -69,9 +71,10 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
       Produce reply: string
       Again check
     }
+    Continue
   }
 
-  Continue
+  Next_Step summarize
 }
 
 Task_Agent summarize "Summarize the batch for the team lead." {
@@ -152,7 +155,7 @@ A keyword is recognised by its position, not reserved: a word that opens a step,
 | `Start "..." { <inputs> Next_Step <step> }` | the client supplies the inputs | the inputs as `name: type "description"` lines; it reads nothing and its inputs are what it produces |
 | `Decide <name> "..." { ... }` | a decision model, or the agent when allowed | an `Answer_Questions { ... }` block with one question per line (`billing: true_or_false "..."`, `tone: choice [a, b] "..."`, `urgency: score [low, medium, high] "..."`, each with optional indented criteria lines; an instruction may interpolate `{key}` from any key available at the step, so a question is composed from data, such as a policy, while `Read` stays the thing the model judges); `Agent_Fallback true` (optional; absent means false); `History true` (optional); `Produce <key>` names the one key the decision writes, whose fields are the questions (2.4) |
 | `Route <name> "..." { ... }` | the runtime, from one answer | `Read <answer>`, one `true_or_false`, `choice` or `score` answer (`triage_decision.tone`, `check_summary.all_hold`, or an answer a script produced); then the check, `Confidence_Below <n> -> <step>`, and one `value -> step` line per label, level or `true`/`false`. No `Produce`. Its branch lines are its `Next_Step` |
-| `Aggregate <name> "..." { ... }` | the runtime, from `true_or_false` answers | an `Aggregations { ... }` block with one aggregation per line, `<name>: All\|Any\|None <source> [== <value> \| != <value>] [With Confidence_Above <p>]`, where the source is one answer (`policy_check.pii`), a decision (`policy_check`), a field through a list (`verdicts.follows`) or a `boolean` key, and must be in `Read`; a `choice` or `score` source needs the comparison, a `true_or_false` source without one means `== true`; `Produce <key>` names the one key holding every aggregation, each a `true_or_false` answer with no confidence (2.5) |
+| `Aggregate <name> "..." { ... }` | the runtime, from `true_or_false` answers | an `Aggregations { ... }` block with one aggregation per line, `<name>: All\|Any\|None <source> [== <value> \| != <value>] [With Confidence_Above <p>]`, where the source is one answer (`policy_check.pii`), a decision (`policy_check`, every answer in it), a field through a collected list (`verdicts.follows`) or a list collected from an answer key, and its key must be in `Read`; a `choice` or `score` source needs the comparison, a `true_or_false` source without one means `== true`; `Produce <key>` names the one key holding every aggregation, each a `true_or_false` answer with no confidence (2.5) |
 | `Execute <name> "..." { ... }` | a script | `Run_Script <path>`, optional `Use` for assets, one per line or comma-separated |
 | `Task_Agent <name> "..." { ... }` | the agent | the description is the prompt, or `Prompt <path>`; `Use` for assets and references, one per line or comma-separated; a reference's description follows its path |
 | `End "..." { Read ... }` | nobody; it declares the result | `Read` names the result keys; no `Produce`, no `Next_Step` |
@@ -161,16 +164,16 @@ A keyword is recognised by its position, not reserved: a word that opens a step,
 
 **Flow.** Every step says where it goes with `Next_Step <step>`, and `Next_Step end` goes to the end step. A route says it with its branch lines, and must name every value. Because every step names its successor, the order of steps in the file carries no meaning: a reader may group steps however reads best, and reordering a file never changes the procedure. The one structural use of position is a loop, whose body is the block between its braces. The compiler reports a step nothing points at as `unreachable_step`, an error.
 
-Inside a loop body, a step may end in two more ways: `Continue` ends the pass (the loop checks its condition or its count and starts the next pass or exits), and `Again <step>` re-enters the procedure at a step (or a loop) defined before the enclosing loop and follows the flow from there until the enclosing loop is reached again, a named jump restricted to the enclosing loop. So `Again check` in a review loop re-runs the check and every step between it and the loop, which is what makes the loop's condition fresh. A route inside a body may send a branch to `Continue` as well as to a step. The loop block itself ends with a `Next_Step <step>` line at block level, for where the procedure goes when the loop exits; a loop nested in another loop's body may end with `Continue` instead, ending the outer pass when it exits. The exit line is the last line of the block; the grammar allows a loop without one, and whether that is an error is the checker's call (section 2.2).
+A loop's body is the block between its braces, and a pass starts at the first step (or loop) written in it; the order of the rest carries no meaning. Inside a loop body, a step may end in two more ways: `Continue` ends the pass (the loop checks its condition or its count and starts the next pass or exits), and `Again <step>` re-enters the procedure at a step (or a loop) at the level of the enclosing loop, from which the flow reaches that loop again, and follows the flow from there; when the loop is reached the pass is over, as with `Continue`, and the loop keeps its count. So `Again check` in a review loop re-runs the check and every step between it and the loop, which is what makes the loop's condition fresh. `Again` is for a `Loop`, whose passes build on each other; a `For` pass is independent and ends with `Continue`. A route inside a body may send a branch to `Continue` as well as to a step. The loop block itself ends with a `Next_Step <step>` line at block level, for where the procedure goes when the loop exits; a loop nested in another loop's body may end with `Continue` instead, ending the outer pass when it exits. The exit line is the last line of the block and is required (`missing_loop_exit`). A body is closed otherwise: a step inside it leaves it only through `Continue`, `Again` or the loop's exit line, never with a `Next_Step` to a step outside it (`flow_leaves_body`; `End` is not reachable inside a body), and a step outside a body points into it only by naming the loop (`jump_into_body`). Every cycle in the graph therefore passes through a loop body; a flow that closes any other cycle is an error (`cycle_without_loop`).
 
 **Conditions.** All conditional logic in a procedure is on answers (2.4), and it is written one way: `<answer> [== <value> | != <value>] [With Confidence_Above <p>]`. The answer is one `true_or_false`, `choice` or `score` answer; the comparison is against a label, a level or `true`/`false`, and a `true_or_false` answer with no comparison means `== true`; a `choice` or `score` answer requires the comparison. The condition's confidence is the probability the model put on it, from the answer's probabilities, one minus for `!=`. `With Confidence_Above <p>` makes a condition whose probability is below `p`, or that has none, count as false. A condition appears in exactly two places: a loop's `Until`, and each line of an `Aggregations` block, where it is applied to every answer in a source. A `Route` is the other conditional step and uses no condition: it reads one answer, branches on its value, and checks its confidence with `Confidence_Below`. No condition ever combines two answers.
 
 **Loops.** Two forms, each with a required cap so that every run terminates in a number of steps computable from the file:
 
 - `For <name> Over <list> As <item>, At_Most <n> [, Collect <key> Into <list>] { ... }`: independent passes over a list. Every pass stands on its own: it may read the item, its index, and what existed before the loop, and nothing from another pass. `Collect` gathers one key from every pass, in input order; the key may be a decision key, and the list then holds one decision object per pass. The run fails before the first pass if the list is longer than the cap.
-- `Loop <name> Until <condition>, At_Most <n> [, Else_Fail|Else_Exit] { ... }`: passes that build on each other until a condition on one answer holds: `Until check_summary.all_hold`, `Until review.verdict == approved With Confidence_Above 0.8`. The loop watches the answer: the condition is tested at the head of every pass and again the moment a step in the body produces the answer, and when it holds the loop ends there, skipping the rest of the pass. **An answer that is absent, or a condition below its confidence bar, does not hold**, so the answer need not exist before the loop; it is enough that a step in the body produces it, and the first pass always runs. That is the shape of a check-then-fix loop: check, then fix, with no route between them, because the loop ends at the check that passes (`examples/language/fixed-policy`). It is the same rule as `Confidence_Below`: unknown never counts as a pass. The compiler checks that the answer is produced by a step in the body or before the loop. `Else_Fail` (the default) or `Else_Exit` says what happens at the cap. `Loop <name> <n> Times { ... }` is a counted loop. `Loop <name> Over <list> As <item>, At_Most <n> { ... }` is the fold: passes that build on each other over a list.
+- `Loop <name> Until <condition>, At_Most <n> [, Else_Fail|Else_Exit] { ... }`: passes that build on each other until a condition on one answer holds: `Until check_summary.all_hold`, `Until review.verdict == approved With Confidence_Above 0.8`. The loop watches the answer: the condition is tested at the head of every pass and again the moment a step in the body produces the answer (or a loop in the body exits having produced it), and when it holds the loop ends there, skipping the rest of the pass. **An answer that is absent, or a condition below its confidence bar, does not hold**, so the answer need not exist before the loop; it is enough that a step in the body produces it, and the first pass always runs. That is the shape of a check-then-fix loop: check, then fix, with no route between them, because the loop ends at the check that passes (`examples/language/fixed-policy`). It is the same rule as `Confidence_Below`: unknown never counts as a pass. The compiler checks that the answer is produced by a step in the body or before the loop. `Else_Fail` (the default) or `Else_Exit` says what happens at the cap. `Loop <name> <n> Times { ... }` is a counted loop. `Loop <name> Over <list> As <item>, At_Most <n> { ... }` is the fold: passes that build on each other over a list.
 
-A loop has a name because steps reach it with `Next_Step`. Inside a body `index` names the pass; after the loop `iterations` says how many ran. Loops nest; each has its own frame. Every cycle in the graph passes through a loop body, so there are no other cycles.
+A loop has a name because steps reach it with `Next_Step`. Every loop has a cap (`At_Most`, or the count of a `Times` loop), so a run ends in a number of steps computable from the file (`missing_cap`). Inside a body `index` names the pass; after the loop `iterations` says how many ran. Both are the runtime's keys and no step produces them (`reserved_key`). Loops nest; each has its own frame. Every cycle in the graph passes through a loop body, so there are no other cycles.
 
 **Questions composed from data.** A question's instruction may interpolate `{key}` from any key available at the step: `"Does the work follow the policy described below?\n{policy}"`. That composes the question; it does not hand the key to the model as the thing to judge. `Read` is what the model judges. So a decision that checks `work` against a policy reads `work` and writes the policy into its question (`examples/language/fixed-policy`). For availability and lineage an interpolated key counts as a read.
 
@@ -181,11 +184,48 @@ A loop has a name because steps reach it with `Next_Step`. Inside a body `index`
 The compiler checks everything before a bundle exists, and reports against source lines. Much of what a graph validator has to check is unreachable from the language: there is no edge name to get wrong, no cycle outside a loop, and availability of a key at a step is definite assignment over the block structure. What remains meaningful:
 
 - **The state contract.** Every key a step reads is produced on every path to it, or declared on `Start`; every declaration of a key agrees on its type; one producer per path (2.3).
-- **Routes, loops and aggregations.** A route reads an answer and names every value it can take; `Until` and every aggregation line hold a condition on an answer, and a plain `boolean`, `string` or `integer` in any of these places is an error (`condition_on_plain_value`). A confidence check or bar sits only on an answer that can carry one (2.4): on an aggregation's output it is an error, `confidence_on_aggregate`, since it has none by design (2.5), and on a script's answer it is the usual warning. A condition's comparison names a label or level the answer's question has (`unknown_label`), and a `choice` or `score` answer without a comparison is an error (`comparison_required`). The compiler classifies what feeds each route as *deterministic* (a script), *measured* (a model's answer) or *unmeasured* (an agent's hand, or a decision that allows one), and warns when a confidence check guards an unmeasured value (`confidence_on_unmeasured_source`) or when a route branches on one with no check (`unmeasured_route`).
-- **Loops.** The cap is present; a `For` body is independent; nothing outside a body points into it; `End` is not reachable inside a body.
-- **Resources.** Every script, asset and reference named exists on disk; a procedure with `Execute` steps declares `Requires`.
+- **Routes, loops and aggregations.** A route reads an answer and names every value it can take; `Until` and every aggregation line hold a condition on an answer, and a plain `boolean`, `string` or `integer` in any of these places is an error (`condition_on_plain_value`). A confidence check or bar sits only on an answer that can carry one (2.4): on an aggregation's output it is an error, `confidence_on_aggregate`, since it has none by design (2.5), and on a script's answer it is the usual warning. A condition's comparison names a label or level the answer's question has (`unknown_label`), and a `choice` or `score` answer without a comparison is an error (`comparison_required`). The compiler classifies what feeds each route as *deterministic* (a script, or an input), *measured* (a model's answer) or *unmeasured* (an agent's hand, or a decision that allows one), and warns when a confidence check guards an unmeasured or deterministic value, neither of which carries a confidence (`confidence_on_unmeasured_source`), or when a route branches on an unmeasured one with no check (`unmeasured_route`).
+- **Loops.** The cap is present; a `For` body is independent; nothing outside a body points into it and nothing inside leaves it but through the loop's own lines; `End` is not reachable inside a body; `Until` watches an answer produced before the loop or by a step in its body; a `For` collects only what every pass produces.
+- **Resources.** Every script, asset and reference named exists on disk, under `assets/`, `references/` or `scripts/`, the directories the bundle carries; a procedure with `Execute` steps declares `Requires`.
 
-Severities are `error`, `warning`, `info`. Compilation fails on `error` and prints the rest.
+Severities are `error`, `warning`, `info`. Compilation fails on `error` and prints the rest. Every diagnostic has one shape, `{code, severity, message, file, line, column, end_line, end_column, step}`, and `aip compile --check --json <folder>` prints them. The codes, which `aip_spec.CODES` lists in the same order:
+
+| Code | Severity | When |
+|---|---|---|
+| `syntax_error` | error | the file does not parse; the message names what was expected |
+| `missing_start`, `missing_end` | error | no `Start`, no `End` |
+| `duplicate_step` | error | two steps or loops share a name, or a second `Start` or `End` |
+| `duplicate_name`, `unknown_name`, `unused_name` | error, error, info | a named string defined twice, used but not defined, defined but not used |
+| `start_in_loop`, `end_in_loop` | error | `Start` or `End` written inside a loop body |
+| `reserved_key` | error | a step produces, or a loop item is called, `index` or `iterations` |
+| `missing_clause` | error | a `Decide` without questions or `Produce`, an `Aggregate` without aggregations or `Produce`, an `Execute` without `Run_Script` |
+| `missing_type` | error | a `Produce` key of an `Execute` or `Task_Agent` without a type |
+| `missing_next_step` | error | a step other than a `Route` or `End` does not say where it goes |
+| `question_labels` | error | a `choice` or `score` question without two labels, a `true_or_false` with labels, a label listed twice |
+| `duplicate_question`, `duplicate_aggregation` | error | a question or aggregation name used twice in one step |
+| `unknown_step` | error | a flow names a step or loop that does not exist (or `start`) |
+| `unreachable_step` | error | nothing reaches a step or loop |
+| `cycle_without_loop` | error | a flow closes a cycle that passes through no loop body |
+| `jump_into_body`, `flow_leaves_body` | error | a `Next_Step` or branch crosses a loop's braces in either direction |
+| `continue_outside_loop`, `again_outside_loop` | error | `Continue` or `Again` outside a loop body, or `Continue` as a top-level loop's exit |
+| `again_target` | error | `Again` inside a `For`, naming its own loop, or naming a step from which the loop is not reached |
+| `missing_cap`, `empty_loop`, `missing_loop_exit` | error | a loop without `At_Most` (or a cap below 1), with no steps, or with no exit line |
+| `unknown_key` | error | a key no step produces is read, interpolated, looped over or collected |
+| `unavailable_key` | error | a key is read where some path to the step has not produced it, including a `For` body's per-pass key read after the loop |
+| `unknown_field` | error | a dotted path names a question, aggregation or field the key does not have |
+| `duplicate_producer` | error | a second producer of a key on one path outside a loop (2.3), including a `For` item or `Collect` list named like an existing key |
+| `type_mismatch` | error | two declarations of a key disagree, two paths bring different types, or `Over` names something other than a list |
+| `route_reads_one` | error | a `Route` reads no key or several |
+| `condition_on_plain_value` | error | a route, an `Until` or an aggregation line is on something that is not an answer |
+| `missing_branch`, `duplicate_branch` | error | a route lacks a branch for a value, or has two for one |
+| `unknown_label` | error | a branch, comparison or criterion names a value the answer cannot take |
+| `comparison_required` | error | a `choice` or `score` answer in a condition without `==` or `!=` |
+| `confidence_on_aggregate` | error | `Confidence_Below` or `With Confidence_Above` on an aggregation's answer (2.5) |
+| `source_not_read` | error | an aggregation's source key is not in the step's `Read` |
+| `confidence_on_unmeasured_source` | warning | a confidence check or bar on an answer that may come without one: a decision with `Agent_Fallback true`, an agent task, a script, an input |
+| `unmeasured_route` | warning | a route with no check on an answer that may be given by hand |
+| `missing_file` | error | a `Run_Script`, `Prompt` or `Use` path is outside the three directories or does not exist |
+| `missing_requires` | error | an `Execute` step with no `Requires` in the header |
 
 ### 2.3 State: one producer per path
 
@@ -377,10 +417,10 @@ A loop is `<opener> { <steps> <exit clause> }`; it has a name because steps reac
 | `Loop <name> Until <condition>, At_Most <n> [, Else_Fail\|Else_Exit] { ... }` | passes build on each other until a condition on one answer holds, `<answer> [== v \| != v] [With Confidence_Above p]`; tested at the head of each pass and again wherever a body step produces the answer, ending the loop there; absent, or below the bar, does not hold | |
 | `Loop <name> <n> Times { ... }` | counted mode: a fixed number of passes | |
 | `Loop <name> Over <list> As <item>, At_Most <n> { ... }` | fold mode: passes build on each other over a list | |
-| `At_Most <n>` | the cap; required on `For` and on the fold, a safety limit on until mode | `Max` |
+| `At_Most <n>` | the cap; required on every loop but a counted one, whose count is its cap | `Max` |
 | `Else_Fail` / `Else_Exit` | what an until loop does at the cap; `Else_Fail` is the default | |
 | `Continue` | last clause of a step in a body, or a route branch target: the pass is over | `Next_Pass` |
-| `Again <step>` | last clause of a step in a body: re-enter at a step or loop defined before the enclosing loop and follow the flow until the enclosing loop is reached again | `Redo`, `Redo_Step` |
+| `Again <step>` | last clause of a step in a `Loop` body: re-enter at a step or loop at the enclosing loop's level and follow the flow until the enclosing loop is reached again, which ends the pass | `Redo`, `Redo_Step` |
 | `Next_Step <step>` at block level | where the run goes when the loop exits | |
 
 ### Types
@@ -398,4 +438,4 @@ Lowercase, never keywords.
 
 ### Reserved names
 
-`end` as a step target (`Next_Step end`) names the `End` step. No other identifier is reserved.
+`end` as a step target (`Next_Step end`) names the `End` step, and no step may be called `end` or `start`. `index` and `iterations` are the runtime's keys (section 2.1, Loops) and no step produces them. No other identifier is reserved.

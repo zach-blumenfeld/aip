@@ -606,9 +606,10 @@ class Parser:
             if kw == "At_Most":
                 node.at_most = self.integer("a whole number after 'At_Most'")
             elif kw == "Collect":
+                collect_tok = self.last
                 key = self.ident("the key to collect from each pass")
                 self.expect_kw("Into", f"after 'Collect {key}'")
-                node.collect = s.Collect(key, self.ident("the list to collect into"))
+                node.collect = self.at(s.Collect(key, self.ident("the list to collect into")), collect_tok)
             else:
                 node.at_cap = kw
         self.next()

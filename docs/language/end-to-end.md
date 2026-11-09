@@ -99,11 +99,11 @@ window in which the runtime still loads the old format with a warning.
 
 | Piece | Scenes | Where it is specified | State |
 |---|---|---|---|
-| Parser and formatter | 1 | spec 2.1, glossary | not started |
-| Checks with source positions | 1 | spec 2.2 to 2.5 | not started |
+| Parser and formatter | 1 | spec 2.1, glossary | done (plan L1, 2026-11-09) |
+| Checks with source positions | 1 | spec 2.2 to 2.5 | done (plan L2, 2026-11-09): `aip_spec.check`, `aip compile --check` |
 | Bundle writer and reader | 1, 4, 6 | spec 3 | not started |
 | Editor grammar | 1 | `editors/vscode` | done |
-| Linter the editor can run | 1 | this page | not started; it is the parser plus the checks, so it is the compiler's front half |
+| Linter the editor can run | 1 | this page | done with the checks: `aip compile --check --json <folder>` prints every diagnostic with its span; the extension's side is plan E1 |
 | Runtime: state, steps, loops, batching, record | 2, 3 | `docs/language/runtime.md` | not started |
 | Decision model client; `Agent_Fallback` | 2 | spec 2.4, runtime | exists in the current runtime for the old format; needs the answer object shape |
 | Run view | 3 | runtime: the record | exists for the old format; needs passes, aggregations, answer objects |

@@ -1,11 +1,13 @@
 # ticket-triage/procedure.aip
 #
-# The summary example from docs/spec.md: a batch loop, a route, a review loop. The scripts it
-# names (scripts/escalate.py, scripts/policy_check.py) are not written yet; this is syntax, not a
-# runnable program.
+# The summary example from docs/language/spec.md: a batch loop, a route, a review loop. The two
+# scripts (scripts/escalate.py, scripts/policy_check.py) are stubs that show the shape a script
+# produces; the program compiles and is not meant to be run for real.
 
 Procedure ticket_triage
   "Classify a batch of support tickets, draft replies, escalate the uncertain ones."
+
+  Requires python 3.10
 
 classify_question = "What kind of ticket is this and how does the customer sound?"
 
@@ -60,9 +62,10 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
       Produce reply: string
       Again check
     }
+    Continue
   }
 
-  Continue
+  Next_Step summarize
 }
 
 Task_Agent summarize "Summarize the batch for the team lead." {

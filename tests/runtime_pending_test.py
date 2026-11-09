@@ -1,5 +1,5 @@
 """The 0.8 runtime's tests wait for the 0.9 runtime; see `conftest.py`. What already works is
-the language's `fmt` under the `aip` command, tested here so the command stays importable."""
+the language's `compile` and `fmt` under the `aip` command, tested here so the command stays importable."""
 
 import contextlib
 import io
@@ -16,7 +16,18 @@ def test_runtime_pending():
     pass
 
 
-class AipFmt(unittest.TestCase):
+class AipLanguageCommands(unittest.TestCase):
+    def test_aip_compile_checks_every_example_clean(self):
+        from aip_spec import example_dir, example_names
+
+        for name in example_names():
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main(["compile", "--check", str(example_dir(name))])
+            self.assertEqual(code, 0, err.getvalue())
+            self.assertTrue(out.getvalue().startswith("ok "), out.getvalue())
+            self.assertNotIn("error", err.getvalue())
+
     def test_aip_fmt_checks_the_examples(self):
         from aip_spec import example_dir, example_names
 
