@@ -29,7 +29,7 @@ look-alike of an existing project); its module and command are `aip`. The runtim
   messages, issues or PR text, goes to the public `aip` or `aip-console` repositories until Zach
   explicitly gives the go-ahead. Push 0.9 work to the `dev` remote only. The `release-0.9.0`
   branch's `pushRemote` is set to `dev`; keep it so.
-- **The 0.9 plan is an issue on this repository**, in the format the 0.7 and 0.8 plans used on the
+- **The 0.9 plan is issue #1 on this repository** (https://github.com/zach-blumenfeld/aip-dev/issues/1), in the format the 0.7 and 0.8 plans used on the
   public repo. One milestone per session, run its proof, tick it, comment, commit.
 - **The language lives under `docs/language/`** (the spec, runtime requirements, limitations, why
   there are no expressions, the end-to-end scenes, the settled plan questions), its programs under
