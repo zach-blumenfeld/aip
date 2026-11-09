@@ -144,6 +144,33 @@ Settled items are marked.
     2026-11-08: no pushed branch of aip or aip-console mentions it; the `cypherlite-backend`
     branch in `~/dev/aip` is local only and must stay so.
 
+## Decided after the first build (2026-11-09)
+
+27. **Settled 2026-11-09.** `Agent_Fallback` is removed: a `Decide` always needs a decision model,
+    so every decision answer carries confidence and probabilities and a route's check always means
+    something. An agent decides in a `Task_Agent` by producing an answer under declared labels
+    (`Produce tone: choice [angry, calm]`); a script may do the same and may supply a confidence.
+    A confidence check on an agent's or an input's answer is a compile error. The decision model
+    is an endpoint with the TypeSafe API shape, URL and key in `aip config`, not a vendor.
+    Milestones L4 and R4, done.
+28. **Settled 2026-11-09.** The graph's data flow reads left to right, as 0.8 did: `Data` (was
+    `Key`), `SUPPLIES` (was `HAS_KEY`), `(Data)-[:READ_BY]->(Step)` (was `READS`, reversed).
+    Reviewed in a Browser: the flow edges stay distinct (`NEXT`, `BRANCH`, `BELOW`, `CONTINUES`,
+    `AGAIN`, `ENTERS`), `CONTAINS` is membership and stays, `OVER`'s double duty is noted and left.
+    The queries are `queries.md`.
+29. **Settled 2026-11-09.** One package. `aip-spec` existed so a SKILL.md could be validated
+    without the runtime; a bundle can only be run by the runtime, so the compiler folds into
+    `agent-instruction-protocol` (milestone L5). The name stays: PyPI refused `aip` as too close
+    to existing names, and `aip-lang` or `aip-runtime` would each name one part and mismatch the
+    `aip` import and command just the same. `aip-spec` is left at 0.8 on PyPI.
+30. **Settled 2026-11-09.** Agent Skills compatibility becomes an export, `aip export --skill`
+    (milestone K2, after the demo): a SKILL.md and the files, derived from the graph, followed by
+    hand with no guarantees, from a bundle or a published name through the server. Discovery in
+    0.9 is the catalog over MCP.
+31. **Open 2026-11-09.** Whether the console moves into this repo as `console/` with its own npm
+    release workflow (the PyPI wheel carries no npm content). Zach is weighing it; the plan's open
+    item 13 has the default if he says yes (at C1, by subtree, history kept).
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show
