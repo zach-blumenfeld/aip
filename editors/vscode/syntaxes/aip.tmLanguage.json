@@ -1,0 +1,407 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "AIP",
+  "scopeName": "source.aip",
+  "fileTypes": [
+    "aip"
+  ],
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#named-string"
+    },
+    {
+      "include": "#step-header"
+    },
+    {
+      "include": "#loop-header"
+    },
+    {
+      "include": "#flow"
+    },
+    {
+      "include": "#branch"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#aggregation"
+    },
+    {
+      "include": "#question"
+    },
+    {
+      "include": "#key-clause"
+    },
+    {
+      "include": "#resource-clause"
+    },
+    {
+      "include": "#criterion"
+    },
+    {
+      "include": "#clause"
+    },
+    {
+      "include": "#type"
+    },
+    {
+      "include": "#constant"
+    },
+    {
+      "include": "#operator"
+    },
+    {
+      "include": "#member"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.aip",
+      "match": "#.*$"
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.aip",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            {
+              "include": "#template-field"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.aip",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.aip",
+              "match": "\\\\."
+            },
+            {
+              "include": "#template-field"
+            }
+          ]
+        }
+      ]
+    },
+    "template-field": {
+      "name": "variable.other.interpolation.aip",
+      "match": "\\{[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*\\}"
+    },
+    "named-string": {
+      "match": "^\\s*([a-z][a-z0-9_]*)\\s*(=)",
+      "captures": {
+        "1": {
+          "name": "variable.other.constant.aip"
+        },
+        "2": {
+          "name": "keyword.operator.assignment.aip"
+        }
+      }
+    },
+    "step-header": {
+      "comment": "Procedure / Start / Decide / Route / Execute / Task_Agent / End, optional With|On, then the step name",
+      "match": "(?i)^\\s*(Procedure|Start|Decide|Route|Aggregate|Execute|Task_Agent|Task|Agent_Task|End)\\b(?:\\s+(With|On)\\b)?(?:\\s+([a-z][a-z0-9_]*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.step.aip"
+        },
+        "2": {
+          "name": "keyword.other.with.aip"
+        },
+        "3": {
+          "name": "entity.name.function.step.aip"
+        }
+      }
+    },
+    "loop-header": {
+      "comment": "For <name> Over <list> As <item> ... / Loop <name> Until|Times|Over ...",
+      "begin": "(?i)^\\s*(For|For_Each|Loop)\\b(?:\\s+([a-z][a-z0-9_]*))?",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.loop.aip"
+        },
+        "2": {
+          "name": "entity.name.function.loop.aip"
+        }
+      },
+      "end": "(?=\\{)|$",
+      "patterns": [
+        {
+          "name": "keyword.other.clause.aip",
+          "match": "(?i)\\b(Over|As|At_Most|Max|Collect|Into|Until|Times|Else_Fail|Else_Exit)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.aip",
+          "match": "==|!="
+        },
+        {
+          "name": "keyword.other.with.aip",
+          "match": "(?i)\\b(With|w/)\\b"
+        },
+        {
+          "name": "keyword.other.clause.aip",
+          "match": "(?i)\\b(Confidence_Above|Confidence|Conf)\\b"
+        },
+        {
+          "include": "#constant"
+        },
+        {
+          "include": "#member"
+        },
+        {
+          "name": "variable.other.key.aip",
+          "match": "[a-z][a-z0-9_]*"
+        }
+      ]
+    },
+    "flow": {
+      "comment": "Next_Step <step> / Next <step> / Again <step> / Continue",
+      "match": "(?i)^\\s*(Next_Step|Next|Go_To|Again|Redo_Step|Redo)\\b\\s+([a-z][a-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.flow.aip"
+        },
+        "2": {
+          "name": "entity.name.function.step.aip"
+        }
+      }
+    },
+    "branch": {
+      "comment": "value -> step, When value -> step, Confidence_Below n -> step",
+      "match": "(?i)^\\s*(?:(Confidence_Below)\\s+([0-9]*\\.?[0-9]+)|(?:(When)\\s+)?([a-z0-9_]+))\\s*(->)\\s*(?:(Continue)|([a-z][a-z0-9_]*))",
+      "captures": {
+        "1": {
+          "name": "keyword.other.clause.aip"
+        },
+        "2": {
+          "name": "constant.numeric.aip"
+        },
+        "3": {
+          "name": "keyword.other.clause.aip"
+        },
+        "4": {
+          "name": "constant.other.label.aip"
+        },
+        "5": {
+          "name": "keyword.operator.arrow.aip"
+        },
+        "6": {
+          "name": "keyword.control.flow.aip"
+        },
+        "7": {
+          "name": "entity.name.function.step.aip"
+        }
+      }
+    },
+    "declaration": {
+      "comment": "key: type (in Read, Produce, Start inputs)",
+      "match": "([a-z][a-z0-9_]*)\\s*(:)\\s*(string|integer|float|number|boolean|list|array|object|decision)\\b",
+      "captures": {
+        "1": {
+          "name": "variable.other.key.aip"
+        },
+        "2": {
+          "name": "punctuation.separator.type.aip"
+        },
+        "3": {
+          "name": "support.type.aip"
+        }
+      }
+    },
+    "question": {
+      "comment": "name: true_or_false|choice|score [labels]",
+      "begin": "([a-z][a-z0-9_]*)\\s*(:)\\s*(true_or_false|noul|choice|score)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.other.key.aip"
+        },
+        "2": {
+          "name": "punctuation.separator.type.aip"
+        },
+        "3": {
+          "name": "support.type.answer.aip"
+        }
+      },
+      "end": "$",
+      "patterns": [
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "name": "meta.labels.aip",
+          "patterns": [
+            {
+              "name": "constant.other.label.aip",
+              "match": "[a-z][a-z0-9_]*"
+            }
+          ]
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "name": "variable.other.constant.aip",
+          "match": "[a-z][a-z0-9_]*"
+        }
+      ]
+    },
+    "clause": {
+      "name": "keyword.other.clause.aip",
+      "match": "(?i)^\\s*(Answer_Questions|Questions|Agent_Fallback|Fallback|History|Aggregations|Continue|Next_Pass|Use_When|Trigger_When|Do_Not_Use_When|Requires|Avoid|Anti_Pattern)\\b"
+    },
+    "type": {
+      "name": "support.type.aip",
+      "match": "\\b(string|integer|float|number|boolean|list|array|object|true_or_false|noul|choice|score|decision)\\b"
+    },
+    "constant": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.aip",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.numeric.aip",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.aip",
+          "match": "->"
+        },
+        {
+          "name": "punctuation.definition.block.aip",
+          "match": "[{}]"
+        }
+      ]
+    },
+    "member": {
+      "comment": "decision.question field access",
+      "match": "\\b([a-z][a-z0-9_]*)(\\.)([a-z][a-z0-9_]*)\\b",
+      "captures": {
+        "1": {
+          "name": "variable.other.key.aip"
+        },
+        "2": {
+          "name": "punctuation.accessor.aip"
+        },
+        "3": {
+          "name": "variable.other.member.aip"
+        }
+      }
+    },
+    "key-clause": {
+      "comment": "Read a, b.c  /  Produce x (bare keys; typed keys are handled by #declaration)",
+      "begin": "(?i)^\\s*(Read|Reads|Input|Produce|Produces|Return|Output)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.clause.aip"
+        }
+      },
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#declaration"
+        },
+        {
+          "include": "#member"
+        },
+        {
+          "name": "variable.other.key.aip",
+          "match": "\\b[a-z][a-z0-9_]*\\b"
+        },
+        {
+          "name": "punctuation.separator.comma.aip",
+          "match": ","
+        }
+      ]
+    },
+    "resource-clause": {
+      "comment": "Run_Script path / Use path [\"description\" | name][, path ...] / Prompt path",
+      "begin": "(?i)^\\s*(Run_Script|Run|Script|Command|Use|Uses|Asset|Reference|Prompt|Template)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.clause.aip"
+        }
+      },
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#string"
+        },
+        {
+          "name": "string.unquoted.path.aip",
+          "match": "[A-Za-z0-9_./-]*[/.][A-Za-z0-9_./-]*"
+        },
+        {
+          "name": "punctuation.separator.comma.aip",
+          "match": ","
+        },
+        {
+          "name": "variable.other.constant.aip",
+          "match": "\\b[a-z][a-z0-9_]*\\b"
+        }
+      ]
+    },
+    "criterion": {
+      "comment": "label: \"criterion\" under a question",
+      "match": "^\\s*([a-z][a-z0-9_]*)\\s*(:)\\s*(?=\")",
+      "captures": {
+        "1": {
+          "name": "constant.other.label.aip"
+        },
+        "2": {
+          "name": "punctuation.separator.type.aip"
+        }
+      }
+    },
+    "aggregation": {
+      "comment": "name: All|Any|None source [== value | != value] [With Confidence_Above p]",
+      "match": "(?i)^\\s*([a-z][a-z0-9_]*)\\s*(:)\\s*(All|Any|None)\\b\\s*([a-z][a-z0-9_.]*)?(?:\\s*(==|!=)\\s*([a-z0-9_]+))?(?:\\s+(With|w/)\\s+(Confidence_Above|Confidence|Conf)\\s+([0-9]*\\.?[0-9]+))?",
+      "captures": {
+        "1": {
+          "name": "variable.other.key.aip"
+        },
+        "2": {
+          "name": "punctuation.separator.type.aip"
+        },
+        "3": {
+          "name": "keyword.other.aggregate.aip"
+        },
+        "4": {
+          "name": "variable.other.key.aip"
+        },
+        "5": {
+          "name": "keyword.operator.comparison.aip"
+        },
+        "6": {
+          "name": "constant.other.label.aip"
+        },
+        "7": {
+          "name": "keyword.other.with.aip"
+        },
+        "8": {
+          "name": "keyword.other.clause.aip"
+        },
+        "9": {
+          "name": "constant.numeric.aip"
+        }
+      }
+    }
+  }
+}

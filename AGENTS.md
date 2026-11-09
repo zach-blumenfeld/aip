@@ -20,6 +20,27 @@ look-alike of an existing project); its module and command are `aip`. The runtim
 `aip-spec==<the same version>`. The web console is a separate repository,
 [aip-console](https://github.com/zach-blumenfeld/aip-console), with its own npm version.
 
+## This is the private 0.9 mirror
+
+`zach-blumenfeld/aip-dev` is a private copy of the public `zach-blumenfeld/aip` repository, made on
+2026-11-08 so that 0.9 can be built before one of its dependencies is public. Rules:
+
+- **Relate (formerly CypherLite) is unreleased.** Nothing that mentions it, in code, docs, commit
+  messages, issues or PR text, goes to the public `aip` or `aip-console` repositories until Zach
+  explicitly gives the go-ahead. Push 0.9 work to the `dev` remote only. The `release-0.9.0`
+  branch's `pushRemote` is set to `dev`; keep it so.
+- **The 0.9 plan is an issue on this repository**, in the format the 0.7 and 0.8 plans used on the
+  public repo. One milestone per session, run its proof, tick it, comment, commit.
+- **The language lives under `docs/language/`** (the spec, runtime requirements, limitations, why
+  there are no expressions, the end-to-end scenes, the settled plan questions), its programs under
+  `examples/language/`, the VS Code extension under `editors/vscode`. They came from the private
+  `aip-lang` repository on 2026-11-08 (its commit 9845671); that repository is now the design
+  archive. Final paths are decided by the compiler milestone.
+- **Public `main` keeps moving** with 0.8 fixes. Merge `origin/main` into `release-0.9.0` when it
+  does; never the other way until the go-ahead.
+- When Zach clears it: push `release-0.9.0` to the public repo, open the release PR there, transfer
+  the plan issue with `gh issue transfer`, archive this mirror.
+
 ## Repo map
 
 | Path | What's there |

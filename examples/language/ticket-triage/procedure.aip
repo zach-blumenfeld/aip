@@ -1,0 +1,76 @@
+# ticket-triage/procedure.aip
+#
+# The summary example from docs/spec.md: a batch loop, a route, a review loop. The scripts it
+# names (scripts/escalate.py, scripts/policy_check.py) are not written yet; this is syntax, not a
+# runnable program.
+
+Procedure ticket_triage
+  "Classify a batch of support tickets, draft replies, escalate the uncertain ones."
+
+classify_question = "What kind of ticket is this and how does the customer sound?"
+
+Start "The batch of tickets and the policy every reply must follow." {
+  tickets: list
+  policy: string
+  Next_Step each_ticket
+}
+
+For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
+
+  Decide classify classify_question {
+    Read ticket
+    Answer_Questions {
+      billing: true_or_false "Is this a billing question?"
+      tone: choice [calm, angry] "How does the customer sound?"
+    }
+    Produce classification
+    Next_Step by_tone
+  }
+
+  Route by_tone "Calm customers get a drafted reply; angry or uncertain ones are escalated." {
+    Read classification.tone
+    Confidence_Below 0.6 -> escalate
+    calm  -> draft
+    angry -> escalate
+  }
+
+  Task_Agent draft "Write a reply that follows the policy." {
+    Read ticket, policy
+    Produce reply: string
+    Next_Step check
+  }
+
+  Execute escalate "Open a ticket in the tier-2 queue." {
+    Read ticket
+    Run_Script scripts/escalate.py
+    Produce reply: string, queue: string
+    Continue
+  }
+
+  Execute check "Does the reply quote the policy correctly?" {
+    Read reply, policy
+    Run_Script scripts/policy_check.py
+    Produce passed: true_or_false
+    Next_Step revise
+  }
+
+  Loop revise Until passed, At_Most 3, Else_Fail {
+    Task_Agent fix "Revise the reply so it quotes the policy correctly." {
+      Read reply, policy
+      Produce reply: string
+      Again check
+    }
+  }
+
+  Continue
+}
+
+Task_Agent summarize "Summarize the batch for the team lead." {
+  Read replies
+  Produce summary: string
+  Next_Step end
+}
+
+End "Every ticket has a reply or an escalation, and the lead has a summary." {
+  Read summary, replies
+}

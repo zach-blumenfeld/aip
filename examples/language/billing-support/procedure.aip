@@ -1,0 +1,74 @@
+# billing-support/procedure.aip
+#
+# The billing-support procedure, written in the language of docs/spec.md, section 2.1.
+# One decision classifies the message, a route sends angry or uncertain customers to a
+# script that opens a tier-2 ticket, and the agent drafts a reply for everyone else.
+#
+# Still to decide: Agent_Fallback true makes triage_decision.tone unmeasured, so the
+# compiler would warn confidence_on_unmeasured_source on by_tone, pointing at that line.
+
+Procedure billing_support
+  "Turn an inbound billing message into either a tier-2 ticket or a drafted reply.
+   A structured decision classifies the message; a script opens the ticket; the
+   agent drafts the reply against the refund policy."
+
+  Use_When
+    "A customer message about a charge, invoice, refund, or subscription arrives."
+    "Support asks to triage a billing complaint."
+  Do_Not_Use_When
+    "The message is about product bugs or feature requests rather than billing."
+  Requires python 3.10
+  Avoid
+    "Replying to an angry customer with a templated answer instead of escalating."
+    "Promising a refund the policy does not cover."
+
+tone_question = "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands."
+help_reference = "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days."
+
+Start "The customer's message, as support received it." {
+  message: string "The customer's message, verbatim."
+  Next_Step triage
+}
+
+Decide triage "Classify whether the message is about billing and how upset the customer is." {
+  Read message
+  Answer_Questions {
+    billing: true_or_false "Is this message about a charge, invoice, refund, or subscription payment?"
+    tone: choice [angry, calm] tone_question
+      angry: "Frustrated, demanding, or threatening to leave."
+      calm:  "Neutral or polite, asking a question."
+  }
+  # The quickstart keeps agent_fallback on so the walkthrough runs without a TypeSafe key.
+  # A hand answer carries no confidence, so by_tone's check fires. Production turns it off.
+  Agent_Fallback true
+  Produce triage_decision
+  Next_Step by_tone
+}
+
+Route On by_tone "Angry customers go to a human queue; calm ones get a drafted reply." {
+  Read triage_decision.tone
+  Confidence_Below 0.6 -> escalate
+  angry -> escalate
+  calm  -> reply
+}
+
+Execute escalate "Open a tier-2 ticket for the message." {
+  Read message, triage_decision.tone
+  Run_Script scripts/escalate.py
+  Use assets/config.json
+  Produce ticket_id: integer "The tier-2 ticket opened for the message."
+           queue: string      "The queue the ticket was routed to."
+  Next_Step end
+}
+
+Task_Agent With reply "Draft a calm reply grounded in the refund policy." {
+  Read message, triage_decision.tone
+  Prompt assets/reply.md
+  Use assets/policy.md, references/help.md help_reference
+  Produce reply: string "The drafted reply to send the customer."
+  Next_Step end
+}
+
+End "The original message plus either a ticket or a drafted reply." {
+  Read message
+}

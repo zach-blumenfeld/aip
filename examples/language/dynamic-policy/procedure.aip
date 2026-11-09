@@ -1,0 +1,73 @@
+# dynamic-policy/procedure.aip
+#
+# Stress test 2. The same procedure as fixed-policy, except the task and the policies arrive
+# as inputs at Start. Inside the revise loop, a For loop checks one policy at a time with one
+# fixed question and collects the verdicts, an Aggregate ANDs them, counting any verdict the model was
+# not at least 0.7 sure of as false, and `Until check_summary.all_hold` ends the loop the moment
+# that is true; otherwise the work is fixed and the loop goes round again.
+#
+# See docs/limitations.md: one model call per policy for now, and a script to AND the verdicts.
+
+Procedure dynamic_policy
+  "Do a task the requester describes, checked against the policies the requester supplies."
+
+  Use_When
+    "A request comes with its own list of policies the result must follow."
+  Avoid
+    "Checking the policies as one question; each policy gets its own verdict."
+
+follows_policy = """
+Does the work follow the policy described below? Read the policy as written; do not infer
+policies it does not state.
+
+{policy}
+"""
+
+Start "The task and the policies, from the requester." {
+  task: string     "What to do, as the requester wrote it."
+  policies: list   "The policies the work must follow, one string each."
+  Next_Step draft
+}
+
+Task draft "Do the task, following every policy." {
+  Read task, policies
+  Prompt assets/task.md
+  Produce work: string "The result of the task."
+  Next_Step revise
+}
+
+Loop revise Until check_summary.all_hold, At_Most 3, Else_Fail {
+  For review Over policies As policy, At_Most 20, Collect verdict Into verdicts {
+    Decide check "Does the work follow this one policy? The policy is written into the question." {
+      Read work
+      Answer_Questions {
+        follows: true_or_false follows_policy
+      }
+      Produce verdict
+      Continue
+    }
+    Next_Step summarize_check
+  }
+
+  Aggregate summarize_check "Every policy holds, and the model was sure of each." {
+    Read verdicts
+    Aggregations {
+      all_hold: All verdicts.follows With Confidence_Above 0.7
+    }
+    Produce check_summary
+    Next_Step fix
+  }
+
+  Task_Agent fix "Revise the work so the failed policies pass." {
+    Read task, work, policies, verdicts
+    Prompt assets/fix.md
+    Produce work: string "The revised work."
+    Continue
+  }
+
+  Next_Step end
+}
+
+End "The work, and the verdict for every policy." {
+  Read work, verdicts
+}

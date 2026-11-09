@@ -1,0 +1,79 @@
+# fixed-policy/procedure.aip
+#
+# Stress test 1. The policies are fixed, so they live in the procedure as named strings and
+# one decision asks one question per policy, in a single model call. The agent does the task
+# from a template saved with the procedure, then a loop checks the work and fixes it until every
+# policy passes. The check lives inside the loop: `Until` treats an absent key as not yet true,
+# so the first pass runs and nothing has to run before the loop to seed it. When the policies arrive at
+# run time instead, see dynamic-policy.
+#
+# An Aggregate turns the four answers into one: each counts as false unless the model was at
+# least 0.7 sure of it, then all four must be true. The result has no confidence of its own;
+# see docs/no-expressions.md for why that is the rule. `Until check_summary.all_hold` ends the
+# loop the moment it is true.
+
+Procedure fixed_policy
+  "Do a writing task the way the house policy says, and do not hand it over until it does."
+
+  Use_When
+    "A customer-facing document is requested and the house policy applies."
+  Do_Not_Use_When
+    "The requester has asked for a draft that knowingly departs from policy."
+  Avoid
+    "Declaring the work compliant without the decision having said so."
+    "Rewriting the task request itself instead of the work."
+
+policy_pii     = "The work contains no personal data: no names of private individuals, no account numbers, no addresses."
+policy_claims  = "Every factual claim about the product is one the approved claims list supports; nothing is promised beyond it."
+policy_tone    = "The tone is plain and courteous: no superlatives, no pressure, no blame."
+policy_length  = "The work is under 300 words."
+
+Start "What the requester wants written." {
+  request: string "The task, as the requester wrote it."
+  Next_Step draft
+}
+
+Task_Agent draft "Write the work from the task template, following the policy." {
+  Read request
+  Prompt assets/task.md
+  Use assets/policy.md
+  Produce work: string "The written work."
+  Next_Step revise
+}
+
+Loop revise Until check_summary.all_hold, At_Most 3, Else_Fail {
+  Decide check "Does the work follow each policy?" {
+    Read work
+    Answer_Questions {
+      pii:    true_or_false policy_pii
+      claims: true_or_false policy_claims
+      tone:   true_or_false policy_tone
+      length: true_or_false policy_length
+    }
+    Produce policy_check
+    Next_Step summarize_check
+  }
+
+  Aggregate summarize_check "Every policy holds, and the model was sure of each." {
+    Read policy_check
+    Aggregations {
+      all_hold: All policy_check With Confidence_Above 0.7
+    }
+    Produce check_summary
+    Next_Step fix
+  }
+
+  Task_Agent fix "Revise the work so the failed policies pass." {
+    Read request, work, policy_check
+    Prompt assets/fix.md
+    Use assets/policy.md
+    Produce work: string "The revised work."
+    Continue
+  }
+
+  Next_Step end
+}
+
+End "The work, and the check that passed it." {
+  Read work, policy_check
+}

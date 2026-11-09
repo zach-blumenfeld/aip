@@ -1,0 +1,223 @@
+{
+  "name": "aip-lang",
+  "displayName": "AIP procedure language",
+  "description": "Syntax highlighting for .aip procedure files and ```aip fences in Markdown.",
+  "version": "0.1.0",
+  "publisher": "zach-blumenfeld",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "aip",
+        "aliases": [
+          "AIP",
+          "aip"
+        ],
+        "extensions": [
+          ".aip"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aip",
+        "scopeName": "source.aip",
+        "path": "./syntaxes/aip.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.aip.codeblock",
+        "path": "./syntaxes/aip.markdown.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.aip": "aip"
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": [
+              "keyword.control.step.aip",
+              "keyword.control.loop.aip"
+            ],
+            "settings": {
+              "foreground": "#FF7AB2",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": [
+              "entity.name.function.step.aip",
+              "entity.name.function.loop.aip"
+            ],
+            "settings": {
+              "foreground": "#E6E6E6"
+            }
+          },
+          {
+            "scope": [
+              "keyword.other.clause.aip",
+              "keyword.control.flow.aip",
+              "keyword.other.with.aip",
+              "keyword.other.aggregate.aip"
+            ],
+            "settings": {
+              "foreground": "#6CB6FF"
+            }
+          },
+          {
+            "scope": [
+              "support.type.aip",
+              "support.type.answer.aip"
+            ],
+            "settings": {
+              "foreground": "#4EC9B0"
+            }
+          },
+          {
+            "scope": [
+              "variable.other.key.aip",
+              "variable.other.member.aip"
+            ],
+            "settings": {
+              "foreground": "#DCDCAA"
+            }
+          },
+          {
+            "scope": "variable.other.constant.aip",
+            "settings": {
+              "foreground": "#B5CEA8"
+            }
+          },
+          {
+            "scope": "constant.other.label.aip",
+            "settings": {
+              "foreground": "#CE9178"
+            }
+          },
+          {
+            "scope": "string.unquoted.path.aip",
+            "settings": {
+              "foreground": "#CE9178"
+            }
+          },
+          {
+            "scope": "variable.other.interpolation.aip",
+            "settings": {
+              "foreground": "#D7BA7D",
+              "fontStyle": "italic"
+            }
+          },
+          {
+            "scope": [
+              "keyword.operator.arrow.aip",
+              "keyword.operator.comparison.aip",
+              "keyword.operator.assignment.aip"
+            ],
+            "settings": {
+              "foreground": "#6CB6FF"
+            }
+          }
+        ],
+        "[*Light*]": {
+          "textMateRules": [
+            {
+              "scope": [
+                "keyword.control.step.aip",
+                "keyword.control.loop.aip"
+              ],
+              "settings": {
+                "foreground": "#C2185B",
+                "fontStyle": "bold"
+              }
+            },
+            {
+              "scope": [
+                "entity.name.function.step.aip",
+                "entity.name.function.loop.aip"
+              ],
+              "settings": {
+                "foreground": "#1F1F1F"
+              }
+            },
+            {
+              "scope": [
+                "keyword.other.clause.aip",
+                "keyword.control.flow.aip",
+                "keyword.other.with.aip",
+                "keyword.other.aggregate.aip"
+              ],
+              "settings": {
+                "foreground": "#0B5FBE"
+              }
+            },
+            {
+              "scope": [
+                "support.type.aip",
+                "support.type.answer.aip"
+              ],
+              "settings": {
+                "foreground": "#0F7B6C"
+              }
+            },
+            {
+              "scope": [
+                "variable.other.key.aip",
+                "variable.other.member.aip"
+              ],
+              "settings": {
+                "foreground": "#795E26"
+              }
+            },
+            {
+              "scope": "variable.other.constant.aip",
+              "settings": {
+                "foreground": "#2E7D32"
+              }
+            },
+            {
+              "scope": "constant.other.label.aip",
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "scope": "string.unquoted.path.aip",
+              "settings": {
+                "foreground": "#A31515"
+              }
+            },
+            {
+              "scope": "variable.other.interpolation.aip",
+              "settings": {
+                "foreground": "#8A6D1F",
+                "fontStyle": "italic"
+              }
+            },
+            {
+              "scope": [
+                "keyword.operator.arrow.aip",
+                "keyword.operator.comparison.aip",
+                "keyword.operator.assignment.aip"
+              ],
+              "settings": {
+                "foreground": "#0B5FBE"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

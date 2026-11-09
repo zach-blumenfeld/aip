@@ -1,2 +1,3 @@
 # Skill files and the runtime block are compared byte for byte; keep LF on every checkout.
 * text=auto eol=lf
+*.aip linguist-language=Ruby
