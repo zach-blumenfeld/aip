@@ -31,6 +31,8 @@ look-alike of an existing project); its module and command are `aip`. The runtim
   branch's `pushRemote` is set to `dev`; keep it so.
 - **The 0.9 plan is issue #1 on this repository** (https://github.com/zach-blumenfeld/aip-dev/issues/1), in the format the 0.7 and 0.8 plans used on the
   public repo. One milestone per session, run its proof, tick it, comment, commit.
+- **Start with `docs/language/sources.md`**: where the old code, the console, Relate's docs and wheels, and the
+  decision model live, with what is stale. Then the plan issue.
 - **The language lives under `docs/language/`** (the spec, runtime requirements, limitations, why
   there are no expressions, the end-to-end scenes, the settled plan questions), its programs under
   `examples/language/`, the VS Code extension under `editors/vscode`. They came from the private

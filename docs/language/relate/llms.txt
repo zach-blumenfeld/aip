@@ -1,0 +1,176 @@
+# cypherlite
+
+> The agent-native graph database. Make sense of connected data in milliseconds — on a graph you can see, in process, with no infrastructure to run. Embedded openCypher engine in a single binary; 100% openCypher TCK 2024.3 (3,892 / 3,892 scenarios, strict run in CI); full GQL alignment and Cypher 25 features.
+
+CypherLite is an embeddable, in-memory property graph engine written in Rust. It is designed for an agent or application to explore the relationships in code, behavior, and events on a graph you can see, in process, with no infrastructure to run. It speaks Cypher (100% openCypher TCK 2024.3 — 3,892 / 3,892 scenarios pass under a strict run that checks error class, error phase, and side effects, enforced in CI — plus GQL alignment and Cypher 25 features including label expressions, quantified path patterns, path selectors, string interpolation, `GROUP BY`, UUID and graph value types, and unquoted Unicode identifiers), persists through an fsync'd WAL plus one snapshot codec (Parquet or JSON) as a directory or a single `.cl` file, supports vector similarity search and geospatial queries, and installs an agent skill bundle that teaches AI assistants how to drive it.
+
+## Where CypherLite fits
+
+Agent context and memory (a durable, queryable graph in one `.cl` file; recall is a `MATCH`), embedded in an app (one dependency across Rust, Python, JavaScript, Java, and Go; no sidecar service), sandbox analytics (fetch a dataset, load it into `:memory:`, traverse it, print JSON, exit), test fixtures and golden graphs (`cypherlite pull` a slice of Neo4j/Aura into a `.cl` file, commit it, test offline), and local-first or edge use (ship a graph with a CLI, a notebook, a WASM app, or a desktop binary; same engine everywhere). Shape of the fit: a single-process, memory-resident engine with one WAL writer — graphs larger than RAM, distributed scale-out, or many simultaneous writers belong in a different database.
+
+## Installation
+
+```bash
+curl -sSfL https://neo4j-labs.github.io/cypherlite/install.sh | bash
+```
+
+The install script verifies the pinned-key release signature (SSHSIG) and SHA256SUMS before installing. Prebuilt binaries ship for macOS (amd64/arm64, Developer-ID signed and notarized), Linux (amd64/arm64), and Windows. Windows: download `cypherlite-windows-amd64.exe` from the releases page. Python package: `pip install neo4j-cypherlite` (import as `import cypherlite`).
+
+## Usage
+
+`cypherlite [OPTIONS] [--database PATH] [QUERY]` — the store is `--database` / `-d` (a directory, a `.cl` bundle, or `:memory:`, the default); the first positional argument is the statement. `cypherlite query [STATEMENT] [--database PATH]` is the statement-session verb — with a statement it runs once and exits, without one it reads a script from stdin or opens the interactive shell on a terminal. With no statement and no `query` verb, a terminal opens the interactive shell; piped or redirected stdin prints help and exits.
+
+- `cypherlite query` — interactive shell on an in-memory database (statements end with `;`)
+- `cypherlite query --database ./mydata` — open/create a durable directory (WAL + Parquet snapshots, default codec)
+- `cypherlite query --database ./mydata.cl` — single-file bundle: WAL, snapshot, and catalog in one host file
+- `cypherlite --snapshot-format json --database ./mydata-json` — JSON snapshot codec (`graph.json`), empty directory only
+- `cypherlite --snapshot-format markdown --database ./vault` — markdown vault codec (ADR-0406): the folder of notes is the store — one `Label/name.md` per node (frontmatter properties, body text, `[[wikilinks]]`), regenerated `index.md`/`log.md` views, and a `.cypherlite/` engine sidecar (manifest, WAL, journal); hand edits made while the database was closed are picked up at the next open. `--markdown-body-properties LIST` configures which properties render as each note's body (`Label=LIST` per label)
+- `cypherlite --read-only --database ./mydata` — open an existing database without writing or checkpointing
+- `cypherlite --read-only=live --database ./mydata` — tail the WAL of a native directory database live (snapshot freshness is the `--read-only` default; `live` is the former `--follow`)
+- `cypherlite --load ./mydata.cl "MATCH (n) RETURN count(n)"` — load a store's content from a `.cl` path, a directory, or an https URL: with the `:memory:` default target the source is turned into the in-memory store (a read-only open that releases the source — nothing is held open or locked, the copy is frozen snapshot freshness); with a `--database PATH` target the source is cloned there and the store opens normally (the target must not exist yet). `--read-only=live` is refused with any `--load`. A GitHub blob link is rewritten to its raw form; a remote folder store is not supported
+- `cypherlite -d ./friends.cl --load https://…/graph.cl "MATCH (n) RETURN n"` — fetch a remote `.cl` bundle and clone it into a new durable store
+- `cypherlite --database ./mydata "MATCH (n) RETURN n"` — one-shot query; pipe scripts with `cypherlite query --database ./mydata < file.cypher`
+- `cypherlite pull --from neo4j.env --query 'MATCH (p:Person) RETURN p' --database ./mydata` — pull a Neo4j/Aura subgraph (HTTP Query API v2) into a local database, streamed in batches with one checkpoint; `--query` takes inline Cypher, a `;`-separated statement list, a file path, or `-` (stdin), every statement must `RETURN` graph elements, and `--param N=V` binds source-query parameters. `pull` refuses a non-empty destination (a re-pull is never a merge). `--from` is a KEY=VALUE env file (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, optional `NEO4J_DATABASE`) or those process env vars; the `--database PATH` destination must be a directory or `.cl` bundle (`:memory:` rejected)
+- `cypherlite push --to CREDS --database PATH [--query Q | --labels L1,L2 | --types T1,T2] [--dry-run]` — pull's mirror (ADR-0401): read a scoped subgraph of the local store and push it into a Neo4j/Aura remote over the same HTTP Query API v2 client and credentials file; merge keys come from the store's uniqueness and node/relationship key constraints, entities are grouped and sent as batched parameterized `UNWIND` statements, and `--dry-run` reports without writing
+- `cypherlite -json --database ./mydata "MATCH (n) RETURN n"` — JSON output for pipes and agents (also `-csv`, `--toon`, `--mode envelope|jsonl|markdown|cypher|toon|speedscope|table`); JSON is compact one-line when piped, indented on a terminal (`--pretty` forces indent); `--toon` prints one `rows[N]{col,…}:` header plus one line per row; `--mode envelope` prints one `{"columns":[…],"rows":[…],"truncated":false,"notifications":[…]}` object per result set, so "no rows" is distinguishable from "no output" (`notifications` is the query-notification list — empty on a plain run); `--mode speedscope` writes a `PROFILE` statement's plan tree as speedscope JSON (loadable at https://www.speedscope.app)
+- `cypherlite --param 'people=[{"name":"Alice"}]' --database ./mydata 'UNWIND $people AS p CREATE (:Person {name: p.name})'` — bind typed Cypher parameters
+- `cypherlite --fetch-params 'value=https://api.example.com/data.json' --database ./mydata 'UNWIND $value.items AS x CREATE (:Item {id: x.id})'` — fetch an http(s) URL or read a file, parse it as JSON, and bind it as a parameter (repeatable; 64 MiB cap, 60 s timeout)
+- `cypherlite skill install [--agent NAME]` — install the agent skill bundle (CLI, Cypher, vector, spatial references) into every detected AI agent (claude-code, cursor, windsurf, copilot, antigravity, gemini-cli, cline, codex, pi, opencode, junie); `skill remove` is idempotent; `skill list` reports each target agent's install state and `skill check` verifies installed bundles against the running binary's bundle (exit 1 on drift)
+- `cypherlite agent-context [COMMAND]` — print the compact agent briefing: command index, query-run flags, exit-code table, or one command's synopsis/flags/examples (rendered from the same descriptor table as `--help`)
+- `cypherlite serve --database PATH [--http PORT] [--mcp PORT] [--bolt PORT] [--read-only[=FRESHNESS]] [--load SOURCE] [--auth USER:PASSWORD]` — host the network surfaces on one open store until SIGINT/SIGTERM (`--read-only` opens the existing store without the writer lease so another process can write it; `--read-only=live` tails the WAL, showing the writer's commits — refused for `.cl` and `:memory:`; `--load SOURCE` with the `:memory:` target serves the ephemeral open — the store loaded into memory, the source released — and with a durable `-d PATH` target creates the store there first): `--http` serves the HTTP Query API v2 (`POST /db/<name>/query/v2`, plus a public `GET /` discovery document), `--mcp` the MCP server (streamable HTTP), `--bolt` the Bolt server (Bolt + Bolt-over-WebSocket). Loopback only, no default ports; `--origin ORIGIN` widens the HTTP browser-Origin policy (default loopback + `https://browser.neo4j.io` and `https://console.neo4j.io`); basic auth is shared by every surface — generated token by default (printed at startup, persisted as `.auth-token`), `--auth user:password`/`CYPHERLITE_AUTH` presets one, `--auth none` disables. `--host HOST` overrides the loopback bind (serve has no TLS), `--mcp stdio` serves the MCP stdio transport in the foreground, `--bolt-identity STRING` sets the Bolt HELLO server agent, `--max-connections N` caps process-wide sessions shared by every surface (accept-then-close over cap; 0/omit unlimited; `CYPHERLITE_MAX_CONNECTIONS`), `--max-active-queries N` caps concurrent queries (`CYPHERLITE_MAX_ACTIVE_QUERIES`)
+- `cypherlite upgrade [--yes] [--check]` — self-update from GitHub releases (alias: `update`); a successful upgrade also refreshes the installed skill bundle automatically
+- `cypherlite telemetry off` — disable anonymous CLI usage metrics (`DO_NOT_TRACK=1` / `CYPHERLITE_TELEMETRY=0` also work)
+- `cypherlite clone [--wal-dir DIR] [--to-snapshot-format F] SOURCE DEST` — copy a database into a new store and exit, covering the full dir/`.cl` matrix: each side's format is inferred from its path (a `.cl` suffix names a single-file bundle), so dir → dir, dir → `.cl`, `.cl` → dir, and `.cl` → `.cl` all work with no direction flag. The source is opened read-only and never written (`--wal-dir` refused with a `.cl` source, `:memory:` refused on both sides), an existing destination is refused, the destination keeps the source snapshot codec unless `--to-snapshot-format parquet|json` transcodes it, and success prints nothing
+- `cypherlite info --database PATH [--json]` — print store metadata from a cold, bounded read (no open, no lock, no WAL replay — safe beside a live writer) and exit: layout (native directory or `.cl` bundle), snapshot codec and format version, checkpoint LSN and commit timestamp, total size on disk, WAL segments past the checkpoint, checkpoint-time node/rel counts, and the index/constraint catalog; `--json` prints one object
+- `cypherlite run fs-to-graph [DIR] [-d/--database PATH] [--max-content-bytes N] [--include-hidden] [--ignore-patterns PAT]` — import a directory tree into a graph (after `cypherlite extension install fs-to-graph` from the signed channel; the old `lab` namespace is retired and the importers are first-party extension packages driven by the `run` host); every directory becomes `(:Folder {path, name, depth})`, every file `(:File {path, name, extension, size_bytes, content?})`, children linked `(:Folder)-[:CONTAINS]->(:Folder|:File)`; nodes `MERGE`d on `path` so re-imports are idempotent; content captured only up to 65536 bytes per file by default; database defaults to `:memory:`
+
+## Key flags
+
+`-h/--help`, `--version`, `-d/--database PATH` (store path: directory, `.cl` bundle, or `:memory:`, the default), `--json`, `--csv`, `--markdown`, `--toon`, `--noheader`, `--mode M` (table|csv|json|jsonl|envelope|markdown|cypher|toon|speedscope — speedscope exports a `PROFILE` plan tree as one speedscope JSON document for speedscope.app, and errors on a plain query or `EXPLAIN`), `--format M` (alias of `--mode`), `--pretty` (indent JSON even when piped — piped JSON is compact one-line by default, indented on a terminal), `--width N` (wrap the human table to N display columns, cells wrapping over lines; default terminal width / `COLUMNS`, else natural width), `--timeout DURATION` (per-statement wall-clock bound: 500ms, 10s, 2m; bare number = seconds; `0` disables; a timed-out statement exits `7` with `code: "timeout"`), `--param N=V` (repeatable, JSON scalars), `--fetch-params N=SRC` (fetch URL / read file, bind JSON as `$N`, repeatable), `-c/--command Q`, `--max-rows N` (rows printed per statement; `0` unlimited), `--snapshot-format F` (parquet|json|markdown), `--markdown-body-properties LIST` (markdown vault: the node properties rendered as each note's body; `Label=LIST` per label), `--wal-dir DIR`, `--checkpoint-interval-secs N`, `--logical-graph-size-limit SIZE` (live graph + index cap, bytes or mb/mib/gb/gib; `0`/unset unlimited; `CYPHERLITE_LOGICAL_GRAPH_SIZE_LIMIT`), `--concurrent-logical-workspace-limit SIZE` (shared query workspace pool; a positive value turns admission on, `0` rejected; `CYPHERLITE_CONCURRENT_LOGICAL_WORKSPACE_LIMIT`; replaces the removed `--token-admission`), `--durability-mode M` (WAL durability: full|everysecond|snapshot, default full), `--load-csv-dir PATH` (allowed LOAD CSV directory, default denied), `--read-only[=FRESH]` (open without writing or checkpointing; FRESH is `snapshot`, the default, or `live` — tail the WAL of a native directory, the former `--follow`), `--load SOURCE` (load a store's content from a `.cl` path, a directory, or an https URL — into `:memory:` as the in-memory store with the source released, or cloned into a new `--database PATH`), `--namespace NAME` (session namespace: neo4j|system|system_ontologies, default neo4j). Flags accept single- and double-dash; `--` ends flag parsing. `--version --json` prints one `{"arch","license","name","os","version"}` JSON line (the text form names the binary's Apache 2.0 license on a second line). An unknown flag close to a real one gets a `Did you mean '--read-only'?` suggestion before the usage line; a parse error whose first word is a near-miss of a command gains a `did you mean "query"?` line under the error. `--help` and every command's help end with one or two examples (`CYPHERLITE_HELP_EXAMPLES=0` hides them). Exit codes: `0` success, `2` usage error, `6` rejected statement (syntax, semantic or type error, including a write on a `--read-only` database), `5` write conflict or store locked by another opener, `7` statement timed out (`--timeout`), `1` other runtime failure. In `json`, `jsonl` and `envelope` modes a failure also prints `{"error":{code,exit_code,kind,message,retryable,…}}` on stdout; a failed multi-statement run reports `statement N of M failed; … completed and committed; … not run` on stderr and adds `statement`, `statements`, `committed` to the error object. A batch write statement (one-shot or piped, never the interactive shell) that applies no change prints `note: write statement changed nothing; the graph is unchanged` on stderr, and a `.commit` whose transaction applied nothing prints its own note — stdout and exit codes are unchanged. `cypherlite <COMMAND> --help` prints a command's own synopsis and flags.
+
+Row cap: without `--max-rows` or `CYPHERLITE_MAX_ROWS`, a statement prints at most 100 rows when an agent harness is detected (Claude Code, Codex, Cursor, Gemini CLI, …) and stdout is not a terminal — it warns on stderr and still exits `0`; `--max-rows 0` or `CYPHERLITE_MAX_ROWS=0` lifts it; any explicit value is honored everywhere. The cap limits what is printed, not what the engine computes — bound the work with a Cypher `LIMIT`, bound the output with `--max-rows`. Under a detected agent harness a piped run's default output format is `toon` instead of `jsonl` (an explicit `--mode`/shortcut always overrides).
+
+## Shell dot-commands
+
+`.help`, `.quit`/`.exit`, `.begin`/`.commit`/`.rollback` (explicit transactions; default is auto-commit; exiting with one open rolls it back with a warning — batch modes exit 1), `.checkpoint`, `.info` (store metadata plus exact live node/rel counts and the index/constraint catalog), `.timer on|off`.
+
+## Cypher
+
+100% openCypher TCK 2024.3 — 3,892 / 3,892 scenarios pass under a strict run (error class, error phase, side effects) enforced in CI. Plus full GQL alignment and the Cypher 25 feature set: reading/writing clauses (`MATCH`, `OPTIONAL MATCH`, `WHERE`, `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, `FOREACH`, `INSERT`), composition (`WITH`, `UNWIND`, `UNION`, `CALL {}` subqueries, subquery expressions, map/list comprehensions), quantified path patterns and path selectors, label expressions, string interpolation (`s'…'`), `GROUP BY` subclause, UUID and graph value types, schema DDL (indexes, constraints, `CREATE/SHOW`, `SHOW PROCEDURES`), `CALL db.schema.visualization()` returning the inferred schema graph for Neo4j Browser–style clients, 100+ built-in functions, `CYPHER 5`/`CYPHER 25` prefixing, unquoted Unicode identifiers (CYPHER 25 — `RETURN 1 AS café`, `MATCH (n:Ärzte)`, `$größe`; code-point-exact, no normalization), and any keyword parses unquoted as an alias, variable, or map key (`WITH 1 AS a RETURN a AS as`, `{as: 1}`).
+
+`EXPLAIN <statement>` renders the plan tree with per-operator row estimates; `PROFILE <statement>` runs the statement (its own columns and rows unchanged) and adds measured per-operator rows, time, db hits (a `Reads` column breaks them into hops / neighbor walks / node reads), and memory bytes, marks an operator that never ran in an `Executed` column, names a walking operator's chosen start in `Details`, plus typed warnings on the tree — `CartesianProduct`, `AllNodesScan` (label-less scan while a label index exists), and `EstimationMiss` (a 10× estimate overshoot). A scan-shaped `MATCH` (single labelled node pattern, no traversal, property-comparison `WHERE`) executes as batch operators over columnar chunks — PROFILE marks such a clause `[batched]` in `Details`, with `[zone-skips N]` when per-column zone maps (min/max + null-presence) skipped a conjunct's evaluation; the same metrics ride the `cypherlite.plan/v1` document as `batched` / `zone_skips`.
+
+`EXPLAIN` and `PROFILE` also derive Neo4j-style query notifications (ADR-0363): twelve kinds — operator-scoped (`CartesianProduct`, `UnboundedVariableLengthPattern`, `AllNodesScan`, `MissingIndex`, `EagerAggregation`, and on `PROFILE` only `EstimationMiss`) and statement-scoped (`UnknownLabelWarning` 01N50, `UnknownRelationshipTypeWarning` 01N51, `UnknownPropertyKeyWarning` 01N52, `DeprecatedFunction`, `DeprecatedProcedure`, `CallSubqueryWithoutScope`) — each with code, GQLSTATUS, severity, category, title, description, and remedy. The CLI renders them per mode: table prints a `Notifications:` block on stderr (plan-warning kinds stay in the plan table's Warnings column), markdown appends the block, toon prints a `notifications:` section, json/jsonl carry them inside the plan object, and envelope always carries the complete list under `notifications` (empty on a plain run, which derives no plan). The Rust `QueryResult` exposes `plan_root()` and `notifications()`; the C ABI JSON handle carries the array too.
+
+Every store has three fixed namespaces — `neo4j` (user data), `system` (no graph data), and `system_ontologies` (read-only). `USE` routes a statement to one of them (unknown name fails 42N00); `SHOW DATABASES` lists the three fixed rows; other database administration commands (`CREATE`/`DROP`/`ALTER DATABASE` otherwise, `START`/`STOP`, aliases) fail with 51N27.
+
+## Vector search
+
+- `vector([0.1, 0.2, 0.3], 3, FLOAT32)` — first-class vector values (FLOAT32, INT8/16/32)
+- `CREATE VECTOR INDEX name FOR (a:Label) ON (a.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 384, `vector.similarity_function`: 'cosine'}}` — HNSW top-k
+- `CALL db.index.vector.queryNodes('name', k, $queryVector) YIELD node, score` — kNN search; brute-force cosine similarity without an index
+- `MATCH (a) SEARCH a IN (VECTOR INDEX name FOR $q WHERE a.topic = 'graph' LIMIT 10)` — the Cypher 25 `SEARCH` clause: engine-side top-k with pre-rank property filtering (filter props must be declared in the index's `WITH [...]`)
+- `CREATE FULLTEXT INDEX …` + `SEARCH … IN (FULLTEXT INDEX … FOR 'terms')` — keyword search over text properties
+- Hybrid: chain `MATCH … SEARCH` clauses through `WITH` (vector then full-text, or reverse) — each search intersects with the already-bound candidates
+- `vector.cosineSimilarity`, `vector.euclideanDistance`, `vector.dotProduct`, `vector.manhattan`, `vector.normalize`, `vector.add`, `vector.subtract`, `vector.dimensions`
+- Hybrid retrieval: vector search + graph traversal in one statement
+
+## Geospatial
+
+- `point({latitude:, longitude:})` (WGS-84, optional `height`), `point({x:, y:})` (Cartesian, optional `z`); `point()` also accepts a node or relationship, read as its property map
+- `point.distance()` (meters, Haversine / Euclidean), `point.withinBBox()`, `point.withinDistance()`
+- `linestring()`, `polygon()`, `spatial.area/length/centroid`, predicates `spatial.contains/within/intersects/overlaps/crosses/touches`
+- `CREATE POINT INDEX name FOR (c:Label) ON (c.location)` — R-tree acceleration
+- WKT and GeoJSON conversion: `spatial.fromWKT/toWKT`, `spatial.fromGeoJSON/toGeoJSON` (multi-geometries included)
+
+## Storage
+
+One write path: commit appends physical redo to the fsync'd WAL, then applies it to the in-memory graph; checkpoints snapshot committed state. One codec per directory (mixing Parquet shards and `graph.json` is an error); the markdown vault codec makes a folder of notes the store itself — one `Label/name.md` per node (frontmatter properties, body text, `[[wikilinks]]`) with a `.cypherlite/` engine sidecar, and hand edits made while the database was closed are picked up at the next open. Layout: `manifest.json`, `nodes/*.parquet` + `relationships/*.parquet` (or `graph.json`), `wal/*.log`; a `.cl` path packs the same tree into one host file. Checkpoint at 64 MiB WAL / 10 000 commits / timer (`--checkpoint-interval-secs`, default 300). `--logical-graph-size-limit` caps the live graph — the working set must fit in RAM. `--read-only` opens an existing store without writing or checkpointing; `--read-only=live` tails the WAL of a native directory database live. `--load SOURCE` loads a store's content from a `.cl` path, a directory, or an https URL — into `:memory:` (turned into the in-memory store, source released) or cloned into a new `--database PATH`. Import/export: `LOAD CSV` (+ `FIELDTERMINATOR`), output flags for CSV/JSON/JSONL export. Stores carry a format version; opening an older store migrates it in place, hands-off.
+
+## Embedding and remote access
+
+- Rust: the `cypherlite` crate — `Database::open("./graph.cl")`, `db.execute(query)`
+- Python: `pip install neo4j-cypherlite` — `cypherlite.connect(":memory:")` (sqlite3-style cursors) or `Database` with `execute_arrow()` for zero-copy Arrow IPC. Cursor rows are `Record`s (dicts with attribute access); cursors carry driver-style conveniences: `data()`, `fetch(n)`, `peek()`, `single()`, `keys()`, `graph()`, `to_df()`, `to_arrow()`. Params accept `uuid.UUID`, `bytes`/`bytearray`, and `tuple`
+- JavaScript (Node): `npm install @neo4j-labs/cypherlite` — wraps the `cypherlite-ffi` C ABI via koffi; the platform binary (`@neo4j-labs/cypherlite-<platform>-<arch>`) is an auto-selected optional dependency; TypeScript types included. `conn.query(cypher, params?)` returns a `Result` with object rows, `stats`, `single()`, `consume()`, and `graph()`; `conn.query` also works as a tagged template — interpolated values become auto-named parameters
+- JavaScript (browser): `npm install @neo4j-labs/cypherlite-wasm` — `new CypherliteDb()` for in-memory, `await CypherliteDb.open("opfs://<name>")` for the durable OPFS store (dedicated worker only)
+- Java: `com.cypherlite:cypherlite` on Maven Central — the plain jar bundles the `cypherlite-ffi` native for all five platforms (darwin/linux arm64+x64, win32-x64) and loads the running platform's copy with no `CYPHERLITE_LIB` or library path; per-platform classifier jars (`osx-aarch_64`, `osx-x86_64`, `linux-aarch_64`, `linux-x86_64`, `windows-x86_64`) carry one platform each. Go: bindings over the `cypherlite-ffi` C ABI (tarballs on the releases page)
+- Result metadata: query results expose the resolved namespace and the query type (`r`/`w`/`rw`/`s`) on every surface — Rust `QueryResult`, the C ABI, Python, JavaScript, Java, Go, and Bolt. The statement's structured plan rides the same surfaces as a `cypherlite.plan/v1` document (operator tree with estimates, PROFILE metrics, and per-operator remedy-bearing warnings; absent on a plain run) — the C ABI's `cypherlite_result_plan_json`, Python `ResultSummary.plan`, JS `result.plan`, Java `Result.getPlan()`, Go `Result.Plan`, the WASM envelope's `plan`, and the MCP tool result.
+- Read-only open is available on every surface — Rust, Bolt, Python, C, JavaScript, Java, Go, and WASM — alongside the CLI's `--read-only`: loads once, refuses writes and checkpoints, never creates a missing store; writable stays the default.
+- Serve: `cypherlite serve --database PATH --http PORT [--mcp PORT] [--bolt PORT] [--read-only[=FRESHNESS]] [--load SOURCE]` embeds the network surfaces in the CLI — HTTP Query API v2, MCP (streamable HTTP), and Bolt on one open store, with shared basic auth (generated token by default, `--auth user:password`, `--auth none`); `--read-only` serves beside the process writing the store, `--read-only=live` (native directories only) tails the WAL and keeps showing its commits, `--load SOURCE` serves a `:memory:`-target load ephemeral or creates a durable target first; `--max-connections N` / `--max-active-queries N` cap shared sessions and concurrent queries (0/omit unlimited)
+- Bolt: `cypherlite-bolt` serves the engine over the Bolt protocol for remote clients. Basic auth is on by default — a token is generated at startup, printed in the banner, and persisted next to a persistent database (`.auth-token`); override with `--auth user:password` / `CYPHERLITE_AUTH`, or `--auth none` to disable. Bolt-over-WebSocket is served on the same `--bind` (on by default; `--no-websocket` opts out, `--ws-allow-origin ORIGIN` widens the auth-dependent Origin policy), so neo4j-browser and the browser build of the official JavaScript driver connect out of the box
+
+## Extensions
+
+Userland commands reach the CLI as extension packages: a directory with an
+`extension.json` manifest and an executable that walks some source and
+writes the graph through MCP tool calls (`tools/call`: `get_schema`,
+`update_schema`, `read_cypher`, `write_cypher`, `batch_cypher`,
+`report_output`). The host owns the store, the caps, the commit policy and
+the exit codes. Author loop: `cypherlite extension init <name> --lang sh|py|ts|rust`
+(scaffold: manifest, inline MCP client, TODO `walk()`) → edit →
+`cypherlite extension check ./<name>` (wiring probe, no install) →
+`extension install <name> --from ./<name>` → `cypherlite run <name> [flags]`.
+Install trust tiers: first-party channel, commit-pinned GitHub releases
+(`--github OWNER/REPO@TAG`, pin recorded in a per-user trust store),
+unsigned URL, local directory. Shipped: `fs-to-graph` (directory tree),
+`git-to-graph` (checkout history), `dungeon` (a MUD-style keep as a playable
+game, every verb a Cypher statement — install from a checkout with
+`extension install dungeon --from extensions/cypherlite-dungeon/package`),
+plus worked `so-to-graph` examples in
+bash/Python/TypeScript (live Stack Exchange import). The same tool surface
+serves any MCP client via `cypherlite serve --mcp stdio` (JSON-RPC per
+line on stdin/stdout) or `--mcp PORT` (streamable HTTP, one JSON-RPC
+message per POST, basic auth via `--auth`). Contract:
+docs/api/extensions/ on GitHub (ADR-0429…0447).
+
+## Docker
+
+`make docker` builds the cypherlite-bolt server image (multi-stage: a
+musl-native Alpine Rust build, a FROM scratch runtime with three static
+binaries and the CA bundle — 65 MB, USER 1000, VOLUME /data, EXPOSE
+7687/7474). `make docker-run` runs it with Bolt on 7687 and a data volume:
+
+```bash
+make docker          # docker build -t cypherlite-bolt:<version> .
+make docker-run      # -p 7687:7687, data in ./target/docker-data:/data
+```
+
+Config resolution, most to least canonical: container args pass straight to
+the server; a mounted `/config/seed.json` (path override CYPHERLITE_CONFIG)
+drives seeding with ordered steps (query, load+query, pull+query); env
+one-liners (CYPHERLITE_QUERY, CYPHERLITE_LOAD + CYPHERLITE_LOAD_QUERY,
+CYPHERLITE_PULL_FROM + CYPHERLITE_PULL_QUERY). INSTANCES=N runs a fleet of
+N servers on consecutive ports from the base --bind port; Ctrl-C and
+docker stop stop it (PID 1 handles SIGINT/SIGTERM). The scratch runtime has
+no shell — the entrypoint is a tiny Rust binary.
+
+## Bolt auth
+
+`cypherlite-bolt` authenticates by default (basic auth on the HELLO token,
+Bolt 4.4): a 128-bit generated token (user `cypherlite`) is printed in the
+startup banner — `docker logs` for the container — and persisted next to a
+persistent database (`<dir>.auth-token`, `<bundle>.cl.auth-token`, mode
+0600, reused across restarts; `:memory:` generates fresh every start).
+`--auth user:password` / `CYPHERLITE_AUTH=user:password` presets a
+credential; `--auth none` disables validation. Wrong or missing
+credentials get `Neo.ClientError.Security.Unauthorized` and the connection
+closes; no message runs before a validated HELLO. TLS (server cert, mTLS)
+and connection caps/timeouts are also available — see
+`docs/api/bolt/spec.md`.
+
+## Cookbook
+
+Task-shaped, tested recipes — entity resolution, nearby places, dependency
+blast radius, hybrid recall (vector + full-text + RRF), long-term agent
+memory, and more — each step runnable in the browser:
+
+- Cookbook: https://neo4j-labs.github.io/cypherlite/cookbook/
+- Cookbook llms.txt: https://neo4j-labs.github.io/cypherlite/cookbook/llms.txt
+
+## Links
+
+- Homepage: https://neo4j-labs.github.io/cypherlite/
+- GitHub: https://github.com/neo4j-labs/cypherlite
+- Issues: https://github.com/neo4j-labs/cypherlite/issues
+- TCK compliance: https://github.com/neo4j-labs/cypherlite/blob/main/docs/tck/compliance.md
+- Architecture decisions: https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/
