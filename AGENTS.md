@@ -49,11 +49,10 @@ look-alike of an existing project); its module and command are `aip`. The runtim
 |---|---|
 | `pyproject.toml` | the `agent-instruction-protocol` package and the uv workspace root (`[tool.uv.workspace] members = ["packages/*"]`); `testpaths` lists both packages' tests |
 | `src/aip/client/` | the `aip` command (`cli.py`), the local runner, the executor that runs scripts and asks the decision model, the resolver, the HTTP client; `aip-runtime/SKILL.md` is the bundled copy of the runtime skill |
-| `src/aip/model/` | the execution engine: steps, types, the environment a run carries, the procedure graph |
+| `src/aip/model/` | the execution engine: `procedure.py` reads a bundle's graph behind a Relate connection (one Cypher query per thing a step needs; `Procedure.load(bundle)` puts a verified bundle in an in-memory store), `steps.py` is what each step kind does, `engine.py` the run loop (`Engine`, `Run`, pauses, the record), `types.py` the type checks and the error kinds, `answers.py` the answer objects of spec 2.4, `resolver.py` the decision-model interface and the scripted test resolver, `cache.py` the files unpacked once per bundle id, `environment.py` the `Requires` check |
 | `src/aip/server/` | `aip server`: the FastAPI app, catalog search, run records, governance, and `backends/` (Neo4j, filesystem) |
-| `src/aip/spec/` | loads a skill folder through `aip_spec` into the runtime's model |
 | `src/aip/sdk.py` | `aip.Client`, the runtime as a library; the CLI is a thin wrapper over it (`docs/sdk.md`) |
-| `tests/` | the runtime's tests; `tests/server/` drives the HTTP API; the Neo4j backend tests skip unless `NEO4J_URI` is set |
+| `tests/` | the runtime's tests: `test_engine.py` is the engine's (skips without Relate); the 0.8 CLI, SDK and server tests are listed in `conftest.py` and not collected until R3 and S1 rewrite them; `tests/server/` drives the HTTP API; the Neo4j backend tests skip unless `NEO4J_URI` is set |
 | `packages/aip-spec/src/aip_spec/` | **where the language lives**: `keywords.py` (every keyword with its aliases, the executable copy of the spec's glossary; the type vocabulary), `lexer.py`, `parser.py` (recursive descent; `ParseError` in `errors.py`), `syntax.py` (the tree every later pass reads), `checker.py` (every check of spec 2.2 to 2.5 as diagnostics; `CODES` is the spec's code table), `graph.py` (the bundle's graph, spec 3; the schema is `docs/language/bundle.md`), `bundle.py` (compile a folder, the bundle id, write, read with verification, export), `relate.py` (the one module that imports the engine, `relate` or `cypherlite`, and knows the `.rl` suffix), `formatter.py` (canonical form), `cli.py` (`aip-spec compile`, `export`, `fmt`), `resources.py` (finds the example programs and, for now, the `aip-compile` skill in a checkout or a wheel), `agents.py` (the agent skills directories). `LANGUAGE_VERSION` is in `language.py` |
 | `editors/vscode/` | the VS Code extension: the grammar (`syntaxes/`), `src/compiler.js` (runs `aip compile --check --json --stdin`, no `vscode` import) and `src/extension.js` (squiggles, status bar); `npm install && npm run build && npm test` (esbuild; node's test runner over the tokenizer harness and a one-error fixture, against `uv run aip`); `dist/` and `node_modules/` are not committed |
 | `scripts/` | `install-relate.sh` installs the pinned Relate wheel (not on PyPI; see `docs/language/sources.md`); `fresh-venv.sh` is L3's proof, a fresh venv compiling an example, run by CI when it has the release token |
@@ -97,7 +96,7 @@ places below and change them in the same commit; the drift tests catch some, not
 
 | Where | What to change |
 |---|---|
-| `src/aip/model/steps.py` | the step's behaviour; `procedure.py` (`resolve`) walks routers, `engine.py` drives the loop |
+| `src/aip/model/steps.py` | the step's behaviour; `engine.py` drives the loop, writes the pause and the record; `procedure.py` reads the graph and changes only when `docs/language/bundle.md` does |
 | `src/aip/server/app.py` | the server's own `resolve` call sites (`execute`, `peek`) mirror the engine |
 | `docs/language/spec.md` and `docs/language/runtime.md` | the language and what running it requires: the same rule in words. This is the language: it moves `LANGUAGE_VERSION` unless the release is still unreleased |
 | `skills/aip-runtime/SKILL.md` and `src/aip/client/aip-runtime/SKILL.md` | the runtime skill, both copies, including the worked example at the end (replaced by one `aip` skill at K1) |

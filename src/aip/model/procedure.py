@@ -1,141 +1,302 @@
-"""The whole graph and the single server operation, `Procedure.run`."""
+"""The compiled procedure as the runtime reads it: a bundle's graph behind a Relate connection,
+one Cypher query per thing a step needs (spec 4; `docs/language/runtime.md`, Loading).
+
+`Procedure.load(bundle)` writes a verified bundle into an in-memory Relate store and answers
+from there; `Procedure(conn, bundle_id)` reads the same graph from any store `aip_spec.write_graph`
+wrote it to, a server's catalog included, since every node is matched by `{bundle_id, id}`. The
+queries are the schema of `docs/language/bundle.md` read back; nothing here decides what a step
+means, only what the bundle says about it. A step is read once per run and kept; the graph never
+changes under a run.
+
+A Relate connection belongs to the thread that opened it, so a `Procedure` is used on one thread."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List
+from typing import Any
 
-from aip.model.environment import Requires
-from aip.model.resources import ResourceLoader
-from aip.model.steps import (
-    BaseStep, Decision, EndStep, Execution, Meta, Node, Router, Start, StepResponse, answered_by_hand, describe_next,
-)
-from aip.model.types import JSON, project, validate_input, validate_output
+from aip_spec import Bundle, FileEntry, write_graph
+from aip_spec.graph import PROCEDURE_ID
+
+from aip.model.types import JSON
+
+STEP_KINDS = ("Start", "Decide", "Route", "Aggregate", "Execute", "Task_Agent", "End")
+FLOW_TYPES = ("NEXT", "CONTINUES", "AGAIN", "BRANCH", "BELOW")
 
 
-@dataclass(kw_only=True)
-class Procedure:
-    """
-    The whole graph. Binds meta, loader, and interpreter to every reachable node and
-    exposes the single server operation, `run`.
-
-    start: the `Start` node: the procedure's inputs, and the first runnable step after it
-    python: interpreter for `python` scripts run in this process; None is this process's own
-    requires: the skill's environment declaration, checked before the first Execution runs
-    """
-    meta: Meta
-    start: Start
-    loader: ResourceLoader | None = None
-    python: Path | None = None
-    requires: Requires | None = None
-    nodes: Dict[str, Node] = field(default_factory=dict, init=False)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.start, Start):
-            raise ValueError(f"The start of {self.meta.name!r} must be a Start node, not {type(self.start).__name__}")
-        self._walk(self.start)
-
-    def _walk(self, node: Node | None) -> None:
-        if node is None:
-            return
-        if node.name in self.nodes:
-            if self.nodes[node.name] is not node:
-                raise ValueError(f"Duplicate step name {node.name!r}")
-            return
-        self.nodes[node.name] = node
-        if isinstance(node, BaseStep):
-            if node.meta is None:
-                node.meta = self.meta
-            if node.loader is None:
-                node.loader = self.loader
-            if isinstance(node, Execution) and node.python is None:
-                node.python = self.python
-            if isinstance(node, Execution) and node.requires is None:
-                node.requires = self.requires
-            self._walk(node.inputsTo)
-        elif isinstance(node, Router):
-            if len(node.branches) < 2:
-                raise ValueError(f"Router {node.name!r} needs at least two branches")
-            for target in node.branches.values():
-                self._walk(target)
-            if node.confidence is not None:
-                self._walk(node.confidence.to)
+@dataclass(frozen=True)
+class Read:
+    """A `READS` edge: the key, its declared type, the field after it (`tone` in
+    `triage_decision.tone`), and whether it is an interpolation rather than a `Read`."""
+    key: str
+    type: str | None
+    field: str | None = None
+    interpolated: bool = False
 
     @property
-    def end(self) -> EndStep | None:
-        return next((n for n in self.nodes.values() if isinstance(n, EndStep)), None)
+    def path(self) -> list[str]:
+        return [self.key, *self.field.split(".")] if self.field else [self.key]
+
+    @property
+    def dotted(self) -> str:
+        return ".".join(self.path)
+
+    @property
+    def name(self) -> str:
+        """The name the step sees the value under: the last segment of the path (spec 2.4)."""
+        return self.path[-1]
+
+
+@dataclass(frozen=True)
+class Produce:
+    key: str
+    type: str | None
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class Flow:
+    """An outgoing flow edge: `NEXT`, `CONTINUES`, `AGAIN`, `BRANCH` (with `value`) or `BELOW`
+    (with `below`); `to` is the target node's id, `continues` marks a branch to `Continue`."""
+    type: str
+    to: str
+    value: str | None = None
+    below: float | None = None
+    continues: bool = False
+
+
+@dataclass(frozen=True)
+class Question:
+    name: str
+    type: str
+    labels: list[str] | None
+    instruction: str
+    criteria: list[tuple[str, str]]
+    order: int
+
+
+@dataclass(frozen=True)
+class Aggregation:
+    name: str
+    mode: str
+    source: list[str]
+    operator: str | None
+    value: str | None
+    confidence_above: float | None
+    order: int
+
+    @property
+    def dotted(self) -> str:
+        return ".".join(self.source)
+
+
+@dataclass(frozen=True)
+class FileUse:
+    """A `RUNS`, `PROMPTED_BY` or `USES` edge to a file."""
+    relation: str
+    path: str
+    description: str | None = None
+
+    @property
+    def folder(self) -> str:
+        return self.path.split("/", 1)[0]
+
+    @property
+    def stem(self) -> str:
+        return self.path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+@dataclass
+class Step:
+    """One step as the graph describes it."""
+    id: str
+    name: str
+    kind: str
+    description: str
+    properties: JSON
+    reads: list[Read] = field(default_factory=list)
+    produces: list[Produce] = field(default_factory=list)
+    flows: list[Flow] = field(default_factory=list)
+    questions: list[Question] = field(default_factory=list)
+    aggregations: list[Aggregation] = field(default_factory=list)
+    files: list[FileUse] = field(default_factory=list)
+
+    @property
+    def declared_reads(self) -> list[Read]:
+        """The `Read` clause: what the step is given (interpolations are reads for lineage, not data)."""
+        return [r for r in self.reads if not r.interpolated]
+
+    @property
+    def next(self) -> Flow | None:
+        found = [f for f in self.flows if f.type in ("NEXT", "CONTINUES", "AGAIN")]
+        return found[0] if found else None
+
+    @property
+    def branches(self) -> list[Flow]:
+        return [f for f in self.flows if f.type == "BRANCH"]
+
+    @property
+    def check(self) -> Flow | None:
+        found = [f for f in self.flows if f.type == "BELOW"]
+        return found[0] if found else None
+
+    def produced_key(self) -> str | None:
+        """The one key a `Decide` or `Aggregate` writes."""
+        return self.properties.get("produces")
+
+    def file(self, relation: str) -> FileUse | None:
+        found = [f for f in self.files if f.relation == relation]
+        return found[0] if found else None
+
+    def uses(self, folder: str) -> list[FileUse]:
+        return [f for f in self.files if f.relation == "USES" and f.folder == folder]
+
+
+class Procedure:
+    """A bundle's graph behind a connection. `bundle_id` scopes every query."""
+
+    def __init__(self, conn, bundle_id: str, *, owns_connection: bool = False):
+        self.conn = conn
+        self.bundle_id = bundle_id
+        self._owns = owns_connection
+        self._steps: dict[str, Step] = {}
+        self._labels: dict[tuple[str, ...], list[str] | None] = {}
+        header = self._one("MATCH (p:Procedure {bundle_id: $b, id: $id}) RETURN properties(p) AS p", id=PROCEDURE_ID)
+        if header is None:
+            raise ValueError(f"the store holds no procedure with bundle id {bundle_id}")
+        self.header: JSON = {k: v for k, v in header["p"].items() if k != "source"}
+
+    @classmethod
+    def load(cls, bundle: Bundle) -> "Procedure":
+        """A verified bundle loaded into an in-memory Relate store."""
+        from aip_spec import relate
+
+        conn = relate.connect(":memory:", read_only=False)
+        write_graph(conn, bundle.graph, bundle.id)
+        return cls(conn, bundle.id, owns_connection=True)
+
+    def close(self) -> None:
+        if self._owns and self.conn is not None:
+            self.conn.close()
+            self.conn = None
+
+    def __enter__(self) -> "Procedure":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    # ------------------------------------------------------------ queries
+
+    def _rows(self, query: str, **params) -> list[dict]:
+        return [dict(r) for r in self.conn.execute(query, {"b": self.bundle_id, **params}).fetchall()]
+
+    def _one(self, query: str, **params) -> dict | None:
+        rows = self._rows(query, **params)
+        return rows[0] if rows else None
+
+    @property
+    def name(self) -> str:
+        return self.header["name"]
+
+    @property
+    def requires(self) -> tuple[str, str | None] | None:
+        """`Requires <interpreter> <version>`, or None when the header has none."""
+        interpreter = self.header.get("requires_interpreter")
+        return (interpreter, self.header.get("requires_version")) if interpreter else None
+
+    @property
+    def start(self) -> str:
+        row = self._one("MATCH (p:Procedure {bundle_id: $b})-[:STARTS_AT]->(s) RETURN s.id AS id")
+        return row["id"]
+
+    def step(self, id: str) -> Step:
+        """The step with node id `id` (`step:<name>`), read once."""
+        if id not in self._steps:
+            self._steps[id] = self._read_step(id)
+        return self._steps[id]
+
+    def step_named(self, name: str) -> Step:
+        return self.step(f"step:{name}")
+
+    def is_loop(self, id: str) -> bool:
+        return id.startswith("loop:")
+
+    def _read_step(self, id: str) -> Step:
+        row = self._one("MATCH (s:Step {bundle_id: $b, id: $id}) RETURN properties(s) AS p", id=id)
+        if row is None:
+            raise KeyError(f"no step {id} in bundle {self.bundle_id}")
+        props = dict(row["p"])
+        step = Step(id, props["name"], props["kind"], props.get("description") or "", props)
+        step.reads = [Read(r["name"], r.get("type"), r.get("field"), bool(r.get("interpolated")))
+                      for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[r:READS]->(k:Key) "
+                                          "RETURN k.name AS name, k.type AS type, r.field AS field, r.interpolated AS interpolated, "
+                                          "r.line AS line, r.column AS column ORDER BY r.line, r.column", id=id)]
+        step.produces = [Produce(r["name"], r.get("type"), r.get("description"))
+                         for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:PRODUCES]->(k:Key) "
+                                             "RETURN k.name AS name, k.type AS type, k.description AS description, "
+                                             "e.line AS line, e.column AS column ORDER BY e.line, e.column", id=id)]
+        step.flows = [Flow(r["type"], r["to"], r["p"].get("value"), r["p"].get("below"), bool(r["p"].get("continues")))
+                      for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:NEXT|CONTINUES|AGAIN|BRANCH|BELOW]->(t) "
+                                          "RETURN type(e) AS type, properties(e) AS p, t.id AS to", id=id)]
+        step.flows.sort(key=lambda f: (f.type, f.value or ""))
+        step.questions = [Question(q["name"], q["type"], list(q["labels"]) if q.get("labels") else None, q.get("instruction") or "",
+                                   list(zip(q.get("criteria_labels") or [], q.get("criteria_texts") or [])), q["order"])
+                          for q in (r["q"] for r in self._rows(
+                              "MATCH (s {bundle_id: $b, id: $id})-[a:ASKS]->(q:Question) RETURN properties(q) AS q ORDER BY a.order", id=id))]
+        step.aggregations = [Aggregation(a["name"], a["mode"], a["source"].split("."), a.get("operator"), a.get("value"),
+                                         a.get("confidence_above"), a["order"])
+                             for a in (r["a"] for r in self._rows(
+                                 "MATCH (s {bundle_id: $b, id: $id})-[e:AGGREGATES]->(a:Aggregation) RETURN properties(a) AS a "
+                                 "ORDER BY e.order", id=id))]
+        step.files = [FileUse(r["type"], r["path"], r.get("description"))
+                      for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:RUNS|PROMPTED_BY|USES]->(f:File) "
+                                          "RETURN type(e) AS type, f.path AS path, e.description AS description, "
+                                          "e.line AS line, e.column AS column ORDER BY e.line, e.column", id=id)]
+        return step
+
+    def files(self) -> list[FileEntry]:
+        """Every file the bundle carries, with its bytes."""
+        rows = self._rows("MATCH (f:File {bundle_id: $b}) RETURN properties(f) AS f ORDER BY f.path")
+        return [FileEntry.from_properties(r["f"]) for r in rows]
+
+    def file_text(self, path: str) -> str:
+        row = self._one("MATCH (f:File {bundle_id: $b, path: $path}) RETURN properties(f) AS f", path=path)
+        if row is None:
+            raise KeyError(f"no file {path} in bundle {self.bundle_id}")
+        return FileEntry.from_properties(row["f"]).data.decode("utf-8")
+
+    def key_type(self, name: str) -> str | None:
+        row = self._one("MATCH (k:Key {bundle_id: $b, name: $name}) RETURN k.type AS type", name=name)
+        return row["type"] if row else None
+
+    def labels_of(self, path: list[str]) -> list[str] | None:
+        """The labels of the answer a dotted path names (`triage_decision.tone` → the question's
+        labels), following a collected list to its per-pass key; None for a `true_or_false`, a
+        script's answer, or an unknown path."""
+        key = tuple(path)
+        if key not in self._labels:
+            self._labels[key] = self._find_labels(list(path))
+        return self._labels[key]
+
+    def _find_labels(self, path: list[str]) -> list[str] | None:
+        root, rest = path[0], path[1:]
+        type = self.key_type(root)
+        if type == "list":
+            row = self._one("MATCH (l:Loop {bundle_id: $b})-[:PRODUCES]->(:Key {name: $name}), (l)-[:COLLECTS]->(k:Key) "
+                            "RETURN k.name AS name", name=root)
+            return self._find_labels([row["name"], *rest]) if row else None
+        if type == "decision" and rest:
+            row = self._one("MATCH (d:Decide {bundle_id: $b})-[:PRODUCES]->(:Key {name: $name}), (d)-[:ASKS]->(q:Question {name: $q}) "
+                            "RETURN q.labels AS labels", name=root, q=rest[0])
+            return list(row["labels"]) if row and row.get("labels") else None
+        return None
 
     def describe(self) -> JSON:
-        """For `aip info`: meta, the start step and its inputs, the end shape, every step's kind,
-        `fallback` and the confidence keys per decision, and the check per router."""
-        return {
-            "meta": {"name": self.meta.name, "description": self.meta.description, "version": self.meta.version},
-            "start": describe_next(self.start),
-            "end": describe_next(self.end),
-            "steps": {name: node.kind for name, node in self.nodes.items()},
-            "decisions": {name: {"fallback": node.fallback, "confidence": list(node.confidence)}
-                          for name, node in self.nodes.items() if isinstance(node, Decision)},
-            "routers": {name: {"branch_on": node.branch_on, "confidence": None if node.confidence is None else {
-                            "key": node.confidence.key, "below": node.confidence.below, "to": node.confidence.to.name}}
-                        for name, node in self.nodes.items() if isinstance(node, Router)},
-        }
+        """The header and every step's kind, for `info`."""
+        rows = self._rows("MATCH (s:Step {bundle_id: $b}) RETURN s.name AS name, s.kind AS kind ORDER BY s.line")
+        return {"name": self.name, "bundle_id": self.bundle_id, "description": self.header.get("description", ""),
+                "steps": {r["name"]: r["kind"] for r in rows}}
 
-    def resolve(self, after: str | None, payload: JSON, history: List[JSON] | None = None) -> tuple[Node | None, List[JSON]]:
-        """
-        The node that receives `payload` after step `after`, walking routers on the
-        payload. Returns the node and the router history entries the walk produced: each
-        records the key it read and where it went, and, when the router has a confidence
-        check, the key it checked and `confidence: {fired, reason}` beside the branch taken.
-        `history` is the run so far: a router's check is skipped (`reason: manual`) when the
-        branch key's latest producer is a decision the client answered by hand.
-        """
-        if after is None:
-            node: Node | None = self.start
-        else:
-            prev = self.nodes.get(after)
-            if not isinstance(prev, BaseStep):
-                raise KeyError(f"No runnable step named {after!r}")
-            node = prev.inputsTo
 
-        entries: List[JSON] = []
-        while isinstance(node, Router):
-            by_hand = node.confidence is not None and answered_by_hand(history or [], node.branch_on)
-            target = node.route(payload, by_hand)
-            checked = node.check(payload, by_hand)
-            entry: JSON = {"step": node.name, "kind": node.kind, "input": {}, "result": {"to": target.name}}
-            if checked is not None:
-                if not by_hand:
-                    entry["input"][node.confidence.key] = payload.get(node.confidence.key)
-                entry["result"]["confidence"] = checked
-            if node.branch_on in payload and not (checked or {}).get("fired"):
-                entry["input"][node.branch_on] = payload[node.branch_on]
-            entries.append(entry)
-            node = target
-        return node, entries
-
-    def run(self, after: str | None, payload: JSON, history: List[JSON] | None = None) -> StepResponse:
-        """
-        The single server operation.
-
-        after:   name of the step the client just completed, or None to start
-        payload: the full state, including the client's answer to `after` when it paused
-        history: the history the client carried in
-
-        The state must hold `after`'s outputs (a client-task answer or a decision answered
-        by the client is checked here). The end step's result is the state projected to its
-        inputs. With `after` None the start step runs: it checks the start input and hands
-        it on.
-        """
-        if after is not None and isinstance(prev := self.nodes.get(after), BaseStep):
-            validate_output(prev.name, prev.required_outputs(), payload, strict=False)
-        node, entries = self.resolve(after, payload, history)
-        history = [*(history or []), *entries]
-
-        if node is None or isinstance(node, EndStep):
-            end = node or EndStep()
-            validate_input(end.name, end.inputs, payload)
-            final = project(payload, end.inputs) if node is not None else payload
-            history.append({"step": end.name, "kind": end.kind, "input": final, "result": final})
-            return StepResponse(ran=end.name, kind=end.kind, result=final, suggested=final,
-                                next=None, history=history)
-
-        return node.accept(payload, history)
+__all__ = ["Procedure", "Step", "Read", "Produce", "Flow", "Question", "Aggregation", "FileUse", "STEP_KINDS", "FLOW_TYPES"]

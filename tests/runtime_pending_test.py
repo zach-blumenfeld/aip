@@ -1,5 +1,6 @@
-"""The 0.8 runtime's tests wait for the 0.9 runtime; see `conftest.py`. What already works is
-the language's `compile` and `fmt` under the `aip` command, tested here so the command stays importable."""
+"""The 0.8 CLI, SDK and server tests wait for the milestones that rewrite those layers; see
+`conftest.py`. The engine's tests are `test_engine.py`. What already works under the `aip`
+command is the language's `compile` and `fmt`, tested here so the command stays importable."""
 
 import contextlib
 import io
@@ -10,9 +11,9 @@ import pytest
 from aip.client.cli import main
 
 
-@pytest.mark.skip(reason="the 0.8 runtime does not load since aip_spec dropped the 0.8 format (plan L1); "
-                         "R1 replaces src/aip/model and src/aip/spec and brings tests/ back")
-def test_runtime_pending():
+@pytest.mark.skip(reason="the 0.8 CLI, SDK, runner and server tests are not collected: they drive the 0.8 commands over the "
+                         "0.8 model, which R1 replaced; R3 and S1 rewrite them (plan aip-dev#1)")
+def test_cli_and_server_pending():
     pass
 
 

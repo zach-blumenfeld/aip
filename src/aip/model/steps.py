@@ -1,679 +1,428 @@
-"""Step model: state, meta, nodes, and the accept flow."""
+"""What each step kind does, as functions of the graph and the state (spec 2.1, 2.4, 2.5;
+`docs/language/runtime.md`, Steps). The engine (`aip.model.engine`) calls these in order and
+keeps the record; nothing here touches the run's history or cursor.
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, ClassVar, Dict, List, TypeAlias
-import copy
+The state is one JSON object of keys. A step sees its `Read` keys, each under the last segment
+of its path (`Read triage_decision.tone` gives the step `tone`, the one answer; spec 2.4), checked
+against the declared types before it runs. A step's result is checked against its `Produce` keys
+before anything is written; an answer written bare (`true`) is stored as `{"value": true}`
+(`aip.model.types.normalise`), the one normalisation the runtime performs."""
+
+from __future__ import annotations
+
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
-from typesafe_sdk import Choice, Noul, Score, SystemOneResponse, TypeSafeClient
-
-from aip.model.environment import PYTHON, Requires, RequiresUnmet
-from aip.model.resources import Asset, Reference, ResourceLoader, Script
+from aip.model.answers import probability_of
+from aip.model.procedure import Aggregation, Procedure, Question, Step
+from aip.model.resolver import DecisionRequest
 from aip.model.types import (
-    JSON, DataType, InputValidationError, Inputs, OutputValidationError, ScriptFailed, ScriptTimeout,
-    describe_inputs, project, validate_input, validate_output,
+    JSON, VALUE_KIND, InvalidInput, InvalidOutput, NoBranch, ScriptFailed, ScriptTimeout, branch_key, conforms, describe,
+    normalise,
 )
 
-DecisionQuestion: TypeAlias = Noul | Choice | Score
-
-@dataclass
-class State:
-    """
-    What one step sees: the state projected to the step's declared `inputs`, plus the
-    history the client carried in. Built by `accept()`, never persisted server-side.
-    """
-    currentState: JSON = field(default_factory=dict)
-    history: List[JSON] = field(default_factory=list)
-
-
-@dataclass
-class Meta:
-    """Package metadata, owned by the Procedure."""
-    name: str
-    description: str = ""
-    version: str = "0.1.0"
-
-
-@dataclass
-class StepResponse:
-    """
-    What the server returns after running a step.
-
-    ran:       name of the step that ran
-    kind:      "start" | "decision" | "client_task" | "execution" | "end"
-    result:    raw output of the step
-    suggested: the full state after this step: the posted state plus the keys this step
-               produced. The client posts it as the next input (answers merged over it)
-    next:      description of what comes next (see `describe_next`); None at the end
-    history:   the carried-in history plus this step's entry
-    """
-    ran: str
-    kind: str
-    result: JSON
-    suggested: JSON
-    next: JSON | None
-    history: List[JSON]
-
-    def to_dict(self) -> JSON:
-        return {
-            "ran": self.ran, "kind": self.kind, "result": self.result, "suggested": self.suggested,
-            "next": self.next, "history": self.history,
-        }
-
-
-@dataclass(kw_only=True)
-class EndStep:
-    """Terminal node. `inputs` is the shape of the final state the client receives."""
-    kind: ClassVar[str] = "end"
-    name: str = "end"
-    inputs: Inputs = field(default_factory=dict)
-
-
-def branch_key(value: Any) -> str:
-    """Branch keys are YAML strings; collapsed answers are typed. `true`/`false` for a
-    noul, the label for a choice, the level number for a score."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-@dataclass(kw_only=True)
-class ConfidenceCheck:
-    """
-    A router's confidence check, applied before its branches: when `key` is below `below`,
-    absent from the state, or null, the run goes to `to` and the value match is skipped.
-    Unknown confidence is low confidence; nobody invents a number. The check guards a model's
-    answer: when the client answered the branch key by hand (`answered_by_hand`), the check is
-    skipped and the client's own call takes the branch.
-
-    key: a float key in the state, typically a decision's `<question>_confidence`
-    below: the bound, in [0, 1]
-    to: the node the run goes to when the check fires
-    """
-    key: str
-    below: float
-    to: "Node"
-
-
-@dataclass(kw_only=True)
-class Router:
-    """
-    Dumb router: maps the value the client posted under `branch_on` to the next node.
-    Calls no model, has no endpoint. The server walks routers internally after the
-    client's input arrives; the client only sees the branches for schema purposes.
-
-    branch_on: key in the posted input whose value selects the branch
-    branches: branch value -> node; needs two or more
-    confidence: the optional check applied first (`ConfidenceCheck`)
-    """
-    kind: ClassVar[str] = "router"
-    name: str
-    branch_on: str
-    branches: Dict[str, "Node"]
-    confidence: ConfidenceCheck | None = None
-
-    def check(self, payload: JSON, by_hand: bool = False) -> JSON | None:
-        """What the confidence check made of `payload`: `{"fired": bool, "reason": "low" | "absent" |
-        "null" | "manual" | None}`, or None when the router has no check. `reason` is None when it did
-        not fire, and `manual` when it was skipped because the client answered the branch key by hand
-        (`by_hand`): a hand answer has no confidence to check, and the client stands behind it."""
-        if self.confidence is None:
-            return None
-        if by_hand:
-            return {"fired": False, "reason": "manual"}
-        key = self.confidence.key
-        if key not in payload:
-            return {"fired": True, "reason": "absent"}
-        value = payload[key]
-        if value is None:
-            return {"fired": True, "reason": "null"}
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            raise InputValidationError(
-                self.name, [f"confidence key {key}={value!r} is not a number"], invalid=[key])
-        low = value < self.confidence.below
-        return {"fired": low, "reason": "low" if low else None}
-
-    def route(self, payload: JSON, by_hand: bool = False) -> "Node":
-        """The node `payload` goes to: the check's `to` when it fires, else the branch its value selects."""
-        fired = self.check(payload, by_hand)
-        if fired is not None and fired["fired"]:
-            return self.confidence.to
-        if self.branch_on not in payload:
-            raise InputValidationError(self.name, [f"missing routing key {self.branch_on!r}"], missing=[self.branch_on])
-        value = payload[self.branch_on]
-        key = branch_key(value)
-        if key not in self.branches:
-            raise InputValidationError(
-                self.name, [f"{self.branch_on}={value!r} has no branch; options: {list(self.branches)}"],
-                invalid=[self.branch_on])
-        return self.branches[key]
-
-
-@dataclass(kw_only=True)
-class BaseStep(ABC):
-    """
-    A node the server runs. Steps are configuration; run state flows through `accept`.
-
-    name: unique within the procedure; endpoints and history refer to it
-    inputs: the keys this step reads; validated on accept, and the only keys it sees
-    outputs: the keys this step adds to the state; its result is validated against them
-    inputsTo: the node that receives this step's output (a step, a router, or the end)
-    """
-    kind: ClassVar[str] = "step"
-    name: str
-    inputs: Inputs = field(default_factory=dict)
-    outputs: Inputs = field(default_factory=dict)
-    inputsTo: "Node | None" = None
-    loader: ResourceLoader | None = None
-    meta: Meta | None = None
-
-    @abstractmethod
-    def _invoke(self, state: State) -> JSON:
-        """Run the step against the accepted state and return its raw result."""
-
-    def output_types(self) -> Inputs:
-        """The keys this step adds to the state, with their types."""
-        return dict(self.outputs)
-
-    def required_outputs(self) -> Inputs:
-        """The keys the state must hold once this step is answered: its outputs, by default."""
-        return self.output_types()
-
-    def produced(self, result: JSON) -> JSON:
-        """The keys this step's result adds to the state. By default the (validated) result itself."""
-        return dict(result)
-
-    def accept(self, payload: JSON, history: List[JSON]) -> StepResponse:
-        """
-        Validate the posted state against the declared inputs, run the step on just those
-        keys, and merge what it produced back into the full state.
-        """
-        validate_input(self.name, self.inputs, payload)
-        state = State(currentState=project(payload, self.inputs), history=copy.deepcopy(history))
-        began = time.monotonic()
-        result = self._invoke(state)
-        entry = {"step": self.name, "kind": self.kind, "input": state.currentState, "result": result}
-        if isinstance(self, Execution):
-            entry["seconds"] = round(time.monotonic() - began, 3)
-        return StepResponse(
-            ran=self.name,
-            kind=self.kind,
-            result=result,
-            suggested={**payload, **self.produced(result)},
-            next=describe_next(self.inputsTo),
-            history=[*history, entry],
-        )
-
-    def _require_loader(self) -> ResourceLoader:
-        if self.loader is None:
-            raise RuntimeError(f"{type(self).__name__} {self.name!r} needs a ResourceLoader to resolve resources")
-        return self.loader
-
-
-@dataclass(kw_only=True)
-class Start(BaseStep):
-    """
-    Where a run begins. `inputs` are the procedure's inputs, what the client supplies; the
-    step checks them, writes its history entry, and hands the state on to `inputsTo`. It
-    adds nothing of its own.
-    """
-    kind: ClassVar[str] = "start"
-    name: str = "start"
-
-    def _invoke(self, state: State) -> JSON:
-        return {}
-
-
-Node: TypeAlias = BaseStep | Router | EndStep
-
-
-def describe_next(node: Node | None) -> JSON | None:
-    """
-    Client-facing description of the node that receives the next input. Routers are
-    expanded into their branches so the client can see every possible input shape,
-    but the client never resolves them; the server does on the next call.
-    """
-    if node is None:
-        return None
-    if isinstance(node, Router):
-        described = {
-            "step": node.name, "kind": node.kind, "branch_on": node.branch_on,
-            "branches": {value: describe_next(target) for value, target in node.branches.items()},
-        }
-        if node.confidence is not None:
-            described["confidence"] = {"key": node.confidence.key, "below": node.confidence.below,
-                                       "to": describe_next(node.confidence.to)}
-        return described
-    described: JSON = {"step": node.name, "kind": node.kind, "inputs": describe_inputs(node.inputs)}
-    if isinstance(node, Decision):
-        described["questions"] = {name: q.model_dump(exclude_none=True) for name, q in node.questions.items()}
-    return described
-
-
-@dataclass(kw_only=True)
-class Decision(BaseStep):
-    """
-    Runs a SystemOne (TypeSafe / Jev) decision and hands the typed result to the client.
-
-    The declared inputs are the content being evaluated; the criteria live in each
-    question's `instructions`, written by the author. No assets and no framing are injected.
-
-    questions: keyed by name; answers come back under the same names and, after
-               collapse, become state keys of the same name: a decision's outputs
-    confidence: question names whose confidence the step also emits, each as the state key
-                `<question>_confidence`, a float in [0, 1]: the probability the model put on
-                the answer it gave (`confidence()`). A manual answer writes no confidence key.
-    fallback: whether the client may answer by hand when it has no decision model. Off by
-              default: `accept_answers` then rejects a manual attribution.
-    history: send the run history to the decision model too; off unless the author asks
-    client: optional injected TypeSafe client (tests, connection reuse); otherwise one
-            is opened per invoke using TYPESAFE_API_KEY from the environment
-    """
-    kind: ClassVar[str] = "decision"
-    questions: Dict[str, DecisionQuestion] = field(default_factory=dict)
-    confidence: List[str] = field(default_factory=list)
-    fallback: bool = False
-    history: bool = False
-    client: TypeSafeClient | None = None
-
-    ANSWER_TYPES: ClassVar[Dict[str, DataType]] = {
-        "noul": DataType.BOOLEAN, "choice": DataType.STRING, "score": DataType.INTEGER}
-
-    def __post_init__(self) -> None:
-        unknown = [q for q in self.confidence if q not in self.questions]
-        if unknown:
-            raise ValueError(f"Decision {self.name!r} names {unknown} in `confidence`, which are not its questions")
-
-    def render(self, state: State) -> JSON:
-        """Pure projection of state into the JSON `state` sent to Jev: the declared inputs,
-        and the history only when the step asks for it."""
-        payload: JSON = {"state": state.currentState}
-        if self.history and state.history:
-            payload["history"] = state.history
-        return payload
-
-    def output_types(self) -> Inputs:
-        """One key per question, typed by what its answer collapses to, and a float
-        `<question>_confidence` for each question the `confidence` list names."""
-        return {**self.required_outputs(), **{confidence_key(name): DataType.FLOAT for name in self.confidence}}
-
-    def required_outputs(self) -> Inputs:
-        """The answers alone: a confidence key is written by a model and absent after a manual answer."""
-        return {name: self.ANSWER_TYPES[q.type] for name, q in self.questions.items()}
-
-    def _invoke(self, state: State) -> JSON:
-        """
-        Returns the TypeSafe result as a JSON dict:
-            {"model": str,
-             "usage": {"input_tokens", "output_tokens"},
-             "answers": {name: {"type": "noul"|"choice"|"score", ...}}}
-        """
-        if not self.questions:
-            raise ValueError(f"Decision {self.name!r} has no questions to ask")
-        payload = self.render(state)
-        if self.client is not None:
-            result: SystemOneResponse = self.client.system_one(state=payload, questions=self.questions)
-        else:
-            with TypeSafeClient() as client:
-                result = client.system_one(state=payload, questions=self.questions)
-        return result.model_dump(mode="json")
-
-    def accept_answers(self, payload: JSON, history: List[JSON], answers: JSON,
-                       attribution: JSON | None = None) -> StepResponse:
-        """
-        The client resolved the decision: `answers` holds one collapsed value per question (bool
-        for noul, label for choice, int level for score), and `attribution` says how it got them,
-        `{"resolver": "typesafe"|"manual", "model", "confidence": {question: float}|None}`. None
-        is a manual answer. Both are checked and recorded in the history entry. A model's
-        confidence for each question the step's `confidence` list names is also written to the
-        state as `<question>_confidence`; a manual answer writes none, and is rejected when the
-        step does not allow `fallback`.
-        """
-        validate_input(self.name, self.inputs, payload)
-        missing = [q for q in self.questions if q not in answers]
-        if missing:
-            raise OutputValidationError(self.name, [f"missing answers for {missing}"], missing=missing)
-        self.check_answers(answers)
-        attribution = self.check_attribution(manual() if attribution is None else attribution)
-        result = {"answers": {name: answers[name] for name in self.questions}}
-        entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs),
-                 "result": result, "attribution": attribution}
-        scores = attribution["confidence"] or {}
-        emitted = {confidence_key(name): scores[name] for name in self.confidence if name in scores}
-        return StepResponse(
-            ran=self.name, kind=self.kind, result=result,
-            suggested={**payload, **result["answers"], **emitted},
-            next=describe_next(self.inputsTo), history=[*history, entry],
-        )
-
-    def check_attribution(self, attribution: JSON) -> JSON:
-        """The attribution as recorded: a known resolver, a model name, and a confidence in 0..1 for
-        questions of this step. A manual answer has no model and no confidence, and is refused
-        unless the step allows `fallback`; a model's answer must carry a confidence for every
-        question the step emits one for."""
-        errors: List[str] = []
-        if not isinstance(attribution, dict):
-            raise OutputValidationError(self.name, ["attribution must be an object"], invalid=["attribution"])
-        resolver = attribution.get("resolver")
-        if resolver not in RESOLVERS:
-            errors.append(f"attribution.resolver must be one of {list(RESOLVERS)}, got {resolver!r}")
-        model = attribution.get("model")
-        if model is not None and not isinstance(model, str):
-            errors.append("attribution.model must be a string or null")
-        scores = attribution.get("confidence")
-        if scores is not None and not (isinstance(scores, dict) and all(
-                k in self.questions and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1
-                for k, v in scores.items())):
-            errors.append("attribution.confidence must map this step's questions to numbers in 0..1")
-        if resolver == "manual":
-            if model is not None or scores is not None:
-                errors.append("a manual answer has no model or confidence")
-            if not self.fallback:
-                errors.append(f"fallback_not_allowed: decision {self.name!r} does not allow a manual answer "
-                              "(`fallback: false`); it needs a decision model")
-        elif resolver in RESOLVERS and self.confidence:
-            unscored = [q for q in self.confidence if q not in (scores or {})]
-            if unscored:
-                errors.append(f"attribution.confidence must give the confidence of {unscored}, which this step emits")
-        if errors:
-            raise OutputValidationError(self.name, errors, invalid=["attribution"])
-        return {"resolver": resolver, "model": model, "confidence": scores}
-
-    def check_answers(self, answers: JSON) -> None:
-        """Collapsed answers must name only this step's questions and fit each question's type."""
-        validate_output(self.name, self.required_outputs(), {k: v for k, v in answers.items() if k in self.questions},
-                        strict=False)
-        invalid = [key for key in answers if key not in self.questions]
-        errors = [f"undeclared output {key!r} (not a question of this step)" for key in invalid]
-        for name, q in self.questions.items():
-            value = answers[name]
-            if q.type == "choice" and value not in q.criteria:
-                errors.append(f"{name}: {value!r} is not one of {list(q.criteria)}")
-                invalid.append(name)
-            if q.type == "score" and isinstance(value, int) and not 0 <= value < len(q.criteria):
-                errors.append(f"{name}: level {value} is outside 0..{len(q.criteria) - 1}")
-                invalid.append(name)
-        if errors:
-            raise OutputValidationError(self.name, errors, invalid=invalid)
-
-    @staticmethod
-    def collapse(answer: JSON) -> Any:
-        """Discrete value for one answer: noul -> bool, choice -> label, score -> argmax level."""
-        match answer["type"]:
-            case "noul":
-                return answer["noul"] >= 0.5
-            case "choice":
-                return answer["choice"]
-            case "score":
-                return int(max(answer["probabilities"], key=answer["probabilities"].get))
-        raise ValueError(f"unknown answer type {answer['type']!r}")
-
-    def produced(self, result: JSON) -> JSON:
-        """Each answer collapsed to a discrete value under its question name, plus the model's
-        confidence under `<question>_confidence` for each question the step names."""
-        missing = [name for name in self.questions if name not in result["answers"]]
-        if missing:
-            raise OutputValidationError(self.name, [f"no answer for {missing}"])
-        answers = result["answers"]
-        return {**{name: self.collapse(answers[name]) for name in self.questions},
-                **{confidence_key(name): confidence(answers[name]) for name in self.confidence}}
-
-
-def confidence_key(question: str) -> str:
-    """The state key a decision's `confidence` list emits for a question. Fixed, not configurable."""
-    return f"{question}_confidence"
-
-
-def confidence(answer: JSON) -> float:
-    """The probability the model put on its collapsed answer, in [0, 1]: `|2p - 1|` for a noul
-    (https://docs.typesafe.ai/confidence#noul), a choice's or score's own confidence. The one
-    number recorded in the history attribution and written to the state."""
-    if answer["type"] == "noul":
-        return round(abs(2 * answer["noul"] - 1), 4)
-    return answer["confidence"]
-
-
-RESOLVERS = ("typesafe", "manual")
-
-
-def answered_by_hand(history: List[JSON], key: str) -> bool:
-    """Whether the latest producer of `key` in `history` is a decision answered with no model
-    (`attribution.resolver` of `manual`). A later script, task or start input that wrote the key
-    makes it theirs again; a key no entry produced is not a hand answer."""
-    for entry in reversed(history):
-        result = entry.get("result") or {}
-        match entry.get("kind"):
-            case "decision":
-                if key in (result.get("answers") or {}):
-                    return (entry.get("attribution") or {}).get("resolver") == "manual"
-            case "client_task":
-                if key in (result.get("answer") or {}):
-                    return False
-            case "router" | "end":
-                continue
-            case _:
-                if key in result:
-                    return False
-    return False
-
-
-def manual() -> JSON:
-    """The attribution of a decision answered with no model: by the client, or the agent at a pause."""
-    return {"resolver": "manual", "model": None, "confidence": None}
-
-
-class _SafeMap(dict):
-    """format_map helper: unknown placeholders are left intact instead of raising."""
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
-@dataclass(kw_only=True)
-class ClientTask(BaseStep):
-    """
-    A step the client performs itself (text generation, synthesis, reasoning). Fallback
-    for anything not expressible as a Decision or Execution.
-
-    The template is the whole task: prose rendered at invoke time with `{key}`
-    placeholders drawn from the step's declared inputs, plus `{assets[name]}` and
-    `{meta.name}`. Nothing is prepended to it. The client does the task and answers with
-    the step's `outputs`.
-
-    template: the asset holding the task template
-    assets: extra eager resources available to the template as {assets[name]}
-    references: lazy resources; only uri + description are handed to the client
-    """
-    kind: ClassVar[str] = "client_task"
-    template: Asset
-    assets: List[Asset] = field(default_factory=list)
-    references: List[Reference] = field(default_factory=list)
-
-    def render(self, state: State) -> str:
-        """Pure projection of the template over state, assets, and meta."""
-        loader = self._require_loader()
-        mapping = _SafeMap(state.currentState)
-        mapping["assets"] = loader.load_all(self.assets)
-        mapping["meta"] = self.meta
-        return loader.load(self.template).format_map(mapping)
-
-    def _invoke(self, state: State) -> JSON:
-        """Hands the rendered task, the reference index, and the keys to answer with to the client."""
-        return {"task": self.render(state), "references": [r.summary() for r in self.references],
-                "expects": describe_inputs(self.outputs)}
-
-    def produced(self, result: JSON) -> JSON:
-        """Nothing yet: the client's answer adds the outputs, checked when it is posted."""
-        return {}
-
-
 WORKDIR = "AIP_WORKDIR"
+PYTHON = "python"
+
+_FIELD = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
+_ASSET = re.compile(r"\{assets\[([^\]]+)\]\}")
 
 
-def run_script(step: str, script: str, argv: List[str], stdin: JSON, cwd: Path, timeout: float | None,
-               workdir: Path | None = None) -> JSON:
+# ---------------------------------------------------------------- the state
+
+def lookup(state: JSON, path: list[str]) -> Any:
+    """The value a dotted path names in the state; `KeyError` with the path when it is absent."""
+    value: Any = state
+    for i, seg in enumerate(path):
+        if not isinstance(value, dict) or seg not in value:
+            raise KeyError(".".join(path[: i + 1]))
+        value = value[seg]
+    return value
+
+
+def project(step: Step, state: JSON) -> JSON:
+    """The `Read` keys as the step sees them: each under the last segment of its path."""
+    return {r.name: lookup(state, r.path) for r in step.declared_reads}
+
+
+def check_reads(procedure: Procedure, step: Step, state: JSON) -> None:
+    """Every `Read` key is in the state with its declared type (`invalid_input` otherwise)."""
+    errors, missing, invalid = [], [], []
+    for r in step.declared_reads:
+        try:
+            value = lookup(state, r.path)
+        except KeyError as err:
+            errors.append(f"{r.dotted} is not in the state ({err.args[0]} is missing)")
+            missing.append(r.dotted)
+            continue
+        type = r.type if r.field is None else None
+        if type is None and r.field is None:
+            type = procedure.key_type(r.key)
+        why = conforms(type, value)
+        if why is not None:
+            errors.append(f"{r.dotted}: {why}")
+            invalid.append(r.dotted)
+    if errors:
+        raise InvalidInput(step.name, errors, missing, invalid)
+
+
+def check_outputs(procedure: Procedure, step: Step, result: Any, *, strict: bool) -> JSON:
+    """`result` as the step's `Produce` keys, normalised: every key present with its type. With
+    `strict` a key the step did not declare is an error (a script's output); otherwise undeclared
+    keys are dropped (an agent's answer)."""
+    if not isinstance(result, dict):
+        raise InvalidOutput(step.name, [f"expected a JSON object of the Produce keys, got {describe(result)}"])
+    errors, missing, invalid, out = [], [], [], {}
+    for p in step.produces:
+        if p.key not in result:
+            errors.append(f"{p.key} is missing")
+            missing.append(p.key)
+            continue
+        value = normalise(p.type, result[p.key])
+        why = conforms(p.type, value)
+        if why is not None:
+            errors.append(f"{p.key}: {why}")
+            invalid.append(p.key)
+        out[p.key] = value
+    if strict:
+        declared = {p.key for p in step.produces}
+        for key in result:
+            if key not in declared:
+                errors.append(f"{key} is not a Produce key of {step.name}")
+                invalid.append(key)
+    if errors:
+        raise InvalidOutput(step.name, errors, missing, invalid)
+    return out
+
+
+def answer_with(step: Step) -> dict[str, str | None]:
+    """`{key: type}` for the step's `Produce` keys: what an agent answers with."""
+    return {p.key: p.type for p in step.produces}
+
+
+def expects(procedure: Procedure, step: Step) -> dict[str, str | None]:
+    """The next step's `Read` keys with their types, handed to a script as `expects`."""
+    flow = step.next
+    if flow is None or procedure.is_loop(flow.to):
+        return {}
+    following = procedure.step(flow.to)
+    return {r.name: (r.type or procedure.key_type(r.key)) if r.field is None else None for r in following.declared_reads}
+
+
+# ---------------------------------------------------------------- rendering
+
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def render(text: str, state: JSON, assets: dict[str, str] | None = None) -> str:
+    """`{key}` and `{decision.question}` filled in from the state, `{assets[stem]}` from the
+    step's `Use` files; a placeholder nothing resolves is left as written, and so is any other
+    brace (spec 2.1, Strings)."""
+    def field(m: re.Match) -> str:
+        try:
+            return _text(lookup(state, m.group(1).split(".")))
+        except KeyError:
+            return m.group(0)
+
+    def asset(m: re.Match) -> str:
+        if assets is not None and m.group(1) in assets:
+            return assets[m.group(1)]
+        return m.group(0)
+
+    return _FIELD.sub(field, _ASSET.sub(asset, text))
+
+
+# ---------------------------------------------------------------- Start and End
+
+def start(step: Step, inputs: Any) -> JSON:
+    """The inputs checked against the `Start` declarations: every one present with its type,
+    nothing undeclared (`invalid_input` otherwise)."""
+    if not isinstance(inputs, dict):
+        raise InvalidInput("start", [f"the inputs are a JSON object, not {describe(inputs)}"])
+    errors, missing, invalid, out = [], [], [], {}
+    for p in step.produces:
+        if p.key not in inputs:
+            errors.append(f"{p.key} is missing")
+            missing.append(p.key)
+            continue
+        value = normalise(p.type, inputs[p.key])
+        why = conforms(p.type, value)
+        if why is not None:
+            errors.append(f"{p.key}: {why}")
+            invalid.append(p.key)
+        out[p.key] = value
+    declared = {p.key for p in step.produces}
+    for key in inputs:
+        if key not in declared:
+            errors.append(f"{key} is not an input of this procedure; the inputs are {sorted(declared)}")
+            invalid.append(key)
+    if errors:
+        raise InvalidInput("start", errors, missing, invalid)
+    return out
+
+
+def end(step: Step, state: JSON) -> JSON:
+    """The result: the `End` step's `Read` keys."""
+    return project(step, state)
+
+
+# ---------------------------------------------------------------- Decide
+
+def decision_request(step: Step, state: JSON, history: list[JSON]) -> DecisionRequest:
+    """What the decision model is asked: the questions with `{key}` rendered, the `Read` keys
+    as the thing to judge, and the history when the step says `History true`."""
+    questions = [Question(q.name, q.type, q.labels, render(q.instruction, state),
+                          [(label, render(text, state)) for label, text in q.criteria], q.order) for q in step.questions]
+    sent = list(history) if step.properties.get("history") else None
+    return DecisionRequest(step.name, questions, project(step, state), sent)
+
+
+def check_decision(step: Step, answers: Any, *, by_hand: bool) -> JSON:
+    """The answers as the decision key holds them: one answer object per question, its value of
+    the question's kind and among its labels. A hand answer keeps `value` and nothing else
+    (spec 2.4); a model's answer is kept whole."""
+    if not isinstance(answers, dict):
+        raise InvalidOutput(step.name, [f"the answers are an object with one entry per question, not {describe(answers)}"])
+    errors, missing, invalid, out = [], [], [], {}
+    for q in step.questions:
+        if q.name not in answers:
+            errors.append(f"no answer to {q.name}")
+            missing.append(q.name)
+            continue
+        answer = normalise(q.type, answers[q.name])
+        why = conforms(q.type, answer, q.labels)
+        if why is not None:
+            errors.append(f"{q.name}: {why}")
+            invalid.append(q.name)
+            continue
+        out[q.name] = {"value": answer["value"]} if by_hand else dict(answer)
+    for name in answers:
+        if step.questions and all(q.name != name for q in step.questions):
+            errors.append(f"{name} is not a question of {step.name}")
+            invalid.append(name)
+    if errors:
+        raise InvalidOutput(step.name, errors, missing, invalid)
+    return out
+
+
+def questions_for_agent(request: DecisionRequest) -> list[JSON]:
+    """The questions as a pause hands them to the agent."""
+    return [{"name": q.name, "type": q.type, "labels": q.labels, "instruction": q.instruction,
+             "criteria": [{"label": label, "text": text} for label, text in q.criteria]} for q in request.questions]
+
+
+# ---------------------------------------------------------------- Route
+
+def route(procedure: Procedure, step: Step, state: JSON) -> tuple[str, JSON]:
+    """Where the route sends the run and what its record says: the node id of the target, and
+    `{"read": dotted, "answer", "check": {"below", "confidence", "fired", "reason"} | None,
+    "value": the branch word | None, "to": name}`. The check reads the answer's `confidence` and
+    fires when it is below the bound or absent; otherwise the branch for `value` is taken, and a
+    value with no branch fails the step (`no_branch`)."""
+    [read] = step.declared_reads
+    answer = lookup(state, read.path)
+    if not isinstance(answer, dict) or "value" not in answer:
+        raise InvalidInput(step.name, [f"{read.dotted} is {describe(answer)}, not an answer with a value"], invalid=[read.dotted])
+    record: JSON = {"read": read.dotted, "answer": answer, "check": None, "value": None}
+    check = step.check
+    if check is not None:
+        confidence = answer.get("confidence")
+        fired = confidence is None or confidence < check.below
+        record["check"] = {"below": check.below, "confidence": confidence, "fired": fired,
+                           "reason": None if not fired else "absent" if confidence is None else "below"}
+        if fired:
+            record["to"] = _name(check.to)
+            return check.to, record
+    key = branch_key(answer["value"], procedure.labels_of(read.path))
+    for b in step.branches:
+        if b.value == key or b.value == str(answer["value"]):
+            record["value"] = b.value
+            record["to"] = _name(b.to)
+            return b.to, record
+    raise NoBranch(step.name, read.dotted, answer["value"], [b.value or "" for b in step.branches])
+
+
+def _name(node_id: str) -> str:
+    return node_id.split(":", 1)[1]
+
+
+# ---------------------------------------------------------------- Aggregate
+
+def _leaf_answers(value: Any, path: list[str], label: str) -> list[tuple[str, JSON]]:
+    """Every answer a source names: through a list, element by element; a decision or an
+    aggregation as a whole, every answer in it; a field, that one answer."""
+    if isinstance(value, list):
+        return [a for i, v in enumerate(value) for a in _leaf_answers(v, path, f"{label}[{i}]")]
+    if path:
+        if not isinstance(value, dict) or path[0] not in value:
+            raise KeyError(f"{label}.{path[0]}")
+        return _leaf_answers(value[path[0]], path[1:], f"{label}.{path[0]}")
+    if isinstance(value, dict) and "value" in value:
+        return [(label, value)]
+    if isinstance(value, dict):
+        return [(f"{label}.{k}", v) for k, v in value.items() if isinstance(v, dict) and "value" in v]
+    raise KeyError(label)
+
+
+def _answer_type(answer: JSON) -> str | None:
+    v = answer["value"]
+    if isinstance(v, bool):
+        return "true_or_false"
+    if isinstance(v, str):
+        return "choice"
+    if isinstance(v, int):
+        return "score"
+    return None
+
+
+def _target(type: str | None, word: str | None, labels: list[str] | None) -> Any:
+    """The value a condition's word stands for: `true`/`false`, a label, or a level (by label or number)."""
+    if type == "true_or_false":
+        return word == "true" if word is not None else True
+    if type == "score" and word is not None:
+        if labels and word in labels:
+            return labels.index(word)
+        if word.isdigit():
+            return int(word)
+    return word
+
+
+def resolve_condition(answer: JSON, type: str | None, operator: str | None, word: str | None, bar: float | None,
+                      labels: list[str] | None, fails_as: bool) -> JSON:
+    """One answer against a condition (spec 2.5, step 1): whether it holds, the probability the
+    answer put on the condition (`1 −` for `!=`), and whether a bar turned it to `fails_as`."""
+    target = _target(type, word, labels)
+    equal = answer["value"] == target
+    holds = equal if operator != "!=" else not equal
+    p = probability_of(answer, type or "", target) if type else None
+    if p is not None and operator == "!=":
+        p = 1 - p
+    barred = bar is not None and (p is None or p < bar)
+    if barred:
+        holds = fails_as
+    return {"value": answer["value"], "holds": holds, "probability": None if p is None else round(p, 6), "barred": barred}
+
+
+def aggregate(procedure: Procedure, step: Step, state: JSON) -> tuple[JSON, JSON]:
+    """The aggregation key's value, one `{"value": bool}` per aggregation and nothing else, and
+    the record of every answer's resolution per aggregation (spec 2.5)."""
+    produced: JSON = {}
+    resolutions: JSON = {}
+    for agg in step.aggregations:
+        try:
+            leaves = _leaf_answers(lookup(state, agg.source[:1]), agg.source[1:], agg.source[0])
+        except KeyError as err:
+            raise InvalidInput(step.name, [f"the source {agg.dotted} of {agg.name} is not an answer in the state ({err.args[0]})"],
+                               invalid=[agg.dotted])
+        labels = procedure.labels_of(agg.source)
+        fails_as = agg.mode == "None"
+        rows = []
+        for label, answer in leaves:
+            resolution = resolve_condition(answer, _answer_type(answer), agg.operator, agg.value, agg.confidence_above, labels, fails_as)
+            rows.append({"source": label, **resolution})
+        held = [r["holds"] for r in rows]
+        value = all(held) if agg.mode == "All" else any(held) if agg.mode == "Any" else not any(held)
+        produced[agg.name] = {"value": value}
+        resolutions[agg.name] = rows
+    return produced, resolutions
+
+
+# ---------------------------------------------------------------- Execute
+
+def assets_of(procedure: Procedure, step: Step, root: Path) -> dict[str, str]:
+    """The step's `Use` files by stem, read from the unpacked bundle."""
+    out: dict[str, str] = {}
+    for use in step.files:
+        if use.relation != "USES":
+            continue
+        path = root / Path(*use.path.split("/"))
+        try:
+            out[use.stem] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            out[use.stem] = path.read_bytes().hex()
+    return out
+
+
+def launch(command: str | None, script: Path, python: str) -> list[str]:
+    """The argument list: `Command` split like a shell would with a leading `python` replaced by
+    the interpreter, else the interpreter on the script."""
+    if not command:
+        return [python, str(script)]
+    argv = shlex.split(command)
+    if argv and argv[0] == PYTHON:
+        argv[0] = python
+    return argv
+
+
+def run_script(step: str, script: str, argv: list[str], stdin: JSON, cwd: Path, timeout: float | None,
+               workdir: Path | None) -> JSON:
     """Run one script under the stdin/stdout contract and return the JSON object it printed.
-
-    The script runs from `cwd` (its own folder) with `AIP_WORKDIR` set to `workdir`, the run's
-    working directory, where it reads and writes the run's files. Raises `ScriptTimeout`, or
-    `ScriptFailed` for a non-zero exit or stdout that is not one JSON object. The result is not
-    checked against the step's outputs here; `Execution.check` does that.
-    """
+    `ScriptTimeout`, or `ScriptFailed` on a non-zero exit or output that is not one JSON object."""
     env = {**os.environ, WORKDIR: str(Path(workdir or Path.cwd()).resolve())}
     try:
-        proc = subprocess.run(argv, input=json.dumps(stdin), capture_output=True, text=True, cwd=cwd,
-                              timeout=timeout, env=env)
+        proc = subprocess.run(argv, input=json.dumps(stdin), capture_output=True, text=True, cwd=cwd, timeout=timeout, env=env)
     except subprocess.TimeoutExpired as err:
         raise ScriptTimeout(step, script, timeout) from err
     stderr = proc.stderr.strip()
     if proc.returncode != 0:
-        raise ScriptFailed(step, script, proc.returncode, stderr, failed_message(script, proc.returncode, stderr))
-
+        raise ScriptFailed(step, script, proc.returncode, stderr, f"the script {script} exited with {proc.returncode}:\n{stderr}")
     out = proc.stdout.strip()
     if not out:
         return {}
     try:
         result = json.loads(out)
     except json.JSONDecodeError as err:
-        raise ScriptFailed(step, script, 0, stderr,
-                           f"Script {script} did not write JSON to stdout: {err}\n{out[:500]}") from err
+        raise ScriptFailed(step, script, 0, stderr, f"the script {script} did not write JSON to stdout: {err}\n{out[:500]}") from err
     if not isinstance(result, dict):
-        raise ScriptFailed(step, script, 0, stderr,
-                           f"Script {script} must write a JSON object, got {type(result).__name__}")
+        raise ScriptFailed(step, script, 0, stderr, f"the script {script} must write a JSON object, got {describe(result)}")
     return result
 
 
-def failed_message(script: str, exit_code: int, stderr: str) -> str:
-    return f"Script {script} exited with {exit_code}:\n{stderr}"
+def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python: str | None, timeout: float | None,
+            workdir: Path | None) -> tuple[JSON, JSON, float]:
+    """Run the step's script from the unpacked bundle at `root`: stdin is `{"state": the Read
+    keys, "assets": the Use files by stem, "expects": the next step's Read keys}`, stdout the
+    `Produce` keys. Returns the checked outputs, the stdin sent, and the seconds taken."""
+    script = step.file("RUNS")
+    if script is None:
+        raise InvalidInput(step.name, [f"{step.name} names no script"])
+    path = root / Path(*script.path.split("/"))
+    stdin = {"state": project(step, state), "assets": assets_of(procedure, step, root), "expects": expects(procedure, step)}
+    argv = launch(step.properties.get("command"), path, python or sys.executable)
+    began = time.monotonic()
+    raw = run_script(step.name, script.path, argv, stdin, root, timeout, workdir)
+    seconds = round(time.monotonic() - began, 3)
+    try:
+        outputs = check_outputs(procedure, step, raw, strict=True)
+    except InvalidOutput as err:
+        err.script = script.path
+        raise
+    return outputs, stdin, seconds
 
 
-def launch(command: List[str] | None, path: Path, python: Path | str | None = None) -> List[str]:
-    """The argument list for a script at `path`: `command`, or `python` on the script. A leading
-    `python` is `python` (default: this process's own interpreter)."""
-    python = str(python or sys.executable)
-    if command is None:
-        return [python, str(path)]
-    return [python if arg == PYTHON and i == 0 else arg for i, arg in enumerate(command)]
+# ---------------------------------------------------------------- Task_Agent
+
+def task(procedure: Procedure, step: Step, state: JSON, root: Path) -> JSON:
+    """What the agent is handed: the prompt (the `Prompt` file or the description) with `{key}`
+    and `{assets[stem]}` rendered, the `Read` keys as `state`, the references with their
+    descriptions, and `answer_with`, the `Produce` keys and their types."""
+    prompt_file = step.file("PROMPTED_BY")
+    template = (root / Path(*prompt_file.path.split("/"))).read_text(encoding="utf-8") if prompt_file else step.description
+    assets = {u.stem: text for u, text in ((u, (root / Path(*u.path.split("/"))).read_text(encoding="utf-8"))
+                                           for u in step.uses("assets"))}
+    return {"prompt": render(template, state, assets), "state": project(step, state),
+            "references": [{"path": u.path, "description": u.description or ""} for u in step.uses("references")],
+            "answer_with": answer_with(step)}
 
 
-@dataclass(kw_only=True)
-class Execution(BaseStep):
-    """
-    Executes an action rather than making a decision. Analogous to a tool call. For now
-    a script in the package; MCP and endpoints can be added later.
-
-    Script contract:
-      stdin   one JSON object: {"state": <the declared inputs only>, "assets": {name: content},
-                                "expects": <describe_next of the node after this one>}
-              (`currentState` carries the same object for one version, for older scripts)
-      stdout  one JSON object holding exactly the declared `outputs` (empty stdout is {});
-              a missing, mistyped, or undeclared key fails the step
-      stderr  diagnostics; carried in the `script_failed` error when the exit code is non-zero
-      env     `AIP_WORKDIR`: the run's working directory, where the run's files are
-    The script runs from its folder with `command` when the step declares one, otherwise
-    `python <script>`. Before it runs, the skill's `requires` block is checked against the
-    machine that runs it (`requires_unmet` names what is missing).
-
-    The script runs on the client. A run that cannot run it in this process (the server's)
-    stops at the step with `request()`, what the client needs to run it, and continues with
-    `accept_report()` when the client posts what happened. `_invoke` runs it in-process.
-
-    script: the Script resource to run
-    command: the argument list that launches the script, from its folder; None is `python <script>`
-    requires: the skill's environment declaration, shared by every Execution of the procedure
-    assets: constant inputs the script always receives, e.g. a JSON config. Re-read from
-            disk on every invoke so edits are picked up.
-    timeout: seconds before the script is killed; None waits forever
-    python: the interpreter for a `python` launcher in-process; None is this process's own
-    """
-    kind: ClassVar[str] = "execution"
-    script: Script
-    assets: List[Asset] = field(default_factory=list)
-    timeout: float | None = 60.0
-    command: List[str] | None = None
-    requires: Requires | None = None
-    python: Path | None = None
-
-    @property
-    def script_path(self) -> str:
-        """The script as the SKILL.md names it, relative to the skill root: `scripts/x.py`."""
-        return Path(*self.script.uri.parts[1:]).as_posix()
-
-    def render(self, state: State) -> JSON:
-        """Pure projection of the declared inputs + assets into the script's stdin payload."""
-        payload: JSON = {"state": state.currentState, "currentState": state.currentState}
-        if self.assets:
-            payload["assets"] = self._require_loader().load_all(self.assets, fresh=True)
-        payload["expects"] = describe_next(self.inputsTo)
-        return payload
-
-    def argv(self, path: Path) -> List[str]:
-        """The launch command: the step's `command`, or `python` on the script."""
-        return launch(self.command, path, self.python)
-
-    def request(self, payload: JSON) -> JSON:
-        """What a client needs to run this step itself on `payload` (the full state, checked against
-        the declared inputs): the script, its launch command, the rendered stdin, the timeout,
-        and the skill's `requires`. The stop the server's run waits at (kind `execute`)."""
-        validate_input(self.name, self.inputs, payload)
-        r = self.requires
-        return {"kind": "execute", "step": self.name, "script": self.script_path, "command": self.command,
-                "stdin": self.render(State(currentState=project(payload, self.inputs))), "timeout": self.timeout,
-                "requires": None if r is None else {"interpreter": r.interpreter, "version": r.version,
-                                                    "packages": list(r.packages), "tools": list(r.tools)}}
-
-    def check(self, result: JSON) -> JSON:
-        """The script's result, checked against the declared outputs."""
-        try:
-            validate_output(self.name, self.outputs, result)
-        except OutputValidationError as err:
-            err.script = self.script_path
-            raise
-        return result
-
-    def accept_report(self, payload: JSON, history: List[JSON], report: JSON) -> StepResponse:
-        """Continue after the client ran the script: `report` is `{"output": {...}, "seconds"}`, or
-        a failure `{"error": "script_failed"|"timeout"|"requires_unmet", ...}` with its detail
-        (exit code and stderr, the timeout, the missing items), raised here as that error so the
-        run records it like a failure in-process."""
-        validate_input(self.name, self.inputs, payload)
-        if "error" in report:
-            raise self.reported_error(report)
-        result = self.check(report["output"])
-        entry = {"step": self.name, "kind": self.kind, "input": project(payload, self.inputs), "result": result}
-        if isinstance(report.get("seconds"), (int, float)):
-            entry["seconds"] = round(float(report["seconds"]), 3)
-        if isinstance(report.get("host"), str):
-            entry["host"] = report["host"]
-        return StepResponse(ran=self.name, kind=self.kind, result=result, suggested={**payload, **result},
-                            next=describe_next(self.inputsTo), history=[*history, entry])
-
-    def reported_error(self, report: JSON) -> Exception:
-        """The error a client's failure report stands for; `host` is the machine that reported it."""
-        kind, script = report["error"], self.script_path
-        if kind == "timeout":
-            exc: Exception = ScriptTimeout(self.name, script, report.get("seconds", self.timeout))
-        elif kind == "requires_unmet":
-            exc = RequiresUnmet(self.name, [str(m) for m in report.get("missing") or []])
-        else:
-            exit_code, stderr = int(report.get("exit_code", 0) or 0), str(report.get("stderr", ""))
-            exc = ScriptFailed(self.name, script, exit_code, stderr,
-                               report.get("message") or failed_message(script, exit_code, stderr))
-        if isinstance(report.get("host"), str):
-            exc.host = report["host"]
-        return exc
-
-    def _invoke(self, state: State) -> JSON:
-        if self.requires is not None:
-            self.requires.ensure(self.name, self.python)
-        loader = self._require_loader()
-        path = loader.path(self.script.uri)
-        if not path.is_file():
-            raise FileNotFoundError(f"Script {self.script.uri!s} not found at {path}")
-        return self.check(run_script(self.name, self.script_path, self.argv(path), self.render(state), path.parent,
-                                     self.timeout))
+__all__ = ["WORKDIR", "lookup", "project", "check_reads", "check_outputs", "answer_with", "expects", "render", "start", "end",
+           "decision_request", "check_decision", "questions_for_agent", "route", "aggregate", "resolve_condition", "assets_of",
+           "launch", "run_script", "execute", "task"]

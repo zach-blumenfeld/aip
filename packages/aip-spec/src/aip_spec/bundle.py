@@ -152,7 +152,11 @@ def compile_folder(folder: Path | str, source: str | None = None) -> tuple[Bundl
 
 # ---------------------------------------------------------------- the file
 
-def _write_graph(conn, graph: Graph, bundle: str) -> None:
+def write_graph(conn, graph: Graph, bundle: str) -> None:
+    """Write a graph into an open Relate or Neo4j connection: the one body of Cypher that puts a
+    bundle's nodes and edges in a store, whether the store is a new `.rl`, the runtime's in-memory
+    copy of a bundle, or a server's catalog (where many bundles share one store and every node
+    is matched by `{bundle_id, id}`)."""
     by_labels: dict[tuple[str, ...], list[dict]] = {}
     for n in graph.nodes:
         by_labels.setdefault(n.labels, []).append(n.properties)
@@ -172,11 +176,12 @@ def write_bundle(bundle: Bundle, path: Path | str) -> Path:
 
     target = Path(path)
     with relate.create(target) as conn:
-        _write_graph(conn, bundle.graph, bundle.id)
+        write_graph(conn, bundle.graph, bundle.id)
     return target
 
 
-def _read_graph(conn, bundle: str) -> Graph:
+def read_graph(conn, bundle: str) -> Graph:
+    """The graph of one bundle, read back from a store `write_graph` wrote it to."""
     nodes = [GraphNode(r["id"], tuple(r["labels"]), dict(r["props"]))
              for r in conn.execute("MATCH (n) WHERE n.bundle_id = $b RETURN n.id AS id, labels(n) AS labels, properties(n) AS props",
                                    {"b": bundle})]
@@ -201,7 +206,7 @@ def read_bundle(path: Path | str) -> Bundle:
             stored_id = header.get("bundle_id")
             if not stored_id or header.get("source") is None:
                 raise BundleError("not_a_bundle", f"{target}: the procedure node has no bundle_id or no source")
-            stored = _read_graph(conn, stored_id)
+            stored = read_graph(conn, stored_id)
     except FileNotFoundError:
         raise BundleError("not_a_bundle", f"{target}: no such file")
     except Exception as exc:

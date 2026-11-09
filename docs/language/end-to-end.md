@@ -104,7 +104,7 @@ window in which the runtime still loads the old format with a warning.
 | Bundle writer and reader | 1, 4, 6 | spec 3 | done (plan L3, 2026-11-09): `aip compile`, `aip export`, `docs/language/bundle.md` |
 | Editor grammar | 1 | `editors/vscode` | done |
 | Linter the editor can run | 1 | this page | done: `aip compile --check --json [--stdin] <folder>` prints every diagnostic with its span, and the extension shows them as squiggles on every change (plan E1, 2026-11-09) |
-| Runtime: state, steps, loops, batching, record | 2, 3 | `docs/language/runtime.md` | not started |
+| Runtime: state, steps, loops, batching, record | 2, 3 | `docs/language/runtime.md` | straight procedures done (R1, `src/aip/model`): the state, every step kind, answers, routes, aggregations, the cache, the record; loops and batching are R2 |
 | Decision model client; `Agent_Fallback` | 2 | spec 2.4, runtime | exists in the current runtime for the old format; needs the answer object shape |
 | Run view | 3 | runtime: the record | exists for the old format; needs passes, aggregations, answer objects |
 | Server: record layer, graph layer, immutable bundles | 4, 5, 6 | spec 3, runtime | exists for the old format; needs `.rl` bundles merged into the store |

@@ -1,310 +1,280 @@
-"""The run loop: one procedure, one cursor, one answer at a time.
+"""The run loop: one procedure, one state, one record, stepping until a pause, the end or a
+failure (`docs/language/runtime.md`).
 
-A run is a `Cursor`: the step whose output the next input answers (`after`), the full state,
-the history, and what the run waits for (`pause`). `start` opens one from the start input;
-`submit` carries one thing to it: the answer to its pause, or nothing to retry a failed step.
-Each steps the procedure until a pause, the end, or a failure, and returns an `Advance`.
+    engine = Engine(resolver=ScriptedResolver({...}))
+    run = engine.start(procedure, {"message": "..."})      # steps until it must stop
+    if run.status == "paused":
+        run = engine.resume(run, {"reply": "..."})          # the agent's answer, then on it goes
+    run.status, run.result, run.history
 
-The same loop runs in both places a run can live: the local client (`aip run ./folder`)
-keeps the cursor in its run file; the server keeps it in its run backend and the client
-holds only the run id. Neither keeps anything in memory between calls.
+A `Run` is data: the state, the history, the node about to run (`at`), the pending pause, and
+the error when a step failed; `to_dict` and `from_dict` move it in and out of a file or a
+server. The `Engine` holds what every run on this machine shares: the decision model, the file
+cache, the interpreter, the script timeout, the clock.
 
-Pause kinds, as `cursor.pause["kind"]`:
+**Pauses.** A `Task_Agent` step always pauses; a `Decide` step pauses when no model is
+configured, or the model fails, and the step says `Agent_Fallback true` (otherwise it fails,
+`no_decision_model` or `decision_model_failed`). A pause is `{"kind": "task" | "decision",
+"step", "tasks": [...]}`, one task per pass; outside a loop there is one, with `index` 0. A task
+carries `prompt`, `state`, `references` and `answer_with` (the `Produce` keys and types), or for a
+decision `questions` and `answer_with` (the question names and types), plus `reason` when a model
+failed. `resume` takes the answers keyed by task index (`{"0": {...}}`), or one answer object when
+there is one task; an answer that does not fit raises `InvalidOutput` and the pause stands.
 
-- `client_task`: the client must answer. The block is what the CLI prints, minus `run_id` and
-  `run_file`.
-- `decision`: every decision stops here; the loop never calls a decision model. The client
-  resolves it (`aip.client.resolver`) with its own model when one is configured, else, when the
-  block's `fallback` is true, prints it for the agent to answer (a manual answer to a decision
-  with `fallback` false is refused: `Decision.accept_answers`); the next `submit` carries the
-  answers and their attribution. The block also carries, when the step sets `history: true`,
-  the run's `history`: what a resolver needs, never printed (`PRIVATE`).
-- `execute`: an execution step, in a run whose loop does not run scripts (`scripts=False`: the
-  server's, and the local client's, which runs them itself between calls). The block is
-  `Execution.request`; the next `submit` carries the client's report of running it (`{"output":
-  {...}, "seconds"}` or a failure, see `Execution.accept_report`). Never printed by the CLI.
-- `error`: a step failed; `after`, `state`, and `history` are as they were before it, so a
-  `submit` with no answer retries it.
-- `done`: the end was reached; `state` is the end step's inputs.
-"""
+**The record.** Every entry carries `bundle_id`, `step`, `kind`, `pass` (None outside a loop),
+`at` (UTC), `input` (the Read keys the step saw) and `result` (what it produced), plus per kind:
+a `Decide` entry `answered_by` (`{"model": name}` or `"agent"`) and `history_sent`; a `Route`
+entry `read`, `answer`, `check` (`below`, `confidence`, `fired`, `reason`: `below` or `absent`),
+`value` and `to`; an `Aggregate` entry `resolutions` per aggregation; an `Execute` entry `script`,
+`stdin` and `seconds`; a `Task_Agent` entry the `prompt` and `references` it was given. The
+record is appended, never rewritten; a failed run keeps everything up to the failure and `error`.
+
+Loops, batching and the TypeSafe resolver arrive with the next milestone; a flow into a loop
+fails the run until then."""
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
 
-from aip.model.procedure import Procedure
-from aip.model.steps import Decision, Execution, describe_next
+from aip.model import cache, steps
+from aip.model.environment import Requires, default_step_timeout
+from aip.model.procedure import Procedure, Step
+from aip.model.resolver import Resolver
 from aip.model.types import (
-    JSON, InputValidationError, OutputValidationError, StepError, project, validate_input, validate_output,
+    JSON, ERROR_KINDS, DecisionModelFailed, InvalidOutput, NoDecisionModel, NotPaused, StepError,
 )
 
-# The error kinds of the error object (`docs/cli-json.md`); anything else is reported as `server`.
-ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "no_decision_model",
-               "server")
+RUNNING, PAUSED, DONE, FAILED = "running", "paused", "done", "failed"
+STATUSES = (RUNNING, PAUSED, DONE, FAILED)
 
-PAUSED = ("client_task", "decision")
+DEFAULT_TIMEOUT = object()  # `Engine(timeout=...)` left unsaid: `default_step_timeout()`, read when the engine is made
 
-# Keys of a pause block that are for the client program, not the agent: the CLI never prints them.
-PRIVATE = ("history", "resolution")
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 @dataclass
-class Cursor:
-    after: str | None = None
+class Run:
+    """One run of a procedure. `at` is the node about to run (None once done); `pause` the
+    pending pause when `status` is `paused`; `error` the error object when it is `failed`
+    (the step stays at `at`, and `Engine.retry` runs it again); `result` the End's keys when done."""
+    procedure: Procedure
     state: JSON = field(default_factory=dict)
-    history: List[JSON] = field(default_factory=list)
+    history: list[JSON] = field(default_factory=list)
+    at: str | None = None
+    status: str = RUNNING
     pause: JSON | None = None
-
-    @property
-    def status(self) -> str:
-        """The run's status: `paused`, `failed`, `done`, or `running` (nothing pending)."""
-        kind = (self.pause or {}).get("kind")
-        return "paused" if kind in PAUSED else "failed" if kind == "error" else "done" if kind == "done" else "running"
-
-
-@dataclass
-class Advance:
-    """What one `start` or `submit` did.
-
-    cursor:  where the run is now; `None` when nothing is worth keeping (the start input was
-             rejected before any step ran)
-    entries: the history entries this call added, in order (also at the end of `cursor.history`)
-    lines:   the `--progress` line of every step this call completed, in order
-    error:   the error object when the call failed; `kept` says the run did not move (an answer
-             that does not fit its pause: answer it again)
-    failure: the history entry recording a step that failed while running (the server's ledger)
-    exc:     the exception behind `error`, for `--debug`
-    """
-    cursor: Cursor | None
-    entries: List[JSON] = field(default_factory=list)
-    lines: List[JSON] = field(default_factory=list)
     error: JSON | None = None
-    kept: bool = False
-    failure: JSON | None = None
-    exc: BaseException | None = None
+    result: JSON | None = None
+    requires_checked: bool = False
 
     @property
-    def resumable(self) -> bool:
-        """Whether there is a run to come back to: the pause that still stands, or the retry point."""
-        return self.kept or self.cursor is not None
+    def bundle_id(self) -> str:
+        return self.procedure.bundle_id
 
-    def outcome(self) -> JSON:
-        """The paused, done, or error object, without `run_id` and `run_file` (the caller adds them)."""
-        if self.error is not None:
-            return dict(self.error)
-        pause = self.cursor.pause
-        if pause["kind"] == "done":
-            return {"done": True, "state": pause["state"]}
-        return {"paused": pause["kind"], **{k: v for k, v in pause.items() if k != "kind"}}
+    def to_dict(self) -> JSON:
+        return {"bundle_id": self.bundle_id, "state": self.state, "history": self.history, "at": self.at, "status": self.status,
+                "pause": self.pause, "error": self.error, "result": self.result, "requires_checked": self.requires_checked}
 
-
-# ---------------------------------------------------------------------------- errors
+    @classmethod
+    def from_dict(cls, procedure: Procedure, data: JSON) -> "Run":
+        if data.get("bundle_id") != procedure.bundle_id:
+            raise ValueError(f"the run is of bundle {data.get('bundle_id')}, not {procedure.bundle_id}")
+        return cls(procedure, dict(data["state"]), list(data["history"]), data.get("at"), data.get("status", RUNNING),
+                   data.get("pause"), data.get("error"), data.get("result"), bool(data.get("requires_checked")))
 
 
-def error_object(exc: BaseException) -> JSON:
-    """The error object's kind, step, message and per-kind detail for a step that raised."""
-    if isinstance(exc, StepError):
-        kind = exc.kind if exc.kind in ERROR_KINDS else "server"
-        return {"error": kind, "step": exc.step, "message": str(exc), **exc.fields()}
-    return {"error": "server", "step": None, "message": f"{type(exc).__name__}: {exc}"}
+class Engine:
+    """Runs procedures. `resolver` is the decision model (None: no model configured); `home` the
+    directory the file cache lives under (`AIP_HOME` when None); `python` the interpreter for
+    `python` scripts (this process's own when None); `timeout` the seconds a script may run;
+    `workdir` the directory scripts read and write the run's files in (`AIP_WORKDIR`; the
+    current directory when None); `clock` the source of timestamps."""
 
+    def __init__(self, resolver: Resolver | None = None, *, home: Path | None = None, python: str | None = None,
+                 timeout: float | None | Any = DEFAULT_TIMEOUT, workdir: Path | None = None, clock: Callable[[], str] = utc_now):
+        self.resolver = resolver
+        self.home = home
+        self.python = python
+        self.timeout = default_step_timeout() if timeout is DEFAULT_TIMEOUT else timeout
+        self.workdir = workdir
+        self.clock = clock
+        self._requires: dict[str, Requires] = {}
+        self._roots: dict[str, Path] = {}
 
-def _answer_error(error: JSON) -> bool:
-    """An answer to a pause that does not fit, as opposed to a step that failed while running."""
-    return error["error"] in ("invalid_input", "invalid_output") and "script" not in error
+    # ------------------------------------------------------------ the three entry points
 
+    def start(self, procedure: Procedure, inputs: JSON) -> Run:
+        """Open a run on the inputs and step it until it must stop. Inputs that do not fit the
+        `Start` step raise `InvalidInput` before anything runs."""
+        start = procedure.step(procedure.start)
+        state = steps.start(start, inputs)
+        run = Run(procedure, state, [], None)
+        self._record(run, start, state, {}, pass_=None)
+        run.at = self._follow(run, start)
+        return self._advance(run)
 
-# ----------------------------------------------------------------------------- lines
+    def resume(self, run: Run, answers: Any) -> Run:
+        """Carry the agent's answers to a paused run and step on. `answers` is keyed by task
+        index, or is the one answer when the pause has one task. A bad answer raises and leaves
+        the pause standing."""
+        if run.status != PAUSED or run.pause is None:
+            raise NotPaused(None, f"the run is {run.status}; only a paused run takes an answer")
+        pause = run.pause
+        step = run.procedure.step(run.at)
+        by_index = _by_index(pause, answers)
+        for t in pause["tasks"]:
+            if t["index"] not in by_index:
+                raise InvalidOutput(step.name, [f"no answer for task {t['index']}"], missing=[str(t["index"])])
+        [task] = pause["tasks"]  # one pass outside a loop; batching arrives with loops
+        answer = by_index[task["index"]]
+        if pause["kind"] == "decision":
+            produced = {step.produced_key(): steps.check_decision(step, answer, by_hand=True)}
+            extra: JSON = {"answered_by": "agent", "history_sent": False}
+        else:
+            produced = steps.check_outputs(run.procedure, step, answer, strict=False)
+            extra = {"prompt": task["prompt"], "references": task["references"]}
+        run.pause, run.status = None, RUNNING
+        run.state.update(produced)
+        self._record(run, step, task["state"], produced if pause["kind"] == "task" else produced[step.produced_key()],
+                     pass_=task.get("pass"), **extra)
+        run.at = self._follow(run, step)
+        return self._advance(run)
 
+    def retry(self, run: Run) -> Run:
+        """Run the step that failed again, from the state before it."""
+        if run.status != FAILED:
+            raise NotPaused(None, f"the run is {run.status}; only a failed run is retried")
+        run.error, run.status = None, RUNNING
+        return self._advance(run)
 
-def step_line(entry: JSON) -> JSON:
-    """The `--progress` line for one completed step, from its history entry."""
-    line: JSON = {"event": "step", "step": entry["step"], "kind": entry["kind"]}
-    if entry["kind"] == "router":
-        line["to"] = entry["result"]["to"]
-    elif entry["kind"] == "decision":
-        line["resolver"] = (entry.get("attribution") or {}).get("resolver", "manual")
-    elif entry["kind"] == "execution" and "seconds" in entry:
-        line["seconds"] = entry["seconds"]
-    return line
+    # ------------------------------------------------------------ the loop
 
+    def _advance(self, run: Run) -> Run:
+        while run.status == RUNNING:
+            if run.at is None:
+                raise RuntimeError("a running run has no step to run")
+            if run.procedure.is_loop(run.at):
+                run.status, run.error = FAILED, StepError(run.at.split(":", 1)[1], "loops are not run yet (plan milestone R2)").to_dict()
+                break
+            step = run.procedure.step(run.at)
+            try:
+                self._step(run, step)
+            except StepError as err:
+                run.status, run.error = FAILED, err.to_dict()
+        return run
 
-def settled_line(pause: JSON) -> JSON | None:
-    """The line for a paused step, printed once its answer is accepted."""
-    if pause["kind"] == "client_task":
-        return {"event": "step", "step": pause["step"], "kind": "client_task"}
-    return None
+    def _step(self, run: Run, step: Step) -> None:
+        procedure = run.procedure
+        steps.check_reads(procedure, step, run.state)
+        match step.kind:
+            case "End":
+                result = steps.end(step, run.state)
+                self._record(run, step, result, result, pass_=None)
+                run.result, run.status, run.at = result, DONE, None
+            case "Route":
+                target, record = steps.route(procedure, step, run.state)
+                self._record(run, step, {record["read"]: record["answer"]}, {"to": record["to"]}, pass_=None,
+                             read=record["read"], check=record["check"], value=record["value"], to=record["to"])
+                run.at = target
+            case "Aggregate":
+                produced, resolutions = steps.aggregate(procedure, step, run.state)
+                key = step.produced_key()
+                run.state[key] = produced
+                self._record(run, step, steps.project(step, run.state), produced, pass_=None, resolutions=resolutions)
+                run.at = self._follow(run, step)
+            case "Execute":
+                self._ensure_requires(run, step)
+                outputs, stdin, seconds = steps.execute(procedure, step, run.state, self._root(procedure), python=self.python,
+                                                        timeout=self.timeout, workdir=self.workdir)
+                run.state.update(outputs)
+                self._record(run, step, stdin["state"], outputs, pass_=None, script=step.file("RUNS").path, stdin=stdin,
+                             seconds=seconds)
+                run.at = self._follow(run, step)
+            case "Task_Agent":
+                task = steps.task(procedure, step, run.state, self._root(procedure))
+                run.pause = {"kind": "task", "step": step.name, "tasks": [{"index": 0, "pass": None, **task}]}
+                run.status = PAUSED
+            case "Decide":
+                self._decide(run, step)
+            case _:
+                raise StepError(step.name, f"{step.kind} is not a step the engine runs")
 
-
-# ---------------------------------------------------------------------------- pauses
-
-
-def pause_of(response: JSON) -> JSON | None:
-    """The pause a step response asks for: a client task. Its `state` is the step's projected input."""
-    if response["next"] is None or response["kind"] != "client_task":
-        return None
-    entry, result = response["history"][-1], response["result"]
-    return {"kind": "client_task", "step": response["ran"], "task": result["task"], "state": entry["input"],
-            "references": result["references"], "answer_with": result["expects"]}
-
-
-def decision_pause(step: Decision, state: JSON, history: List[JSON]) -> JSON:
-    """The pause at a decision: what the decision model is given (`questions`, `state`, and `history`
-    when the step asks for it), the questions whose `confidence` the step emits, and whether the
-    client may answer by hand (`fallback`)."""
-    pause = {"kind": "decision", "step": step.name, "questions": describe_next(step)["questions"],
-             "state": project(state, step.inputs), "confidence": list(step.confidence), "fallback": step.fallback}
-    if step.history:
-        pause["history"] = history
-    return pause
-
-
-# ------------------------------------------------------------------------------ loop
-
-
-def start(procedure: Procedure, payload: JSON, scripts: bool = True) -> Advance:
-    """Open a run on the start input and step it until it must stop. With `scripts` false the run
-    stops at each execution step (`execute`) instead of running its script here."""
-    return _drive(procedure, scripts, None, payload, [])
-
-
-def submit(procedure: Procedure, cursor: Cursor, answer: JSON | None, scripts: bool = True,
-           attribution: JSON | None = None) -> Advance:
-    """Carry one thing to a run: the answer to its pause (at a decision, with the `attribution` of
-    whoever resolved it; None is a manual answer), the report of a script the client ran, or
-    (`None`, at a failed step) a retry. A retry may carry keys too; they are merged over the
-    state before the step. An answer that does not fit leaves the run where it was (`kept`)."""
-    pause = cursor.pause or {}
-    kind = pause.get("kind")
-    if kind == "done":
-        return Advance(cursor, kept=True, error={
-            "error": "server", "step": None, "message": "the run is done; there is nothing to answer"})
-    if kind == "error":
-        return _drive(procedure, scripts, cursor.after, {**cursor.state, **(answer or {})}, cursor.history)
-    if kind == "execute":
-        if not _is_report(answer):
-            return Advance(cursor, kept=True, error={
-                "error": "invalid_output", "step": pause["step"],
-                "message": f"step {pause['step']!r} runs on the client: post the report of running its script, "
-                           '{"output": {...}} or {"error": "script_failed"|"timeout"|"requires_unmet", ...}',
-                "missing": ["output"], "invalid": []})
-        return _drive(procedure, scripts, cursor.after, cursor.state, cursor.history, report=answer)
-    if kind not in PAUSED:
-        return Advance(cursor, kept=True, error={
-            "error": "server", "step": None, "message": f"the run is not paused (status {cursor.status})"})
-    if answer is None:
-        keys = list(pause["questions"] if kind == "decision" else pause.get("answer_with", {}))
-        return Advance(cursor, kept=True, error={
-            "error": "invalid_output", "step": pause["step"],
-            "message": f"resume needs an answer for the paused {kind} step {pause['step']!r} (--input <answer.json>)",
-            "missing": keys, "invalid": []})
-    if kind == "decision":
-        return _drive(procedure, scripts, cursor.after, cursor.state, cursor.history,
-                      answering=pause, answers=(answer, attribution))
-    try:
-        validate_output(pause["step"], pause["answer_with"], answer, strict=False)
-    except OutputValidationError as exc:
-        return Advance(cursor, kept=True, error=error_object(exc), exc=exc)
-    # the client task's entry is written now, like a decision's: the task it was given and the answer
-    outputs = {k: answer[k] for k in pause["answer_with"]}
-    entry = {"step": pause["step"], "kind": "client_task", "input": pause["state"],
-             "result": {"task": pause["task"], "references": pause["references"], "answer": outputs}}
-    return _drive(procedure, scripts, cursor.after, {**cursor.state, **outputs}, cursor.history,
-                  answering=pause, answered=entry)
-
-
-def _is_report(answer: JSON | None) -> bool:
-    """A client's report of running a script: its output, or a failure of a known kind."""
-    if not isinstance(answer, dict):
-        return False
-    if "error" in answer:
-        return answer["error"] in ("script_failed", "timeout", "requires_unmet")
-    return isinstance(answer.get("output"), dict)
-
-
-def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON,
-           history: List[JSON], answering: JSON | None = None, answers: tuple[JSON, JSON | None] | None = None,
-           report: JSON | None = None, answered: JSON | None = None) -> Advance:
-    """Step until a pause, the end, or a failure. `answering` is the pause this call answers: a bad
-    answer leaves it in place. `answers` (the answers and their attribution) answers a decision
-    first, `report` an execution step the client ran, and `answered` is the history entry of the
-    client task this call answers."""
-    carried = len(history)
-    if answered is not None:
-        history = [*history, answered]
-    lines: List[JSON] = []
-
-    def settle() -> None:
-        nonlocal answering
-        line = settled_line(answering) if answering is not None else None
-        if line is not None:
-            lines.append(line)
-        answering = None
-
-    def stop(pause: JSON) -> Advance:
-        return Advance(Cursor(after, payload, history, pause), entries=history[carried:], lines=lines)
-
-    while True:
-        node = None
-        try:
-            node, routed = procedure.resolve(after, payload, history)
-            if answers is not None:
-                if not isinstance(node, Decision):
-                    raise KeyError(f"the step after {after!r} is not a decision")
-                response = node.accept_answers(payload, [*history, *routed], *answers).to_dict()
-                answers = None
-            elif report is not None:
-                if not isinstance(node, Execution):
-                    raise KeyError(f"the step after {after!r} is not an execution step")
-                response = node.accept_report(payload, [*history, *routed], report).to_dict()
-                report = None
-            elif isinstance(node, Decision):
-                validate_input(node.name, node.inputs, payload)          # before asking anyone
-                settle()
-                return stop(decision_pause(node, payload, [*history, *routed]))
-            elif isinstance(node, Execution) and not scripts:
-                request = node.request(payload)
-                settle()
-                return stop(request)
+    def _decide(self, run: Run, step: Step) -> None:
+        request = steps.decision_request(step, run.state, run.history)
+        fallback = bool(step.properties.get("agent_fallback"))
+        reason: str | None = None
+        if self.resolver is None:
+            if not fallback:
+                raise NoDecisionModel(step.name)
+            reason = "no_decision_model"
+        else:
+            try:
+                decision = self.resolver.decide(request)
+                answers = steps.check_decision(step, decision.answers, by_hand=False)
+            except InvalidOutput:
+                raise
+            except Exception as exc:  # the model failed: the agent's, or the run's failure
+                failed = DecisionModelFailed(step.name, getattr(self.resolver, "name", type(self.resolver).__name__), exc)
+                if not fallback:
+                    raise failed from exc
+                reason = f"{failed.kind}: {failed.cause}"
             else:
-                response = procedure.run(after, payload, history).to_dict()
-        except Exception as exc:
-            return _failed(exc, node, after, payload, history, carried, lines, keep=answering is not None)
-        settle()
-        pause = pause_of(response)
-        if pause is not None:                        # its entry is written when it is answered
-            response["history"] = response["history"][:-1]
-        for entry in response["history"][len(history):]:
-            if entry["kind"] not in ("start", "end"):
-                lines.append(step_line(entry))
-        after, payload, history = response["ran"], response["suggested"], response["history"]
-        if response["next"] is None:
-            payload = response["result"]
-            return stop({"kind": "done", "state": response["result"]})
-        if pause is not None:
-            return stop(pause)
+                run.state[step.produced_key()] = answers
+                self._record(run, step, request.state, answers, pass_=None, answered_by={"model": decision.model},
+                             history_sent=request.history is not None)
+                run.at = self._follow(run, step)
+                return
+        run.pause = {"kind": "decision", "step": step.name, "reason": reason, "tasks": [{
+            "index": 0, "pass": None, "questions": steps.questions_for_agent(request), "state": request.state,
+            "answer_with": {q.name: q.type for q in request.questions}}]}
+        run.status = PAUSED
+
+    # ------------------------------------------------------------ helpers
+
+    def _follow(self, run: Run, step: Step) -> str:
+        flow = step.next
+        if flow is None:
+            raise StepError(step.name, f"{step.name} has no next step")
+        return flow.to
+
+    def _record(self, run: Run, step: Step, input: JSON, result: JSON, *, pass_: int | None, **extra: Any) -> None:
+        """Append the step's entry. What it holds is copied: the state moves on, the record does not."""
+        run.history.append(copy.deepcopy({"bundle_id": run.bundle_id, "step": step.name, "kind": step.kind, "pass": pass_,
+                                          "at": self.clock(), "input": input, "result": result, **extra}))
+
+    def _root(self, procedure: Procedure) -> Path:
+        """The bundle's files, unpacked once per bundle id."""
+        if procedure.bundle_id not in self._roots:
+            self._roots[procedure.bundle_id] = cache.unpack(procedure.bundle_id, procedure.files(), self.home)
+        return self._roots[procedure.bundle_id]
+
+    def _ensure_requires(self, run: Run, step: Step) -> None:
+        if run.requires_checked:
+            return
+        declared = run.procedure.requires
+        if declared is not None:
+            requires = self._requires.setdefault(run.bundle_id, Requires(*declared))
+            requires.ensure(step.name, self.python)
+        run.requires_checked = True
 
 
-def _failed(exc: BaseException, node: Any, after: str | None, state: JSON, history: List[JSON], carried: int,
-            lines: List[JSON], keep: bool) -> Advance:
-    """A step failed. The run waits at the state before it, to be retried, unless the failure is a
-    bad answer to a pause (`keep`: the pause stands, answer it again) or the start input was
-    rejected before any step ran (start again)."""
-    error = error_object(exc)
-    if keep and _answer_error(error):
-        return Advance(None, error=error, kept=True, exc=exc)
-    if after is None and not history and isinstance(exc, InputValidationError):
-        return Advance(None, error=error, exc=exc)
-    detail = exc.fields() if isinstance(exc, StepError) else {}
-    if isinstance(getattr(exc, "host", None), str):
-        detail["host"] = exc.host                           # the machine that reported a script's failure
-    failure = {"step": getattr(node, "name", error["step"]), "kind": "error", "step_kind": getattr(node, "kind", None),
-               "input": state, "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}
-    pause = {"kind": "error", "step": error["step"], "error": error["error"]}
-    return Advance(Cursor(after, state, history, pause), entries=history[carried:], lines=lines,
-                   error=error, failure=failure, exc=exc)
+def _by_index(pause: JSON, answers: Any) -> dict[int, Any]:
+    """The answers keyed by task index: as given, from a list in task order, or the one answer
+    for the one task."""
+    tasks = pause["tasks"]
+    if isinstance(answers, list):
+        return dict(enumerate(answers))
+    if isinstance(answers, dict) and answers and all(str(k).isdigit() for k in answers) and all(isinstance(v, dict) for v in answers.values()):
+        return {int(k): v for k, v in answers.items()}
+    if isinstance(answers, dict) and len(tasks) == 1:
+        return {tasks[0]["index"]: answers}
+    raise InvalidOutput(pause["step"], ["the answers are an object keyed by task index, or one answer object for a single task"])
 
 
-__all__ = ["Advance", "Cursor", "ERROR_KINDS", "PAUSED", "PRIVATE", "decision_pause", "error_object", "pause_of",
-           "settled_line", "start", "step_line", "submit"]
+__all__ = ["Engine", "Run", "RUNNING", "PAUSED", "DONE", "FAILED", "STATUSES", "ERROR_KINDS", "utc_now"]

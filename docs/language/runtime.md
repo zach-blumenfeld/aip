@@ -13,14 +13,19 @@ procedure means; this page says what running one entails.
   step is read with a Cypher query as the run reaches it. The same queries run against a
   server's graph, so a server can run a procedure from its own store.
 - Scripts and assets are unpacked once per bundle id into a cache and executions launch from
-  there, so the same bundle on the same machine does not unpack twice.
+  there, so the same bundle on the same machine does not unpack twice. The reference runtime
+  keeps them under `~/.aip/cache/<bundle id>/` (`AIP_HOME` moves it), written whole and moved
+  into place, so the directory is complete or absent.
 
 ## The state
 
 - One state per run: a set of named, typed keys, as the spec's section 2.3 defines it. A step
   sees only the keys its `Read` names, with the declared types checked before it runs.
 - A step's `Produce` keys are checked on its result and added to the state. A missing key or
-  a wrong type fails the step; the runtime does not fill in a value.
+  a wrong type fails the step; the runtime does not fill in a value. One normalisation is
+  allowed: a script or an agent may write an answer-typed key as the bare value (`true` for
+  `passed: true_or_false`, a label for a `choice`, a level for a `score`), and the runtime stores
+  it as `{"value": ...}`, which is also what the record keeps.
 - A key is rebound when a loop pass writes it; every earlier value stays in the record.
 - A decision writes its one key with one answer object per question, in the shape of 2.4. An
   answer given by hand has `value` and nothing else.
@@ -34,7 +39,10 @@ procedure means; this page says what running one entails.
   unless `Agent_Fallback true`, in which case the agent answers and the record says so.
 - `Route`: the runtime reads one answer. With a `Confidence_Below` check, it reads the answer's
   `confidence` first and takes the check's branch when the confidence is below the bound or
-  absent; otherwise it takes the branch for `value`. A value with no branch fails the step.
+  absent; otherwise it takes the branch for `value`: `true` or `false` for a `true_or_false`,
+  the label for a `choice`, and for a `score` the label of the level the value names (the
+  branch lines are written with the question's labels, the value is the level's number). A
+  value with no branch fails the step.
 - `Aggregate`: for each aggregation, the runtime tests each answer in its source against the
   line's condition (`== value`, `!= value`, or `== true` for a bare `true_or_false`), takes the
   probability the model put on that condition from the answer's probabilities, and, when the
@@ -48,7 +56,22 @@ procedure means; this page says what running one entails.
   and takes the JSON object on stdout as the step's `Produce` keys. A non-zero exit fails the
   step. The runtime never performs a script's work by hand.
 - `Task_Agent`: the runtime renders the prompt (`{key}` from `Read`, `{assets[stem]}` for
-  `Use`) and hands the task to the agent, which produces the `Produce` keys.
+  `Use`) and hands the task to the agent, which produces the `Produce` keys. A `Decide` with no
+  model, or whose model failed, and `Agent_Fallback true` is handed to the agent the same way,
+  with its rendered questions; the agent answers each with a value, stored as `{"value": ...}`.
+
+### Pauses
+
+A pause is the runtime stopping for the agent. One pause carries one step and a list of tasks,
+one per pass of a loop (one task, index 0, outside a loop): `{"kind": "task" | "decision",
+"step", "tasks": [{"index", "pass", ...}]}`. A task of a `Task_Agent` step carries `prompt`,
+`state` (the `Read` keys), `references` (path and description) and `answer_with` (the `Produce`
+keys and their types); a task of a `Decide` step carries `questions` (name, type, labels, the
+rendered instruction, criteria), `state` and `answer_with` (the question names and types), and
+the pause says why the agent is asked (`reason`: no model, or how the model failed). The agent
+answers with one object per task, keyed by the task's index; an answer that does not fit the
+step's keys is refused and the pause stands. The step's record entry is written when the answer
+is accepted.
 - `End`: the state must hold the `Read` keys; they are the result.
 
 ## Loops
@@ -98,12 +121,18 @@ operator setting, not something the procedure says:
 ## The record
 
 - Every run entry carries the bundle id, so a question about a run can name the exact program
-  that ran.
-- Every step's outputs are recorded, including every pass of a loop, with the pass number.
-- A decision's record says who answered (the model, by name, or the agent) and keeps the
-  model's full answer objects. A route's record says whether its confidence check fired and why
-  (below the bound, absent).
-- The record is appended, never rewritten. A run that fails keeps everything up to the failure.
+  that ran, and the time it was written.
+- Every step's outputs are recorded, including every pass of a loop, with the pass number: one
+  entry per step run, with the keys the step read (`input`) and what it produced (`result`).
+- A decision's record says who answered (the model, by name, or the agent), whether the history
+  was sent, and keeps the model's full answer objects. A route's record says what it read,
+  whether its confidence check fired and why (below the bound, absent), and where it went. An
+  aggregation's record keeps every answer's resolution (its value, the probability on the
+  condition, whether it held, whether a bar turned it). A script's record keeps the script, what
+  it was given on stdin and how long it took. An agent task's record keeps the prompt and
+  references it was given.
+- The record is appended, never rewritten. A run that fails keeps everything up to the failure
+  and the error beside it; the failed step runs again on a retry, from the state before it.
 
 ## What a runtime may add
 
