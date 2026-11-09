@@ -57,9 +57,13 @@ Settled items are marked.
 
 ## Agents and pauses
 
-9. **Settled 2026-11-08.** `Task_Agent` always pauses. `Decide` pauses only with
-   `Agent_Fallback true` when no model is configured or the call fails. `Execute` never pauses; a
-   failing script fails the run. `Start` with missing inputs fails before the first step.
+9. **Settled 2026-11-08, revised 2026-11-09.** `Task_Agent` always pauses. `Decide` never
+   pauses: it needs a decision model, and with none configured, or a failed call, the run fails
+   and `aip resume` retries the step (`Agent_Fallback` was removed; it made a route's confidence
+   check meaningless on every hand answer, and an agent decides in a `Task_Agent` instead, by
+   producing an answer under declared labels). `Execute` never pauses; a failing script fails the
+   run. `Start` with missing inputs fails before the first step. The decision model is an
+   endpoint with the TypeSafe API shape, URL and key in `aip config`, not a vendor.
 10. **Settled 2026-11-08.** One pause carrying N tasks, each with its pass index and state; one
     `aip resume` with N answers keyed by pass index. The agent chooses its own concurrency. A
     missing index fails that pass.
@@ -98,7 +102,7 @@ Settled items are marked.
 19. **Settled 2026-11-08.** Two test procedures, each milestone naming which it proves against.
     `dynamic-policy` is the headline (loops, batching, aggregation, agent pauses) and is what
     `make_procedure` produces in demo step 1. `billing-support` is the second (Route with a
-    confidence check, Execute running a script, Agent_Fallback). Together they cover every step
+    confidence check, Execute running a script; `billing-support-agent` is the same triage done by a `Task_Agent` under labels, for a machine with no model). Together they cover every step
     kind; `make_procedure` becomes the third once it exists.
 20. **Settled 2026-11-08.** Abandon, no upgrade tool. `validate`, `upgrade` and `schema` go. The
     old catalog stays as an archive; anything worth keeping is rewritten by hand or with
