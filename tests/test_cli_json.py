@@ -1,8 +1,9 @@
 """The CLI's JSON contract (`docs/cli-json.md`): every example in the doc is what `aip run` and
 `aip resume` print for `billing-support` with a fake decision model, `billing-support-agent`
-with none, and, for the batched pause, `ticket-triage`, all run with no server configured. Before comparing, the
-run's id becomes the doc's `SAMPLE_ID`, `run_file` is reduced to its file name and a script's
-`seconds` to `<seconds>`, so nothing else varies. The stderr line about recording is checked too.
+with none, for the batched pause `ticket-triage`, and for the loop at its cap `fixed-policy`, all run with no
+server configured. Before comparing, the run's id becomes the doc's `SAMPLE_ID`, `run_file` is reduced to its
+file name and a step's `seconds` to `<seconds>`, so nothing else varies. The stderr line about recording is
+checked too, and so are `aip runs`, `aip --help` and `aip server --help`.
 Everything here opens a Relate store, so it skips with the install hint where Relate is missing."""
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ DOC = REPO / "docs" / "cli-json.md"
 EXAMPLE = example_dir("billing-support")            # triage is a Decide: needs a model
 AGENT = example_dir("billing-support-agent")        # triage is a Task_Agent: runs with none
 TRIAGE = example_dir("ticket-triage")
+FIXED = example_dir("fixed-policy")
 BLOCK = re.compile(r"<!-- cli-json: (?P<name>[a-z-]+) -->\s*```(?:json|jsonl)\n(?P<body>.*?)```", re.DOTALL)
 
 CALM = "I was charged twice for March. Could you check?"
@@ -74,9 +76,11 @@ def normalise(obj, run_id: str | None = None):
 
 class FakeTypeSafe:
     """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97); the tone is `calm` with
-    probability `CALM_P`, or read off the ticket for `ticket-triage` (`NOW` means angry). The
-    keyword arguments it was opened with (the key, the `base_url`) are kept in `OPENED`."""
+    probability `CALM_P`, or read off the ticket for `ticket-triage` (`NOW` means angry). Any
+    other questions (`fixed-policy`'s four policies) are answered `HOLDS_P` each. The keyword
+    arguments it was opened with (the key, the `base_url`) are kept in `OPENED`."""
     CALM_P = 0.9
+    HOLDS_P = 0.3
     OPENED: list[dict] = []
 
     def __init__(self, **kwargs):
@@ -89,6 +93,9 @@ class FakeTypeSafe:
         return False
 
     def system_one(self, state, questions, **_):
+        if "billing" not in questions:
+            return {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "answers": {name: {"type": "noul", "noul": self.HOLDS_P} for name in questions}}
         text = json.dumps(state.get("state", {}))
         calm_p = 0.1 if "NOW" in text else self.CALM_P
         angry_p = round(1 - calm_p, 6)
@@ -118,7 +125,7 @@ class CliJson(unittest.TestCase):
         with mock.patch("sys.stdout", new=out), mock.patch("sys.stderr", new=err):
             code = main(list(argv))
         text = out.getvalue()
-        if argv[0] == "config":
+        if argv[0] in ("config", "runs") and "--json" not in argv:
             printed = text.splitlines()
         else:
             printed = [json.loads(line) for line in text.splitlines()] if "--progress" in argv else [json.loads(text)]
@@ -169,10 +176,17 @@ class CliJson(unittest.TestCase):
         self.assertEqual((code, err), (0, NOT_RECORDED))
         self.assert_documented("paused-task-labels", pause)
 
-        code, [error], _ = self.resume({"billing": True})                       # one of two keys
-        self.assertEqual(code, 1)
+        code, [error], err = self.resume({"billing": True})                     # one of two keys
+        self.assertEqual((code, err), (1, ""), "a refused answer changed nothing: no line about recording")
         self.assert_documented("error-invalid-output", error)
         self.assertEqual(RunFile.load(self.run_file).status, "paused", "a bad answer leaves the pause")
+        code, [error], err = self.resume({"billing": True, "tone": "calm", "confidence": 0.9})   # a key the pause did not ask for
+        self.assertEqual((code, err), (1, ""))
+        self.assert_documented("error-extra-key", error)
+        code, [error], _ = self.resume([{"billing": True, "tone": "calm"}, {"billing": True, "tone": "angry"}])   # two answers, one task
+        self.assertEqual((code, error["error"], error["invalid_tasks"], error["resumable"]), (1, "invalid_output", [1], True))
+        held = RunFile.load(self.run_file)
+        self.assertEqual((held.status, [e["step"] for e in held.run["history"]]), ("paused", ["start"]), "still paused, nothing applied")
 
         code, [pause], _ = self.resume({"billing": True, "tone": "calm"})       # the route branches on the agent's answer
         self.assertEqual((code, pause.get("paused"), pause.get("step")), (0, "task", "reply"))
@@ -183,6 +197,14 @@ class CliJson(unittest.TestCase):
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "reply", "end"])
         self.assertEqual(history[1]["result"], {"billing": {"value": True}, "tone": {"value": "calm"}})
         self.assertEqual((history[2]["check"], history[2]["value"], history[2]["to"]), (None, "calm", "reply"))
+        self.assertEqual((history[2]["input"], history[2]["read"], history[2]["result"]), ({"tone": {"value": "calm"}}, "tone", {}))
+        self.assertEqual(history[1]["answered_by"], {"agent": "cli", "session": None}, "who answered the task")
+        self.assertIsInstance(history[1]["waited_seconds"], float)
+        self.assertTrue(all("bundle_id" not in e and isinstance(e["seconds"], float) for e in history))
+        saved = json.loads(self.run_file.read_text(encoding="utf-8"))
+        self.assertEqual((len(saved["bundle_id"]), "bundle_id" in saved["run"]), (64, False), "the run file names the bundle once")
+        self.assertEqual((saved["run"]["position"], saved["run"]["loops"], bool(saved["run"]["started"]), bool(saved["run"]["finished"])),
+                         (None, {}, True, True))
 
         with self.decision_model(0.9):                                           # a model sure of calm: the check passes
             code, [pause], _ = self.run_(EXAMPLE, {"message": CALM})
@@ -191,12 +213,15 @@ class CliJson(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assert_documented("paused-task", pause)
         code, [done], err = self.resume({"reply": REPLY})
-        self.assertEqual((code, err), (0, NOT_RECORDED))
+        self.assertEqual((code, err), (0, ""), "the line about recording is `aip run`'s, once; a resume does not repeat it")
         self.assert_documented("done", done)
         history = RunFile.load(self.run_file).run["history"]
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "reply", "end"])
         self.assertEqual(history[1]["answered_by"], {"model": "jev-1", "endpoint": "https://api.typesafe.ai"})
-        self.assertEqual(history[2]["check"], {"below": 0.9, "confidence": 0.9, "fired": False, "reason": None})
+        self.assertEqual(history[2]["check"], {"below": 0.9, "confidence": 0.9, "fired": False})
+        self.assertEqual((list(history[2]["input"]), history[2]["read"]), (["tone"], "triage_decision.tone"),
+                         "one spelling of a read key in input; the dotted path is kept as read")
+        self.assertIsInstance(history[1]["model_seconds"], float)
 
     def test_the_answer_can_be_keyed_by_task_index_or_listed(self):
         self.run_(AGENT, {"message": CALM})
@@ -211,7 +236,7 @@ class CliJson(unittest.TestCase):
         self.assertEqual((code, err), (1, NOT_RECORDED))
         self.assert_documented("error-no-decision-model", error)
         held = RunFile.load(self.run_file)
-        self.assertEqual((held.status, held.run["at"]), ("failed", "step:triage"), "the run waits at the decision")
+        self.assertEqual((held.status, held.run["position"]), ("failed", "step:triage"), "the run waits at the decision")
         code, [again], _ = self.resume({"billing": True, "tone": "calm"})      # a failed run takes no answer
         self.assertEqual((code, again["error"], again["step"], again["resumable"]), (1, "not_paused", "triage", True))
         with self.decision_model(0.9):                                           # a model configured: the retry asks it
@@ -254,8 +279,9 @@ class CliJson(unittest.TestCase):
         self.assertEqual(code, 0)
         lines, final = printed[:-1], printed[-1]
         self.assertEqual([l["step"] for l in lines], ["start", "triage", "by_tone", "escalate", "end"])
-        self.assertEqual(lines[0], {"event": "step", "step": "start", "kind": "Start", "pass": None, "passes": []})
-        self.assertIsInstance(lines[3]["seconds"], float)
+        self.assertEqual({k: v for k, v in lines[0].items() if k != "seconds"},
+                         {"event": "step", "step": "start", "kind": "Start", "pass": None, "passes": []})
+        self.assertTrue(all(isinstance(line["seconds"], float) for line in lines))
         self.assert_documented("progress", printed)
         self.assertTrue(final["done"])
 
@@ -268,7 +294,7 @@ class CliJson(unittest.TestCase):
         self.assertNotIn("Traceback", err)
         self.assert_documented("error-script-failed", error)
         held = RunFile.load(self.run_file)
-        self.assertEqual((held.status, held.run["at"]), ("failed", "step:escalate"))
+        self.assertEqual((held.status, held.run["position"]), ("failed", "step:escalate"))
         self.assertEqual(held.run["state"]["message"], ANGRY)
         code, [again], _ = self.resume(None)                                     # still down: the same error
         self.assertEqual((code, again["error"]), (1, "script_failed"))
@@ -297,6 +323,109 @@ class CliJson(unittest.TestCase):
         self.assertEqual((code, done.get("done")), (0, True))
         self.assertEqual(done["result"]["summary"], "Two replies drafted, one ticket escalated.")
 
+    def test_progress_reports_a_batch_as_it_goes(self):
+        """Inside a batch the lines appear as the entries are written, before the pause: the
+        classifications with their values, the routes, the escalation."""
+        with self.decision_model():
+            code, printed, _ = self.run_(TRIAGE, {"tickets": TICKETS, "policy": POLICY}, "--progress")
+        lines, pause = printed[:-1], printed[-1]
+        self.assertEqual((code, pause["paused"], pause["step"]), (0, "task", "draft"))
+        self.assertEqual([(l["step"], l["pass"]) for l in lines],
+                         [("start", None), ("classify", 0), ("by_tone", 0), ("classify", 1), ("by_tone", 1), ("escalate", 1),
+                          ("classify", 2), ("by_tone", 2)], "pass by pass, as they run")
+        self.assertEqual(lines[3]["answers"]["tone"], {"value": "angry", "confidence": 0.9})
+        self.assertEqual([(l["to"], l["fired"]) for l in lines if l["step"] == "by_tone"],
+                         [("draft", False), ("escalate", False), ("draft", False)])
+
+    def test_the_last_pass_is_announced_and_a_loop_at_its_cap_is_not_resumable(self):
+        """Plan R5's proof on fixed-policy, with a model that never finds the policies held: the
+        third `fix` task says it is the last pass, the cap fails the run for good, and the final
+        state holds no loop key."""
+        with self.decision_model():
+            code, [pause], _ = self.run_(FIXED, {"request": "Write a thank-you note."})
+            self.assertEqual((code, pause["step"], "last_pass" in pause["tasks"][0]), (0, "draft", False))
+            seen, lines = [], []
+            code, [pause], _ = self.resume({"work": "Thank you!"})
+            for _ in range(3):
+                task = pause["tasks"][0]
+                self.assertEqual((code, pause["step"]), (0, "fix"))
+                seen.append((task["pass"], task["last_pass"], task["pass_of"]))
+                code, printed, _ = self.resume({"work": "Thank you."}, "--progress")
+                pause = printed[-1]
+                lines += printed[:-1]
+        self.assertEqual(seen, [(0, False, 3), (1, False, 3), (2, True, 3)])
+        self.assertEqual(code, 1)
+        self.assert_documented("error-loop-cap", pause)
+        self.assertEqual(printed[-2], {"event": "step", "step": "revise", "kind": "Loop", "pass": None, "passes": [], "exit": "cap",
+                                       "where": "head", "iterations": 3}, "the loop's exit entry is written at the cap too")
+        aggregate = [l for l in lines if l.get("kind") == "Aggregate"][0]
+        self.assertEqual(aggregate["result"], {"all_hold": False}, "a progress line carries the aggregation's result")
+        held = RunFile.load(self.run_file)
+        self.assertEqual((held.status, held.run["loops"], held.run["frames"]), ("failed", {}, []))
+        self.assertFalse({"index", "iterations", "revise"} & set(held.run["state"]), "no loop key in the final state")
+        check = [e for e in held.run["history"] if e["step"] == "check"]
+        self.assertEqual([e["until"]["holds"] for e in check], [False, False, False], "each pass's first entry carries the head's Until test")
+        self.assertEqual((check[0]["until"]["resolution"], check[1]["until"]["resolution"]["value"]), (None, False))
+        code, [again], err = self.resume(None)
+        self.assertEqual((code, again["error"], again["resumable"], err), (1, "not_paused", False, ""))
+        self.assertIn("a retry would only repeat", again["message"])
+
+    def test_runs_lists_this_machines_runs_and_prints_one_as_a_table(self):
+        code, printed, _ = self.aip("runs")
+        self.assertEqual((code, printed), (0, ["no runs on this machine"]))
+        with self.decision_model(0.1):
+            self.run_(EXAMPLE, {"message": ANGRY})
+        done_id = self.run_id
+        self.run_(AGENT, {"message": CALM})
+        code, printed, err = self.aip("runs")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(printed[0].split(), ["RUN", "NAME", "STATUS", "AGENT", "STARTED", "UPDATED"])
+        self.assertEqual([line.split()[:5] for line in printed[1:]], [[self.run_id, "billing_support_agent", "(draft)", "paused", "cli"],
+                                                                       [done_id, "billing_support", "(draft)", "done", "cli"]])
+        code, [rows], _ = self.aip("runs", "--json", "--status", "done")
+        self.assertEqual([(r["run_id"], r["status"]) for r in rows], [(done_id, "done")])
+        code, table, _ = self.aip("runs", done_id)
+        self.assertEqual(code, 0)
+        self.assertEqual(table[0].split(), ["run", done_id, "billing_support", "draft", "done"])
+        header = next(i for i, line in enumerate(table) if line.startswith("STEP"))
+        self.assertEqual(table[header].split(), ["STEP", "KIND", "PASS", "WHEN", "+MS", "WHAT"])
+        rows = [line.split() for line in table[header + 1:header + 6]]
+        self.assertEqual([(r[0], r[1], r[2]) for r in rows], [("start", "Start", "-"), ("triage", "Decide", "-"), ("by_tone", "Route", "-"),
+                                                             ("escalate", "Execute", "-"), ("end", "End", "-")])
+        self.assertTrue(all(r[4].isdigit() for r in rows), "+ms: the step's own time")
+        self.assertIn("billing=true 0.94, tone=angry 0.9  (by jev-1)", table[header + 2])
+        self.assertIn("-> escalate  (triage_decision.tone is angry; confidence 0.9 not below 0.9)", table[header + 3])
+        self.assertTrue(table[-1].startswith("result: {"))
+        code, paused, _ = self.aip("runs", self.run_id)
+        self.assertIn(f"paused at triage since ", paused[-1])
+        code, [record], _ = self.aip("runs", done_id, "--json")
+        self.assertEqual((record["run_id"], record["status"], len(record["history"])), (done_id, "done", 5))
+        code, printed, err = self.aip("runs", "zzz")
+        self.assertEqual((code, printed, err), (1, [], "aip: no run zzz on this machine\n"))
+
+    def test_help_has_a_line_per_command_and_server_help_prints(self):
+        from aip.client.cli import COMMANDS, SUMMARIES
+
+        self.assertEqual(set(SUMMARIES), set(COMMANDS))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", new=out):
+            self.assertEqual(main(["--help"]), 0)
+        for command in COMMANDS:
+            self.assertRegex(out.getvalue(), rf"(?m)^  {command}\s+\S.+$")
+        for command, marker in (("server", "usage: aip server"), ("db", "Not on 0.9 yet"), ("runs", "this machine's run files")):
+            out = io.StringIO()
+            with mock.patch("sys.stdout", new=out), self.assertRaises(SystemExit) as stop:
+                main([command, "--help"])
+            self.assertEqual(stop.exception.code, 0)
+            self.assertIn(marker, " ".join(out.getvalue().split()))
+
+    def test_a_file_that_is_not_a_bundle_says_so_and_nothing_about_the_engine(self):
+        garbage = self.tmp / "garbage.rl"
+        garbage.write_bytes(b"not a bundle")
+        code, [error], _ = self.aip("run", str(garbage), "--inputs", "{}")
+        self.assertEqual((code, error["error"], error["kind"]), (1, "invalid_input", "not_a_bundle"))
+        self.assertEqual(error["message"], f"{garbage} is not an .rl bundle")
+
     def test_errors_before_anything_ran_are_not_resumable(self):
         code, [error], err = self.aip("run", str(EXAMPLE), "--inputs", json.dumps({"msg": "wrong key"}))
         self.assertEqual((code, err), (1, ""))
@@ -319,8 +448,8 @@ class CliJson(unittest.TestCase):
         self.assertIn("Traceback", err)
 
     def test_every_documented_example_is_exercised(self):
-        names = {"paused-task-labels", "paused-task", "paused-tasks", "done", "error-invalid-output", "error-invalid-input",
-                 "error-script-failed", "error-no-decision-model", "progress"}
+        names = {"paused-task-labels", "paused-task", "paused-tasks", "done", "error-invalid-output", "error-extra-key",
+                 "error-invalid-input", "error-script-failed", "error-no-decision-model", "error-loop-cap", "progress"}
         self.assertEqual(set(self.docs), names)
 
 

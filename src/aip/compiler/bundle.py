@@ -215,7 +215,7 @@ def read_bundle(path: Path | str) -> Bundle:
         if isinstance(exc, BundleError):
             raise
         if type(exc).__name__ in ("OperationalError", "RuntimeError", "InterfaceError"):
-            raise BundleError("not_a_bundle", f"{target} is not a bundle Relate can open: {exc}") from exc
+            raise BundleError("not_a_bundle", f"{target} is not an {BUNDLE_SUFFIX} bundle") from exc
         raise
     language = header.get("language_version")
     if language != LANGUAGE_VERSION:

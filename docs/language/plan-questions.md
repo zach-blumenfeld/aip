@@ -214,10 +214,27 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     on a `true_or_false` answer. (e) A step sees a loop's number under the last word of its path,
     as it sees any read (`Read revise.iterations` hands it `iterations`), so two loops' numbers
     in one step are read as the loops' whole keys, `Read review, revise`.
-39. **Open 2026-11-09, found in L6.** Two reads of one step that end in the same word
-    (`Read review.iterations, revise.iterations`, or `Read first.tone, second.tone` from two
-    decisions) are handed to the step under one name, and one is lost without a word. Default,
-    proposed for R5: a compile error naming both reads and the fix (read the keys whole).
+39. **Found in L6, decided and done in R5 (2026-11-09).** Two reads of one step that end in the
+    same word (`Read review.iterations, revise.iterations`, or `Read first.tone, second.tone`
+    from two decisions) were handed to the step under one name, and one was lost without a
+    word. It is a compile error, `ambiguous_read`, naming both reads and the fix: read the keys
+    whole (`Read review, revise`) and name the field in the script or the template.
+40. **Decided in R5 (2026-11-09), where the plan left a choice.** (a) A pause is answered whole:
+    a task left out refuses the answers (`missing_tasks`) as an extra one does (`invalid_tasks`),
+    and nothing is applied. R2 had a missing index fail its pass, which is the
+    failed-then-bare-resume dance the reports asked to be rid of. (b) The runtime's loop keys are
+    kept beside the state (`loops` in the run file), not stripped from it at the end, so no
+    saved state holds one at any time, a resumable failed run included. (c) The `Until` test at
+    the head of a pass is a field, `until`, on the first entry the pass writes at the loop's
+    level, not an entry of its own, so the history keeps one entry per step run. (d)
+    `last_pass` and `pass_of` are on a task only when its innermost loop is a capped `Loop`, so
+    they speak of the same loop as the task's `pass`. (e) A `Task_Agent` entry's `answered_by`
+    is who resumed (`AIP_AGENT`, `AIP_SESSION`, else the run's own identity), which may differ
+    from who started the run. (f) A loop's exit entry has no `seconds`: its time is its passes'.
+    (g) `--progress` prints an entry the moment it is written, which inside a batch is the
+    order things happened in and can differ from the history's pass order. (h) The line `not
+    recorded: no server is configured` is `aip run`'s alone; a server that is configured and
+    refuses a stop is still reported at every stop.
 
 ## Revised after public feedback (2026-11-09)
 

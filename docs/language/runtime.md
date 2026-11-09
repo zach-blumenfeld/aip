@@ -34,9 +34,10 @@ procedure means; this page says what running one entails.
   the pass's number, from 0, while the loop runs, and `<loop>.iterations` how many passes ran, a
   pass ended by `Until` included, once it has exited. The bare `index` is the innermost running
   loop's and the bare `iterations` the last exited loop's; when a nested loop exits, `index` is
-  the enclosing pass's again. None of these keys is in the final state of a run, done or failed.
-  (The engine writes all of them, and does not yet clear them from a final state: plan
-  milestone R5.)
+  the enclosing pass's again. A step reads them like any key, but they are the runtime's and
+  are kept beside the state, not in it: no saved state of a run holds one, and a run that is
+  over (done, or failed at a cap) keeps none at all. The reference runtime's run file has them
+  under `loops` while the run is under way, since a resumed run needs them.
 
 ## Steps
 
@@ -88,11 +89,16 @@ innermost loop's pass number and `passes` every enclosing loop's, outermost firs
 "each_ticket", "pass": 2}, {"loop": "revise", "pass": 0}]`). A task carries `prompt`, `state`
 (the `Read` keys), `references` (path and description), `answer_with` (the `Produce` keys and
 their types) and `labels` (for each `choice` or `score` among them, the values it may take, so
-the agent knows what to answer). The agent answers with one object per task, keyed by the task's
-index, or with the one object when there is one task; an answer that does not fit the step's
-keys is refused, nothing is applied, and the pause stands; a task left unanswered fails its
-pass (and so the run), and a retry asks for it again. The step's record entry is written when
-the answer is accepted.
+the agent knows what to answer). A task whose innermost loop is a `Loop` with a cap also says
+`pass_of`, the cap, and `last_pass`, whether this pass is the last the cap allows, so an agent
+asked to fix something on the last pass knows no pass follows it. The agent answers every task
+of the pause at once, with one object per task keyed by the task's index, or with the one
+object when there is one task. Answers are as strict as inputs: a key missing, a key or a task
+the pause did not ask for, a task left out, a value outside the labels, or a field on an answer
+beside its value, and the answers are refused whole, the refusal naming each such key and task;
+nothing is applied, and the pause stands with the same tasks, to be answered again. The step's
+history entry is written when the answer is accepted, and says who answered and how long the
+run waited.
 - `End`: the result is the `Read` keys the path taken produced; a key named there but produced
   only on another path is left out, so a run reports what it did (a ticket, or a reply).
 
@@ -100,9 +106,11 @@ the answer is accepted.
 
 - The cap (`At_Most`, `Times`) is enforced before the first pass for a `For` and for a fold (the
   list may not be longer than the cap; `loop_cap` fails the run before any pass) and at the head
-  of each pass for a `Loop`. `Else_Fail` fails the run at the cap (`loop_cap`, with the loop,
-  the cap and the count; a retry arrives at the head again and fails the same way); `Else_Exit`
-  leaves the loop; a `Times` loop simply ends.
+  of each pass for a `Loop`. `Else_Fail` fails the run at the cap (`loop_cap`, naming the loop,
+  the cap and the count, and no step or pass, since none was under way); `Else_Exit` leaves the
+  loop; a `Times` loop simply ends. A run failed by `loop_cap`, in either form, is over: a retry
+  would fail the same way, so the runtime does not offer one (`resumable: false`), and the
+  loop's exit entry is in the history with `cap` as its reason.
 - `For` passes are independent: each sees the item, its index, the state as it was before the
   loop, and the record as it was before the loop, and nothing from another pass. `Collect`
   builds its list in input order whatever order the passes ran in; every other key a pass wrote
@@ -119,8 +127,8 @@ the answer is accepted.
   the enclosing loop is reached again, which ends the pass; everything on that path runs,
   recorded under the pass that asked for it (and with that pass's `index`), and the head's
   `Until` test is what sees the fresh answer.
-- A loop writes one record entry when it exits (below). The loop's frame, the pass count and the
-  passes in flight are part of the run's saved state, so a paused run resumes mid-loop.
+- A loop writes one history entry when it exits (below). The loop's frame, the pass count and the
+  passes in flight are part of the saved run, so a paused run resumes mid-loop.
 
 ### Batching `For` passes
 
@@ -152,9 +160,12 @@ operator setting, not something the procedure says:
   as the rest of this section holds.
 - Batching never changes a result. Anything a pass could observe is the same at every batch
   size, which is what the independence rule guarantees, and a procedure that gives different
-  results at different batch sizes is a bug in the runtime. The record is the same too: a
-  pass's entries are appended when its batch completes, pass by pass in input order, so the
-  record reads as if the passes had run one at a time.
+  results at different batch sizes is a bug in the runtime. The history is the same too: a
+  pass's entries are appended when its batch completes, pass by pass in input order, so it
+  reads as if the passes had run one at a time. Only the timings differ, and the mark on a
+  decision that went out with others in one call (below). A runtime that reports progress
+  reports each entry as it is written, which inside a batch is the order things happened in,
+  not the history's.
 - A failing pass fails the run. The passes of its batch that finished are recorded, a pass
   waiting for the agent stays where it is, and no further pass starts; a retry runs the failed
   pass's step again and the batch goes on.
@@ -162,27 +173,38 @@ operator setting, not something the procedure says:
 
 ## The record
 
-- Every run entry carries the bundle id, so a question about a run can name the exact program
-  that ran, and the time it was written.
-- Every step's outputs are recorded, including every pass of a loop, with the pass number: one
-  entry per step run, with the keys the step read (`input`) and what it produced (`result`),
-  `pass` (the innermost loop's pass number, from 0; none outside loops) and `passes` (every
-  enclosing loop's name and pass number, outermost first).
+The record is the whole run; its **history** is the list of entries, one per step run. The
+reference runtime's field names are in `docs/cli-json.md`, The run file.
+
+- The run carries the bundle id, once, so a question about a run can name the exact program that
+  ran; when it started and when it finished; and who ran it: `agent` (the framework or tool,
+  from the MCP client or `--agent` / `AIP_AGENT`), `session` (a caller-supplied id grouping
+  runs, `--session` / `AIP_SESSION`) and `user` (the server token's name). Claimed, not verified.
+- Every step's outputs are in the history, including every pass of a loop, with the pass number:
+  one entry per step run, with the time it was written, the keys the step read (`input`, each
+  under the name the step reads it by) and what it produced (`result`), `pass` (the innermost
+  loop's pass number, from 0; none outside loops) and `passes` (every enclosing loop's name and
+  pass number, outermost first).
+- Every step's entry says how long the step took (`seconds`, its own wall time, waiting for an
+  agent not counted), so where a run's time went can be read off the history.
 - A loop writes one entry when it exits, under its name and kind (`For` or `Loop`): what it ran
   over, `iterations` and the collected list as its result, and `exit`: why it ended (`until`,
   `items`, `times`, `cap`), where (`head`, or the body step or loop that produced the `Until`
-  answer) and that answer's resolution.
-- The run carries who ran it: `agent` (the framework or tool, from the MCP client or
-  `--agent` / `AIP_AGENT`), `session` (a caller-supplied id grouping runs, `--session` /
-  `AIP_SESSION`) and `user` (the server token's name). Claimed, not verified.
-- A decision's record says which model answered and at which endpoint, whether the history was
-  sent, and keeps the model's full answer objects. A route's record says what it read, whether its confidence check
-  fired and why (below the bound, absent), and where it went. An
-  aggregation's record keeps every answer's resolution (its value, the probability on the
-  condition, whether it held, whether a bar turned it). A script's record keeps the script, what
-  it was given on stdin and how long it took. An agent task's record keeps the prompt and
-  references it was given.
-- The record is appended, never rewritten. A run that fails keeps everything up to the failure
+  answer) and that answer's resolution. A loop that fails the run at its cap writes it too. The
+  test of `Until` at the head of a pass that then ran is written as well, on the first entry
+  the pass writes at the loop's level (`until`: that it did not hold, and the answer's
+  resolution, or none when the answer was absent), so the history shows why each pass ran.
+- A decision's entry says which model answered and at which endpoint, how long the call alone
+  took (`model_seconds`), whether the history was sent, whether it went out with other passes
+  in one call and how many (`batched`, `batch_size`), and keeps the model's full answer objects.
+  A route's entry says what it read (the dotted key, for lineage), whether its confidence
+  check fired and why (below the bound, absent), and where it went, once. An aggregation's
+  entry keeps every answer's resolution (its value, the probability on the condition, which is
+  the number a bar reads, whether it held, whether a bar turned it). A script's entry keeps the
+  script and what it was given on stdin. An agent task's entry keeps the prompt and references
+  it was given, who answered (`agent`, `session`) and how long the run waited for the answer
+  (`waited_seconds`).
+- The history is appended, never rewritten. A run that fails keeps everything up to the failure
   and the error beside it; the failed step runs again on a retry, from the state before it.
 
 ## What a runtime may add

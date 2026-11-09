@@ -14,6 +14,7 @@ from pathlib import Path
 
 from aip.compiler import FileEntry, compile_folder, compile_source, example_dir, relate
 
+from aip.model.types import resumable
 from aip.model import (
     DONE, FAILED, PAUSED, Engine, InvalidInput, InvalidOutput, NotPaused, Procedure, ScriptedResolver, answers,
 )
@@ -133,7 +134,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(run.state["queue"], "tier2")
         self.assertTrue((self.home / "cache" / self.bundle.id / "scripts" / "escalate.py").is_file())
         route = run.history[2]
-        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.95, "fired": False, "reason": None})
+        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.95, "fired": False})
         self.assertEqual((route["value"], route["to"]), ("angry", "escalate"))
 
     def test_the_confidence_arm_escalates_an_unsure_calm(self):
@@ -144,13 +145,14 @@ class BillingSupport(EngineCase):
         route = run.history[2]
         self.assertEqual(route["read"], "triage_decision.tone")
         self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.55, "fired": True, "reason": "below"})
-        self.assertEqual((route["value"], route["to"], route["result"]), (None, "escalate", {"to": "escalate"}))
+        self.assertEqual((route["value"], route["to"], route["result"]), (None, "escalate", {}), "a route says where it went once")
+        self.assertEqual(route["input"], {"tone": run.state["triage_decision"]["tone"]}, "the answer under the name a step reads it by")
 
     def test_without_a_model_the_decision_fails_the_run_and_a_retry_with_one_goes_on(self):
         """Spec 2.4: a Decide is always a model's; there is no agent fallback (plan L4)."""
         procedure = self.load(self.bundle)
         run = self.engine(None).start(procedure, {"message": self.message})
-        self.assertEqual((run.status, run.error["error"], run.error["step"], run.at), (FAILED, "no_decision_model", "triage", "step:triage"))
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.position), (FAILED, "no_decision_model", "triage", "step:triage"))
         self.assertIn("configure one", run.error["message"])
         self.assertEqual(self.steps_of(run), ["start"], "nothing is recorded for the decision")
         with self.assertRaises(NotPaused):
@@ -184,14 +186,24 @@ class BillingSupport(EngineCase):
         with self.assertRaises(InvalidInput):
             engine.start(procedure, ["message"])
 
-    def test_every_entry_carries_the_bundle_id_and_the_clock(self):
-        engine = self.engine(ScriptedResolver({"triage": angry()}))
+    def test_every_entry_carries_the_clock_and_its_seconds_and_the_run_the_bundle_id(self):
+        ticks = iter(range(1000))
+        engine = self.engine(ScriptedResolver({"triage": angry()}), timer=lambda: next(ticks) / 4)   # a timer that moves 0.25 s a look
         run = engine.start(self.load(self.bundle), {"message": self.message})
         for entry in run.history:
-            self.assertEqual((entry["bundle_id"], entry["at"], entry["pass"], entry["passes"]), (self.bundle.id, CLOCK(), None, []))
+            self.assertEqual((entry["at"], entry["pass"], entry["passes"]), (CLOCK(), None, []))
+            self.assertNotIn("bundle_id", entry, "the run carries the bundle id, once")
             self.assertIn(entry["kind"], ("Start", "Decide", "Route", "Execute", "End"))
-        self.assertEqual(run.history[0], {"bundle_id": self.bundle.id, "step": "start", "kind": "Start", "pass": None, "passes": [],
-                                          "at": CLOCK(), "input": {"message": self.message}, "result": {}})
+            self.assertGreater(entry["seconds"], 0, "every step's entry says how long the step took")
+        self.assertEqual(run.history[0], {"step": "start", "kind": "Start", "pass": None, "passes": [], "at": CLOCK(), "seconds": 0.25,
+                                          "input": {"message": self.message}, "result": {}})
+        triage = run.history[1]
+        self.assertEqual(triage["model_seconds"], 0.25, "the call alone")
+        self.assertGreater(triage["seconds"], triage["model_seconds"])
+        self.assertNotIn("batched", triage)
+        saved = run.to_dict()
+        self.assertEqual((saved["bundle_id"], saved["started"], saved["finished"], saved["position"]), (self.bundle.id, CLOCK(), CLOCK(), None))
+        self.assertEqual((saved["loops"], saved["frames"]), ({}, []))
         self.assertEqual(run.identity, {"agent": None, "session": None, "user": None})
 
     def test_the_identity_is_the_run_s(self):
@@ -524,7 +536,7 @@ class Scripts(EngineCase):
         self.assertEqual({k: run.error[k] for k in ("error", "step", "script", "exit_code", "stderr")},
                          {"error": "script_failed", "step": "check", "script": "scripts/check.py", "exit_code": 3, "stderr": "boom"})
         self.assertEqual(self.steps_of(run), ["start"], "the record keeps everything up to the failure")
-        self.assertEqual(run.at, "step:check")
+        self.assertEqual(run.position, "step:check")
         run = engine.retry(run)
         self.assertEqual((run.status, run.error["error"]), (FAILED, "script_failed"))
 
@@ -618,9 +630,13 @@ class Scores(EngineCase):
         self.assertEqual(run.history[2]["check"]["reason"], "below")
 
 
+TIMING = ("at", "seconds", "model_seconds", "waited_seconds", "batched", "batch_size")
+
+
 def without_timestamps(history):
-    """The record less what the clock wrote: `at`, and a script's `seconds`."""
-    return [{k: v for k, v in e.items() if k not in ("at", "seconds")} for e in history]
+    """The history less what the clock and the batching wrote: when and how long, and whether
+    a decision went out in a batch."""
+    return [{k: v for k, v in e.items() if k not in TIMING} for e in history]
 
 
 def policy_verdicts(request):
@@ -699,8 +715,8 @@ class DynamicPolicy(EngineCase):
             "answer": "check_summary.all_hold", "value": True, "holds": True, "probability": None, "barred": False}},
             "the loop ends the moment the aggregate is produced and holds; fix does not run again")
         self.assertEqual(revise["result"], {"iterations": 2})
-        self.assertEqual(run.state["iterations"], 2)
-        self.assertNotIn("index", run.state, "the pass index is gone after the loop")
+        self.assertEqual((run.loops, [k for k in ("index", "iterations", "revise", "review") if k in run.state]), ({}, []),
+                         "no loop key is in the state, and none is kept once the run is done")
         self.assertEqual(set(run.result), {"work", "verdicts"})
         self.assertEqual(run.result["work"], "a fixed draft")
 
@@ -713,20 +729,48 @@ class DynamicPolicy(EngineCase):
             self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"))
             run = engine.resume(run, {"work": "w2"})
         self.assertEqual(run.status, FAILED)
-        self.assertEqual({k: run.error[k] for k in ("error", "step", "loop", "cap", "count", "pass")},
-                         {"error": "loop_cap", "step": "revise", "loop": "revise", "cap": 3, "count": 3, "pass": 3})
+        self.assertEqual({k: run.error[k] for k in ("error", "step", "loop", "cap", "count", "pass", "passes")},
+                         {"error": "loop_cap", "step": None, "loop": "revise", "cap": 3, "count": 3, "pass": None, "passes": []},
+                         "the error names the loop, and no pass that never ran")
         self.assertEqual([e["step"] for e in run.history].count("fix"), 3)
-        self.assertEqual(run.at, "loop:revise")
-        run = engine.retry(run)
-        self.assertEqual((run.status, run.error["error"], run.error["count"]), (FAILED, "loop_cap", 3), "the count does not move on a retry")
+        self.assertEqual(run.position, "loop:revise")
+        last = run.history[-1]
+        self.assertEqual((last["step"], last["kind"], last["result"], last["exit"]["reason"], last["exit"]["where"]),
+                         ("revise", "Loop", {"iterations": 3}, "cap", "head"), "the loop's entry says why it ended")
+        self.assertEqual(last["exit"]["resolution"]["holds"], False)
+        self.assertEqual((run.loops, run.frames), ({}, []), "a run that is over keeps no loop key and no frame")
+        self.assertFalse(resumable(run.error))
+        with self.assertRaises(NotPaused):
+            engine.retry(run)
+
+    def test_the_last_pass_is_announced_and_the_head_test_is_recorded(self):
+        resolver = ScriptedResolver({"check": {"follows": answers.true_or_false(0.2)}})  # never passes
+        engine = self.engine(resolver)
+        run = engine.start(self.load(self.bundle), {"task": "t", "policies": ["p"]})
+        self.assertNotIn("last_pass", run.pause["tasks"][0], "draft is in no loop")
+        run = engine.resume(run, {"work": "w"})
+        seen = []
+        for _ in range(3):
+            task = run.pause["tasks"][0]
+            seen.append((task["pass"], task["last_pass"], task["pass_of"]))
+            run = engine.resume(run, {"work": "w2"})
+        self.assertEqual(seen, [(0, False, 3), (1, False, 3), (2, True, 3)])
+        firsts = [e for e in run.history if e["step"] == "review"]
+        self.assertEqual([e["until"] for e in firsts][0], {"where": "head", "holds": False, "resolution": None},
+                         "before the first pass the answer is absent")
+        self.assertEqual([(e["until"]["holds"], e["until"]["resolution"]["value"]) for e in firsts[1:]], [(False, False), (False, False)],
+                         "the test that let each later pass run is on the pass's first entry at the loop's level")
+        self.assertTrue(all("until" not in e for e in run.history if e["step"] != "review"))
 
     def test_a_list_longer_than_the_cap_fails_before_the_first_pass(self):
         engine = self.engine(ScriptedResolver({"check": policy_verdicts}))
         run = engine.start(self.load(self.bundle), {"task": "t", "policies": [f"p{i}" for i in range(21)]})
         run = engine.resume(run, {"work": "w"})
-        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["count"], run.error["cap"]),
-                         (FAILED, "loop_cap", "review", 21, 20))
-        self.assertEqual([e["step"] for e in run.history], ["start", "draft"])
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["loop"], run.error["count"], run.error["cap"]),
+                         (FAILED, "loop_cap", None, "review", 21, 20))
+        self.assertEqual([e["step"] for e in run.history], ["start", "draft", "review"])
+        self.assertEqual((run.history[-1]["exit"], run.history[-1]["result"]), ({"reason": "cap", "where": "head"}, {"iterations": 0}))
+        self.assertFalse(resumable(run.error))
 
     def test_without_a_model_the_batch_fails_at_its_first_pass_and_a_retry_with_one_goes_on(self):
         procedure = self.load(self.bundle)
@@ -767,11 +811,12 @@ class DynamicPolicy(EngineCase):
         engine = self.engine(ScriptedResolver({"check": policy_verdicts}))
         procedure = self.load(self.bundle)
         run = engine.resume(engine.start(procedure, {"task": "t", "policies": self.POLICIES}), {"work": "a draft"})
-        self.assertEqual((run.status, run.at), (PAUSED, "step:fix"))
+        self.assertEqual((run.status, run.position), (PAUSED, "step:fix"))
         restored = Run.from_dict(procedure, json.loads(json.dumps(run.to_dict())))
         self.assertEqual(restored.frames[0]["count"], 0)
+        self.assertEqual(restored.loops["revise"], {"index": 0}, "the loop keys travel beside the state")
         restored = engine.resume(restored, {"work": "a fixed draft"})
-        self.assertEqual((restored.status, restored.state["iterations"]), (DONE, 2))
+        self.assertEqual((restored.status, restored.history[-2]["result"]), (DONE, {"iterations": 2}))
 
 
 @needs_relate
@@ -817,7 +862,7 @@ class FixedPolicy(EngineCase):
             run = engine.resume(run, {"work": "w"})
         self.assertEqual((run.status, run.error), (DONE, None))
         self.assertEqual(run.history[-2]["exit"], {"reason": "cap", "where": "head"})
-        self.assertEqual(run.state["iterations"], 3)
+        self.assertEqual(run.history[-2]["result"], {"iterations": 3})
 
 
 def triage_answers(request):
@@ -893,22 +938,36 @@ class TicketTriage(EngineCase):
     def test_the_record_matches_at_batch_one(self):
         self.assertEqual(without_timestamps(self.drive(1).history), without_timestamps(self.drive(10).history))
 
-    def test_a_bad_answer_is_refused_a_missing_one_fails_its_pass_and_a_retry_asks_for_it_alone(self):
+    def test_an_answer_that_does_not_fit_is_refused_whole_and_the_pause_stands(self):
+        """Answers are as strict as inputs (plan R5): a wrong type, a key or a task the pause did
+        not ask for, or a task left out, and nothing is applied; the same tasks wait."""
         engine = Engine(ScriptedResolver({"classify": triage_answers}), home=self.home, workdir=self.tmp, batch=10, clock=CLOCK)
         run = engine.start(self.load(self.bundle), {"tickets": self.TICKETS, "policy": self.POLICY})
-        self.assertEqual([(t["index"], t["pass"]) for t in run.pause["tasks"]], [(0, 0), (1, 2)])
-        with self.assertRaises(InvalidOutput):
-            engine.resume(run, {"0": {"reply": "ok"}, "1": {"reply": 7}})
-        self.assertEqual(run.status, PAUSED, "a bad answer is refused and the pause stands")
-        run = engine.resume(run, {"0": {"reply": "We refund within 30 days, of course."}})
-        self.assertEqual((run.status, run.error["error"], run.error["pass"], run.error["missing"]), (FAILED, "invalid_output", 2, ["1"]))
-        recorded = [(e["step"], e["pass"]) for e in run.history]
-        self.assertIn(("draft", 0), recorded, "the answered pass is recorded")
-        self.assertIn(("escalate", 1), recorded, "the pass that finished is recorded")
-        self.assertNotIn(("draft", 2), recorded, "the unanswered pass is not")
-        run = engine.retry(run)
-        self.assertEqual((run.status, run.pause["step"], [(t["index"], t["pass"]) for t in run.pause["tasks"]]), (PAUSED, "draft", [(0, 2)]))
-        run = engine.resume(run, {"reply": "We refund within 30 days. I checked your plan."})
+        waiting = [(t["index"], t["pass"]) for t in run.pause["tasks"]]
+        self.assertEqual(waiting, [(0, 0), (1, 2)])
+        good = {"reply": "We refund within 30 days, of course."}
+        before = len(run.history)
+
+        def refused(answers):
+            with self.assertRaises(InvalidOutput) as caught:
+                engine.resume(run, answers)
+            self.assertEqual((run.status, [(t["index"], t["pass"]) for t in run.pause["tasks"]], len(run.history)),
+                             (PAUSED, waiting, before), "nothing is applied and the same tasks wait")
+            return caught.exception
+
+        err = refused({"0": good, "1": {"reply": 7}})
+        self.assertEqual((err.invalid, err.to_dict()["message"]), (["reply"], "the output of 'draft': task 1: reply: expected a string, got an integer"))
+        err = refused({"0": good})                                             # a task left out
+        self.assertEqual((err.missing, err.missing_tasks, err.to_dict()["missing_tasks"]), ([], [1], [1]))
+        self.assertNotIn("invalid_tasks", err.to_dict())
+        err = refused([good, good, good])                                      # one answer more than there are tasks
+        self.assertEqual((err.invalid_tasks, err.missing_tasks), ([2], []))
+        self.assertIn("there is no task 2; the pause has 2 tasks, 0, 1", err.message)
+        err = refused({"0": good, "1": {**good, "notes": "x"}, "5": good})     # a key and a task the pause did not ask for
+        self.assertEqual((err.invalid, err.invalid_tasks), (["notes"], [5]))
+        self.assertIn("task 1: notes is not a Produce key of draft; its keys are ['reply']", err.message)
+        self.assertEqual(refused(good).errors[0][:22], "the pause has 2 tasks:")
+        run = engine.resume(run, {"0": good, "1": {"reply": "We refund within 30 days. I checked your plan."}})
         self.assertEqual((run.status, run.pause["step"]), (PAUSED, "summarize"))
 
 
@@ -1026,8 +1085,8 @@ class LoopForms(EngineCase):
         source = LOOPS.replace("  items: list\n", "  items: list\n  big: true_or_false\n")
         bundle = program(source, {"scripts/bump.py": STDIN + "print(json.dumps({'n': 1}))", "scripts/add.py": "", "scripts/probe.py": ""})
         run = self.engine().start(self.load(bundle), {"n": 0, "items": [1, 2, 3, 4, 5, 6], "big": False})
-        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["count"]), (FAILED, "loop_cap", "total", 6))
-        self.assertEqual([e["step"] for e in run.history][-2:], ["bump", "rounds"])
+        self.assertEqual((run.status, run.error["error"], run.error["loop"], run.error["count"]), (FAILED, "loop_cap", "total", 6))
+        self.assertEqual([e["step"] for e in run.history][-3:], ["bump", "rounds", "total"])
 
     def test_an_inner_loop_exiting_with_the_watched_answer_ends_the_outer_one(self):
         bundle = program(NESTED, {
@@ -1258,7 +1317,7 @@ class ScriptAnswers(EngineCase):
         self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "classify", "by_tone", "end"]))
         self.assertEqual(run.state["tone"], {"value": "calm", "confidence": 0.9, "probabilities": {"angry": 0.1, "calm": 0.9}},
                          "the script's confidence and probabilities are kept")
-        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None})
+        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": 0.9, "fired": False})
 
     def test_a_low_or_absent_confidence_fires_the_check(self):
         run = self.run_with({"value": "calm", "confidence": 0.3})

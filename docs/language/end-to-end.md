@@ -46,7 +46,7 @@ it fired, each loop pass by number, the aggregation's per-answer resolution (whi
 failed, which answer was under the bar). A failed run shows where it stopped and why.
 
 Needs: the record's shape as `docs/language/runtime.md` states it; a run view in the console that reads
-it; `aip runs` and `aip run --show`.
+it; `aip runs` and `aip runs <run_id>`.
 
 ## Scene 4: publish and run from a server
 

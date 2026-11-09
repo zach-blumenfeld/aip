@@ -46,23 +46,30 @@ directory); `batch` how many `For` passes run at once (default 10, `aip config -
 
 - `aip.Paused`: `kind` (`task`, the one kind: a `Task_Agent` step waits for the agent; a
   `Decide` never pauses), `step`, `tasks` (a list of `aip.Task`, one per `For` pass waiting at
-  the step; one outside a loop), `run_id`, `run_file`, `recorded`. A `Task` has `index` (what
-  the answer is keyed by), `pass_`, `passes`, `prompt`, `state`, `references`, `answer_with`
-  and `labels` (the values each `choice` or `score` in `answer_with` may take). `paused.task`
-  is the one task of a pause outside a loop.
+  the step; one outside a loop), `hint` (one line on the shape of an answer), `run_id`,
+  `run_file`, `recorded`. A `Task` has `index` (what the answer is keyed by), `pass_`, `passes`,
+  `prompt`, `state`, `references`, `answer_with` and `labels` (the values each `choice` or
+  `score` in `answer_with` may take), and inside a `Loop` with a cap `last_pass` (whether this
+  pass is the last the cap allows) and `pass_of` (the cap); both are `None` elsewhere.
+  `paused.task` is the one task of a pause outside a loop.
 - `aip.Done`: `run_id`, `result`, `run_file`, `recorded`.
 
 `recorded` is `True` when the server has this stop, `False` when the post failed
 (`client.recording_error` says why; the next stop tries again), `None` when no server is
 configured. `resume(run, answers=None)` answers a pause; `run` is the `Paused` (or the
 `RunError`), a run id, or a run file's path; `answers` is keyed by task index
-(`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task;
-an answer-typed key is the bare value or `{"value": ...}` among the key's labels, and anything
-else on it is refused (`invalid_output`, the pause stands). With no answers it retries the step
-a failed run stopped at. `on_step` receives each record
-entry's progress line as the run writes it; `on_pause`, if given, answers pauses in-process:
-return the answers to go on, or None to stop and get the `Paused` back. Each result's
-`to_json()` is exactly the object the CLI prints (`docs/cli-json.md`).
+(`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task,
+and answers every task of the pause; an answer-typed key is the bare value or `{"value": ...}`
+among the key's labels. Answers are as strict as inputs: a key or a task missing, one the pause
+did not ask for, or anything on an answer but its value raises a `RunError` (`invalid_output`,
+its `error` naming them under `missing`, `invalid`, `missing_tasks`, `invalid_tasks`), nothing
+is applied, and the pause stands: call `resume` again with the right answers. With no answers
+`resume` retries the step a failed run stopped at; a run that failed at a loop's cap
+(`loop_cap`, `resumable` false) is over and is not retried. `on_step` receives each history
+entry's progress line the moment the run writes it, inside a batch of `For` passes too;
+`on_pause`, if given, answers pauses in-process: return the answers to go on, or None to stop
+and get the `Paused` back. Each result's `to_json()` is exactly the object the CLI prints
+(`docs/cli-json.md`).
 
 ## Errors
 
@@ -70,7 +77,7 @@ Everything raises a subclass of `aip.AipError`, whose `kind` uses the CLI's voca
 
 | error | when |
 |---|---|
-| `aip.RunError` | a run stopped on an error; `error` is the CLI's error object, plus `step`, `run_id`, `resumable`, `run_file`, `recorded` and `cause` (the exception behind it, if any) |
+| `aip.RunError` | a run stopped on an error; `error` is the CLI's error object, plus `step`, `run_id`, `resumable`, `run_file`, `recorded`, `cause` (the exception behind it, if any) and `stopped` (False when the call changed nothing: a refused answer, a run with nothing to resume) |
 | `aip.CompileError` | a program directory that does not compile; `diagnostics` are the compiler's |
 | `aip.InvalidBundle` | an `.rl` that is not a usable bundle; `kind` is the bundle error's code (`not_a_bundle`, `bundle_tampered`, `bundle_language_version`) |
 | `aip.NotFound` | a target that is neither a folder, a bundle file, nor a name the server knows |
@@ -95,8 +102,8 @@ catalog reference still runs from the bundle cache.
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it) | `aip pin` |
 | `retire("name@revision")` | `Retired` | `aip retire` |
-| `runs(name=None, status=None, agent=None, session=None, limit=50)` | `[RunSummary]` | `aip runs` |
-| `run_record(run_id)` | `RunRecord`: `status`, `identity`, `pause`, `error`, `result`, `history`, from this machine's run file or the server | `aip runs <run_id>` |
+| `runs(name=None, status=None, agent=None, session=None, limit=50)` | `[RunSummary]`: `run_id`, `name`, `revision`, `status`, `draft`, `identity`, `started`, `updated`; the server's runs when one is configured, else this machine's run files | `aip runs` |
+| `run_record(run_id)` | `RunRecord`: `status`, `identity`, `started`, `finished`, `pause`, `error`, `result`, `history` (the entries, one per step run), `table()` (the step table), from this machine's run file or the server; `InvalidInput` when neither has it | `aip runs <run_id>` |
 | `governance(query=None, **params)` | `[GovernanceQuery]`, or the query's rows | `aip governance` |
 | `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server`, `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
 

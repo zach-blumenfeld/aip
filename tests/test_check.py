@@ -89,6 +89,8 @@ CASES = [
     ("duplicate_producer", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o: string  Next_Step u }\n'
                            'Task_Agent u "u" { Read o  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 4, 36, "u"),
     ("type_mismatch", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m: integer  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 3, 25, "t"),
+    ("ambiguous_read", START + NOUL.replace("Next_Step r", "Next_Step d2") + NOUL.replace("d ", "d2 ", 1).replace("dec", "dec2").replace("Next_Step r", "Next_Step t")
+     + 'Task_Agent t "t" { Read dec.q, dec2.q  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 5, 32, "t"),
     ("route_reads_one", START + NOUL + 'Route r "r" { Read dec.q, m  true -> end  false -> end }\nEnd "e" { Read dec }\n', 4, 1, "r"),
     ("condition_on_plain_value", START + NOUL + 'Route r "r" { Read m  true -> end  false -> end }\nEnd "e" { Read dec }\n', 4, 20, "r"),
     ("missing_branch", START + DECIDE + 'Route r "r" { Read dec.q  a -> end }\nEnd "e" { Read dec }\n', 4, 1, "r"),
@@ -126,6 +128,18 @@ class EveryCode(unittest.TestCase):
                 self.assertTrue(all(d.end_line >= d.line and (d.end_line > d.line or d.end_column > d.column) for d in found), "a span, not a point")
                 covered.add(code)
         self.assertEqual(covered, set(CODES) - {"missing_file"} | {"missing_file"}, "every code has a case")
+
+    def test_two_reads_that_end_in_the_same_word_are_ambiguous(self):
+        """Plan R5 (plan question 39): a step is handed each read under the last word of its
+        path, so two that end alike would land on one name. The fix is to read the keys whole."""
+        body = (START + NOUL.replace("Next_Step r", "Next_Step d2") + NOUL.replace("d ", "d2 ", 1).replace("dec", "dec2").replace("Next_Step r", "Next_Step t")
+                + 'Task_Agent t "t" { Read READS  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n')
+        [d] = diagnostics(body.replace("READS", "dec.q, dec2.q"))
+        self.assertEqual((d.code, d.severity, d.step), ("ambiguous_read", "error", "t"))
+        self.assertEqual(d.message, "dec.q and dec2.q would both reach t as q, the last word of each, and one would replace the other; "
+                                    "read the keys whole (Read dec, dec2) and name the field in the script or the template")
+        self.assertEqual(diagnostics(body.replace("READS", "dec, dec2")), [], "the keys read whole do not collide")
+        self.assertEqual(diagnostics(body.replace("READS", "dec.q, dec.q")), [], "the same read twice is one read")
 
     def test_syntax_error_is_a_diagnostic(self):
         program, found = check_source('Procedure p "x"\nDecide d {}\n', "p/procedure.aip")
@@ -506,23 +520,25 @@ class LoopKeys(unittest.TestCase):
     NESTED = ('Start "s" { items: list  Next_Step outer }\n'
               'Loop outer 2 Times {\n'
               '  For inner Over items As item, At_Most 5 {\n'
-              '    Task_Agent t "t" { Read item, index, inner.index, outer.index  Produce o: string  Continue }\n'
+              '    Task_Agent t "t" { Read item, inner.index, outer  Produce o: string  Continue }\n'
               '    Next_Step after\n  }\n'
-              '  Task_Agent after "a" { Read inner.iterations, outer.index, iterations, index  Produce note: string  Continue }\n'
+              '  Task_Agent after "a" { Read inner.iterations, outer.index  Produce note: string  Continue }\n'
               '  Next_Step last\n}\n'
-              'Task_Agent last "l" { Read inner.iterations, outer.iterations, iterations  Produce z: string  Next_Step end }\n'
+              'Task_Agent last "l" { Read inner, outer, iterations  Produce z: string  Next_Step end }\n'
               'End "e" { Read z }\n')
 
     def test_each_loop_has_its_own_index_and_iterations(self):
         self.assertEqual(codes(self.NESTED), [], "a step after nested loops reads the inner loop's count by the loop's name")
+        both = self.NESTED.replace("Read inner, outer, iterations", "Read inner.iterations, outer.iterations")
+        self.assertEqual(codes(both), ["ambiguous_read"], "two counts in one step are read as the loops' whole keys")
 
     def test_a_loop_key_is_read_where_it_exists(self):
-        [d] = diagnostics(self.NESTED.replace("Read inner.iterations, outer.index, iterations, index", "Read inner.index"))
+        [d] = diagnostics(self.NESTED.replace("Read inner.iterations, outer.index", "Read inner.index"))
         self.assertEqual((d.code, d.step), ("unknown_field", "after"))
         self.assertIn("inner.index inside its body and inner.iterations after it exits; here it has iterations", d.message)
-        [d] = diagnostics(self.NESTED.replace("Read inner.iterations, outer.iterations, iterations", "Read outer.index"))
+        [d] = diagnostics(self.NESTED.replace("Read inner, outer, iterations", "Read outer.index"))
         self.assertEqual((d.code, d.step), ("unknown_field", "last"))
-        [d] = diagnostics(self.NESTED.replace("Read item, index, inner.index, outer.index", "Read item, outer.iterations"))
+        [d] = diagnostics(self.NESTED.replace("Read item, inner.index, outer", "Read item, outer.iterations"))
         self.assertEqual((d.code, d.step), ("unknown_field", "t"))
         before = 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read l.iterations  Produce o: string  Next_Step l }\n' \
                  'Loop l 2 Times {\n  Task_Agent u "u" { Read o  Produce z: string  Continue }\n  Next_Step end\n}\nEnd "e" { Read z }\n'
@@ -533,10 +549,10 @@ class LoopKeys(unittest.TestCase):
     def test_a_for_pass_keeps_its_loop_keys_to_itself(self):
         body = ('Start "s" { items: list  Next_Step f }\nFor f Over items As item, At_Most 5 {\n'
                 '  Loop l 2 Times {\n    Task_Agent t "t" { Read item  Produce o: string  Continue }\n    Continue\n  }\n  Next_Step u\n}\n'
-                'Task_Agent u "u" { Read l.iterations, f.iterations  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
+                'Task_Agent u "u" { Read l, f  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.step), ("unavailable_key", "u"), "the inner loop ran once per pass of the For, and a pass's keys are gone after it")
-        self.assertEqual(codes(body.replace("Read l.iterations, f.iterations", "Read f.iterations")), [])
+        self.assertEqual(codes(body.replace("Read l, f", "Read f.iterations")), [])
 
     def test_a_key_may_not_share_a_loops_name(self):
         body = ('Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce l: string  Next_Step l }\n'
@@ -559,8 +575,8 @@ class LoopKeys(unittest.TestCase):
         g = bundle.graph
         self.assertEqual(g.node("data:inner").properties["runtime"], True)
         self.assertEqual([e.start for e in g.edges if e.type == "PRODUCES" and e.end == "data:inner"], ["loop:inner"])
-        fields = sorted(e.properties.get("field") for e in g.edges if e.type == "READ_BY" and e.start == "data:inner")
-        self.assertEqual(fields, ["index", "iterations", "iterations"])
+        fields = sorted(e.properties.get("field") or "" for e in g.edges if e.type == "READ_BY" and e.start == "data:inner")
+        self.assertEqual(fields, ["", "index", "iterations"], "read whole after both loops, by field inside and between them")
 
     def test_an_until_whose_answer_may_exist_can_end_the_loop_before_any_pass(self):
         """Spec 2.6: `Until` is tested at the head, so a body runs no pass when the answer already

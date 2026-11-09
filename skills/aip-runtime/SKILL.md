@@ -57,7 +57,7 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 
    | `paused`      | what the pause carries                               | what you put in the answer file                                    |
    |---------------|------------------------------------------------------|--------------------------------------------------------------------|
-   | `task`        | `tasks`, one per waiting pass, each with `prompt`: what to do; `state`; `references`; `answer_with`; `labels` | the work product under every key in `answer_with`, with those types; an answer-typed key is `true`/`false`, one of its `labels`, or the level number (list position from 0), and nothing else |
+   | `task`        | `tasks`, one per waiting pass, each with `prompt`: what to do; `state`; `references`; `answer_with`; `labels` | for every task at once, the work product under every key in `answer_with` and no other key, with those types; an answer-typed key is `true`/`false` or one of its `labels`, and nothing else |
 
    A decision (`Decide`) never pauses: the decision model on this machine answers it. There is no
    answering one yourself.
@@ -68,7 +68,8 @@ A skill folder on disk (`aip run <folder>`) runs locally with the same loop belo
 
 5. **On an error**, read `error`, `step` and `message`. `invalid_input` / `invalid_output`
    name the keys in `missing` and `invalid`: fix your input or answer and resume again (a
-   bad answer leaves the pause in place). `script_failed` carries the script's `exit_code`
+   bad answer leaves the pause in place, and names in `missing_tasks` a task you left out).
+   `loop_cap` has `resumable` false: a loop ran out of passes, the run is over, report it. `script_failed` carries the script's `exit_code`
    and `stderr`; if `resumable` is true, `aip resume <run_id>` with no input retries that
    step once the cause is fixed. `requires_unmet` lists in `missing` what the machine running
    the scripts lacks; install it if you may, then retry the same way. `no_decision_model`: this

@@ -6,14 +6,16 @@
     aip info <target>                   what a procedure is and what to give it
     aip pull | publish | get            move bundles between the cache and the catalog
     aip search | list | pin | retire    the catalog
-    aip runs | governance               the server's record
+    aip runs                            this machine's runs, or the server's; one run step by step
+    aip governance                      the server's governance queries
     aip config                          where the client points: the server, the token, the decision model's endpoint and key, the batch size
     aip server | db                     serve, or load Neo4j directly
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
-object (`docs/cli-json.md`); the rest print text, or JSON with `--json`. A run that no server
-records ends with one line on stderr saying so and how to change that.
+object (`docs/cli-json.md`); the rest print text, or JSON with `--json`. `aip run` with no
+server configured ends with one line on stderr saying the run is not recorded and how to change
+that; the run's resumes do not repeat it.
 """
 
 from __future__ import annotations
@@ -129,7 +131,7 @@ def info_command(argv: list[str]) -> int:
 
 def _run_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--progress", action="store_true",
-                        help="print one JSON line per record entry before the final object (itself one line)")
+                        help="print one JSON line per history entry as the run writes it, then the final object on one line")
     parser.add_argument("--debug", action="store_true", help="print a traceback on stderr when the command fails")
 
 
@@ -137,16 +139,17 @@ def _print_block(block: dict, progress: bool) -> None:
     print(json.dumps(block) if progress else json.dumps(block, indent=2))
 
 
-def _outcome(call: Callable[[Callable[[dict], None]], Any], client: Any, progress: bool, debug: bool) -> int:
+def _outcome(call: Callable[[Callable[[dict], None]], Any], client: Any, progress: bool, debug: bool, starting: bool) -> int:
     """`run` and `resume`: print where the run stopped as one object, exit 0 for paused or done
     and 1 for an error; then the recording line on stderr (`docs/cli-json.md`). Whatever else
     fails is still one error object, kind `invalid_input` for a target, inputs or run reference
-    that cannot be used, `server` for the rest."""
+    that cannot be used, `server` for the rest. `starting` is True for `run`, which is where a
+    run with no server says so, once."""
     from aip.client.runs import EXIT_ERROR, EXIT_OK, error_outcome
     from aip.errors import AipError
     from aip.sdk import CompileError, RunError
 
-    on_step = (lambda line: print(json.dumps(line))) if progress else None
+    on_step = (lambda line: print(json.dumps(line), flush=True)) if progress else None
     try:
         result = call(on_step)
     except RunError as exc:
@@ -154,7 +157,7 @@ def _outcome(call: Callable[[Callable[[dict], None]], Any], client: Any, progres
             import traceback
             traceback.print_exception(exc.cause, file=sys.stderr)
         _print_block(exc.to_json(), progress)
-        _recording_line(client, exc.recorded, exc.run_id is not None)
+        _recording_line(client, exc.recorded, exc.run_id is not None and exc.stopped, starting)
         return EXIT_ERROR
     except Exception as exc:
         if debug:
@@ -168,16 +171,19 @@ def _outcome(call: Callable[[Callable[[dict], None]], Any], client: Any, progres
         _print_block(error_outcome({"error": kind, "step": None, "message": str(exc), **detail}, None, None, None, False), progress)
         return EXIT_ERROR
     _print_block(result.to_json(), progress)
-    _recording_line(client, result.recorded, True)
+    _recording_line(client, result.recorded, True, starting)
     return EXIT_OK
 
 
-def _recording_line(client: Any, recorded: bool | None, ran: bool) -> None:
-    """The closing line, on stderr: nothing when the stop was recorded; why not otherwise."""
-    if not ran or recorded is True:
+def _recording_line(client: Any, recorded: bool | None, stopped: bool, starting: bool) -> None:
+    """The closing line, on stderr: nothing when the stop was recorded, or when the command
+    changed nothing (a refused answer). With no server, one line when the run starts and none on
+    its resumes; when a server is configured and did not take the stop, why, every time."""
+    if not stopped or recorded is True:
         return
     if recorded is None:
-        print(f"aip: not recorded: no server is configured; {CONFIGURE_HINT}", file=sys.stderr)
+        if starting:
+            print(f"aip: not recorded: no server is configured; {CONFIGURE_HINT}", file=sys.stderr)
     else:
         why = getattr(client, "recording_error", None) or "the server did not take it"
         print(f"aip: not recorded: {why}; the next stop will try again", file=sys.stderr)
@@ -204,7 +210,7 @@ def run_command(argv: list[str]) -> int:
         inputs = _read_json(args.inputs, "--inputs")
         return client.run(args.target, {} if inputs is None else inputs, batch=args.batch, agent=args.agent,
                           session=args.session, workdir=args.workdir, on_step=on_step)
-    return _outcome(go, client, args.progress, args.debug)
+    return _outcome(go, client, args.progress, args.debug, starting=True)
 
 
 def resume_command(argv: list[str]) -> int:
@@ -212,15 +218,15 @@ def resume_command(argv: list[str]) -> int:
                                      "retry the step a failed run stopped at.")
     parser.add_argument("run", metavar="run_id|run_file", help="the run id every outcome prints, or a run file's path")
     parser.add_argument("--answers", "-a", default=None, metavar="JSON",
-                        help="the answers, keyed by task index ({\"0\": {...}}), a list in task order, or the one answer "
-                             "object for a single task: JSON inline, @path for a file, or - for stdin")
+                        help="the answers to every task of the pause, keyed by task index ({\"0\": {...}}), a list in task "
+                             "order, or the one answer object for a single task: JSON inline, @path for a file, or - for stdin")
     _run_flags(parser)
     args = parser.parse_args(argv)
     client = _client()
 
     def go(on_step):
         return client.resume(args.run, _read_json(args.answers, "--answers"), on_step=on_step)
-    return _outcome(go, client, args.progress, args.debug)
+    return _outcome(go, client, args.progress, args.debug, starting=False)
 
 
 # ------------------------------------------------------------------ the catalog
@@ -339,32 +345,42 @@ def retire_command(argv: list[str]) -> int:
 
 
 def runs_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip runs", description="The server's runs, newest first; with a run id, that run's "
-                                     "record (this machine's run file when it has one).")
+    parser = argparse.ArgumentParser(prog="aip runs", description="Runs, newest first: the server's when one is configured, else "
+                                     "this machine's run files. With a run id, that run step by step (this machine's run file "
+                                     "when it has one): each step, its pass, when, how long, and who answered or where it went.")
     parser.add_argument("run_id", nargs="?", default=None)
     parser.add_argument("--name", default=None, help="only runs of this procedure")
     parser.add_argument("--status", default=None, help="only runs with this status (paused, done, failed)")
     parser.add_argument("--agent", default=None, help="only runs this agent made")
     parser.add_argument("--session", default=None, help="only runs of this session")
     parser.add_argument("--limit", type=int, default=50)
-    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--json", action="store_true", help="the list, or the run's whole record, as JSON")
     args = parser.parse_args(argv)
 
     def go() -> int:
+        client = _client()
         if args.run_id is not None:
-            print(json.dumps(_client().run_record(args.run_id).data, indent=2))
+            record = client.run_record(args.run_id)
+            if args.json:
+                print(json.dumps(record.data, indent=2))
+            else:
+                sys.stdout.write(record.table())
             return 0
-        rows = _client().runs(args.name, args.status, args.agent, args.session, args.limit)
+        rows = client.runs(args.name, args.status, args.agent, args.session, args.limit)
         if args.json:
             print(json.dumps([r.data for r in rows], indent=2))
             return 0
         if not rows:
-            print("no runs")
+            print("no runs" if client.server is not None else "no runs on this machine")
             return 0
+        table = [("RUN", "NAME", "STATUS", "AGENT", "STARTED", "UPDATED")]
         for r in rows:
-            who = (r.identity or {}).get("agent") or "-"
-            draft = "  draft" if r.draft else ""
-            print(f"{r.run_id}  {r.name}@{r.revision or '-'}{draft}  {r.status}  {who}  {r.updated or r.created or ''}".rstrip())
+            name = f"{r.name}@{r.revision}" if r.revision else f"{r.name}"
+            table.append((r.run_id, name + (" (draft)" if r.draft else ""), r.status, (r.identity or {}).get("agent") or "-",
+                          r.started or r.created or "-", r.updated or "-"))
+        widths = [max(len(row[i]) for row in table) for i in range(6)]
+        for row in table:
+            print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
         return 0
     return _serving(go)
 
@@ -430,7 +446,7 @@ def config_command(argv: list[str]) -> int:
 
 
 def db_command(argv: list[str]) -> int:
-    """`aip db load|list|export`: the Neo4j backend, 0.4 shape. Connection from NEO4J_* env or flags."""
+    """`aip db load|list|export`: Neo4j directly. Not on 0.9 yet: the server milestone (plan S1) moves it to bundles."""
     from aip.db.neo4j import Connection, export, list_skills, load
 
     connection = argparse.ArgumentParser(add_help=False)
@@ -439,12 +455,14 @@ def db_command(argv: list[str]) -> int:
     connection.add_argument("--password", default=None, help="default $NEO4J_PASSWORD")
     connection.add_argument("--database", default=None, help="default $NEO4J_DATABASE or neo4j")
 
-    parser = argparse.ArgumentParser(prog="aip db", description="Load skills into Neo4j losslessly, list them, export them back.")
+    parser = argparse.ArgumentParser(prog="aip db", description="The Neo4j store, directly, without a server. Not on 0.9 yet: "
+                                     "these subcommands read and write the format before the language and do not take a "
+                                     "procedure.aip or an .rl bundle. To store a 0.9 procedure, `aip publish` it to a server.")
     sub = parser.add_subparsers(dest="op", required=True)
-    p_load = sub.add_parser("load", parents=[connection], help="validate a skill folder and write it to the database")
-    p_load.add_argument("skill_dir", type=Path)
-    sub.add_parser("list", parents=[connection], help="skills in the database, newest revision first")
-    p_export = sub.add_parser("export", parents=[connection], help="rebuild a skill folder from the database, byte for byte")
+    p_load = sub.add_parser("load", parents=[connection], help="write a folder to the database")
+    p_load.add_argument("skill_dir", type=Path, metavar="folder")
+    sub.add_parser("list", parents=[connection], help="what the database holds, newest revision first")
+    p_export = sub.add_parser("export", parents=[connection], help="rebuild a folder from the database, byte for byte")
     p_export.add_argument("name")
     p_export.add_argument("--revision", default=None, help="a specific revision; default is the latest")
     p_export.add_argument("--out", type=Path, default=Path("."), help="parent folder; the skill lands at <out>/<name>")
@@ -618,6 +636,28 @@ COMMANDS = {
 }
 ALIASES = {"describe": "info"}
 
+# One line per command, for `aip --help`.
+SUMMARIES = {
+    "run": "run a procedure (a folder, an .rl bundle or a published name) until it pauses or is done",
+    "resume": "answer a paused run, or retry the step a failed run stopped at",
+    "compile": "check a program directory and write its .rl bundle",
+    "export": "write a bundle's program directory back",
+    "fmt": "rewrite procedure.aip in the canonical form",
+    "info": "what a procedure does: its inputs, its steps and loops, its result",
+    "pull": "put a published procedure's bundle in this machine's cache",
+    "publish": "upload a folder or a bundle to the server under its name",
+    "get": "write a published procedure's program directory",
+    "search": "find published procedures by what they do",
+    "list": "every published name and the revision it resolves to",
+    "pin": "make a name resolve to one revision",
+    "retire": "stop a revision resolving",
+    "runs": "list runs (this machine's, or the server's), or show one run step by step",
+    "governance": "the server's governance queries over the runs",
+    "config": "where this client points: the server, the decision model, the batch size",
+    "server": "serve the catalog and the record of runs over HTTP",
+    "db": "the Neo4j store directly (not on 0.9 yet)",
+}
+
 
 def version_line() -> str:
     """`aip --version`: `aip <version> language <language version>` on one line, which the console checks at startup."""
@@ -634,7 +674,9 @@ def main(argv: list[str] | None = None) -> int:
         print(version_line())
         return 0
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: aip <command> [args]\n       aip --version\n\ncommands:\n  " + "\n  ".join(COMMANDS)
+        width = max(len(c) for c in COMMANDS)
+        print("usage: aip <command> [args]\n       aip <command> --help\n       aip --version\n\ncommands:\n"
+              + "\n".join(f"  {c.ljust(width)}  {SUMMARIES[c]}" for c in COMMANDS)
               + "\n\n`run` and `info` take a program directory, an .rl bundle, or a published name "
               "(`aip pull` caches one; a server is configured with `aip config --server URL`).")
         return 0

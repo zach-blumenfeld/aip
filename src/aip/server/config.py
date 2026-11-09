@@ -103,7 +103,7 @@ class ConfigError(ValueError):
 
 def user_config_path() -> Path:
     """`~/.config/aip/server.toml`: next to the client's `config.json` (so `AIP_CONFIG` moves both)."""
-    from aip.client.server import config_path
+    from aip.client.config import config_path
 
     return config_path().parent / USER_CONFIG_NAME
 

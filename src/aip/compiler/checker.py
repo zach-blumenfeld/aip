@@ -82,6 +82,7 @@ CODES: dict[str, str] = {
     "unknown_field": "error",
     "duplicate_producer": "error",
     "type_mismatch": "error",
+    "ambiguous_read": "error",
     # routes, conditions and aggregations
     "route_reads_one": "error",
     "condition_on_plain_value": "error",
@@ -807,7 +808,15 @@ class Checker:
         return Type(d.type, labels=labels, sources=(name,))
 
     def check_reads(self, st: s.Step, m_in: State, name: str):
+        seen: dict[str, s.Node] = {}
         for d in st.reads:
+            # A step sees a read under the last word of its path (spec 2.4): two that end alike collide.
+            first = seen.setdefault(d.key.path[-1], d)
+            if first.key.dotted != d.key.dotted:
+                whole = list(dict.fromkeys([first.key.name, d.key.name]))
+                self.report("ambiguous_read", d, f"{first.key.dotted} and {d.key.dotted} would both reach {name} as {d.key.path[-1]}, the last "
+                            f"word of each, and one would replace the other; read the {'keys' if len(whole) > 1 else 'key'} whole "
+                            f"(Read {', '.join(whole)}) and name the field in the script or the template", name)
             t = self.resolve(d.key.path, m_in, d, name)
             if t is not None and d.type is not None and t.kind is not None and t.kind != d.type:
                 producers = m_in[d.key.name].producers

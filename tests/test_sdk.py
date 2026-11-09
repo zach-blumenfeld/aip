@@ -174,8 +174,13 @@ def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
     record = client.run_record(done.run_id)
     assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
     assert record.history[1]["answered_by"] == {"model": "jev-1", "endpoint": "https://api.typesafe.ai"}
-    assert record.history[2]["check"] == {"below": 0.9, "confidence": 0.9, "fired": False, "reason": None}
+    assert record.history[2]["check"] == {"below": 0.9, "confidence": 0.9, "fired": False}
     assert record.history[3]["result"] == {"reply": REPLY}
+    assert record.history[3]["answered_by"] == {"agent": "tests", "session": None}, "who answered the task"
+    assert isinstance(record.history[3]["waited_seconds"], float) and isinstance(record.history[1]["model_seconds"], float)
+    assert record.started and record.finished and all(isinstance(e["seconds"], float) for e in record.history)
+    assert "STEP" in record.table() and "+MS" in record.table()
+    assert task.hint == 'answer with {"reply": <string>}'
 
 
 def test_the_angry_arm_runs_the_script_with_on_step_and_identity(tmp_path, monkeypatch):
@@ -187,6 +192,7 @@ def test_the_angry_arm_runs_the_script_with_on_step_and_identity(tmp_path, monke
     assert [(l["step"], l["kind"]) for l in lines] == [("start", "Start"), ("triage", "Decide"), ("by_tone", "Route"),
                                                        ("escalate", "Execute"), ("end", "End")]
     assert lines[2]["to"] == "escalate" and lines[1]["answered_by"]["model"] == "jev-1" and isinstance(lines[3]["seconds"], float)
+    assert lines[1]["answers"]["tone"] == {"value": "angry", "confidence": 0.9} and lines[2]["fired"] is False
     record = client.run_record(done.run_id)
     assert record.identity == {"agent": "my-agent 1.0", "session": "s-1", "user": None}
     assert record.history[3]["result"]["queue"] == "tier2"
@@ -216,6 +222,13 @@ def test_a_bad_answer_leaves_the_pause_and_a_failed_step_is_retried(tmp_path):
         client.resume(paused, {"billing": True})
     assert (bad.value.kind, bad.value.step, bad.value.resumable, bad.value.error["missing"]) == ("invalid_output", "triage", True, ["tone"])
     assert RunFile.load(paused.run_file).status == "paused", "the pause stands"
+    with pytest.raises(aip.RunError) as extra:                             # answers are as strict as inputs
+        client.resume(paused, {"billing": True, "tone": "angry", "confidence": 0.9})
+    assert (extra.value.kind, extra.value.error["invalid"], extra.value.stopped) == ("invalid_output", ["confidence"], False)
+    with pytest.raises(aip.RunError) as surplus:
+        client.resume(paused, [{"billing": True, "tone": "angry"}, {"billing": True, "tone": "calm"}])
+    assert (surplus.value.kind, surplus.value.error["invalid_tasks"]) == ("invalid_output", [1])
+    assert RunFile.load(paused.run_file).status == "paused", "and the pause still stands"
     with pytest.raises(aip.RunError) as failed:
         client.resume(paused, {"billing": True, "tone": "angry"})
     error = failed.value
@@ -239,6 +252,25 @@ def test_a_bad_answer_leaves_the_pause_and_a_failed_step_is_retried(tmp_path):
     with pytest.raises(aip.RunError) as paused_again:
         client.resume(client.run(folder, {"message": ANGRY}, workdir=tmp_path))  # a paused run is not retried
     assert (paused_again.value.kind, paused_again.value.step, paused_again.value.resumable) == ("invalid_input", "triage", True)
+
+
+def test_runs_lists_this_machines_run_files_when_no_server_is_configured(tmp_path):
+    client = local()
+    assert client.runs() == []
+    first = client.run(AGENT, {"message": CALM}, workdir=tmp_path, session="s-1")
+    second = client.run(AGENT, {"message": ANGRY}, workdir=tmp_path, on_pause=lambda _p: {"billing": True, "tone": "angry"})
+    rows = client.runs()
+    assert [r.run_id for r in rows] == [second.run_id, first.run_id] and all(isinstance(r, sdk.RunSummary) for r in rows)
+    assert [(r.name, r.status, r.draft, r.identity["agent"]) for r in rows] == [("billing_support_agent", "done", True, "tests"),
+                                                                              ("billing_support_agent", "paused", True, "tests")]
+    assert all(r.started and r.updated for r in rows)
+    assert [r.run_id for r in client.runs(status="paused")] == [first.run_id]
+    assert [r.run_id for r in client.runs(session="s-1")] == [first.run_id]
+    assert client.runs(name="other") == [] and len(client.runs(limit=1)) == 1
+    with pytest.raises(aip.InvalidInput, match="no run zzz on this machine"):
+        client.run_record("zzz")
+    with pytest.raises(aip.InvalidInput, match="no run 0123456789abcdef on this machine"):
+        client.run_record("0123456789abcdef")
 
 
 def test_an_rl_file_runs_as_the_same_bundle(tmp_path):
@@ -298,6 +330,26 @@ def test_describe_a_folder():
     assert d.data["requires"] == {"interpreter": "python", "version": "3.10"}
     text = d.summary()
     assert "USE WHEN" in text and "aip run" in text and "The customer's message, verbatim." in text
+    assert f"bundle {d.bundle_id}\n" in text and len(d.bundle_id) == 64, "the whole bundle id"
+
+
+def test_describe_nests_a_loops_steps_under_its_header():
+    d = local().describe(example_dir("ticket-triage"))
+    loops = {l["name"]: l for l in d.data["loops"]}
+    assert loops["each_ticket"]["header"] == "Over tickets As ticket, At_Most 50, Collect reply Into replies"
+    assert loops["revise"]["header"] == "Until passed, At_Most 3, Else_Fail"
+    assert (loops["each_ticket"]["loop"], loops["revise"]["loop"], loops["revise"]["body"]) == (None, "each_ticket", ["fix"])
+    assert {s["name"]: s["loop"] for s in d.steps}["fix"] == "revise"
+    rows = [line for line in d.summary().splitlines() if line.startswith("  ")]
+    names = [line.split()[0] for line in rows[rows.index(next(r for r in rows if r.split()[0] == "start")):]]
+    assert names[:10] == ["start", "each_ticket", "classify", "by_tone", "draft", "escalate", "check", "revise", "fix", "summarize"]
+    assert "    revise     Loop        Until passed, At_Most 3, Else_Fail" in d.summary()
+    assert "      fix      Task_Agent" in d.summary()
+    assert "LOOPS" not in d.summary()
+    fixed = local().describe(example_dir("fixed-policy"))
+    assert {l["name"]: l["header"] for l in fixed.data["loops"]} == {"revise": "Until check_summary.all_hold, At_Most 3, Else_Fail"}
+    agent = local().describe(AGENT).summary()                              # a description that is a whole prompt shows its opening
+    assert "triage    Task_Agent  Read the customer's message and classify it.\n" in agent
 
 
 # ------------------------------------------------------------------------ the catalog

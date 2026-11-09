@@ -32,11 +32,12 @@ from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 
 from aip.client import bundles, config
 from aip.client.config import CONFIGURE_HINT, Settings, configure, settings
-from aip.client.runs import RunFile, error_outcome, new_run_id, outcome, progress_line, run_path, RUN_ID
+from aip.client.runs import RunFile, error_outcome, local_runs, new_run_id, outcome, progress_line, run_path, RUN_ID
 from aip.client.server import Server, ServerError
 from aip.errors import AipError
 from aip.model import DONE, FAILED, PAUSED, Engine, InvalidOutput, NotPaused, Procedure, Run, StepError, TypeSafeResolver
 from aip.model.engine import _where
+from aip.model.types import resumable
 
 JSON = dict[str, Any]
 EXAMPLE_VALUES = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "list": [], "object": {}}
@@ -82,12 +83,15 @@ class InvalidBundle(AipError):
 class RunError(AipError):
     """A run stopped on an error. `error` is the CLI's error object (`docs/cli-json.md`): `error`
     (the kind), `step`, `message`, the kind's own keys, `pass`, `passes`, `run_id`, `resumable`,
-    `run_file` when resumable, `recorded`. `cause` is the exception behind it, if any."""
+    `run_file` when resumable, `recorded`. `cause` is the exception behind it, if any; `stopped`
+    is False when the call changed nothing (an answer refused, a run with nothing to resume), so
+    there is no new stop to record."""
 
-    def __init__(self, error: JSON, cause: BaseException | None = None):
+    def __init__(self, error: JSON, cause: BaseException | None = None, stopped: bool = True):
         super().__init__(error.get("message") or error["error"], error["error"])
         self.error = error
         self.cause = cause
+        self.stopped = stopped
 
     step = property(lambda self: self.error.get("step"))
     run_id = property(lambda self: self.error.get("run_id"))
@@ -107,7 +111,9 @@ class Task:
     """One task of a pause (runtime.md, Pauses): `index` is what the answer is keyed by; `pass_`
     and `passes` say which loop pass is waiting. It carries `prompt`, `state` (the `Read` keys),
     `references`, `answer_with` (the `Produce` keys and types) and `labels` (the values each
-    `choice` or `score` among them may take)."""
+    `choice` or `score` among them may take). Inside a `Loop` with a cap, `last_pass` says
+    whether this pass is the last the cap allows and `pass_of` is the cap; both are None
+    anywhere else."""
     index: int
     pass_: int | None
     passes: list[JSON]
@@ -116,21 +122,24 @@ class Task:
     prompt: str
     references: list[JSON]
     labels: dict[str, list[str]] = field(default_factory=dict)
+    last_pass: bool | None = None
+    pass_of: int | None = None
     data: JSON = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, data: JSON) -> "Task":
         return cls(data["index"], data.get("pass"), list(data.get("passes") or []), data.get("state") or {},
                    data.get("answer_with") or {}, data.get("prompt") or "", list(data.get("references") or []),
-                   dict(data.get("labels") or {}), data)
+                   dict(data.get("labels") or {}), data.get("last_pass"), data.get("pass_of"), data)
 
 
 @dataclass(frozen=True)
 class Paused:
     """The run waits for the agent at a `Task_Agent` step: `kind` is `task`, the one kind of
     pause (a `Decide` never pauses; without a model it fails the run); `tasks` has one task per
-    pass waiting at `step`. `recorded` is True when the server has this stop, False when the post
-    failed, None when no server is configured. `to_json()` is the CLI's paused object."""
+    pass waiting at `step`, all answered in one `resume`. `hint` is one line on the shape of an
+    answer. `recorded` is True when the server has this stop, False when the post failed, None
+    when no server is configured. `to_json()` is the CLI's paused object."""
     kind: str
     step: str
     tasks: list[Task]
@@ -138,6 +147,10 @@ class Paused:
     run_file: Path
     recorded: bool | None
     body: JSON = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def hint(self) -> str:
+        return self.body.get("hint") or ""
 
     @property
     def task(self) -> Task:
@@ -205,7 +218,7 @@ class Description:
         """The `aip info` text."""
         d = self.data
         where = f"{self.name}@{self.revision}" if self.revision else self.target
-        lines = [f"{self.name}  (bundle {self.bundle_id[:12]}…; {where})", "  " + " ".join(self.description.split()), ""]
+        lines = [f"{self.name}  ({where})", f"  bundle {self.bundle_id}", "  " + " ".join(self.description.split()), ""]
         for heading, key in (("USE WHEN", "use_when"), ("DO NOT USE WHEN", "do_not_use_when"), ("AVOID", "avoid")):
             if d.get(key):
                 lines += [heading] + [f"  - {t}" for t in d[key]] + [""]
@@ -214,9 +227,7 @@ class Description:
         descriptions = d.get("input_descriptions") or {}
         lines += ["INPUTS"] + (_table([(k, t or "", descriptions.get(k) or "") for k, t in self.inputs.items()]) or ["  (none)"])
         lines += ["", f"  run:  aip run {self.target} --inputs '{json.dumps(self.example_inputs)}'", ""]
-        lines += ["STEPS"] + _table([(s["name"], s["kind"], s.get("description") or "") for s in self.steps])
-        if d.get("loops"):
-            lines += ["", "LOOPS"] + _table([(l["name"], l["kind"], l.get("mode") or "") for l in d["loops"]])
+        lines += ["STEPS"] + _table(_outline(self.steps, d.get("loops") or []))
         lines += ["", "RESULT"] + (_table([(k, t or "", "") for k, t in self.result.items()]) or ["  (none)"])
         return "\n".join(lines) + "\n"
 
@@ -226,6 +237,39 @@ def _table(rows: list[tuple[str, str, str]]) -> list[str]:
         return []
     w1, w2 = max(len(r[0]) for r in rows), max(len(r[1]) for r in rows)
     return [f"  {a.ljust(w1)}  {b.ljust(w2)}  {' '.join(c.split())}".rstrip() for a, b, c in rows]
+
+
+def _brief(text: str) -> str:
+    """A description as one line of a table: the text before the first blank line (a
+    `Task_Agent` whose description is its whole prompt shows its opening)."""
+    return (text or "").strip().split("\n\n", 1)[0]
+
+
+def _outline(steps: list[JSON], loops: list[JSON]) -> list[tuple[str, str, str]]:
+    """The steps in source order with each loop's header where the loop stands and its body
+    indented under it. A description without the nesting (a server's) is listed flat."""
+    by_name = {l["name"]: l for l in loops}
+    if not all("body" in l for l in loops) or not all("loop" in s for s in steps):
+        return [(s["name"], s["kind"], _brief(s.get("description") or "")) for s in steps] + \
+               [(l["name"], l["kind"], l.get("header") or l.get("mode") or "") for l in loops]
+    step_rows = {s["name"]: s for s in steps}
+    rows: list[tuple[str, str, str]] = []
+
+    def place(name: str, depth: int) -> None:
+        pad = "  " * depth
+        if name in by_name:
+            loop = by_name[name]
+            rows.append((pad + name, loop["kind"], loop.get("header") or ""))
+            for inner in loop["body"]:
+                place(inner, depth + 1)
+        else:
+            s = step_rows[name]
+            rows.append((pad + name, s["kind"], _brief(s.get("description") or "")))
+
+    top = sorted([s for s in steps if s["loop"] is None] + [l for l in loops if l.get("loop") is None], key=lambda n: n.get("line") or 0)
+    for node in top:
+        place(node["name"], 0)
+    return rows
 
 
 def _record(cls, data: JSON):
@@ -298,12 +342,14 @@ class Retired:
 
 @dataclass(frozen=True)
 class RunSummary:
+    """One row of `aip runs`: a run on the server, or one of this machine's run files."""
     run_id: str
     name: str | None
     revision: str | None
     status: str
     draft: bool | None
     identity: JSON | None
+    started: str | None
     created: str | None
     updated: str | None
     data: JSON = field(repr=False, compare=False)
@@ -311,17 +357,25 @@ class RunSummary:
 
 @dataclass(frozen=True)
 class RunRecord:
-    """One run as its home holds it: the local run file, or the server's record."""
+    """One run as its home holds it: the local run file, or the server's record. `history` is
+    its entries, one per step run; `table()` is the text `aip runs <run id>` prints."""
     run_id: str
     bundle_id: str | None
     name: str | None
     status: str
     identity: JSON | None
+    started: str | None
+    finished: str | None
     pause: JSON | None
     error: JSON | None
     result: JSON | None
     history: list[JSON]
     data: JSON = field(repr=False, compare=False)
+
+    def table(self) -> str:
+        from aip.client.runs import run_table
+
+        return run_table(self.data)
 
 
 @dataclass(frozen=True)
@@ -468,10 +522,13 @@ class Client:
 
     # ------------------------------------------------------------------ runs
 
-    def _engine(self, workdir: Path, batch: int | None) -> Engine:
+    def _engine(self, workdir: Path, batch: int | None, on_step: OnStep | None = None) -> Engine:
+        """The engine for one call. `on_step` gets each history entry's progress line the
+        moment the entry is written, so a batch of `For` passes reports as it goes."""
         s = self.settings
         resolver = TypeSafeResolver.from_environment(client=self.decision_client, api_key=s.decision_model_key, url=s.decision_model_url)
-        return Engine(resolver, home=self.home, workdir=workdir, batch=batch or s.batch)
+        on_entry = (lambda entry: on_step(progress_line(entry))) if on_step is not None else None
+        return Engine(resolver, home=self.home, workdir=workdir, batch=batch or s.batch, on_entry=on_entry)
 
     def run(self, target: str | Path, inputs: JSON, *, batch: int | None = None, agent: str | None = None,
             session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
@@ -479,8 +536,9 @@ class Client:
         """Run `target` (a program directory, an `.rl`, or `name[@rev]`) on `inputs`, the Start
         step's object, until it pauses or is done. `workdir` is where its scripts read and write
         files (default the current directory); `batch` how many `For` passes run at once;
-        `agent` and `session` the run's identity. `on_step` gets each record entry's progress
-        line; `on_pause`, if given, answers each pause in-process (returning None stops there).
+        `agent` and `session` the run's identity. `on_step` gets each history entry's progress
+        line as it is written; `on_pause`, if given, answers each pause in-process (returning
+        None stops there).
         Raises `RunError` when the run stops on an error, `CompileError`, `InvalidBundle`,
         `NotFound` or `NoServer` when the target cannot be run."""
         if not isinstance(inputs, dict):
@@ -489,7 +547,7 @@ class Client:
             raise InvalidInput(f"the batch size is at least 1, not {batch}")
         bundle, origin = self._open(target)
         where = Path(workdir if workdir is not None else Path.cwd()).resolve()
-        engine = self._engine(where, batch)
+        engine = self._engine(where, batch, on_step)
         identity = config.identity(agent, session, default_agent=self.agent)
         with Procedure.load(bundle) as procedure:
             try:
@@ -498,16 +556,19 @@ class Client:
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc
             handle = RunFile(new_run_id(), bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
                              origin["revision"], server=self.server.url if self.server else None)
-            return self._settle(engine, run, handle, on_step, on_pause, 0)
+            return self._settle(engine, run, handle, on_pause)
 
     def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, on_step: OnStep | None = None,
                on_pause: OnPause | None = None) -> Result:
         """Carry the agent's answers to a paused run, or with no answers retry the step a failed
         run stopped at. `run` is a run id, a run file's path, or the `Paused`/`RunError` a call
         returned; `answers` is keyed by task index (`{"0": {...}}`), a list in task order, or the
-        one answer object when the pause has one task. An answer that does not fit, an answer to
-        a run that is not paused, or a retry of one that has not failed is a `RunError` naming
-        the run (`invalid_output`, `not_paused`, `invalid_input`) and changes nothing."""
+        one answer object when the pause has one task, and answers every task of the pause. An
+        answer that does not fit (a key or a task missing, or one the pause did not ask for), an
+        answer to a run that is not paused, or a retry of one that has not failed or that a
+        retry cannot help (`loop_cap`) is a `RunError` naming the run (`invalid_output`,
+        `not_paused`, `invalid_input`) and changes nothing: a refused answer leaves the pause
+        as it was, to be answered again."""
         path = self.run_file(run)
         handle = RunFile.load(path)
         try:
@@ -517,12 +578,11 @@ class Client:
                                f"({bundles.bundle_path(handle.bundle_id, self.home)}); run it again") from None
         except BundleError as exc:
             raise InvalidBundle(exc) from exc
-        engine = self._engine(Path(handle.workdir), handle.run.get("batch"))
+        engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step)
         with Procedure.load(bundle) as procedure:
             state = Run.from_dict(procedure, handle.run)
-            since = len(state.history)
             state = self._apply(engine, state, answers, handle, path)
-            return self._settle(engine, state, handle, on_step, on_pause, since)
+            return self._settle(engine, state, handle, on_pause)
 
     def _apply(self, engine: Engine, run: Run, answers: Any, handle: RunFile, path: Path) -> Run:
         """The answers into a paused run, or a retry of a failed one. A bad answer is a
@@ -531,7 +591,7 @@ class Client:
 
         def refuse(kind: str, step: str | None, message: str, resumable: bool) -> RunError:
             return RunError(error_outcome({"error": kind, "step": step, "message": message, **_where(run)}, handle.run_id, path,
-                                          recorded, resumable))
+                                          recorded, resumable), stopped=False)
 
         if answers is None:
             if run.status == PAUSED:
@@ -539,24 +599,23 @@ class Client:
                              f"answers to its {len(run.pause['tasks'])} task(s); only a failed run is retried without any", True)
             if run.status != FAILED:
                 raise refuse("not_paused", None, f"run {handle.run_id} is {run.status}; there is nothing to resume", False)
+            if not resumable(run.error):
+                raise refuse("not_paused", run.error.get("step"), f"run {handle.run_id} failed with {run.error['error']}, which a "
+                             "retry would only repeat; there is nothing to resume", False)
             return engine.retry(run)
         if run.status != PAUSED:
             raise refuse("not_paused", (run.error or {}).get("step"), f"run {handle.run_id} is {run.status}, not paused; an answer "
                          "needs a pause" + (" (resume it with no answers to retry the failed step)" if run.status == FAILED else ""),
                          run.status == FAILED)
         try:
-            return engine.resume(run, answers)
+            return engine.resume(run, answers, identity=config.identity(default_agent=self.agent))
         except (InvalidOutput, NotPaused) as exc:
-            raise RunError(error_outcome({**exc.to_dict(), **_where(run)}, handle.run_id, path, recorded, True), exc) from exc
+            raise RunError(error_outcome({**exc.to_dict(), **_where(run)}, handle.run_id, path, recorded, True), exc, stopped=False) from exc
 
-    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_step: OnStep | None, on_pause: OnPause | None, since: int) -> Result:
-        """Report the new record entries, record the stop (server and run file), and return it
-        as a result or raise it; with `on_pause`, answer pauses in-process and go on."""
+    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None) -> Result:
+        """Record the stop (server and run file), and return it as a result or raise it; with
+        `on_pause`, answer pauses in-process and go on."""
         while True:
-            if on_step is not None:
-                for entry in run.history[since:]:
-                    on_step(progress_line(entry))
-            since = len(run.history)
             handle.run = run.to_dict()
             recorded = self._record(handle)
             path = handle.save(home=self.home)
@@ -613,18 +672,27 @@ class Client:
 
     def runs(self, name: str | None = None, status: str | None = None, agent: str | None = None, session: str | None = None,
              limit: int = 50) -> list[RunSummary]:
-        """The server's runs, newest first, filtered by name, status, agent or session."""
-        return [_record(RunSummary, r) for r in self._server().runs(name, status, agent, session, limit)]
+        """Runs, newest first, filtered by name, status, agent or session: the server's when one
+        is configured, else this machine's run files."""
+        if self.server is not None:
+            return [_record(RunSummary, r) for r in self.server.runs(name, status, agent, session, limit)]
+        rows = [r.summary() for r in local_runs(self.home)]
+        for key, wanted in (("name", name), ("status", status)):
+            if wanted:
+                rows = [r for r in rows if r.get(key) == wanted]
+        for key, wanted in (("agent", agent), ("session", session)):
+            if wanted:
+                rows = [r for r in rows if (r.get("identity") or {}).get(key) == wanted]
+        return [_record(RunSummary, r) for r in rows[:limit]]
 
     def run_record(self, run_id: str) -> RunRecord:
         """One run: the local run file when this machine has it, else the server's record."""
-        if RUN_ID.fullmatch(run_id) and run_path(run_id, self.home).is_file():
-            handle = RunFile.load(run_path(run_id, self.home))
-            data = {"run_id": handle.run_id, "name": handle.name, "revision": handle.revision, "draft": handle.draft,
-                    "target": handle.target, "server": handle.server, "recorded": handle.recorded, "created": handle.created,
-                    "updated": handle.updated, **handle.run}
-            return _record(RunRecord, data)
-        return _record(RunRecord, self._server().run(run_id))
+        known = RUN_ID.fullmatch(run_id) is not None
+        if known and run_path(run_id, self.home).is_file():
+            return _record(RunRecord, RunFile.load(run_path(run_id, self.home)).record())
+        if self.server is None:
+            raise InvalidInput(f"no run {run_id} on this machine" + (f" (looked for {run_path(run_id, self.home)})" if known else ""))
+        return _record(RunRecord, self.server.run(run_id))
 
     # --------------------------------------------------------------------- catalog
 

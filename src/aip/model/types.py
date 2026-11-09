@@ -35,6 +35,10 @@ ANSWER_FIELDS = {"true_or_false": ("confidence", "noul", "probabilities"), "choi
 ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "requires_unmet",
                "no_decision_model", "decision_model_failed", "loop_cap", "not_paused", "server")
 
+# The failures a retry would only repeat: `aip resume` does not retry them, and their error
+# objects say `resumable: false`.
+NOT_RESUMABLE = ("loop_cap",)
+
 DECISION_MODEL_HINT = ("run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other "
                        "than TypeSafe's")
 
@@ -181,13 +185,22 @@ class InvalidInput(KeysError):
 
 class InvalidOutput(KeysError):
     """A step's result does not match its `Produce` keys. Nothing is written to the state;
-    `script` is set when a script returned it."""
+    `script` is set when a script returned it. For the answers to a pause, `missing_tasks` are
+    the task indexes left unanswered and `invalid_tasks` the indexes the pause does not have
+    (`missing` and `invalid` hold key names, never indexes)."""
 
     kind, what = "invalid_output", "the output of"
     script: str | None = None
 
+    def __init__(self, step: str | None, errors: list[str], missing: list[str] | None = None, invalid: list[str] | None = None,
+                 *, missing_tasks: list[int] | None = None, invalid_tasks: list[int] | None = None):
+        super().__init__(step, errors, missing, invalid)
+        self.missing_tasks = list(missing_tasks or [])
+        self.invalid_tasks = list(invalid_tasks or [])
+
     def fields(self) -> JSON:
-        return {**({"script": self.script} if self.script else {}), **super().fields()}
+        tasks = {k: v for k, v in (("missing_tasks", self.missing_tasks), ("invalid_tasks", self.invalid_tasks)) if v}
+        return {**({"script": self.script} if self.script else {}), **super().fields(), **tasks}
 
 
 class NoBranch(StepError):
@@ -267,13 +280,15 @@ class DecisionModelFailed(StepError):
 
 class LoopCap(StepError):
     """A loop reached its cap: a `For` (or a fold) given more items than `At_Most`, or an `Until`
-    loop that ran `At_Most` passes without its condition holding and says `Else_Fail`."""
+    loop that ran `At_Most` passes without its condition holding and says `Else_Fail`. The error
+    names the `loop` (its `step` is None: no step is to blame), the `cap` and the `count` (passes
+    run, or items given). A retry would fail the same way, so it is not resumable."""
 
     kind = "loop_cap"
 
     def __init__(self, loop: str, cap: int, count: int, message: str):
         self.loop, self.cap, self.count = loop, cap, count
-        super().__init__(loop, message)
+        super().__init__(None, message)
 
     def fields(self) -> JSON:
         return {"loop": self.loop, "cap": self.cap, "count": self.count}
@@ -285,6 +300,11 @@ class NotPaused(StepError):
     kind = "not_paused"
 
 
-__all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "ANSWER_FIELDS", "DECISION_MODEL_HINT", "StepError", "KeysError", "InvalidInput",
+def resumable(error: JSON | None) -> bool:
+    """Whether a failed run's error is one `aip resume` can retry."""
+    return error is not None and error.get("error") not in NOT_RESUMABLE
+
+
+__all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "ANSWER_FIELDS", "DECISION_MODEL_HINT", "NOT_RESUMABLE", "resumable", "StepError", "KeysError", "InvalidInput",
            "InvalidOutput", "NoBranch", "ScriptFailed", "ScriptTimeout", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed",
            "LoopCap", "NotPaused", "is_plain", "normalise", "conforms", "extra_fields", "describe", "branch_key"]

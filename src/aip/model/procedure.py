@@ -380,18 +380,52 @@ class Procedure:
         return None
 
     def describe(self) -> JSON:
-        """The header, every step with its kind and description in source order, and every loop."""
+        """The header, every step with its kind and description in source order, and every loop
+        with its header as written (`Until check_summary.all_hold, At_Most 3, Else_Fail`) and its
+        body. A step or loop says which loop it stands in (`loop`, None at the top level) and
+        the line it is written on, so the nesting can be drawn."""
         steps = self._rows("MATCH (s:Step {bundle_id: $b}) RETURN s.name AS name, s.kind AS kind, s.description AS description, "
                            "s.line AS line ORDER BY s.line")
-        loops = self._rows("MATCH (l:Loop {bundle_id: $b}) RETURN l.name AS name, l.kind AS kind, l.mode AS mode, l.line AS line "
-                           "ORDER BY l.line")
+        loops = self._rows("MATCH (l:Loop {bundle_id: $b}) RETURN l.id AS id, l.name AS name, l.kind AS kind, l.mode AS mode, "
+                           "l.line AS line ORDER BY l.line")
+        inside: dict[str, str] = {}
+        bodies: dict[str, list[str]] = {}
+        for row in loops:
+            body = [id.split(":", 1)[1] for id in self.loop(row["id"]).body]
+            bodies[row["name"]] = body
+            inside.update({name: row["name"] for name in body})
         return {"name": self.name, "bundle_id": self.bundle_id, "description": self.header.get("description") or "",
                 "use_when": list(self.header.get("use_when") or []), "do_not_use_when": list(self.header.get("do_not_use_when") or []),
                 "avoid": list(self.header.get("avoid") or []),
                 "requires": ({"interpreter": self.requires[0], "version": self.requires[1]} if self.requires else None),
-                "steps": [{"name": r["name"], "kind": r["kind"], "description": r.get("description") or ""} for r in steps],
-                "loops": [{"name": r["name"], "kind": r["kind"], "mode": r["mode"]} for r in loops]}
+                "steps": [{"name": r["name"], "kind": r["kind"], "description": r.get("description") or "", "loop": inside.get(r["name"]),
+                           "line": r.get("line")} for r in steps],
+                "loops": [{"name": r["name"], "kind": r["kind"], "mode": r["mode"], "header": loop_header(self.loop(r["id"])),
+                           "body": bodies[r["name"]], "loop": inside.get(r["name"]), "line": r.get("line")} for r in loops]}
+
+
+def loop_header(loop: Loop) -> str:
+    """A loop's header after its name, as the formatter writes it: `Over tickets As ticket,
+    At_Most 50, Collect reply Into replies`, `Until passed, At_Most 3, Else_Fail`, `3 Times`."""
+    if loop.mode == "Until" and loop.until is not None:
+        until = loop.until
+        head = f"Until {until.dotted}"
+        if until.operator:
+            head += f" {until.operator} {until.value}"
+        if until.confidence_above is not None:
+            head += f" With Confidence_Above {until.confidence_above:g}"
+    elif loop.mode == "Times":
+        head = f"{loop.times} Times"
+    else:
+        head = f"Over {'.'.join(loop.over or [])} As {loop.item}"
+    if loop.at_most is not None:
+        head += f", At_Most {loop.at_most}"
+    if loop.collect_key is not None:
+        head += f", Collect {loop.collect_key} Into {loop.collect_into}"
+    if loop.at_cap is not None:
+        head += f", {loop.at_cap}"
+    return head
 
 
 __all__ = ["Procedure", "Step", "Loop", "Until", "Read", "Produce", "Flow", "Question", "Aggregation", "FileUse", "STEP_KINDS",
-           "FLOW_TYPES"]
+           "FLOW_TYPES", "loop_header"]

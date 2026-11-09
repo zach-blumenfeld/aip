@@ -80,9 +80,9 @@ def check_reads(procedure: Procedure, step: Step, state: JSON) -> None:
 
 def check_outputs(procedure: Procedure, step: Step, result: Any, *, source: str) -> JSON:
     """`result` as the step's `Produce` keys, normalised: every key present with its type, an
-    answer's value among the key's labels. `source` is `script` (an `Execute`: a key the step did
-    not declare is an error, and an answer may carry the model fields of spec 2.4) or `agent` (a
-    `Task_Agent`: undeclared keys are dropped, and an answer is its value and nothing else)."""
+    answer's value among the key's labels, and no key the step does not produce. `source` is
+    `script` (an `Execute`: an answer may carry the model fields of spec 2.4) or `agent` (a
+    `Task_Agent`: an answer is its value and nothing else)."""
     if not isinstance(result, dict):
         raise InvalidOutput(step.name, [f"expected a JSON object of the Produce keys, got {describe(result)}"])
     errors, missing, invalid, out = [], [], [], {}
@@ -97,12 +97,11 @@ def check_outputs(procedure: Procedure, step: Step, result: Any, *, source: str)
             errors.append(f"{p.key}: {why}")
             invalid.append(p.key)
         out[p.key] = value
-    if source == "script":
-        declared = {p.key for p in step.produces}
-        for key in result:
-            if key not in declared:
-                errors.append(f"{key} is not a Produce key of {step.name}")
-                invalid.append(key)
+    declared = [p.key for p in step.produces]
+    for key in result:
+        if key not in declared:
+            errors.append(f"{key} is not a Produce key of {step.name}; its keys are {declared}")
+            invalid.append(key)
     if errors:
         raise InvalidOutput(step.name, errors, missing, invalid)
     return out
@@ -277,26 +276,25 @@ def is_batched_decide(procedure: Procedure, loop: Loop) -> Step | None:
 
 def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
     """Where the route sends the run and what its record says: the flow taken (its `to` is the
-    target's node id; `continues` marks a branch to `Continue`), and `{"read": dotted, "answer",
-    "check": {"below", "confidence", "fired", "reason"} | None, "value": the branch word | None,
-    "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound
-    (`reason: "below"`) or absent (`reason: "absent"`: a script's answer written without one; the
-    compiler allows the check only on a decision's or a script's answer, spec 2.2). Otherwise the
-    branch for `value` is taken, and a value with no branch fails the step (`no_branch`)."""
+    target's node id; `continues` marks a branch to `Continue`), and `{"read": dotted, "input":
+    the answer under the name a step reads it by, "check": {"below", "confidence", "fired"} |
+    None, "value": the branch word | None, "to": name}`. The check reads the answer's
+    `confidence` and fires when it is below the bound (`reason: "below"`) or absent (`reason:
+    "absent"`: a script's answer written without one; the compiler allows the check only on a
+    decision's or a script's answer, spec 2.2); `reason` is there only when it fired. Otherwise
+    the branch for `value` is taken, and a value with no branch fails the step (`no_branch`)."""
     [read] = step.declared_reads
     answer = lookup(state, read.path)
     if not isinstance(answer, dict) or "value" not in answer:
         raise InvalidInput(step.name, [f"{read.dotted} is {describe(answer)}, not an answer with a value"], invalid=[read.dotted])
-    record: JSON = {"read": read.dotted, "answer": answer, "check": None, "value": None}
+    record: JSON = {"read": read.dotted, "input": {read.name: answer}, "check": None, "value": None}
     check = step.check
     if check is not None:
         confidence = answer.get("confidence")
-        if confidence is None:
-            fired, reason = True, "absent"
-        else:
-            fired, reason = confidence < check.below, "below" if confidence < check.below else None
-        record["check"] = {"below": check.below, "confidence": confidence, "fired": fired, "reason": reason}
+        fired = confidence is None or confidence < check.below
+        record["check"] = {"below": check.below, "confidence": confidence, "fired": fired}
         if fired:
+            record["check"]["reason"] = "absent" if confidence is None else "below"
             record["to"] = _name(check)
             return check, record
     key = branch_key(answer["value"])
