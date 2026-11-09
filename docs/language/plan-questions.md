@@ -247,6 +247,13 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     procedure with its own serializer and linter; this has neither, the compiler is the only rule
     book. Authoring with an agent stays in the IDE; the Studio is for reading and adjusting.
 
+42. **Settled 2026-11-09.** `aip governance` is renamed `aip audit` (endpoint `/audit`, module
+    `aip.server.audit`, console tab "Audit"). The named queries review the record and the catalog;
+    none decides who may do what, which is what "governance" promises. "Governance" stays as the
+    word for what the record, pins and retirements add up to. `manual-decisions` retires with the
+    fallback; `unmeasured-routes` becomes `agent-routes`, read off the source class on the route's
+    edge. Milestone S2.
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show
