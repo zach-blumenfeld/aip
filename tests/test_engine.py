@@ -156,7 +156,7 @@ class BillingSupport(EngineCase):
             self.engine(None).resume(run, {"billing": True, "tone": "calm"})
         run = self.engine(ScriptedResolver({"triage": calm()})).retry(run)
         self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "reply"))
-        self.assertEqual(run.history[1]["answered_by"], {"model": "scripted"})
+        self.assertEqual(run.history[1]["answered_by"], {"model": "scripted", "endpoint": None}, "the record names the model and its endpoint")
 
     def test_a_failing_model_fails_the_step_and_a_retry_asks_again(self):
         engine = self.engine(ScriptedResolver({}))  # no script for triage: KeyError
@@ -286,6 +286,23 @@ class BillingSupportAgent(EngineCase):
             engine.resume(run, {"billing": "yes"})
         self.assertEqual((caught.exception.missing, caught.exception.invalid), (["tone"], ["billing"]))
         self.assertEqual(run.status, PAUSED, "the pause stands")
+
+    def test_the_answer_is_checked_against_the_labels_and_carries_nothing_but_its_value(self):
+        """Plan R4: an agent's answer is a bare value or `{"value": ...}` among the key's labels;
+        anything else on it is `invalid_output` (spec 2.4)."""
+        engine = self.engine(None)
+        run = engine.start(self.load(self.bundle), {"message": self.message})
+        with self.assertRaises(InvalidOutput) as caught:
+            engine.resume(run, {"billing": True, "tone": "furious"})
+        self.assertEqual(caught.exception.invalid, ["tone"])
+        self.assertIn("'furious' is not one of the labels ['angry', 'calm']", caught.exception.message)
+        with self.assertRaises(InvalidOutput) as caught:
+            engine.resume(run, {"billing": True, "tone": {"value": "calm", "confidence": 0.9}})
+        self.assertEqual(caught.exception.invalid, ["tone"])
+        self.assertIn("an agent's answer is its value and nothing else, not confidence", caught.exception.message)
+        self.assertEqual(run.status, PAUSED, "the pause stands")
+        run = engine.resume(run, {"billing": True, "tone": {"value": "calm"}})
+        self.assertEqual((run.status, run.pause["step"], run.state["tone"]), (PAUSED, "reply", {"value": "calm"}))
 
 
 AGGREGATE = '''
@@ -503,11 +520,13 @@ class Scripts(EngineCase):
         run = engine.start(self.load(self.bundle("print('not json')")), {"n": 4})
         self.assertEqual((run.status, run.error["error"]), (FAILED, "script_failed"))
 
-    def test_a_value_with_no_branch_fails_the_route(self):
+    def test_a_label_the_key_does_not_declare_is_refused_at_the_script(self):
+        """Plan R4: a script's answer is checked against the key's labels where it is produced,
+        so a stray label never reaches the route (which would have failed with `no_branch`)."""
         engine = self.engine()
         run = engine.start(self.load(self.bundle(CHECK_PY.replace('"small" if n < limits["big"] else "large"', '"huge"'))), {"n": 4})
-        self.assertEqual((run.status, run.error["error"], run.error["step"]), (FAILED, "no_branch", "by_size"))
-        self.assertEqual((run.error["value"], run.error["branches"]), ("huge", ["large", "small"]))
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["invalid"]), (FAILED, "invalid_output", "check", ["size"]))
+        self.assertIn("'huge' is not one of the labels ['small', 'large']", run.error["message"])
 
     def test_a_timeout_and_an_unmet_requires(self):
         engine = self.engine(timeout=0.5)
@@ -640,7 +659,7 @@ class DynamicPolicy(EngineCase):
                           ("summarize_check", 1), ("revise", None), ("end", None)])
         check = run.history[3]
         self.assertEqual(check["passes"], [{"loop": "revise", "pass": 0}, {"loop": "review", "pass": 1}])
-        self.assertEqual(check["answered_by"], {"model": "scripted"})
+        self.assertEqual(check["answered_by"], {"model": "scripted", "endpoint": None})
         self.assertEqual(check["result"], {"follows": answers.true_or_false(0.2)}, "recorded as if the pass had called alone")
         self.assertEqual(check["input"], {"work": "a draft"})
         review = run.history[5]
@@ -1078,6 +1097,112 @@ class Batching(unittest.TestCase):
         self.assertEqual((question_base("follows__12"), question_base("follows"), question_base("a__b")), ("follows", "follows", "a__b"))
 
 
+SCRIPT_ANSWERS = '''
+Procedure script_answers "A script's answer, with or without a confidence, under a route's check."
+  Requires python 3.10
+
+Start "Input." {
+  answer: object "What the script writes as tone."
+  Next_Step classify
+}
+
+Execute classify "Write the given answer as tone." {
+  Read answer
+  Run_Script scripts/classify.py
+  Produce tone: choice [angry, calm]
+  Next_Step by_tone
+}
+
+Route by_tone "Branch on the script's answer, checking its confidence." {
+  Read tone
+  Confidence_Below 0.6 -> unsure
+  angry -> end
+  calm -> end
+}
+
+Task_Agent unsure "The script was not sure: look at it." {
+  Read tone
+  Produce verdict: string
+  Next_Step end
+}
+
+End "Done." {
+  Read tone
+}
+'''
+
+CLASSIFY_PY = ('import json, sys\na = json.load(sys.stdin)["state"]["answer"]\n'
+               'print(json.dumps({"tone": a["bare"] if "bare" in a else a}))\n')  # {"bare": "calm"} writes the bare value
+
+LABELLED_INPUT = '''
+Procedure labelled_input "An input under labels."
+
+Start "Input." {
+  tone: choice [angry, calm]
+  Next_Step by_tone
+}
+
+Route by_tone "Branch on the input." {
+  Read tone
+  angry -> end
+  calm -> end
+}
+
+End "Done." {
+  Read tone
+}
+'''
+
+
+@needs_relate
+class ScriptAnswers(EngineCase):
+    """Plan R4, spec 2.4: a script's answer may carry `confidence` and `probabilities` as a
+    model's would, and a route's check reads them; written without a confidence the check fires
+    (`absent`); a stray field or a label the key does not declare is `invalid_output`. An input
+    under labels is checked the same way at `Start`."""
+
+    def run_with(self, answer):
+        bundle = program(SCRIPT_ANSWERS, {"scripts/classify.py": CLASSIFY_PY})
+        return self.engine().start(self.load(bundle), {"answer": answer})
+
+    def test_a_confident_answer_passes_the_check_on_its_value(self):
+        run = self.run_with({"value": "calm", "confidence": 0.9, "probabilities": {"angry": 0.1, "calm": 0.9}})
+        self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "classify", "by_tone", "end"]))
+        self.assertEqual(run.state["tone"], {"value": "calm", "confidence": 0.9, "probabilities": {"angry": 0.1, "calm": 0.9}},
+                         "the script's confidence and probabilities are kept")
+        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None})
+
+    def test_a_low_or_absent_confidence_fires_the_check(self):
+        run = self.run_with({"value": "calm", "confidence": 0.3})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "unsure"))
+        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": 0.3, "fired": True, "reason": "below"})
+        run = self.run_with({"bare": "calm"})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "unsure"))
+        self.assertEqual(run.state["tone"], {"value": "calm"}, "a bare value is stored as an answer with no confidence")
+        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": None, "fired": True, "reason": "absent"})
+
+    def test_anything_but_the_model_fields_or_a_stray_label_is_invalid_output(self):
+        run = self.run_with({"value": "calm", "legend": {"calm": "Calm."}})
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["invalid"]), (FAILED, "invalid_output", "classify", ["tone"]))
+        self.assertIn("a choice answer carries value, confidence, probabilities and nothing else, not legend", run.error["message"])
+        run = self.run_with({"value": "furious", "confidence": 0.9})
+        self.assertEqual((run.status, run.error["error"], run.error["invalid"]), (FAILED, "invalid_output", ["tone"]))
+        self.assertIn("'furious' is not one of the labels", run.error["message"])
+        run = self.run_with({"value": "calm", "probabilities": {"calm": 2}})
+        self.assertEqual((run.status, run.error["error"]), (FAILED, "invalid_output"))
+
+    def test_an_input_under_labels_is_checked_at_start(self):
+        procedure = self.load(program(LABELLED_INPUT))
+        with self.assertRaises(InvalidInput) as caught:
+            self.engine().start(procedure, {"tone": "furious"})
+        self.assertEqual(caught.exception.invalid, ["tone"])
+        with self.assertRaises(InvalidInput) as caught:
+            self.engine().start(procedure, {"tone": {"value": "calm", "confidence": 1}})
+        self.assertIn("nothing else, not confidence", caught.exception.message)
+        run = self.engine().start(procedure, {"tone": "calm"})
+        self.assertEqual((run.status, run.result), (DONE, {"tone": {"value": "calm"}}))
+
+
 class Answers(unittest.TestCase):
     """The answer objects and the type checks need no store."""
 
@@ -1086,7 +1211,6 @@ class Answers(unittest.TestCase):
         self.assertEqual(answers.true_or_false(0.3)["value"], False)
         self.assertEqual(answers.choice({"angry": 0.9, "calm": 0.1}), {"value": "angry", "confidence": 0.9, "probabilities": {"angry": 0.9, "calm": 0.1}})
         self.assertEqual(answers.score({0: 0.1, 1: 0.1, 2: 0.8}), {"value": 2, "confidence": 0.8, "score": 1.7, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}})
-        self.assertEqual(answers.by_hand("calm"), {"value": "calm"})
         self.assertEqual(answers.probability_of(answers.true_or_false(0.98), "true_or_false", False), 1 - 0.98)
         self.assertEqual(answers.probability_of(answers.choice({"a": 0.6, "b": 0.4}), "choice", "b"), 0.4)
         self.assertEqual(answers.probability_of(answers.score({0: 0.6, 1: 0.4}), "score", 1), 0.4)
@@ -1104,6 +1228,8 @@ class Answers(unittest.TestCase):
         self.assertEqual(normalise("string", "a"), "a")
         self.assertIsNotNone(conforms("choice", {"value": "c"}, ["a", "b"]))
         self.assertIsNotNone(conforms("true_or_false", {"value": True, "confidence": 2}))
+        self.assertIsNotNone(conforms("choice", {"value": "a", "probabilities": {"a": 2}}), "probabilities are numbers in 0..1")
+        self.assertIsNone(conforms("choice", {"value": "a", "probabilities": {"a": 0.7, "b": 0.3}}))
         self.assertIsNotNone(conforms("true_or_false", True), "a bare value is normalised before it is checked")
         self.assertEqual((branch_key(True), branch_key("calm"), branch_key(2, ["low", "medium", "high"]), branch_key(5)),
                          ("true", "calm", "high", "5"))

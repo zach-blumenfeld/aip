@@ -11,7 +11,8 @@ thin wrapper over it, and so is `aip mcp`.
 
 Every run is local (`aip.model`): the target, a program directory, an `.rl` bundle or a catalog
 reference, is put in the bundle cache (`aip.client.bundles`) and loaded into an in-memory
-store; scripts run from the file cache; the decision model is TypeSafe when a key is configured.
+store; scripts run from the file cache; the decision model is the configured endpoint (`aip
+config --decision-model URL --decision-model-key KEY`; TypeSafe's URL by default).
 Every stop writes the run file (`aip.client.runs`), so a run started here can be resumed by
 `aip resume <run id>` and the other way round. When a server is configured the run is recorded
 there at every stop, a folder or file run as a run of a *draft* bundle; when none is, the run
@@ -104,41 +105,38 @@ class RunError(AipError):
 @dataclass(frozen=True)
 class Task:
     """One task of a pause (runtime.md, Pauses): `index` is what the answer is keyed by; `pass_`
-    and `passes` say which loop pass is waiting. A `task` pause's task carries `prompt`, `state`,
+    and `passes` say which loop pass is waiting. It carries `prompt`, `state` (the `Read` keys),
     `references`, `answer_with` (the `Produce` keys and types) and `labels` (the values each
-    `choice` or `score` among them may take); a `decision` pause's carries `questions`, `state`
-    and `answer_with` (the question names and types)."""
+    `choice` or `score` among them may take)."""
     index: int
     pass_: int | None
     passes: list[JSON]
     state: JSON
     answer_with: dict[str, str | None]
-    prompt: str | None = None
-    references: list[JSON] | None = None
-    questions: list[JSON] | None = None
+    prompt: str
+    references: list[JSON]
     labels: dict[str, list[str]] = field(default_factory=dict)
     data: JSON = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, data: JSON) -> "Task":
         return cls(data["index"], data.get("pass"), list(data.get("passes") or []), data.get("state") or {},
-                   data.get("answer_with") or {}, data.get("prompt"), data.get("references"), data.get("questions"),
+                   data.get("answer_with") or {}, data.get("prompt") or "", list(data.get("references") or []),
                    dict(data.get("labels") or {}), data)
 
 
 @dataclass(frozen=True)
 class Paused:
-    """The run waits for the agent: `kind` is `task` (do the step's work) or `decision` (answer
-    the questions, because no model is configured or it failed: `reason`); `tasks` has one task
-    per pass waiting at `step`. `recorded` is True when the server has this stop, False when the
-    post failed, None when no server is configured. `to_json()` is the CLI's paused object."""
+    """The run waits for the agent at a `Task_Agent` step: `kind` is `task`, the one kind of
+    pause (a `Decide` never pauses; without a model it fails the run); `tasks` has one task per
+    pass waiting at `step`. `recorded` is True when the server has this stop, False when the post
+    failed, None when no server is configured. `to_json()` is the CLI's paused object."""
     kind: str
     step: str
     tasks: list[Task]
     run_id: str
     run_file: Path
     recorded: bool | None
-    reason: str | None = None
     body: JSON = field(default_factory=dict, repr=False, compare=False)
 
     @property
@@ -346,10 +344,12 @@ class Client:
     `server` is a URL, a `Server`, or None for the configured one (`aip config`; `AIP_SERVER`
     and `AIP_TOKEN` override), which may be none: then runs work and are not recorded, and
     catalog calls raise `NoServer`. `token` is the bearer token. `decision_client` injects a
-    TypeSafe client (tests); otherwise the configured key decides, and without one every
-    decision is the agent's where the step allows it. `session` is an httpx-style client to send
-    requests through. `home` moves `~/.aip` (default `AIP_HOME`). `agent` is the identity's
-    `agent` when neither a call nor `AIP_AGENT` names one.
+    client with the TypeSafe SDK's shape (tests); otherwise the configured endpoint and key
+    decide (`aip config --decision-model URL --decision-model-key KEY`; `AIP_DECISION_MODEL`
+    and `AIP_DECISION_MODEL_KEY` override), and with neither a `Decide` fails the run
+    (`no_decision_model`). `session` is an httpx-style client to send requests through. `home`
+    moves `~/.aip` (default `AIP_HOME`). `agent` is the identity's `agent` when neither a call
+    nor `AIP_AGENT` names one.
     """
 
     def __init__(self, server: str | Server | None = None, token: str | None = None, *, decision_client: Any = None,
@@ -469,8 +469,9 @@ class Client:
     # ------------------------------------------------------------------ runs
 
     def _engine(self, workdir: Path, batch: int | None) -> Engine:
-        resolver = TypeSafeResolver.from_environment(client=self.decision_client, api_key=self.settings.decision_model_key)
-        return Engine(resolver, home=self.home, workdir=workdir, batch=batch or self.settings.batch)
+        s = self.settings
+        resolver = TypeSafeResolver.from_environment(client=self.decision_client, api_key=s.decision_model_key, url=s.decision_model_url)
+        return Engine(resolver, home=self.home, workdir=workdir, batch=batch or s.batch)
 
     def run(self, target: str | Path, inputs: JSON, *, batch: int | None = None, agent: str | None = None,
             session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
@@ -565,7 +566,7 @@ class Client:
             if run.status == DONE:
                 return Done(handle.run_id, run.result or {}, path, recorded, block)
             paused = Paused(run.pause["kind"], run.pause["step"], [Task.from_dict(t) for t in run.pause["tasks"]], handle.run_id,
-                            path, recorded, run.pause.get("reason"), block)
+                            path, recorded, block)
             if on_pause is None:
                 return paused
             answers = on_pause(paused)

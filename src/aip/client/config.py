@@ -1,11 +1,14 @@
 """Where the client points and who is running: the per-user config file and the environment.
 
 `~/.config/aip/config.json` (`AIP_CONFIG` moves it; `aip config` writes it) holds the server
-URL, its bearer token, the decision model's key and the default batch size. The environment
-overrides each: `AIP_SERVER`, `AIP_TOKEN`, `TYPESAFE_API_KEY`, `AIP_BATCH`. Nothing configured
-means runs work and are not recorded, and every decision is the agent's unless a step forbids
-it. The identity of a run (`agent`, `session`; runtime.md, The record) comes from `--agent` /
-`AIP_AGENT` and `--session` / `AIP_SESSION`; `user` is the server's to fill from the token.
+URL, its bearer token, the decision model (`decision_model: {url, api_key}`) and the default
+batch size. The environment overrides each: `AIP_SERVER`, `AIP_TOKEN`, `AIP_DECISION_MODEL`,
+`AIP_DECISION_MODEL_KEY`, `AIP_BATCH`. The decision model is an endpoint with the TypeSafe API
+shape (plan question 7): the URL defaults to TypeSafe's and the key is the endpoint's; a model
+is configured when either is set, and with none every `Decide` fails the run
+(`no_decision_model`) until one is. No server means runs work and are not recorded. The identity
+of a run (`agent`, `session`; runtime.md, The record) comes from `--agent` / `AIP_AGENT` and
+`--session` / `AIP_SESSION`; `user` is the server's to fill from the token.
 """
 
 from __future__ import annotations
@@ -17,13 +20,15 @@ from pathlib import Path
 from typing import Any
 
 from aip.model.engine import DEFAULT_BATCH
-from aip.model.typesafe import KEY_ENV
+from aip.model.typesafe import DEFAULT_URL, KEY_ENV, URL_ENV
+from aip.model.types import DECISION_MODEL_HINT
 
 JSON = dict[str, Any]
 
 CONFIG_ENV = "AIP_CONFIG"
 SERVER_ENV, TOKEN_ENV, BATCH_ENV = "AIP_SERVER", "AIP_TOKEN", "AIP_BATCH"
 AGENT_ENV, SESSION_ENV = "AIP_AGENT", "AIP_SESSION"
+DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV = URL_ENV, KEY_ENV
 CONFIGURE_HINT = "run `aip config --server URL` to record runs on a server"
 
 
@@ -56,13 +61,14 @@ def save_config(config: JSON) -> Path:
 
 @dataclass(frozen=True)
 class Settings:
-    """What a `Client()` with no arguments uses. `token_set` and `decision_model_set`, not the
-    secrets, so printing it leaks nothing; `decision_model_key` is for the resolver."""
+    """What a `Client()` with no arguments uses. `token_set` and `decision_model_key_set`, not
+    the secrets, so printing it leaks nothing; `decision_model_key` is for the resolver."""
     server: str | None
-    source: str | None            # where the server came from: the variable or the file
+    source: str | None                 # where the server came from: the variable or the file
     token: str | None
+    decision_model_url: str | None     # the endpoint as configured; None means TypeSafe's (`DEFAULT_URL`)
     decision_model_key: str | None
-    decision_model_source: str | None
+    decision_model_source: str | None  # where the model came from: the variable(s) or the file
     batch: int
     path: Path
 
@@ -71,11 +77,27 @@ class Settings:
         return bool(self.token)
 
     @property
+    def decision_model_key_set(self) -> bool:
+        return bool(self.decision_model_key)
+
+    @property
+    def decision_model_configured(self) -> bool:
+        """A model is configured when an endpoint or a key is set (plan R4)."""
+        return bool(self.decision_model_url or self.decision_model_key)
+
+    @property
+    def decision_model_endpoint(self) -> str:
+        """The URL the resolver speaks to: the configured one, else TypeSafe's."""
+        return self.decision_model_url or DEFAULT_URL
+
+    @property
     def decision_model(self) -> str:
-        if self.decision_model_key:
-            return f"decision model: TypeSafe (key from {self.decision_model_source})"
-        return (f"decision model: none (set {KEY_ENV} or run `aip config --decision-model KEY`; until then a decision "
-                "is the agent's where the step allows Agent_Fallback and fails the run where not)")
+        """The `aip config` line: the endpoint and whether a key is set, never the key."""
+        if not self.decision_model_configured:
+            return f"decision model: none (a Decide fails the run with no_decision_model; {DECISION_MODEL_HINT})"
+        where = f"{self.decision_model_endpoint}" + ("  (TypeSafe's, the default)" if not self.decision_model_url else "")
+        key = "set" if self.decision_model_key_set else "none"
+        return f"decision model: {where}  key: {key}  (from {self.decision_model_source})"
 
 
 def settings() -> Settings:
@@ -83,10 +105,14 @@ def settings() -> Settings:
     server = os.environ.get(SERVER_ENV) or config.get("server") or None
     source = SERVER_ENV if os.environ.get(SERVER_ENV) else (str(config_path()) if config.get("server") else None)
     token = os.environ.get(TOKEN_ENV) or config.get("token") or None
-    key = os.environ.get(KEY_ENV) or (config.get("decision_model") or {}).get("api_key") or None
-    key_source = KEY_ENV if os.environ.get(KEY_ENV) else (str(config_path()) if key else None)
+    model = config.get("decision_model") if isinstance(config.get("decision_model"), dict) else {}
+    url = os.environ.get(DECISION_MODEL_ENV) or model.get("url") or None
+    key = os.environ.get(DECISION_MODEL_KEY_ENV) or model.get("api_key") or None
+    from_env = [v for v in (DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV) if os.environ.get(v)]
+    model_source = ", ".join(from_env) if from_env else (str(config_path()) if url or key else None)
     batch = _int(os.environ.get(BATCH_ENV)) or _int(config.get("batch")) or DEFAULT_BATCH
-    return Settings(server.rstrip("/") if server else None, source, token, key, key_source, batch, config_path())
+    return Settings(server.rstrip("/") if server else None, source, token, url.rstrip("/") if url else None, key, model_source,
+                    batch, config_path())
 
 
 def _int(value: Any) -> int | None:
@@ -98,9 +124,10 @@ def _int(value: Any) -> int | None:
 
 
 def configure(server: str | None = None, token: str | None = None, decision_model: str | None = None,
-              batch: int | None = None, clear: bool = False) -> Settings:
+              decision_model_key: str | None = None, batch: int | None = None, clear: bool = False) -> Settings:
     """Write the config file: arguments left None are unchanged, an empty string forgets the
-    value, `clear` forgets everything."""
+    value, `clear` forgets everything. `decision_model` is the endpoint's URL,
+    `decision_model_key` its key."""
     if clear:
         save_config({})
         return settings()
@@ -110,9 +137,15 @@ def configure(server: str | None = None, token: str | None = None, decision_mode
             config[key] = value
         elif value is not None:
             config.pop(key, None)
-    if decision_model:
-        config["decision_model"] = {"api_key": decision_model}
-    elif decision_model is not None:
+    model = dict(config.get("decision_model") or {}) if isinstance(config.get("decision_model"), dict) else {}
+    for key, value in (("url", decision_model.rstrip("/") if decision_model else decision_model), ("api_key", decision_model_key)):
+        if value:
+            model[key] = value
+        elif value is not None:
+            model.pop(key, None)
+    if model:
+        config["decision_model"] = model
+    else:
         config.pop("decision_model", None)
     if batch is not None:
         if batch < 1:
@@ -129,5 +162,6 @@ def identity(agent: str | None = None, session: str | None = None, default_agent
             "user": None}
 
 
-__all__ = ["CONFIG_ENV", "SERVER_ENV", "TOKEN_ENV", "BATCH_ENV", "AGENT_ENV", "SESSION_ENV", "CONFIGURE_HINT", "Settings",
-           "config_path", "load_config", "save_config", "settings", "configure", "identity"]
+__all__ = ["CONFIG_ENV", "SERVER_ENV", "TOKEN_ENV", "BATCH_ENV", "AGENT_ENV", "SESSION_ENV", "DECISION_MODEL_ENV",
+           "DECISION_MODEL_KEY_ENV", "CONFIGURE_HINT", "DECISION_MODEL_HINT", "Settings", "config_path", "load_config", "save_config",
+           "settings", "configure", "identity"]

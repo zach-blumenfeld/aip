@@ -99,10 +99,12 @@ no decision model at all.
 Answer with every key of `answer_with`: `{"billing": true, "tone": "calm"}`. An answer-typed
 key takes the bare value, or `{"value": ...}`: a `true_or_false` is `true` or `false`, a
 `choice` one of its `labels`, a `score` the level's number (its position in the labels, from
-0). The runtime stores it as `{"value": ...}` and nothing else: an agent's answer has no
-confidence, so the route `by_tone` that reads `tone` branches on its value and has no
-`Confidence_Below` (the compiler refuses one on an agent's answer). A model's answer, below,
-carries its confidence and a route may check it.
+0). The runtime stores it as `{"value": ...}` and nothing else: a value outside the labels, or
+anything on the answer but its value (a `confidence`, say), is refused as `invalid_output` and
+the pause stands. An agent's answer has no confidence, so the route `by_tone` that reads `tone`
+branches on its value and has no `Confidence_Below` (the compiler refuses one on an agent's
+answer). A model's answer, below, carries its confidence and a route may check it; so may a
+script's, when the script wrote `confidence` and `probabilities` beside its `value`.
 
 ### A task that does the step's work
 
@@ -233,7 +235,8 @@ below); a task left unanswered fails its pass and the run, and a retry asks for 
 `result` is the `End` step's `Read` keys. What every step read and produced along the way is
 the run's record: the run file's `run.history` (`aip runs <run_id>` prints the run), one entry
 per step run with `step`, `kind`, `pass`, `passes`, `at`, `input` and `result`; a decision's
-`answered_by` (`{"model": "jev-1"}`) and the answer objects whole; a route's `read`, `check`
+`answered_by` (`{"model": "jev-1", "endpoint": "https://api.typesafe.ai"}`, the model the reply
+named and the endpoint asked) and the answer objects whole; a route's `read`, `check`
 (`below`, `confidence`, `fired`, `reason`: `below`, or `absent` when a script's answer carried
 no confidence), `value` and `to`;
 an aggregation's `resolutions`; a script's `script`, `stdin` and `seconds`; a task's `prompt` and
@@ -249,13 +252,13 @@ when `resumable` is true.
 | kind | when | extra keys |
 |---|---|---|
 | `invalid_input` | the inputs do not fit `Start`; a step's `Read` key is missing or mistyped; a target, run id or JSON argument cannot be used (then `kind` says which: `not_found`, `no_server`, `compile_error`, `not_a_bundle`, `bundle_tampered`, …) | `missing`, `invalid` |
-| `invalid_output` | a result does not match the step's `Produce` keys: a script's (then `script` is set), or an answer to a pause | `missing`, `invalid` |
+| `invalid_output` | a result does not match the step's `Produce` keys: a script's (then `script` is set), or an answer to a pause; an answer's value outside the key's labels, or anything on an agent's answer but its value, counts | `missing`, `invalid` |
 | `no_branch` | a route read a value none of its branch lines names | `key`, `value`, `branches` |
 | `script_failed` | a script exited non-zero, or did not print one JSON object (then `exit_code` is 0) | `script`, `exit_code`, `stderr` |
 | `timeout` | a script ran past the timeout | `script`, `seconds` |
 | `requires_unmet` | the machine lacks what the procedure's `Requires` names, checked before the first script runs | `missing` |
-| `no_decision_model` | a `Decide` step and this client has no decision model | |
-| `decision_model_failed` | the decision model failed on a `Decide` step | `model`, `cause` |
+| `no_decision_model` | a `Decide` step and this client has no decision model configured | |
+| `decision_model_failed` | the decision model failed on a `Decide` step (unreachable, refused the key, a bad reply) | `model`, `endpoint`, `cause` |
 | `loop_cap` | a `For` (or fold) given more items than `At_Most`, or an `Until` loop at its cap with `Else_Fail` | `loop`, `cap`, `count` |
 | `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done | |
 | `server` | anything else: a bug, an unreachable server | |
@@ -304,17 +307,20 @@ An answer that does not fit its pause leaves the pause in place; answer it again
 ```
 
 A `Decide` needs a decision model; there is no answering it by hand (a procedure that wants the
-agent to decide uses a `Task_Agent`, as `billing-support-agent` does). With none configured the
-run fails at the decision, resumable: set `TYPESAFE_API_KEY` or run `aip config
---decision-model KEY`, then `aip resume <run_id>` with no answers asks the model. Here
-`billing-support` was run on a client with no model:
+agent to decide uses a `Task_Agent`, as `billing-support-agent` does). The model is an endpoint
+with the TypeSafe API shape: `aip config --decision-model-key KEY` sets the key, and
+`aip config --decision-model URL` moves the endpoint off TypeSafe's (`AIP_DECISION_MODEL_KEY`
+and `AIP_DECISION_MODEL` override the file); `aip config` prints the endpoint and whether a key
+is set, never the key. With neither configured the run fails at the decision, resumable:
+configure the model, then `aip resume <run_id>` with no answers asks it. Here `billing-support`
+was run on a client with no model:
 
 <!-- cli-json: error-no-decision-model -->
 ```json
 {
   "error": "no_decision_model",
   "step": "triage",
-  "message": "triage is a decision and no decision model is configured; a Decide is always answered by a decision model, so configure one (aip config --decision-model KEY) and retry the run",
+  "message": "triage is a decision and no decision model is configured; a Decide is always answered by a decision model, so configure one: run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other than TypeSafe's; then `aip resume <run_id>` asks it",
   "pass": null,
   "passes": [],
   "run_id": "4f1c9a2e7b3d5068",
@@ -322,6 +328,10 @@ run fails at the decision, resumable: set `TYPESAFE_API_KEY` or run `aip config
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
+
+A model that fails (nothing answers at the endpoint, the key is refused, the reply is not an
+answer) fails the decision the same way, as `decision_model_failed` with `model`, `endpoint`
+and `cause`; fix the endpoint or the key and `aip resume <run_id>` asks again.
 
 An error before any step ran is not resumable and writes no run file: fix the inputs (or the
 target) and `aip run` again. Here the inputs named `msg` instead of `message`:
@@ -359,7 +369,7 @@ no step paused, so one `run` printed the whole record and the final object.
 <!-- cli-json: progress -->
 ```jsonl
 {"event": "step", "step": "start", "kind": "Start", "pass": null, "passes": []}
-{"event": "step", "step": "triage", "kind": "Decide", "pass": null, "passes": [], "answered_by": {"model": "jev-1"}}
+{"event": "step", "step": "triage", "kind": "Decide", "pass": null, "passes": [], "answered_by": {"model": "jev-1", "endpoint": "https://api.typesafe.ai"}}
 {"event": "step", "step": "by_tone", "kind": "Route", "pass": null, "passes": [], "to": "escalate"}
 {"event": "step", "step": "escalate", "kind": "Execute", "pass": null, "passes": [], "seconds": "<seconds>"}
 {"event": "step", "step": "end", "kind": "End", "pass": null, "passes": []}

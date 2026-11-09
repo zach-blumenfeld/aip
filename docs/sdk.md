@@ -15,11 +15,14 @@ client = aip.Client(agent="my-framework 2.1")                 # who the record s
 ```
 
 With no argument the client points where `aip config` points, which may be nowhere: then runs
-work and are not recorded, and the catalog methods raise `NoServer`. `decision_client=`
-injects a TypeSafe client; otherwise the configured key (`TYPESAFE_API_KEY`, `aip config
---decision-model`) decides, and without one a `Decide` fails the run (`no_decision_model`,
-resumable once a key is set); a procedure that must run without a model has the agent decide in
-a `Task_Agent`, as `examples/language/billing-support-agent` does. `home=` moves `~/.aip`
+work and are not recorded, and the catalog methods raise `NoServer`. The decision model is an
+endpoint with the TypeSafe API shape: the configured one decides (`aip config --decision-model
+URL --decision-model-key KEY`, or `AIP_DECISION_MODEL` and `AIP_DECISION_MODEL_KEY`; the URL
+defaults to TypeSafe's), and `decision_client=` injects a client with the SDK's shape instead
+(tests). With no model a `Decide` fails the run (`no_decision_model`, resumable once one is
+configured), and a model that fails is `decision_model_failed` naming the `model`, the
+`endpoint` and the `cause`; a procedure that must run without a model has the agent decide in a
+`Task_Agent`, as `examples/language/billing-support-agent` does. `home=` moves `~/.aip`
 (default `AIP_HOME`).
 
 ## Running
@@ -41,20 +44,22 @@ directory); `batch` how many `For` passes run at once (default 10, `aip config -
 `agent` and `session` the run's identity (default `AIP_AGENT` / the client's `agent`, and
 `AIP_SESSION`). It returns:
 
-- `aip.Paused`: `kind` (`task` or `decision`), `step`, `reason` (for a decision: why the agent
-  is asked), `tasks` (a list of `aip.Task`, one per `For` pass waiting at the step; one outside a
-  loop), `run_id`, `run_file`, `recorded`. A `Task` has `index` (what the answer is keyed by),
-  `pass_`, `passes`, `state`, `answer_with`, `labels` (the values each `choice` or `score` in
-  `answer_with` may take), and `prompt` and `references` for a task or `questions` for a
-  decision. `paused.task` is the one task of a pause outside a loop.
+- `aip.Paused`: `kind` (`task`, the one kind: a `Task_Agent` step waits for the agent; a
+  `Decide` never pauses), `step`, `tasks` (a list of `aip.Task`, one per `For` pass waiting at
+  the step; one outside a loop), `run_id`, `run_file`, `recorded`. A `Task` has `index` (what
+  the answer is keyed by), `pass_`, `passes`, `prompt`, `state`, `references`, `answer_with`
+  and `labels` (the values each `choice` or `score` in `answer_with` may take). `paused.task`
+  is the one task of a pause outside a loop.
 - `aip.Done`: `run_id`, `result`, `run_file`, `recorded`.
 
 `recorded` is `True` when the server has this stop, `False` when the post failed
 (`client.recording_error` says why; the next stop tries again), `None` when no server is
 configured. `resume(run, answers=None)` answers a pause; `run` is the `Paused` (or the
 `RunError`), a run id, or a run file's path; `answers` is keyed by task index
-(`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task.
-With no answers it retries the step a failed run stopped at. `on_step` receives each record
+(`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task;
+an answer-typed key is the bare value or `{"value": ...}` among the key's labels, and anything
+else on it is refused (`invalid_output`, the pause stands). With no answers it retries the step
+a failed run stopped at. `on_step` receives each record
 entry's progress line as the run writes it; `on_pause`, if given, answers pauses in-process:
 return the answers to go on, or None to stop and get the `Paused` back. Each result's
 `to_json()` is exactly the object the CLI prints (`docs/cli-json.md`).
@@ -93,7 +98,7 @@ catalog reference still runs from the bundle cache.
 | `runs(name=None, status=None, agent=None, session=None, limit=50)` | `[RunSummary]` | `aip runs` |
 | `run_record(run_id)` | `RunRecord`: `status`, `identity`, `pause`, `error`, `result`, `history`, from this machine's run file or the server | `aip runs <run_id>` |
 | `governance(query=None, **params)` | `[GovernanceQuery]`, or the query's rows | `aip governance` |
-| `aip.settings()`, `aip.configure(server, token, decision_model, batch, clear)` | `Settings` | `aip config` |
+| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server`, `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under
 `--json`. `aip export` and `aip fmt` are the language's tooling, and `aip server` and `aip db`

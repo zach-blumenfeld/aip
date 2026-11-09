@@ -39,10 +39,13 @@ procedure means; this page says what running one entails.
 - `Start`: the client supplies the inputs; the runtime checks them against the declared types.
 - `Decide`: the runtime renders each question's instruction (`{key}` from the state), sends the
   step's `Read` keys as the thing to judge and the rendered questions to the decision model, and
-  records the model's answers whole. An interpolated key is not sent as data unless `Read` names it. With no model configured the step fails the run
-  (`no_decision_model`), and so does a model that fails (`decision_model_failed`); a retry asks
-  again. A decision is never answered by hand (spec 2.4, revised 2026-11-09: `Agent_Fallback`
-  is gone; an agent decides in a `Task_Agent`).
+  records the model's answers whole. An interpolated key is not sent as data unless `Read` names it. The decision model is an endpoint with the
+  TypeSafe API shape (questions in, answer objects with their confidence and probabilities
+  out), configured by URL and key on the machine that runs; TypeSafe's URL is the default and
+  any endpoint with that shape serves. With no model configured the step fails the run
+  (`no_decision_model`), and so does a model that fails (`decision_model_failed`, naming the
+  endpoint); a retry asks again. A decision is never answered by hand (spec 2.4, revised
+  2026-11-09: `Agent_Fallback` is gone; an agent decides in a `Task_Agent`).
 - `Route`: the runtime reads one answer. With a `Confidence_Below` check, it reads the answer's
   `confidence` first and takes the check's branch when the confidence is below the bound
   (`reason: below`) or absent (`reason: absent`, a script's answer written without one); the
@@ -62,11 +65,15 @@ procedure means; this page says what running one entails.
   `Execute` of a run, launches the script from the cache with one JSON object on stdin (the
   `Read` keys as `state`, the `Use` assets by stem, the next step's `Read` keys as `expects`),
   and takes the JSON object on stdout as the step's `Produce` keys. A non-zero exit fails the
-  step. The runtime never performs a script's work by hand.
+  step. An answer-typed key among them is the bare value or an object with `value` and, when the
+  script measured them, the `confidence` and `probabilities` a model's answer carries (spec 2.4);
+  the value must be among the key's labels, and anything else on the answer fails the step
+  (`invalid_output`). The runtime never performs a script's work by hand.
 - `Task_Agent`: the runtime renders the prompt (`{key}` from `Read`, `{assets[stem]}` for
   `Use`) and hands the task to the agent, which produces the `Produce` keys; an answer-typed key
-  among them is written as the bare value or `{"value": ...}` and stored as the latter, with
-  nothing else on it.
+  among them is written as the bare value or `{"value": ...}` and stored as the latter, its value
+  among the key's labels and nothing else on it; an answer that breaks either rule is refused and
+  the pause stands.
 
 ### Pauses
 
@@ -161,8 +168,8 @@ operator setting, not something the procedure says:
 - The run carries who ran it: `agent` (the framework or tool, from the MCP client or
   `--agent` / `AIP_AGENT`), `session` (a caller-supplied id grouping runs, `--session` /
   `AIP_SESSION`) and `user` (the server token's name). Claimed, not verified.
-- A decision's record says which model answered, whether the history was sent, and keeps the
-  model's full answer objects. A route's record says what it read, whether its confidence check
+- A decision's record says which model answered and at which endpoint, whether the history was
+  sent, and keeps the model's full answer objects. A route's record says what it read, whether its confidence check
   fired and why (below the bound, absent), and where it went. An
   aggregation's record keeps every answer's resolution (its value, the probability on the
   condition, whether it held, whether a bar turned it). A script's record keeps the script, what

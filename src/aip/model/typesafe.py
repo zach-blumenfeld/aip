@@ -1,4 +1,4 @@
-"""The decision model: TypeSafe, as a `Resolver` (`aip.model.resolver`).
+"""The decision model: an endpoint with the TypeSafe API shape, as a `Resolver` (`aip.model.resolver`).
 
 A `Decide` step's questions become TypeSafe's `Noul`, `Choice` and `Score` questions, the
 `Read` keys go as the `state` to judge (with the run's history beside them when the step says
@@ -7,10 +7,14 @@ A `Decide` step's questions become TypeSafe's `Noul`, `Choice` and `Score` quest
 `probabilities`, a `score` whose `value` is the most probable level with the expected value as
 `score`. The model's `legend` is dropped; it repeats the question's criteria.
 
-The key is `TYPESAFE_API_KEY` in the environment, or the one the CLI reads from `aip config`
-and passes in (`api_key=`); `TypeSafeResolver.from_environment()` returns None without one, which
+The model is an endpoint, not a vendor (plan question 7): `typesafe-sdk` speaks to `url`
+(`base_url`), which defaults to TypeSafe's own, `DEFAULT_URL`, so any service with that shape
+serves. The URL and the key come from `aip config` (`decision_model: {url, api_key}`) or the
+environment, `AIP_DECISION_MODEL` and `AIP_DECISION_MODEL_KEY`; `TYPESAFE_API_KEY` is not read.
+`TypeSafeResolver.from_environment()` returns None when neither a URL nor a key is given, which
 the engine takes as "no decision model configured". A client may be injected (`client=`) for
-tests and connection reuse; otherwise one is opened per call."""
+tests and connection reuse; otherwise one is opened per call. The record names what answered as
+`{"model": <the reply's model>, "endpoint": <url>}`."""
 
 from __future__ import annotations
 
@@ -21,7 +25,9 @@ from aip.model import answers
 from aip.model.resolver import Decision, DecisionRequest
 from aip.model.types import JSON
 
-KEY_ENV = "TYPESAFE_API_KEY"
+URL_ENV = "AIP_DECISION_MODEL"
+KEY_ENV = "AIP_DECISION_MODEL_KEY"
+DEFAULT_URL = "https://api.typesafe.ai"
 NAME = "typesafe"
 
 
@@ -70,23 +76,27 @@ def answer_object(answer: JSON) -> JSON:
 
 
 class TypeSafeResolver:
-    """Answers decisions with TypeSafe. `client` is an injected client (anything with
-    `system_one(state=, questions=)`); otherwise one is opened per decision with `api_key`."""
+    """Answers decisions at an endpoint with the TypeSafe API shape. `client` is an injected
+    client (anything with `system_one(state=, questions=)`); otherwise one is opened per decision
+    on `url` (default `DEFAULT_URL`) with `api_key`."""
 
     name = NAME
 
-    def __init__(self, client: Any = None, api_key: str | None = None, model: str | None = None):
+    def __init__(self, client: Any = None, api_key: str | None = None, url: str | None = None, model: str | None = None):
         self.client = client
         self.api_key = api_key
+        self.url = (url or DEFAULT_URL).rstrip("/")
         self.model = model
 
     @classmethod
-    def from_environment(cls, client: Any = None, api_key: str | None = None) -> "TypeSafeResolver | None":
-        """A resolver when a key is given or `TYPESAFE_API_KEY` is set, else None."""
+    def from_environment(cls, client: Any = None, api_key: str | None = None, url: str | None = None) -> "TypeSafeResolver | None":
+        """A resolver when a client is injected, or a key or a URL is given or set in the
+        environment (`AIP_DECISION_MODEL_KEY`, `AIP_DECISION_MODEL`); else None: no model."""
+        url = url or os.environ.get(URL_ENV) or None
         if client is not None:
-            return cls(client)
-        key = api_key or os.environ.get(KEY_ENV)
-        return cls(api_key=key) if key else None
+            return cls(client, url=url)
+        key = api_key or os.environ.get(KEY_ENV) or None
+        return cls(api_key=key, url=url) if key or url else None
 
     def ask(self, request: DecisionRequest) -> JSON:
         """The model's reply as JSON: `{"model", "usage", "answers": {name: {...}}}`."""
@@ -97,14 +107,14 @@ class TypeSafeResolver:
         else:
             from typesafe_sdk import TypeSafeClient
 
-            with TypeSafeClient(api_key=self.api_key, model=self.model) as client:
+            with TypeSafeClient(api_key=self.api_key, model=self.model, base_url=self.url) as client:
                 result = client.system_one(state=payload, questions=questions)
         return result if isinstance(result, dict) else result.model_dump(mode="json")
 
     def decide(self, request: DecisionRequest) -> Decision:
         result = self.ask(request)
         given = result.get("answers") or {}
-        return Decision(result.get("model") or NAME, {name: answer_object(given[name]) for name in given})
+        return Decision(result.get("model") or NAME, {name: answer_object(given[name]) for name in given}, self.url)
 
 
-__all__ = ["KEY_ENV", "NAME", "TypeSafeResolver", "question_payload", "state_payload", "answer_object"]
+__all__ = ["URL_ENV", "KEY_ENV", "DEFAULT_URL", "NAME", "TypeSafeResolver", "question_payload", "state_payload", "answer_object"]

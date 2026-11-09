@@ -6,10 +6,11 @@ The language's types (spec 6, Types) are checked against JSON values: `string`, 
 `decision` and `aggregation`, objects with one answer per question or aggregation. A key whose
 type the program does not say (an item of a plain list) accepts anything.
 
-An answer written by a script or an agent is `{"value": ...}` and nothing else. The runtime also
-accepts the bare value (`true` for `passed: true_or_false`) and stores it as `{"value": true}`;
-that is the one normalisation it performs, and the record keeps the normalised form
-(`docs/language/runtime.md`, The state).
+An answer written by an agent is `{"value": ...}` and nothing else; one written by a script may
+carry `confidence` and the probabilities a model's would (`ANSWER_FIELDS`, spec 2.4), and nothing
+else. The runtime also accepts the bare value (`true` for `passed: true_or_false`) and stores it
+as `{"value": true}`; that is the one normalisation it performs, and the record keeps the
+normalised form (`docs/language/runtime.md`, The state).
 
 Every failure of a step is a `StepError` whose `kind` is a word of `ERROR_KINDS`, the vocabulary
 of the error objects the CLI and the SDK report; `fields()` is the kind's detail."""
@@ -25,8 +26,16 @@ JSON: TypeAlias = dict[str, Any]
 # The JSON kind each answer type's `value` has (spec 2.4).
 VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "integer"}
 
+# The fields an answer of each type may carry beside `value`: the model's own (spec 2.4). A script
+# may supply them; an agent's answer is `value` alone.
+ANSWER_FIELDS = {"true_or_false": ("confidence", "noul", "probabilities"), "choice": ("confidence", "probabilities"),
+                 "score": ("confidence", "score", "probabilities")}
+
 ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "requires_unmet",
                "no_decision_model", "decision_model_failed", "loop_cap", "not_paused", "server")
+
+DECISION_MODEL_HINT = ("run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other "
+                       "than TypeSafe's")
 
 
 def is_plain(type: str, value: Any) -> bool:
@@ -74,12 +83,29 @@ def conforms(type: str | None, value: Any, labels: list[str] | None = None) -> s
         confidence = value.get("confidence")
         if confidence is not None and not (is_plain("float", confidence) and 0 <= confidence <= 1):
             return f"the confidence of an answer is a number in 0..1, not {describe(confidence)}"
+        probabilities = value.get("probabilities")
+        if probabilities is not None and not (isinstance(probabilities, dict)
+                                              and all(is_plain("float", p) and 0 <= p <= 1 for p in probabilities.values())):
+            return "the probabilities of an answer are an object of numbers in 0..1"
         return None
     if type in ("decision", "aggregation"):
         return None if isinstance(value, dict) else f"a {type} is an object, not {describe(value)}"
     if is_plain(type, value):
         return None
     return f"expected {an(type)}, got {describe(value)}"
+
+
+def extra_fields(type: str | None, value: Any, allowed: tuple[str, ...]) -> str | None:
+    """Why an answer carries fields its source may not write, or None: `allowed` is what may
+    sit beside `value` (nothing for an agent, `ANSWER_FIELDS[type]` for a script)."""
+    if type not in ANSWER_TYPES or not isinstance(value, dict):
+        return None
+    extra = sorted(k for k in value if k != "value" and k not in allowed)
+    if not extra:
+        return None
+    if not allowed:
+        return f"an agent's answer is its value and nothing else, not {', '.join(extra)}"
+    return f"a {type} answer carries value, {', '.join(allowed)} and nothing else, not {', '.join(extra)}"
 
 
 def an(word: str) -> str:
@@ -226,20 +252,22 @@ class NoDecisionModel(StepError):
 
     def __init__(self, step: str):
         super().__init__(step, f"{step} is a decision and no decision model is configured; a Decide is always answered by a "
-                               "decision model, so configure one (aip config --decision-model KEY) and retry the run")
+                               f"decision model, so configure one: {DECISION_MODEL_HINT}; then `aip resume <run_id>` asks it")
 
 
 class DecisionModelFailed(StepError):
-    """The decision model raised on a `Decide` step."""
+    """The decision model raised on a `Decide` step: `model` is the resolver's name, `endpoint`
+    the URL it spoke to (None for a resolver that is not a service), `cause` the exception."""
 
     kind = "decision_model_failed"
 
-    def __init__(self, step: str, model: str, cause: BaseException):
-        self.model, self.cause = model, f"{type(cause).__name__}: {cause}"
-        super().__init__(step, f"the decision model {model} failed on {step}: {self.cause}")
+    def __init__(self, step: str, model: str, cause: BaseException, endpoint: str | None = None):
+        self.model, self.endpoint, self.cause = model, endpoint, f"{type(cause).__name__}: {cause}"
+        where = f" at {endpoint}" if endpoint else ""
+        super().__init__(step, f"the decision model {model}{where} failed on {step}: {self.cause}")
 
     def fields(self) -> JSON:
-        return {"model": self.model, "cause": self.cause}
+        return {"model": self.model, "endpoint": self.endpoint, "cause": self.cause}
 
 
 class LoopCap(StepError):
@@ -262,6 +290,6 @@ class NotPaused(StepError):
     kind = "not_paused"
 
 
-__all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "StepError", "KeysError", "InvalidInput", "InvalidOutput", "NoBranch",
-           "ScriptFailed", "ScriptTimeout", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed", "LoopCap", "NotPaused",
-           "is_plain", "normalise", "conforms", "describe", "branch_key"]
+__all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "ANSWER_FIELDS", "DECISION_MODEL_HINT", "StepError", "KeysError", "InvalidInput",
+           "InvalidOutput", "NoBranch", "ScriptFailed", "ScriptTimeout", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed",
+           "LoopCap", "NotPaused", "is_plain", "normalise", "conforms", "extra_fields", "describe", "branch_key"]

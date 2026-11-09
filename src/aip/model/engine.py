@@ -1,7 +1,7 @@
 """The run loop: one procedure, one state, one record, stepping until a pause, the end or a
 failure (`docs/language/runtime.md`).
 
-    engine = Engine(resolver=TypeSafeResolver.from_environment())
+    engine = Engine(resolver=TypeSafeResolver.from_environment())  # None when no model is configured
     run = engine.start(procedure, {"message": "..."})      # steps until it must stop
     if run.status == "paused":
         run = engine.resume(run, {"0": {"reply": "..."}})   # the agent's answers, then on it goes
@@ -27,20 +27,19 @@ recorded.
 
 **Pauses.** A `Task_Agent` step always pauses; a `Decide` step never does: with no model
 configured it fails the run (`no_decision_model`), and so does a model that raises
-(`decision_model_failed`), and `retry` asks again. (The language lost `Agent_Fallback` in plan
-L4, so `agent_fallback` is never on a step and the `decision` pause below is unreachable; R4
-removes it.) A pause is `{"kind": "task", "step", "tasks": [...]}`, one task per pass waiting
-at the step; outside a loop there is one. A task carries `index` (its position in the list),
-`pass` and `passes` (which pass of which loop), `prompt`, `state`, `references`, `answer_with`
-(the `Produce` keys and types) and `labels` (the values a `choice` or `score` among them may
-take). `resume` takes the answers keyed by task index (`{"0": {...}}`), or one
-answer object when there is one task; an answer that does not fit raises `InvalidOutput` and the
-pause stands; a task left unanswered fails its pass.
+(`decision_model_failed`), and `retry` asks again. A pause is `{"kind": "task", "step", "tasks":
+[...]}`, one task per pass waiting at the step; outside a loop there is one. A task carries
+`index` (its position in the list), `pass` and `passes` (which pass of which loop), `prompt`,
+`state`, `references`, `answer_with` (the `Produce` keys and types) and `labels` (the values a
+`choice` or `score` among them may take). `resume` takes the answers keyed by task index
+(`{"0": {...}}`), or one answer object when there is one task; an answer that does not fit (a
+missing key, a value outside the labels, anything on an answer but its value) raises
+`InvalidOutput` and the pause stands; a task left unanswered fails its pass.
 
 **The record.** Every entry carries `bundle_id`, `step`, `kind`, `pass` (the innermost loop's
 pass index, None outside loops), `passes` (`[{"loop", "pass"}]` from the outermost loop in),
 `at` (UTC), `input` (the Read keys the step saw) and `result` (what it produced), plus per kind:
-a `Decide` entry `answered_by` (`{"model": name}` or `"agent"`) and `history_sent`; a `Route`
+a `Decide` entry `answered_by` (`{"model": name, "endpoint": url}`) and `history_sent`; a `Route`
 entry `read`, `answer`, `check` (`below`, `confidence`, `fired`, `reason`: `below` or `absent`),
 `value` and `to`; an `Aggregate` entry `resolutions` per aggregation; an `Execute` entry `script`,
 `stdin` and `seconds`; a `Task_Agent` entry the `prompt` and `references` it was given. A loop
@@ -206,18 +205,12 @@ class Engine:
                     raise InvalidOutput(step.name, [f"no answer for task {task['index']}"], missing=[str(task["index"])])
                 missing.append((cursor, step, task))
                 continue
-            answer = by_index[task["index"]]
-            if pause["kind"] == "decision":
-                produced = {step.produced_key(): steps.check_decision(step, answer, by_hand=True)}
-                extra: JSON = {"answered_by": "agent", "history_sent": False}
-            else:
-                produced = steps.check_outputs(run.procedure, step, answer, strict=False)
-                extra = {"prompt": task["prompt"], "references": task["references"]}
-            accepted.append((cursor, step, task, produced, extra))
-        for cursor, step, task, produced, extra in accepted:  # every answer checked before any is applied
+            produced = steps.check_outputs(run.procedure, step, by_index[task["index"]], source="agent")
+            accepted.append((cursor, step, task, produced))
+        for cursor, step, task, produced in accepted:  # every answer checked before any is applied
             cursor.pause, cursor.status = None, RUNNING
             cursor.state.update(produced)
-            self._record(run, cursor, step, task["state"], produced if pause["kind"] == "task" else produced[step.produced_key()], **extra)
+            self._record(run, cursor, step, task["state"], produced, prompt=task["prompt"], references=task["references"])
             try:
                 self._after_step(run, cursor, step, set(produced))
             except StepError as err:  # the flow after the step: a loop's cap at the head of the next pass
@@ -292,41 +285,28 @@ class Engine:
                 raise StepError(step.name, f"{step.kind} is not a step the engine runs")
 
     def _decide(self, run: Run, cursor: Cursor, step: Step) -> None:
-        request = steps.decision_request(step, cursor.state, self._visible_history(cursor))
-        fallback = bool(step.properties.get("agent_fallback"))
-        reason: str | None = None
+        """A `Decide` is the model's: no model fails the step, and so does a model that raises;
+        a retry asks again (spec 2.4)."""
         if self.resolver is None:
-            if not fallback:
-                raise NoDecisionModel(step.name)
-            reason = "no_decision_model"
-        else:
-            try:
-                decision = self.resolver.decide(request)
-                answers = steps.check_decision(step, decision.answers, by_hand=False)
-            except InvalidOutput:
-                raise
-            except Exception as exc:  # the model failed: the agent's, or the run's failure
-                failed = DecisionModelFailed(step.name, getattr(self.resolver, "name", type(self.resolver).__name__), exc)
-                if not fallback:
-                    raise failed from exc
-                reason = f"{failed.kind}: {failed.cause}"
-            else:
-                key = step.produced_key()
-                cursor.state[key] = answers
-                self._record(run, cursor, step, request.state, answers, answered_by={"model": decision.model},
-                             history_sent=request.history is not None)
-                self._after_step(run, cursor, step, {key})
-                return
-        self._pause(cursor, "decision", step, [self._decision_task(request)], reason=reason)
+            raise NoDecisionModel(step.name)
+        request = steps.decision_request(step, cursor.state, self._visible_history(cursor))
+        try:
+            decision = self.resolver.decide(request)
+        except Exception as exc:
+            raise self._model_failed(step, exc) from exc
+        answers = steps.check_decision(step, decision.answers)
+        key = step.produced_key()
+        cursor.state[key] = answers
+        self._record(run, cursor, step, request.state, answers, answered_by=decision.answered_by(), history_sent=request.history is not None)
+        self._after_step(run, cursor, step, {key})
 
-    def _decision_task(self, request) -> JSON:
-        return {"questions": steps.questions_for_agent(request), "state": request.state,
-                "answer_with": {q.name: q.type for q in request.questions}}
+    def _model_failed(self, step: Step, exc: BaseException) -> DecisionModelFailed:
+        resolver = self.resolver
+        return DecisionModelFailed(step.name, getattr(resolver, "name", type(resolver).__name__), exc, getattr(resolver, "url", None))
 
-    def _pause(self, cursor: Cursor, kind: str, step: Step, tasks: list[JSON], reason: str | None = None) -> None:
+    def _pause(self, cursor: Cursor, kind: str, step: Step, tasks: list[JSON]) -> None:
         where = _where(cursor)
-        cursor.pause = {"kind": kind, "step": step.name, **({"reason": reason} if kind == "decision" else {}),
-                        "tasks": [{"index": i, **where, **t} for i, t in enumerate(tasks)]}
+        cursor.pause = {"kind": kind, "step": step.name, "tasks": [{"index": i, **where, **t} for i, t in enumerate(tasks)]}
         cursor.status = PAUSED
 
     # ------------------------------------------------------------ flow
@@ -506,35 +486,28 @@ class Engine:
     def _decide_batch(self, run: Run, cursor: Cursor, step: Step, passes: list[Cursor]) -> None:
         """One model call for a batch of passes whose body is this `Decide`: the question keys
         suffixed with the pass index on the way out and mapped back on the way in, so the record
-        is one entry per pass as if each had called alone. The model failing hands every pass to
-        the agent when the step allows it, else fails the first."""
+        is one entry per pass as if each had called alone. The call failing fails every pass of
+        it, so a retry makes one call again."""
         requests = [(p.passes[-1]["pass"], steps.decision_request(step, p.state, self._visible_history(p))) for p in passes]
-        fallback = bool(step.properties.get("agent_fallback"))
         try:
-            decision = self.resolver.decide(steps.batch_request(step, requests))
+            try:
+                decision = self.resolver.decide(steps.batch_request(step, requests))
+            except Exception as exc:
+                raise self._model_failed(step, exc) from exc
             split = steps.split_answers(step, decision.answers, [i for i, _ in requests])
-        except InvalidOutput as err:
-            for p in passes:  # one call, one failure: every pass of it, so a retry makes one call again
+        except StepError as err:
+            for p in passes:
                 p.status, p.error = FAILED, {**err.to_dict(), **_where(p)}
-            return
-        except Exception as exc:
-            failed = DecisionModelFailed(step.name, getattr(self.resolver, "name", type(self.resolver).__name__), exc)
-            if not fallback:
-                for p in passes:
-                    p.status, p.error = FAILED, {**failed.to_dict(), **_where(p)}
-                return
-            for p, (_, request) in zip(passes, requests):
-                self._pause(p, "decision", step, [self._decision_task(request)], reason=f"{failed.kind}: {failed.cause}")
             return
         key = step.produced_key()
         for p, (index, request) in zip(passes, requests):
             try:
-                answers = steps.check_decision(step, split[index], by_hand=False)
+                answers = steps.check_decision(step, split[index])
             except InvalidOutput as err:
                 p.status, p.error = FAILED, {**err.to_dict(), **_where(p)}
                 continue
             p.state[key] = answers
-            self._record(run, p, step, request.state, answers, answered_by={"model": decision.model}, history_sent=request.history is not None)
+            self._record(run, p, step, request.state, answers, answered_by=decision.answered_by(), history_sent=request.history is not None)
             self._after_step(run, p, step, {key})
 
     def _flush(self, cursor: Cursor, passes: list[Cursor]) -> None:

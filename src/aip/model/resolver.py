@@ -14,7 +14,7 @@ never shows them (runtime.md, Batching).
 
 `ScriptedResolver` is the test resolver: the answers are given up front, per step, as answer
 objects or as a function of the request. `aip.model.typesafe.TypeSafeResolver` is the decision
-model, implementing the same two members."""
+model, an endpoint with the TypeSafe API shape, implementing the same two members."""
 
 from __future__ import annotations
 
@@ -41,9 +41,15 @@ class DecisionRequest:
 
 @dataclass
 class Decision:
-    """A resolver's reply: the model's name and one answer object per question."""
+    """A resolver's reply: the model's name, one answer object per question, and the endpoint
+    that answered (None for a resolver that is not a service, such as the scripted one)."""
     model: str
     answers: JSON
+    endpoint: str | None = None
+
+    def answered_by(self) -> JSON:
+        """What the record says answered a decision (runtime.md, The record)."""
+        return {"model": self.model, "endpoint": self.endpoint}
 
 
 @runtime_checkable

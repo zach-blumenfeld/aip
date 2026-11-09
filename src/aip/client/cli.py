@@ -7,7 +7,7 @@
     aip pull | publish | get            move bundles between the cache and the catalog
     aip search | list | pin | retire    the catalog
     aip runs | governance               the server's record
-    aip config                          where the client points: the server, the token, the decision model, the batch size
+    aip config                          where the client points: the server, the token, the decision model's endpoint and key, the batch size
     aip server | db                     serve, or load Neo4j directly
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
@@ -393,21 +393,25 @@ def governance_command(argv: list[str]) -> int:
 
 
 def config_command(argv: list[str]) -> int:
+    from aip.model.typesafe import DEFAULT_URL
     from aip.sdk import configure, settings
 
     parser = argparse.ArgumentParser(prog="aip config", description="Where the client points and how it runs. With no flags, "
-                                     "show it. AIP_SERVER, AIP_TOKEN, TYPESAFE_API_KEY and AIP_BATCH override the file.")
+                                     "show it. AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY and AIP_BATCH "
+                                     "override the file. The decision model is an endpoint with the TypeSafe API shape; without "
+                                     "one a Decide step fails the run (no_decision_model) until one is set and the run is resumed.")
     parser.add_argument("--server", default=None, metavar="URL", help="the server that records runs and holds the catalog (an empty string forgets it)")
     parser.add_argument("--token", default=None, help="the bearer token for the server (an empty string forgets it)")
-    parser.add_argument("--decision-model", default=None, metavar="KEY",
-                        help="the TypeSafe API key this client decides with (an empty string forgets it). Without one, a "
-                             "Decide step fails the run (no_decision_model) until a key is set and the run is resumed")
+    parser.add_argument("--decision-model", default=None, metavar="URL",
+                        help=f"the decision model's endpoint (default {DEFAULT_URL}, TypeSafe's; an empty string forgets it)")
+    parser.add_argument("--decision-model-key", default=None, metavar="KEY",
+                        help="the decision model's API key (an empty string forgets it); never printed")
     parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once by default")
     parser.add_argument("--clear", action="store_true", help="forget everything")
     args = parser.parse_args(argv)
-    writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model, args.batch))
+    writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model, args.decision_model_key, args.batch))
     try:
-        s = configure(args.server, args.token, args.decision_model, args.batch, clear=args.clear) if writes else settings()
+        s = configure(args.server, args.token, args.decision_model, args.decision_model_key, args.batch, clear=args.clear) if writes else settings()
     except ValueError as exc:
         parser.error(str(exc))
     if writes:

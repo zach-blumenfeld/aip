@@ -10,8 +10,8 @@ place of the id. When a server is configured the same run is posted there at eve
 server's record and the run file say the same thing; `recorded` says whether the last post landed.
 
 A run stops one of three ways, and `outcome(run)` is the object the CLI prints for each: paused
-(`"paused": <kind>`), done (`"done": true`) or error (`"error": <kind>`). `progress_line(entry)`
-is the `--progress` line for one record entry.
+(`"paused": "task"`, the one kind), done (`"done": true`) or error (`"error": <kind>`).
+`progress_line(entry)` is the `--progress` line for one record entry.
 """
 
 from __future__ import annotations
@@ -103,8 +103,7 @@ def outcome(run: Run, run_id: str | None, run_file: Path | None, recorded: bool 
         tail["recorded"] = recorded
     if run.status == PAUSED and run.pause is not None:
         pause = run.pause
-        return {"paused": pause["kind"], "step": pause["step"], **({"reason": pause["reason"]} if pause.get("reason") else {}),
-                "tasks": pause["tasks"], **tail}
+        return {"paused": pause["kind"], "step": pause["step"], "tasks": pause["tasks"], **tail}
     if run.status == DONE:
         return {"done": True, "result": run.result, **tail}
     if run.status == FAILED and run.error is not None:

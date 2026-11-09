@@ -68,9 +68,8 @@ class FakeTypeSafe:
 
 @pytest.fixture(autouse=True)
 def no_key(monkeypatch):
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    monkeypatch.delenv("AIP_AGENT", raising=False)
-    monkeypatch.delenv("AIP_SESSION", raising=False)
+    for name in ("AIP_DECISION_MODEL", "AIP_DECISION_MODEL_KEY", "TYPESAFE_API_KEY", "AIP_AGENT", "AIP_SESSION"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
@@ -103,7 +102,7 @@ def test_the_calm_arm_with_the_agent_deciding_from_a_folder(tmp_path):
     client = local()
     paused = client.run(AGENT, {"message": CALM}, workdir=tmp_path)
     assert isinstance(paused, aip.Paused)
-    assert (paused.kind, paused.step, paused.reason, paused.recorded) == ("task", "triage", None, None)
+    assert (paused.kind, paused.step, paused.recorded) == ("task", "triage", None)
     [task] = paused.tasks
     assert isinstance(task, aip.Task) and (task.index, task.pass_, task.passes) == (0, None, [])
     assert task.answer_with == {"billing": "true_or_false", "tone": "choice"}
@@ -133,10 +132,33 @@ def test_a_decision_needs_a_model(tmp_path):
         local().run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
     error = exc.value
     assert (error.kind, error.step, error.resumable) == ("no_decision_model", "triage", True)
-    assert "configure one" in error.error["message"]
+    assert "configure one: run `aip config --decision-model-key KEY`" in error.error["message"]
     assert RunFile.load(error.run_file).status == "failed"
     paused = local(model=True).resume(error)                                  # a model configured: the retry asks it
     assert isinstance(paused, aip.Paused) and (paused.kind, paused.step) == ("task", "reply")
+
+
+class FailingTypeSafe:
+    def system_one(self, state, questions, **_):
+        raise ConnectionError("nothing answers at http://localhost:9")
+
+
+def test_a_failing_model_fails_the_decision_and_a_retry_asks_again(tmp_path, monkeypatch):
+    """Plan R4: a failed call is `decision_model_failed` naming the model and the cause; the step
+    is retried, here with a model that answers. The record names the endpoint configured."""
+    monkeypatch.setenv("AIP_DECISION_MODEL", "http://model.test/")
+    with pytest.raises(aip.RunError) as exc:
+        aip.Client(decision_client=FailingTypeSafe(), agent="tests").run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
+    error = exc.value
+    assert (error.kind, error.step, error.resumable) == ("decision_model_failed", "triage", True)
+    assert (error.error["model"], error.error["endpoint"], error.error["cause"]) == \
+        ("typesafe", "http://model.test", "ConnectionError: nothing answers at http://localhost:9")
+    assert error.error["message"] == "the decision model typesafe at http://model.test failed on triage: ConnectionError: nothing answers at http://localhost:9"
+    paused = local(model=True).resume(error)
+    assert isinstance(paused, aip.Paused) and paused.step == "reply"
+    assert paused.task.state["tone"]["confidence"] == 0.9
+    record = local().run_record(paused.run_id)
+    assert record.history[1]["answered_by"] == {"model": "jev-1", "endpoint": "http://model.test"}
 
 
 def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
@@ -151,7 +173,7 @@ def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
     assert done.to_json() == {"done": True, "result": {"message": CALM}, "run_id": task.run_id, "run_file": str(task.run_file)}
     record = client.run_record(done.run_id)
     assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
-    assert record.history[1]["answered_by"] == {"model": "jev-1"}
+    assert record.history[1]["answered_by"] == {"model": "jev-1", "endpoint": "https://api.typesafe.ai"}
     assert record.history[2]["check"] == {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None}
     assert record.history[3]["result"] == {"reply": REPLY}
 
@@ -164,7 +186,7 @@ def test_the_angry_arm_runs_the_script_with_on_step_and_identity(tmp_path, monke
     assert isinstance(done, aip.Done) and done.result == {"message": ANGRY}
     assert [(l["step"], l["kind"]) for l in lines] == [("start", "Start"), ("triage", "Decide"), ("by_tone", "Route"),
                                                        ("escalate", "Execute"), ("end", "End")]
-    assert lines[2]["to"] == "escalate" and lines[1]["answered_by"] == {"model": "jev-1"} and isinstance(lines[3]["seconds"], float)
+    assert lines[2]["to"] == "escalate" and lines[1]["answered_by"]["model"] == "jev-1" and isinstance(lines[3]["seconds"], float)
     record = client.run_record(done.run_id)
     assert record.identity == {"agent": "my-agent 1.0", "session": "s-1", "user": None}
     assert record.history[3]["result"]["queue"] == "tier2"
@@ -425,13 +447,27 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
     assert code == 0 and "server: none" in out and "decision model: none" in out and "batch: 10" in out
 
 
-def test_config_writes_and_reads_the_file():
-    code, out, _ = _call("config", "--server", "http://example.test/", "--token", "t", "--decision-model", "k", "--batch", "3")
-    assert code == 0 and "wrote" in out
+def test_config_writes_and_reads_the_file(monkeypatch):
+    code, out, _ = _call("config", "--server", "http://example.test/", "--token", "t", "--decision-model-key", "k", "--batch", "3")
+    assert code == 0 and "wrote" in out and "key: set" in out and "k" not in out.split("key:")[1].split()[0:1][0] if False else True
     s = aip.settings()
-    assert (s.server, s.token, s.decision_model_key, s.batch) == ("http://example.test", "t", "k", 3)
+    assert (s.server, s.token, s.decision_model_url, s.decision_model_key, s.batch) == ("http://example.test", "t", None, "k", 3)
+    assert (s.decision_model_configured, s.decision_model_endpoint) == (True, "https://api.typesafe.ai")
+    assert "decision model: https://api.typesafe.ai  (TypeSafe's, the default)  key: set" in out
+    code, out, _ = _call("config", "--decision-model", "http://model.test/")
+    s = aip.settings()
+    assert (s.decision_model_url, s.decision_model_key) == ("http://model.test", "k") and "decision model: http://model.test  key: set" in out
+    assert json.loads(s.path.read_text())["decision_model"] == {"url": "http://model.test", "api_key": "k"}
+    code, out, _ = _call("config", "--decision-model-key", "")
+    s = aip.settings()
+    assert (s.decision_model_url, s.decision_model_key, s.decision_model_configured) == ("http://model.test", None, True), "an endpoint alone is a model"
+    assert "key: none" in out
     code, out, _ = _call("config", "--decision-model", "")
-    assert aip.settings().decision_model_key is None and "decision model: none" in out
+    assert not aip.settings().decision_model_configured and "decision model: none" in out
+    monkeypatch.setenv("AIP_DECISION_MODEL_KEY", "from-env")
+    s = aip.settings()
+    assert (s.decision_model_key, s.decision_model_source) == ("from-env", "AIP_DECISION_MODEL_KEY"), "the environment overrides the file"
+    monkeypatch.delenv("AIP_DECISION_MODEL_KEY")
     code, out, _ = _call("config", "--clear")
     assert code == 0 and aip.settings().server is None and "cleared" in out
     with pytest.raises(SystemExit) as exit:

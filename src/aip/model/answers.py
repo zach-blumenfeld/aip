@@ -8,10 +8,11 @@ write the same shapes.
 | `choice`        | a label                        | `confidence`; `probabilities`, label to probability |
 | `score`         | the most probable level (int)  | `confidence`; `score`, the expected value; `probabilities`, level to probability |
 
-A hand-given answer is `{"value": ...}` and nothing else (`by_hand`). `probability_of` reads the
-probability an answer puts on a condition (`== value`), the number an aggregation's bar is on;
-it is `noul` or `1 − noul` for a `true_or_false` and `probabilities[label]` for the others, and
-None when the answer carries no probabilities."""
+An answer an agent produced in a `Task_Agent` is `{"value": ...}` and nothing else; a script's
+may carry the model fields it computed (`aip.model.types.ANSWER_FIELDS`). `probability_of` reads
+the probability an answer puts on a condition (`== value`), the number an aggregation's bar is
+on; it is `noul` or `1 − noul` for a `true_or_false` and `probabilities[label]` for the others,
+and None when the answer carries no probabilities."""
 
 from __future__ import annotations
 
@@ -41,11 +42,6 @@ def score(probabilities: dict[int | str, float], value: int | None = None) -> JS
     return {"value": level, "confidence": probs[str(level)], "score": round(expected, 6), "probabilities": probs}
 
 
-def by_hand(value: Any) -> JSON:
-    """An answer the agent gave: a value and nothing else."""
-    return {"value": value}
-
-
 def probability_of(answer: JSON, type: str, value: Any) -> float | None:
     """The probability `answer` puts on `== value`: `noul` or `1 − noul` for a `true_or_false`,
     the label's or level's entry in `probabilities` otherwise; None when the answer has none."""
@@ -64,4 +60,4 @@ def probability_of(answer: JSON, type: str, value: Any) -> float | None:
     return None if p is None else float(p)
 
 
-__all__ = ["true_or_false", "choice", "score", "by_hand", "probability_of"]
+__all__ = ["true_or_false", "choice", "score", "probability_of"]

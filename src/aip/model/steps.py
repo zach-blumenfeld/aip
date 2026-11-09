@@ -6,7 +6,10 @@ The state is one JSON object of keys. A step sees its `Read` keys, each under th
 of its path (`Read triage_decision.tone` gives the step `tone`, the one answer; spec 2.4), checked
 against the declared types before it runs. A step's result is checked against its `Produce` keys
 before anything is written; an answer written bare (`true`) is stored as `{"value": true}`
-(`aip.model.types.normalise`), the one normalisation the runtime performs."""
+(`aip.model.types.normalise`), the one normalisation the runtime performs. An answer's value is
+checked against the key's labels; an agent's answer may carry nothing but its value, a script's
+the model fields of spec 2.4 (`confidence`, `probabilities`, ...), and anything else on it is
+`invalid_output`."""
 
 from __future__ import annotations
 
@@ -24,8 +27,8 @@ from aip.model.answers import probability_of
 from aip.model.procedure import Aggregation, Flow, Loop, Procedure, Question, Step
 from aip.model.resolver import DecisionRequest
 from aip.model.types import (
-    JSON, VALUE_KIND, InvalidInput, InvalidOutput, LoopCap, NoBranch, ScriptFailed, ScriptTimeout, branch_key, conforms,
-    describe, normalise,
+    ANSWER_FIELDS, JSON, VALUE_KIND, InvalidInput, InvalidOutput, LoopCap, NoBranch, ScriptFailed, ScriptTimeout, branch_key,
+    conforms, describe, extra_fields, normalise,
 )
 
 WORKDIR = "AIP_WORKDIR"
@@ -75,10 +78,11 @@ def check_reads(procedure: Procedure, step: Step, state: JSON) -> None:
         raise InvalidInput(step.name, errors, missing, invalid)
 
 
-def check_outputs(procedure: Procedure, step: Step, result: Any, *, strict: bool) -> JSON:
-    """`result` as the step's `Produce` keys, normalised: every key present with its type. With
-    `strict` a key the step did not declare is an error (a script's output); otherwise undeclared
-    keys are dropped (an agent's answer)."""
+def check_outputs(procedure: Procedure, step: Step, result: Any, *, source: str) -> JSON:
+    """`result` as the step's `Produce` keys, normalised: every key present with its type, an
+    answer's value among the key's labels. `source` is `script` (an `Execute`: a key the step did
+    not declare is an error, and an answer may carry the model fields of spec 2.4) or `agent` (a
+    `Task_Agent`: undeclared keys are dropped, and an answer is its value and nothing else)."""
     if not isinstance(result, dict):
         raise InvalidOutput(step.name, [f"expected a JSON object of the Produce keys, got {describe(result)}"])
     errors, missing, invalid, out = [], [], [], {}
@@ -88,12 +92,12 @@ def check_outputs(procedure: Procedure, step: Step, result: Any, *, strict: bool
             missing.append(p.key)
             continue
         value = normalise(p.type, result[p.key])
-        why = conforms(p.type, value)
+        why = conforms(p.type, value, p.labels) or extra_fields(p.type, value, ANSWER_FIELDS.get(p.type or "", ()) if source == "script" else ())
         if why is not None:
             errors.append(f"{p.key}: {why}")
             invalid.append(p.key)
         out[p.key] = value
-    if strict:
+    if source == "script":
         declared = {p.key for p in step.produces}
         for key in result:
             if key not in declared:
@@ -151,8 +155,9 @@ def render(text: str, state: JSON, assets: dict[str, str] | None = None) -> str:
 # ---------------------------------------------------------------- Start and End
 
 def start(step: Step, inputs: Any) -> JSON:
-    """The inputs checked against the `Start` declarations: every one present with its type,
-    nothing undeclared (`invalid_input` otherwise)."""
+    """The inputs checked against the `Start` declarations: every one present with its type (an
+    answer's value among its labels, and nothing on it but the value), nothing undeclared
+    (`invalid_input` otherwise)."""
     if not isinstance(inputs, dict):
         raise InvalidInput("start", [f"the inputs are a JSON object, not {describe(inputs)}"])
     errors, missing, invalid, out = [], [], [], {}
@@ -162,7 +167,7 @@ def start(step: Step, inputs: Any) -> JSON:
             missing.append(p.key)
             continue
         value = normalise(p.type, inputs[p.key])
-        why = conforms(p.type, value)
+        why = conforms(p.type, value, p.labels) or extra_fields(p.type, value, ())
         if why is not None:
             errors.append(f"{p.key}: {why}")
             invalid.append(p.key)
@@ -193,10 +198,9 @@ def decision_request(step: Step, state: JSON, history: list[JSON]) -> DecisionRe
     return DecisionRequest(step.name, questions, project(step, state), sent)
 
 
-def check_decision(step: Step, answers: Any, *, by_hand: bool) -> JSON:
-    """The answers as the decision key holds them: one answer object per question, its value of
-    the question's kind and among its labels; a model's answer is kept whole. `by_hand` (keep
-    `value` only) served the agent fallback the language no longer has; R4 removes it."""
+def check_decision(step: Step, answers: Any) -> JSON:
+    """The model's answers as the decision key holds them: one answer object per question, its
+    value of the question's kind and among its labels, the model's own fields kept whole."""
     if not isinstance(answers, dict):
         raise InvalidOutput(step.name, [f"the answers are an object with one entry per question, not {describe(answers)}"])
     errors, missing, invalid, out = [], [], [], {}
@@ -211,7 +215,7 @@ def check_decision(step: Step, answers: Any, *, by_hand: bool) -> JSON:
             errors.append(f"{q.name}: {why}")
             invalid.append(q.name)
             continue
-        out[q.name] = {"value": answer["value"]} if by_hand else dict(answer)
+        out[q.name] = dict(answer)
     for name in answers:
         if step.questions and all(q.name != name for q in step.questions):
             errors.append(f"{name} is not a question of {step.name}")
@@ -219,12 +223,6 @@ def check_decision(step: Step, answers: Any, *, by_hand: bool) -> JSON:
     if errors:
         raise InvalidOutput(step.name, errors, missing, invalid)
     return out
-
-
-def questions_for_agent(request: DecisionRequest) -> list[JSON]:
-    """The questions as a pause hands them to the agent."""
-    return [{"name": q.name, "type": q.type, "labels": q.labels, "instruction": q.instruction,
-             "criteria": [{"label": label, "text": text} for label, text in q.criteria]} for q in request.questions]
 
 
 def batch_request(step: Step, requests: list[tuple[int, DecisionRequest]]) -> DecisionRequest:
@@ -278,11 +276,9 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
     target's node id; `continues` marks a branch to `Continue`), and `{"read": dotted, "answer",
     "check": {"below", "confidence", "fired", "reason"} | None, "value": the branch word | None,
     "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound
-    (`reason: "below"`) or absent (`reason: "absent"`: a script's answer written without one).
-    The compiler allows the check only on a decision's or a script's answer (spec 2.2), so the
-    `given_by_hand` branch below never fires on a compiled bundle; R4 removes it with
-    `reason: "hand"`. Otherwise the branch for `value` is taken, and a value with no branch
-    fails the step (`no_branch`)."""
+    (`reason: "below"`) or absent (`reason: "absent"`: a script's answer written without one; the
+    compiler allows the check only on a decision's or a script's answer, spec 2.2). Otherwise the
+    branch for `value` is taken, and a value with no branch fails the step (`no_branch`)."""
     [read] = step.declared_reads
     answer = lookup(state, read.path)
     if not isinstance(answer, dict) or "value" not in answer:
@@ -292,8 +288,7 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
     if check is not None:
         confidence = answer.get("confidence")
         if confidence is None:
-            by_hand = procedure.given_by_hand(read.path[0])
-            fired, reason = not by_hand, "hand" if by_hand else "absent"
+            fired, reason = True, "absent"
         else:
             fired, reason = confidence < check.below, "below" if confidence < check.below else None
         record["check"] = {"below": check.below, "confidence": confidence, "fired": fired, "reason": reason}
@@ -497,7 +492,7 @@ def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python
     raw = run_script(step.name, script.path, argv, stdin, root, timeout, workdir)
     seconds = round(time.monotonic() - began, 3)
     try:
-        outputs = check_outputs(procedure, step, raw, strict=True)
+        outputs = check_outputs(procedure, step, raw, source="script")
     except InvalidOutput as err:
         err.script = script.path
         raise
@@ -521,6 +516,6 @@ def task(procedure: Procedure, step: Step, state: JSON, root: Path) -> JSON:
 
 
 __all__ = ["WORKDIR", "INDEX", "ITERATIONS", "PASS_SUFFIX", "lookup", "project", "check_reads", "check_outputs", "answer_with", "labels_of",
-           "expects", "render", "start", "end", "decision_request", "check_decision", "questions_for_agent", "batch_request",
+           "expects", "render", "start", "end", "decision_request", "check_decision", "batch_request",
            "split_answers", "is_batched_decide", "route", "aggregate", "resolve_condition", "loop_items", "until_holds", "assets_of",
            "launch", "run_script", "execute", "task"]

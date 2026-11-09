@@ -215,7 +215,6 @@ class Procedure:
         self._steps: dict[str, Step] = {}
         self._loops: dict[str, Loop] = {}
         self._labels: dict[tuple[str, ...], list[str] | None] = {}
-        self._by_hand: dict[str, bool] = {}
         header = self._one("MATCH (p:Procedure {bundle_id: $b, id: $id}) RETURN properties(p) AS p", id=PROCEDURE_ID)
         if header is None:
             raise ValueError(f"the store holds no procedure with bundle id {bundle_id}")
@@ -349,17 +348,6 @@ class Procedure:
         if row is None:
             raise KeyError(f"no file {path} in bundle {self.bundle_id}")
         return FileEntry.from_properties(row["f"]).data.decode("utf-8")
-
-    def given_by_hand(self, name: str) -> bool:
-        """Whether every producer of a root key is a `Decide` or a `Task_Agent`. Since the
-        language lost `Agent_Fallback` (plan L4) a `Decide` is always a model's and a route's
-        check may not sit on a `Task_Agent`'s answer, so this is dead at any check; R4 removes
-        it with `reason: hand`."""
-        if name not in self._by_hand:
-            kinds = [r["kind"] for r in self._rows("MATCH (s:Step {bundle_id: $b})-[:PRODUCES]->(:Data {name: $name}) "
-                                                   "RETURN s.kind AS kind", name=name)]
-            self._by_hand[name] = bool(kinds) and all(k in ("Decide", "Task_Agent") for k in kinds)
-        return self._by_hand[name]
 
     def key_type(self, name: str) -> str | None:
         row = self._one("MATCH (k:Data {bundle_id: $b, name: $name}) RETURN k.type AS type", name=name)

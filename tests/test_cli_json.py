@@ -74,11 +74,13 @@ def normalise(obj, run_id: str | None = None):
 
 class FakeTypeSafe:
     """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97); the tone is `calm` with
-    probability `CALM_P`, or read off the ticket for `ticket-triage` (`NOW` means angry)."""
+    probability `CALM_P`, or read off the ticket for `ticket-triage` (`NOW` means angry). The
+    keyword arguments it was opened with (the key, the `base_url`) are kept in `OPENED`."""
     CALM_P = 0.9
+    OPENED: list[dict] = []
 
-    def __init__(self, **_):
-        pass
+    def __init__(self, **kwargs):
+        FakeTypeSafe.OPENED.append(kwargs)
 
     def __enter__(self):
         return self
@@ -105,18 +107,21 @@ class CliJson(unittest.TestCase):
         env = mock.patch.dict(os.environ, {"AIP_CONFIG": str(self.tmp / "none.json"), "AIP_HOME": str(self.tmp / "home")})
         env.start()
         self.addCleanup(env.stop)
-        for key in ("TYPESAFE_API_KEY", "AIP_SERVER", "AIP_AGENT", "AIP_SESSION"):
+        for key in ("AIP_DECISION_MODEL", "AIP_DECISION_MODEL_KEY", "TYPESAFE_API_KEY", "AIP_SERVER", "AIP_AGENT", "AIP_SESSION"):
             os.environ.pop(key, None)
         self.run_id: str | None = None
         self.docs = documented()
 
     def aip(self, *argv: str) -> tuple[int, list, str]:
-        """Exit code, every JSON line or object printed on stdout, and stderr."""
+        """Exit code, every JSON line or object printed on stdout (the text lines for `config`), and stderr."""
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", new=out), mock.patch("sys.stderr", new=err):
             code = main(list(argv))
         text = out.getvalue()
-        printed = [json.loads(line) for line in text.splitlines()] if "--progress" in argv else [json.loads(text)]
+        if argv[0] == "config":
+            printed = text.splitlines()
+        else:
+            printed = [json.loads(line) for line in text.splitlines()] if "--progress" in argv else [json.loads(text)]
         return code, printed, err.getvalue()
 
     @property
@@ -141,8 +146,9 @@ class CliJson(unittest.TestCase):
 
     @contextmanager
     def decision_model(self, calm_p: float = 0.9):
-        with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "stub"}), mock.patch.object(FakeTypeSafe, "CALM_P", calm_p), \
-                mock.patch("typesafe_sdk.TypeSafeClient", FakeTypeSafe):
+        """A decision model configured by its key in the environment, answered by the fake."""
+        with mock.patch.dict(os.environ, {"AIP_DECISION_MODEL_KEY": "stub"}), mock.patch.object(FakeTypeSafe, "CALM_P", calm_p), \
+                mock.patch.object(FakeTypeSafe, "OPENED", []), mock.patch("typesafe_sdk.TypeSafeClient", FakeTypeSafe):
             yield
 
     def variant(self, edit=None, script: str | None = None, example: Path = AGENT) -> Path:
@@ -180,6 +186,8 @@ class CliJson(unittest.TestCase):
 
         with self.decision_model(0.9):                                           # a model sure of calm: the check passes
             code, [pause], _ = self.run_(EXAMPLE, {"message": CALM})
+            self.assertEqual(FakeTypeSafe.OPENED, [{"api_key": "stub", "model": None, "base_url": "https://api.typesafe.ai"}],
+                             "the key from the environment, TypeSafe's endpoint by default")
         self.assertEqual(code, 0)
         self.assert_documented("paused-task", pause)
         code, [done], err = self.resume({"reply": REPLY})
@@ -187,7 +195,7 @@ class CliJson(unittest.TestCase):
         self.assert_documented("done", done)
         history = RunFile.load(self.run_file).run["history"]
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "reply", "end"])
-        self.assertEqual(history[1]["answered_by"], {"model": "jev-1"})
+        self.assertEqual(history[1]["answered_by"], {"model": "jev-1", "endpoint": "https://api.typesafe.ai"})
         self.assertEqual(history[2]["check"], {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None})
 
     def test_the_answer_can_be_keyed_by_task_index_or_listed(self):
@@ -209,7 +217,36 @@ class CliJson(unittest.TestCase):
         with self.decision_model(0.9):                                           # a model configured: the retry asks it
             code, [pause], _ = self.resume(None)
         self.assertEqual((code, pause.get("paused"), pause["step"]), (0, "task", "reply"))
-        self.assertEqual(RunFile.load(self.run_file).run["history"][1]["answered_by"], {"model": "jev-1"})
+        self.assertEqual(RunFile.load(self.run_file).run["history"][1]["answered_by"], {"model": "jev-1", "endpoint": "https://api.typesafe.ai"})
+
+    def test_a_decision_model_that_fails_is_retried_once_the_endpoint_is_fixed(self):
+        """Plan R4's proof: an endpoint nothing answers at fails the decision with
+        `decision_model_failed`; `aip config` moves the endpoint and `aip resume` asks again. The
+        first call is the real SDK against `http://localhost:9/`."""
+        code, printed, _ = self.aip("config", "--decision-model", "http://localhost:9/", "--decision-model-key", "k")
+        self.assertEqual(code, 0)
+        code, [error], _ = self.run_(EXAMPLE, {"message": CALM})
+        self.assertEqual((code, error["error"], error["step"], error["resumable"], error["model"], error["endpoint"]),
+                         (1, "decision_model_failed", "triage", True, "typesafe", "http://localhost:9"))
+        self.assertIn("the decision model typesafe at http://localhost:9 failed on triage: TypeSafeAPIConnectionError", error["message"])
+        self.assertTrue(error["cause"].startswith("TypeSafeAPIConnectionError"), error["cause"])
+        code, printed, _ = self.aip("config", "--decision-model", "")                 # back to TypeSafe's endpoint; the key stays
+        with self.decision_model(0.9):
+            code, [pause], _ = self.resume(None)
+            self.assertEqual(FakeTypeSafe.OPENED[0]["base_url"], "https://api.typesafe.ai")
+        self.assertEqual((code, pause.get("paused"), pause["step"]), (0, "task", "reply"))
+
+    def test_config_prints_the_endpoint_and_whether_a_key_is_set_never_the_key(self):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", new=out), mock.patch("sys.stderr", new=err):
+            self.assertEqual(main(["config"]), 0)
+            self.assertEqual(main(["config", "--decision-model-key", "s3cret"]), 0)
+            self.assertEqual(main(["config", "--decision-model", "http://model.test/"]), 0)
+        text = out.getvalue()
+        self.assertIn("decision model: none (a Decide fails the run with no_decision_model; run `aip config --decision-model-key KEY`", text)
+        self.assertIn("decision model: https://api.typesafe.ai  (TypeSafe's, the default)  key: set", text)
+        self.assertIn("decision model: http://model.test  key: set", text)
+        self.assertNotIn("s3cret", text)
 
     def test_progress_on_the_angry_branch(self):
         with self.decision_model(0.1):                                           # a model sure of angry
