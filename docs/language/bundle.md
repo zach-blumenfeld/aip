@@ -1,5 +1,7 @@
 # The bundle and its graph
 
+The queries worth knowing over this schema, verified against the examples, are in `queries.md`.
+
 What `aip compile` writes (spec section 3): one Relate file, extension `.rl`, holding the
 program's source byte for byte, its files, and the graph derived from them. This page is the
 schema of that graph. `aip_spec/graph.py` is its only implementation and `aip_spec/bundle.py`

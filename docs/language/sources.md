@@ -17,7 +17,7 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
   (`git show cypherlite-backend:src/aip/server/backends/cypherlite.py`), written against
   CypherLite 0.13 and sharing the Neo4j backend's Cypher. The Python API has moved since (typed
   ABI v2 in 0.16); use it for shape, not for calls.
-- **The language**: `docs/language/spec.md` (the law), `docs/language/runtime.md`,
+- **The language**: `docs/language/spec.md` (and `docs/language/queries.md`, the Cypher queries over a bundle) (the law), `docs/language/runtime.md`,
   `docs/language/limitations.md`, `docs/language/no-expressions.md`, `docs/language/end-to-end.md`,
   `docs/language/plan-questions.md` (the 26 decisions and why). Programs under
   `examples/language/`. The VS Code grammar under `editors/vscode`.
