@@ -28,7 +28,8 @@ procedure means; this page says what running one entails.
   it as `{"value": ...}`, which is also what the record keeps.
 - A key is rebound when a loop pass writes it; every earlier value stays in the record.
 - A decision writes its one key with one answer object per question, in the shape of 2.4. An
-  answer given by hand has `value` and nothing else.
+  answer an agent produced in a `Task_Agent` has `value` and nothing else; a script's has `value`
+  and whatever confidence and probabilities the script supplied.
 - The runtime's own keys: inside a body `index` is the pass's number, from 0, and after a loop
   `iterations` is how many passes ran, a pass ended by `Until` included. When a nested loop
   exits, `index` is the enclosing pass's again.
@@ -38,16 +39,18 @@ procedure means; this page says what running one entails.
 - `Start`: the client supplies the inputs; the runtime checks them against the declared types.
 - `Decide`: the runtime renders each question's instruction (`{key}` from the state), sends the
   step's `Read` keys as the thing to judge and the rendered questions to the decision model, and
-  records the model's answers whole. An interpolated key is not sent as data unless `Read` names it. With no model configured, the step stops the run
-  unless `Agent_Fallback true`, in which case the agent answers and the record says so.
+  records the model's answers whole. An interpolated key is not sent as data unless `Read` names it. With no model configured the step fails the run
+  (`no_decision_model`), and so does a model that fails (`decision_model_failed`); a retry asks
+  again. A decision is never answered by hand (spec 2.4, revised 2026-11-09: `Agent_Fallback`
+  is gone; an agent decides in a `Task_Agent`).
 - `Route`: the runtime reads one answer. With a `Confidence_Below` check, it reads the answer's
-  `confidence` first and takes the check's branch when the confidence is below the bound. An
-  answer with no confidence is let through when it was given by hand, by the agent under
-  `Agent_Fallback` or in a `Task_Agent` (the record says `reason: hand`), and fires the check when
-  it came from a script or an input (`reason: absent`); otherwise it takes the branch for `value`: `true` or `false` for a `true_or_false`,
+  `confidence` first and takes the check's branch when the confidence is below the bound
+  (`reason: below`) or absent (`reason: absent`, a script's answer written without one); the
+  compiler allows the check only on a decision's or a script's answer. Otherwise it takes the branch for `value`: `true` or `false` for a `true_or_false`,
   the label for a `choice`, and for a `score` the label of the level the value names (the
-  branch lines are written with the question's labels, the value is the level's number). A
-  value with no branch fails the step.
+  branch lines are written with the labels, the value is the level's number; the labels are the
+  question's, or the key's own when a script or an agent produced it under labels). A value
+  with no branch fails the step.
 - `Aggregate`: for each aggregation, the runtime tests each answer in its source against the
   line's condition (`== value`, `!= value`, or `== true` for a bare `true_or_false`), takes the
   probability the model put on that condition from the answer's probabilities, and, when the
@@ -61,23 +64,21 @@ procedure means; this page says what running one entails.
   and takes the JSON object on stdout as the step's `Produce` keys. A non-zero exit fails the
   step. The runtime never performs a script's work by hand.
 - `Task_Agent`: the runtime renders the prompt (`{key}` from `Read`, `{assets[stem]}` for
-  `Use`) and hands the task to the agent, which produces the `Produce` keys. A `Decide` with no
-  model, or whose model failed, and `Agent_Fallback true` is handed to the agent the same way,
-  with its rendered questions; the agent answers each with a value, stored as `{"value": ...}`.
+  `Use`) and hands the task to the agent, which produces the `Produce` keys; an answer-typed key
+  among them is written as the bare value or `{"value": ...}` and stored as the latter, with
+  nothing else on it.
 
 ### Pauses
 
-A pause is the runtime stopping for the agent. One pause carries one step and a list of tasks,
-one per `For` pass waiting at that step (one task outside a `For`): `{"kind": "task" |
-"decision", "step", "tasks": [{"index", "pass", "passes", ...}]}`. A task's `index` is its
-position in the list, from 0, and is what the answer is keyed by; `pass` is the innermost
-loop's pass number and `passes` every enclosing loop's, outermost first (`[{"loop":
-"each_ticket", "pass": 2}, {"loop": "revise", "pass": 0}]`). A task of a `Task_Agent` step
-carries `prompt`, `state` (the `Read` keys), `references` (path and description) and
-`answer_with` (the `Produce` keys and their types); a task of a `Decide` step carries
-`questions` (name, type, labels, the rendered instruction, criteria), `state` and `answer_with`
-(the question names and types), and the pause says why the agent is asked (`reason`: no model,
-or how the model failed). The agent answers with one object per task, keyed by the task's
+A pause is the runtime stopping for the agent, and only a `Task_Agent` pauses. One pause carries
+one step and a list of tasks, one per `For` pass waiting at that step (one task outside a
+`For`): `{"kind": "task", "step", "tasks": [{"index", "pass", "passes", ...}]}`. A task's
+`index` is its position in the list, from 0, and is what the answer is keyed by; `pass` is the
+innermost loop's pass number and `passes` every enclosing loop's, outermost first (`[{"loop":
+"each_ticket", "pass": 2}, {"loop": "revise", "pass": 0}]`). A task carries `prompt`, `state`
+(the `Read` keys), `references` (path and description), `answer_with` (the `Produce` keys and
+their types) and `labels` (for each `choice` or `score` among them, the values it may take, so
+the agent knows what to answer). The agent answers with one object per task, keyed by the task's
 index, or with the one object when there is one task; an answer that does not fit the step's
 keys is refused, nothing is applied, and the pause stands; a task left unanswered fails its
 pass (and so the run), and a retry asks for it again. The step's record entry is written when
@@ -125,7 +126,7 @@ operator setting, not something the procedure says:
   pass had made its own call, one decision key per pass, one entry per pass, in input order. A
   `Decide` that `Read`s the item (or `index`) judges something different on every pass, so its
   passes call one at a time; they still run as a batch. When the one call fails, every pass of
-  it is handed to the agent (`Agent_Fallback true`) or fails, and a retry makes one call again.
+  it fails, and a retry makes one call again.
 - The suffix scheme is the runtime's and is not part of the language. A procedure cannot name
   a suffixed key, and a compiler never sees one. Any other way of making the keys distinct is
   equally correct provided the mapping back is exact.
@@ -160,9 +161,9 @@ operator setting, not something the procedure says:
 - The run carries who ran it: `agent` (the framework or tool, from the MCP client or
   `--agent` / `AIP_AGENT`), `session` (a caller-supplied id grouping runs, `--session` /
   `AIP_SESSION`) and `user` (the server token's name). Claimed, not verified.
-- A decision's record says who answered (the model, by name, or the agent), whether the history
-  was sent, and keeps the model's full answer objects. A route's record says what it read,
-  whether its confidence check fired and why (below the bound, absent), or let a hand answer through (`hand`), and where it went. An
+- A decision's record says which model answered, whether the history was sent, and keeps the
+  model's full answer objects. A route's record says what it read, whether its confidence check
+  fired and why (below the bound, absent), and where it went. An
   aggregation's record keeps every answer's resolution (its value, the probability on the
   condition, whether it held, whether a bar turned it). A script's record keeps the script, what
   it was given on stdin and how long it took. An agent task's record keeps the prompt and

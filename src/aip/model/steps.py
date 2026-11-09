@@ -109,6 +109,12 @@ def answer_with(step: Step) -> dict[str, str | None]:
     return {p.key: p.type for p in step.produces}
 
 
+def labels_of(step: Step) -> dict[str, list[str]]:
+    """`{key: labels}` for the `Produce` keys declared under labels (`tone: choice [angry, calm]`):
+    the values an agent's `choice` answer may take, or the levels of its `score`."""
+    return {p.key: list(p.labels) for p in step.produces if p.labels}
+
+
 def expects(procedure: Procedure, step: Step) -> dict[str, str | None]:
     """The next step's `Read` keys with their types, handed to a script as `expects`."""
     flow = step.next
@@ -189,8 +195,8 @@ def decision_request(step: Step, state: JSON, history: list[JSON]) -> DecisionRe
 
 def check_decision(step: Step, answers: Any, *, by_hand: bool) -> JSON:
     """The answers as the decision key holds them: one answer object per question, its value of
-    the question's kind and among its labels. A hand answer keeps `value` and nothing else
-    (spec 2.4); a model's answer is kept whole."""
+    the question's kind and among its labels; a model's answer is kept whole. `by_hand` (keep
+    `value` only) served the agent fallback the language no longer has; R4 removes it."""
     if not isinstance(answers, dict):
         raise InvalidOutput(step.name, [f"the answers are an object with one entry per question, not {describe(answers)}"])
     errors, missing, invalid, out = [], [], [], {}
@@ -271,11 +277,12 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
     """Where the route sends the run and what its record says: the flow taken (its `to` is the
     target's node id; `continues` marks a branch to `Continue`), and `{"read": dotted, "answer",
     "check": {"below", "confidence", "fired", "reason"} | None, "value": the branch word | None,
-    "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound.
-    An answer with no confidence is let through on its value when it was given by hand (a
-    `Decide` answered by the agent, a `Task_Agent`), `reason: "hand"`; from a script or an input
-    the absent confidence fires the check, `reason: "absent"`. Otherwise the branch for `value`
-    is taken, and a value with no branch fails the step (`no_branch`)."""
+    "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound
+    (`reason: "below"`) or absent (`reason: "absent"`: a script's answer written without one).
+    The compiler allows the check only on a decision's or a script's answer (spec 2.2), so the
+    `given_by_hand` branch below never fires on a compiled bundle; R4 removes it with
+    `reason: "hand"`. Otherwise the branch for `value` is taken, and a value with no branch
+    fails the step (`no_branch`)."""
     [read] = step.declared_reads
     answer = lookup(state, read.path)
     if not isinstance(answer, dict) or "value" not in answer:
@@ -502,17 +509,18 @@ def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python
 def task(procedure: Procedure, step: Step, state: JSON, root: Path) -> JSON:
     """What the agent is handed: the prompt (the `Prompt` file or the description) with `{key}`
     and `{assets[stem]}` rendered, the `Read` keys as `state`, the references with their
-    descriptions, and `answer_with`, the `Produce` keys and their types."""
+    descriptions, `answer_with`, the `Produce` keys and their types, and `labels`, the values
+    each `choice` or `score` among them may take."""
     prompt_file = step.file("PROMPTED_BY")
     template = (root / Path(*prompt_file.path.split("/"))).read_text(encoding="utf-8") if prompt_file else step.description
     assets = {u.stem: text for u, text in ((u, (root / Path(*u.path.split("/"))).read_text(encoding="utf-8"))
                                            for u in step.uses("assets"))}
     return {"prompt": render(template, state, assets), "state": project(step, state),
             "references": [{"path": u.path, "description": u.description or ""} for u in step.uses("references")],
-            "answer_with": answer_with(step)}
+            "answer_with": answer_with(step), "labels": labels_of(step)}
 
 
-__all__ = ["WORKDIR", "INDEX", "ITERATIONS", "PASS_SUFFIX", "lookup", "project", "check_reads", "check_outputs", "answer_with",
+__all__ = ["WORKDIR", "INDEX", "ITERATIONS", "PASS_SUFFIX", "lookup", "project", "check_reads", "check_outputs", "answer_with", "labels_of",
            "expects", "render", "start", "end", "decision_request", "check_decision", "questions_for_agent", "batch_request",
            "split_answers", "is_batched_decide", "route", "aggregate", "resolve_condition", "loop_items", "until_holds", "assets_of",
            "launch", "run_script", "execute", "task"]

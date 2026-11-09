@@ -24,7 +24,7 @@ decide d "d" { reads it
 questions {   yes:  noul q
    true: "it is"
    maybe_longer: choice [a,b] "which"  }
-fallback true  produces verdict  next_pass }
+history true  produces verdict  next_pass }
     next end
 }
 End "e" { read verdicts  }
@@ -55,7 +55,7 @@ For each Over item As it, At_Most 3, Collect verdict Into verdicts {
         true: "it is"
       maybe_longer: choice [a, b] "which"
     }
-    Agent_Fallback true
+    History true
     Produce verdict
     Continue
   }
@@ -92,6 +92,15 @@ class Canonical(unittest.TestCase):
     def test_produce_continues_aligned_under_the_first_key(self):
         text = format_source('Procedure p "x"\nExecute e "x" {\nRead m\nRun_Script s.py\nProduce a: string "A", b: integer\nNext_Step end\n}\n')
         self.assertIn('  Produce a: string "A"\n          b: integer\n', text)
+
+    def test_a_labelled_produce_round_trips(self):
+        source = ('Procedure p "x"\nTask t "x" {\nRead m\nProduce tone: choice [angry,calm] "T", level: score [low, high]\nNext_Step end\n}\n'
+                  'Start "s" { kind: choice [a, b] "K"  Next_Step t }\n')
+        text = format_source(source)
+        self.assertIn('  Produce tone: choice [angry, calm] "T"\n          level: score [low, high]\n', text)
+        self.assertIn('  kind: choice [a, b] "K"\n', text)
+        self.assertEqual(parse(text), parse(source))
+        self.assertEqual(format_source(text), text)
 
     def test_named_strings_group_and_align(self):
         text = format_source('Procedure p "x"\nshort = "a"\nmuch_longer = "b"\n\nStart "s" { m: string  Next_Step end }\nlast = "c"\n')

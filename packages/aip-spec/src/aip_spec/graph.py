@@ -7,12 +7,16 @@ program (the bundle carries it byte for byte on the `Procedure` node). `docs/lan
 is the schema in prose; this module is its only implementation, and a label, property or edge
 added to one is added to the other in the same commit.
 
-Every node has `id`, unique within the bundle (`step:triage`, `loop:revise`, `key:message`,
+Every node has `id`, unique within the bundle (`step:triage`, `loop:revise`, `data:message`,
 `question:triage.tone`, `aggregation:summarize_check.all_hold`, `file:assets/config.json`,
 `procedure`), and `bundle_id`, so a store holding many bundles can match a node by the pair.
 Steps, loops, questions and aggregations carry their source span (`line`, `column`, `end_line`,
 `end_column`); flow edges carry the span of the clause that wrote them. Properties whose value
-would be null are left out."""
+would be null are left out.
+
+Data flows left to right: `(Step)-[:PRODUCES]->(Data)-[:READ_BY]->(Step)`. A route's `READ_BY`
+edge carries `source`, the class of the answer it reads as the checker classified it (spec 2.2),
+which `build_graph` is handed and never computes."""
 
 from __future__ import annotations
 
@@ -157,11 +161,13 @@ def _clean(props: dict) -> dict:
 
 
 class _Builder:
-    def __init__(self, program: s.Program, files: list[FileEntry], bundle_id: str, compiler_version: str):
+    def __init__(self, program: s.Program, files: list[FileEntry], bundle_id: str, compiler_version: str,
+                 sources: dict[str, str] | None):
         self.p = program
         self.files = files
         self.bundle_id = bundle_id
         self.compiler_version = compiler_version
+        self.sources = sources or {}
         self.names = program.named_strings
         self.graph = Graph()
         self.by_id: dict[str, GraphNode] = {}
@@ -169,6 +175,7 @@ class _Builder:
         self.seen_edges: set = set()
         self.key_type: dict[str, str | None] = {}
         self.key_description: dict[str, str | None] = {}
+        self.key_labels: dict[str, list[str] | None] = {}
         self.loops_at_level: dict[tuple[str, ...], list[str]] = {}
 
     # ------------------------------------------------------------ primitives
@@ -203,19 +210,23 @@ class _Builder:
             props = {**props, **_span(at)}
         self.graph.edges.append(GraphEdge(type, start, end, props))
 
-    def key(self, name: str, type: str | None = None, description: str | None = None) -> str:
-        """The key node for `name`, created on first use; a declared type or description fills in
-        what earlier uses did not say (the checker has made every declaration agree)."""
-        id = f"key:{name}"
+    def key(self, name: str, type: str | None = None, description: str | None = None, labels: list[str] | None = None) -> str:
+        """The `Data` node for the key `name`, created on first use; a declared type, description
+        or label list fills in what earlier uses did not say (the checker has made every
+        declaration agree)."""
+        id = f"data:{name}"
         if id not in self.by_id:
-            self.node(id, ("Key",), {"name": name, "runtime": True if name in RUNTIME_KEYS else None})
-            self.edge("HAS_KEY", PROCEDURE_ID, id)
+            self.node(id, ("Data",), {"name": name, "runtime": True if name in RUNTIME_KEYS else None})
+            self.edge("SUPPLIES", PROCEDURE_ID, id)
             self.key_type[name] = "integer" if name in RUNTIME_KEYS else None
             self.key_description[name] = None
+            self.key_labels[name] = None
         if type is not None and self.key_type[name] is None:
             self.key_type[name] = type
         if description is not None and self.key_description[name] is None:
             self.key_description[name] = description
+        if labels and self.key_labels[name] is None:
+            self.key_labels[name] = list(labels)
         return id
 
     # ------------------------------------------------------------ the passes
@@ -243,11 +254,13 @@ class _Builder:
             self.edge("HAS_FILE", PROCEDURE_ID, f"file:{f.path}")
         self.items(self.p.items, ())
         for name, type in self.key_type.items():
-            props = self.by_id[f"key:{name}"].properties
+            props = self.by_id[f"data:{name}"].properties
             if type is not None:
                 props["type"] = type
             if self.key_description.get(name) is not None:
                 props["description"] = self.key_description[name]
+            if self.key_labels.get(name):
+                props["labels"] = self.key_labels[name]
         return self.graph
 
     def index_items(self, items, path: tuple[str, ...]) -> None:
@@ -273,8 +286,7 @@ class _Builder:
         id = _node_id(st)
         props = {"name": name, "kind": st.kind, "description": self.text(st.description), **_span(st)}
         if st.kind == "Decide":
-            props.update(agent_fallback=st.flag("Agent_Fallback"), history=st.flag("History"),
-                         produces=st.produces[0].key.name if st.produces else None)
+            props.update(history=st.flag("History"), produces=st.produces[0].key.name if st.produces else None)
         elif st.kind == "Route":
             props.update(check_below=st.check.below if st.check is not None else None)
         elif st.kind == "Aggregate":
@@ -289,13 +301,14 @@ class _Builder:
             self.edge("STARTS_AT", PROCEDURE_ID, id)
         if st.kind == "End":
             self.edge("ENDS_AT", PROCEDURE_ID, id)
+        source = self.sources.get(name) if st.kind == "Route" else None
         for d in st.reads:
-            self.read(id, d.key, path, d, type=d.type)
+            self.read(id, d.key, path, d, type=d.type, source=source)
         for d in st.inputs:
-            self.edge("PRODUCES", id, self.key(d.key.name, d.type, self.text(d.description)), at=d)
+            self.edge("PRODUCES", id, self.key(d.key.name, d.type, self.text(d.description), d.labels), at=d)
         for d in st.produces:
             type = "decision" if st.kind == "Decide" else "aggregation" if st.kind == "Aggregate" else d.type
-            self.edge("PRODUCES", id, self.key(d.key.name, type, self.text(d.description)), at=d)
+            self.edge("PRODUCES", id, self.key(d.key.name, type, self.text(d.description), d.labels), at=d)
         if st.kind == "Decide":
             for order, q in enumerate(st.questions):
                 qid = f"question:{name}.{q.name}"
@@ -333,7 +346,9 @@ class _Builder:
             self.flow(None, id, st.flow, path, at=st.flow)
 
     def read(self, step_id: str, ref: s.KeyRef, path: tuple[str, ...], at: s.Node, *, type: str | None = None,
-             interpolated: bool = False) -> None:
+             interpolated: bool = False, source: str | None = None) -> None:
+        """A `Read` or an interpolation: `(Data)-[:READ_BY]->(Step)`, with the field after the key,
+        `interpolated` for a `{key}`, and on a route the answer's `source` class."""
         root = ref.name
         key = self.key(root, type if len(ref.path) == 1 else None)
         if root == "index" and path:
@@ -341,7 +356,8 @@ class _Builder:
         elif root == "iterations":
             for loop_id in self.loops_at_level.get(path, []):
                 self.edge("PRODUCES", loop_id, key)
-        self.edge("READS", step_id, key, {"field": ".".join(ref.path[1:]) or None, "interpolated": interpolated or None}, at=at)
+        self.edge("READ_BY", key, step_id, {"field": ".".join(ref.path[1:]) or None, "interpolated": interpolated or None,
+                                            "source": source}, at=at)
 
     def interpolations(self, step_id: str, text: s.Str, path: tuple[str, ...]) -> None:
         literal = self.literal(text)
@@ -415,7 +431,10 @@ class _Builder:
         self.items(loop.body, inner)
 
 
-def build_graph(program: s.Program, files: list[FileEntry], bundle_id: str, compiler_version: str) -> Graph:
+def build_graph(program: s.Program, files: list[FileEntry], bundle_id: str, compiler_version: str,
+                sources: dict[str, str] | None = None) -> Graph:
     """The graph of a checked program. `files` are the program's resource files, `bundle_id` the
-    id the bundle computes from the source and those files (`aip_spec.bundle.bundle_id`)."""
-    return _Builder(program, files, bundle_id, compiler_version).build()
+    id the bundle computes from the source and those files (`aip_spec.bundle.bundle_id`), and
+    `sources` the checker's source class per route (`aip_spec.check(..., sources=)`), written on
+    each route's `READ_BY` edge."""
+    return _Builder(program, files, bundle_id, compiler_version, sources).build()

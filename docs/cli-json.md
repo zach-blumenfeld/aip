@@ -11,9 +11,9 @@ else there unless asked: no prose, no traceback. A run stops one of three ways:
 
 This is a contract: agents, the `aip` skill, `aip mcp` and the console parse it. Every example
 on this page is checked against the CLI's real output by `tests/test_cli_json.py` (the
-`billing-support` and `ticket-triage` examples under `examples/language/`, run with no server
-configured; the test reads `4f1c9a2e7b3d5068` as whatever id the run was given and shows
-`run_file` as its file name).
+`billing-support`, `billing-support-agent` and `ticket-triage` examples under
+`examples/language/`, run with no server configured; the test reads `4f1c9a2e7b3d5068` as
+whatever id the run was given and shows `run_file` as its file name).
 
 ```
 aip run <folder | bundle.rl | name[@rev]> --inputs '{"message": "..."}' [--batch N] [--agent A] [--session S] [--workdir DIR]
@@ -47,65 +47,47 @@ aip: not recorded: no server is configured; run `aip config --server URL` to rec
 
 ## Paused
 
-Every pause has `paused` (the kind), `step`, `tasks`, `run_id` and `run_file`. `tasks` is a list
-with one entry per `For` pass waiting at the step, and one entry outside a loop. Each task
-carries `index` (its position in the list, what the answer is keyed by), `pass` (the innermost
-loop's pass number, `null` outside loops), `passes` (every enclosing loop's name and pass number,
-outermost first), `state` (the keys the step `Read`s, as it sees them) and `answer_with` (what
-to answer: the keys and their types). The rest depends on the kind.
+Every pause has `paused` (the kind, `task`: a `Task_Agent` step waits for the agent; a `Decide`
+never pauses, it needs a decision model and fails the run without one, below), `step`, `tasks`,
+`run_id` and `run_file`. `tasks` is a list with one entry per `For` pass waiting at the step,
+and one entry outside a loop. Each task carries `index` (its position in the list, what the
+answer is keyed by), `pass` (the innermost loop's pass number, `null` outside loops), `passes`
+(every enclosing loop's name and pass number, outermost first), `prompt` (the step's `Prompt`
+file or its description with `{key}` and `{assets[stem]}` filled in, nothing prepended), `state`
+(the keys the step `Read`s, as it sees them), `references` (named, not loaded; read them when
+the prompt calls for it), `answer_with` (what to answer: the keys and their types) and `labels`
+(for each `choice` or `score` among them, the values it may take).
 
-### `decision`: answer the questions
+### A task that decides
 
-No decision model is configured on this client (`TYPESAFE_API_KEY`, or `aip config
---decision-model KEY`), or the model failed (`reason` says which), and the step allows
-`Agent_Fallback`, so the agent answers in its place. Each task carries the step's `questions`
-with their rendered instruction, type, labels and criteria.
+`billing-support-agent` has the agent classify the message: its `triage` is a `Task_Agent`
+producing `billing: true_or_false` and `tone: choice [angry, calm]`, so the procedure runs with
+no decision model at all.
 
-<!-- cli-json: paused-decision -->
+<!-- cli-json: paused-task-labels -->
 ```json
 {
-  "paused": "decision",
+  "paused": "task",
   "step": "triage",
-  "reason": "no_decision_model",
   "tasks": [
     {
       "index": 0,
       "pass": null,
       "passes": [],
-      "questions": [
-        {
-          "name": "billing",
-          "type": "true_or_false",
-          "labels": null,
-          "instruction": "Is this message about a charge, invoice, refund, or subscription payment?",
-          "criteria": []
-        },
-        {
-          "name": "tone",
-          "type": "choice",
-          "labels": [
-            "angry",
-            "calm"
-          ],
-          "instruction": "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands.",
-          "criteria": [
-            {
-              "label": "angry",
-              "text": "Frustrated, demanding, or threatening to leave."
-            },
-            {
-              "label": "calm",
-              "text": "Neutral or polite, asking a question."
-            }
-          ]
-        }
-      ],
+      "prompt": "Read the customer's message and classify it.\n\nCustomer message:\nI was charged twice for March. Could you check?\n\nAnswer `billing` with true when the message is about a charge, invoice, refund, or\nsubscription payment, and `tone` with `angry` for explicit frustration, threats to cancel,\nor demands, else `calm`.",
       "state": {
         "message": "I was charged twice for March. Could you check?"
       },
+      "references": [],
       "answer_with": {
         "billing": "true_or_false",
         "tone": "choice"
+      },
+      "labels": {
+        "tone": [
+          "angry",
+          "calm"
+        ]
       }
     }
   ],
@@ -114,17 +96,19 @@ with their rendered instruction, type, labels and criteria.
 }
 ```
 
-Answer with one value per question: `{"billing": true, "tone": "calm"}`. A `true_or_false` is
-`true` or `false`, a `choice` one of its labels, a `score` the level's number (its position in
-the labels, from 0). A hand answer is stored as `{"value": ...}` with no confidence, and the
-record says `"answered_by": "agent"`. In `billing-support` the next step, the route `by_tone`,
-reads `triage_decision.tone` with `Confidence_Below 0.6 -> escalate`; a hand answer has no
-confidence and the check lets it through on its value (the record says `"reason": "hand"`), so a
-hand-answered `calm` reaches the task below, the same place a model's confident `calm` sends the
-run. An answer from a script or an input has no confidence either, and there the check fires
-(`"reason": "absent"`).
+Answer with every key of `answer_with`: `{"billing": true, "tone": "calm"}`. An answer-typed
+key takes the bare value, or `{"value": ...}`: a `true_or_false` is `true` or `false`, a
+`choice` one of its `labels`, a `score` the level's number (its position in the labels, from
+0). The runtime stores it as `{"value": ...}` and nothing else: an agent's answer has no
+confidence, so the route `by_tone` that reads `tone` branches on its value and has no
+`Confidence_Below` (the compiler refuses one on an agent's answer). A model's answer, below,
+carries its confidence and a route may check it.
 
-### `task`: do the step's work
+### A task that does the step's work
+
+Here `billing-support` was run with a decision model: its `triage` is a `Decide`, the model
+answered `calm` at 0.9, the route's `Confidence_Below 0.6` did not fire, and the run waits at
+`reply` for the agent to draft the reply.
 
 <!-- cli-json: paused-task -->
 ```json
@@ -156,7 +140,8 @@ run. An answer from a script or an input has no confidence either, and there the
       ],
       "answer_with": {
         "reply": "string"
-      }
+      },
+      "labels": {}
     }
   ],
   "run_id": "4f1c9a2e7b3d5068",
@@ -164,10 +149,8 @@ run. An answer from a script or an input has no confidence either, and there the
 }
 ```
 
-`prompt` is the step's `Prompt` file (or its description) with `{key}` and `{assets[stem]}`
-filled in, nothing prepended. `state` holds the `Read` keys: `triage_decision.tone` arrives as
-`tone`, the model's whole answer object. `references` are named, not loaded; read them when the
-prompt calls for it. Answer with every key of `answer_with`: `{"reply": "..."}`.
+`state` holds the `Read` keys: `triage_decision.tone` arrives as `tone`, the model's whole
+answer object. Answer with every key of `answer_with`: `{"reply": "..."}`.
 
 ### Several tasks at once
 
@@ -199,7 +182,8 @@ carries two tasks, for passes 0 and 2.
       "references": [],
       "answer_with": {
         "reply": "string"
-      }
+      },
+      "labels": {}
     },
     {
       "index": 1,
@@ -218,7 +202,8 @@ carries two tasks, for passes 0 and 2.
       "references": [],
       "answer_with": {
         "reply": "string"
-      }
+      },
+      "labels": {}
     }
   ],
   "run_id": "4f1c9a2e7b3d5068",
@@ -248,8 +233,9 @@ below); a task left unanswered fails its pass and the run, and a retry asks for 
 `result` is the `End` step's `Read` keys. What every step read and produced along the way is
 the run's record: the run file's `run.history` (`aip runs <run_id>` prints the run), one entry
 per step run with `step`, `kind`, `pass`, `passes`, `at`, `input` and `result`; a decision's
-`answered_by` (`{"model": "jev-1"}` or `"agent"`) and the answer objects whole; a route's
-`read`, `check` (`below`, `confidence`, `fired`, `reason`: `below`, `absent`, or `hand` when a hand answer was let through), `value` and `to`;
+`answered_by` (`{"model": "jev-1"}`) and the answer objects whole; a route's `read`, `check`
+(`below`, `confidence`, `fired`, `reason`: `below`, or `absent` when a script's answer carried
+no confidence), `value` and `to`;
 an aggregation's `resolutions`; a script's `script`, `stdin` and `seconds`; a task's `prompt` and
 `references`; a loop's `iterations`, collected list and `exit`. `docs/language/runtime.md`, The
 record, is the definition.
@@ -268,8 +254,8 @@ when `resumable` is true.
 | `script_failed` | a script exited non-zero, or did not print one JSON object (then `exit_code` is 0) | `script`, `exit_code`, `stderr` |
 | `timeout` | a script ran past the timeout | `script`, `seconds` |
 | `requires_unmet` | the machine lacks what the procedure's `Requires` names, checked before the first script runs | `missing` |
-| `no_decision_model` | a `Decide` step without `Agent_Fallback` and this client has no decision model | |
-| `decision_model_failed` | the model failed on a `Decide` step without `Agent_Fallback` | `model`, `cause` |
+| `no_decision_model` | a `Decide` step and this client has no decision model | |
+| `decision_model_failed` | the decision model failed on a `Decide` step | `model`, `cause` |
 | `loop_cap` | a `For` (or fold) given more items than `At_Most`, or an `Until` loop at its cap with `Else_Fail` | `loop`, `cap`, `count` |
 | `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done | |
 | `server` | anything else: a bug, an unreachable server | |
@@ -297,14 +283,14 @@ Here the ticket service was unreachable:
 ```
 
 An answer that does not fit its pause leaves the pause in place; answer it again. Here the
-decision pause above was answered with `{"billing": true}` only:
+`triage` task of `billing-support-agent` above was answered with `{"billing": true}` only:
 
 <!-- cli-json: error-invalid-output -->
 ```json
 {
   "error": "invalid_output",
   "step": "triage",
-  "message": "the output of 'triage': no answer to tone",
+  "message": "the output of 'triage': tone is missing",
   "missing": [
     "tone"
   ],
@@ -317,17 +303,18 @@ decision pause above was answered with `{"billing": true}` only:
 }
 ```
 
-A decision whose author did not write `Agent_Fallback true` needs a decision model. With none
-configured the run fails at the decision, resumable: set `TYPESAFE_API_KEY` or run `aip config
+A `Decide` needs a decision model; there is no answering it by hand (a procedure that wants the
+agent to decide uses a `Task_Agent`, as `billing-support-agent` does). With none configured the
+run fails at the decision, resumable: set `TYPESAFE_API_KEY` or run `aip config
 --decision-model KEY`, then `aip resume <run_id>` with no answers asks the model. Here
-`billing-support` was run with the `Agent_Fallback` line removed from `triage`:
+`billing-support` was run on a client with no model:
 
 <!-- cli-json: error-no-decision-model -->
 ```json
 {
   "error": "no_decision_model",
   "step": "triage",
-  "message": "triage is a decision, no decision model is configured, and the step does not allow Agent_Fallback; configure a model and retry the run",
+  "message": "triage is a decision and no decision model is configured; a Decide is always answered by a decision model, so configure one (aip config --decision-model KEY) and retry the run",
   "pass": null,
   "passes": [],
   "run_id": "4f1c9a2e7b3d5068",
@@ -366,12 +353,13 @@ script (wall time; `<seconds>` below stands for a number), and `exit` and `itera
 loop. A `For` pass's entries appear when its batch completes, pass by pass in input order,
 which is the order the record has them in at every batch size.
 
-The angry branch, resumed after the decision pause with `{"billing": true, "tone": "angry"}`
-(the `run` itself printed the `start` entry's line before the pause):
+The angry branch of `billing-support`, with a decision model that read the message as angry:
+no step paused, so one `run` printed the whole record and the final object.
 
 <!-- cli-json: progress -->
 ```jsonl
-{"event": "step", "step": "triage", "kind": "Decide", "pass": null, "passes": [], "answered_by": "agent"}
+{"event": "step", "step": "start", "kind": "Start", "pass": null, "passes": []}
+{"event": "step", "step": "triage", "kind": "Decide", "pass": null, "passes": [], "answered_by": {"model": "jev-1"}}
 {"event": "step", "step": "by_tone", "kind": "Route", "pass": null, "passes": [], "to": "escalate"}
 {"event": "step", "step": "escalate", "kind": "Execute", "pass": null, "passes": [], "seconds": "<seconds>"}
 {"event": "step", "step": "end", "kind": "End", "pass": null, "passes": []}

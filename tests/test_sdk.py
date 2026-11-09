@@ -34,7 +34,8 @@ from fake_server import DownSession, FakeServer
 
 pytestmark = pytest.mark.skipif(not relate.available(), reason=relate.INSTALL_HINT)
 
-EXAMPLE = example_dir("billing-support")
+EXAMPLE = example_dir("billing-support")            # triage is a Decide: needs a model
+AGENT = example_dir("billing-support-agent")        # triage is a Task_Agent: runs with none
 REPO = Path(__file__).parent.parent
 CALM = "I was charged twice for March. Could you check?"
 ANGRY = "This is the THIRD time you have double charged me. Fix it today or I cancel."
@@ -47,7 +48,8 @@ FLAKY = ('import json, os, sys\n'
 
 
 class FakeTypeSafe:
-    """Stands in for `TypeSafeClient`: billing is clear (noul 0.97); `tone` is `calm` at `calm_p`."""
+    """Stands in for `TypeSafeClient`: billing is clear (noul 0.97); `tone` is `calm` at `calm_p`,
+    except that the `ANGRY` message is read as angry at the same confidence."""
 
     def __init__(self, calm_p: float = 0.9):
         self.calm_p = calm_p
@@ -55,12 +57,13 @@ class FakeTypeSafe:
 
     def system_one(self, state, questions, **_):
         self.calls.append((state, questions))
-        angry_p = round(1 - self.calm_p, 6)
-        tone = "calm" if self.calm_p >= 0.5 else "angry"
+        calm_p = self.calm_p if "THIRD time" not in json.dumps(state) else min(self.calm_p, round(1 - self.calm_p, 6))
+        angry_p = round(1 - calm_p, 6)
+        tone = "calm" if calm_p >= 0.5 else "angry"
         return {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
                 "answers": {"billing": {"type": "noul", "noul": 0.97},
-                            "tone": {"type": "choice", "choice": tone, "confidence": max(self.calm_p, angry_p),
-                                     "probabilities": {"angry": angry_p, "calm": self.calm_p}}}}
+                            "tone": {"type": "choice", "choice": tone, "confidence": max(calm_p, angry_p),
+                                     "probabilities": {"angry": angry_p, "calm": calm_p}}}}
 
 
 @pytest.fixture(autouse=True)
@@ -77,15 +80,16 @@ def fake() -> FakeServer:
 
 @pytest.fixture
 def served(fake) -> aip.Client:
-    """A client on the fake server with `billing-support` published through the SDK."""
-    client = aip.Client(Server("http://testserver", token="secret", session=fake), agent="tests")
+    """A client on the fake server, with a fake model, with `billing-support` published through the SDK."""
+    client = aip.Client(Server("http://testserver", token="secret", session=fake), decision_client=FakeTypeSafe(0.9), agent="tests")
     published = client.publish(EXAMPLE)
     assert published == sdk.Published("billing_support", "1", published.bundle_id, False)
     return client
 
 
-def local() -> aip.Client:
-    return aip.Client(agent="tests")
+def local(model: bool = False) -> aip.Client:
+    """A client with no server; with `model`, a fake decision model (needed to run `EXAMPLE`)."""
+    return aip.Client(decision_client=FakeTypeSafe(0.9) if model else None, agent="tests")
 
 
 def steps(record) -> list[str]:
@@ -95,33 +99,44 @@ def steps(record) -> list[str]:
 # ------------------------------------------------------------------------ running locally
 
 
-def test_the_calm_arm_by_hand_from_a_folder(tmp_path):
+def test_the_calm_arm_with_the_agent_deciding_from_a_folder(tmp_path):
     client = local()
-    paused = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
+    paused = client.run(AGENT, {"message": CALM}, workdir=tmp_path)
     assert isinstance(paused, aip.Paused)
-    assert (paused.kind, paused.step, paused.reason, paused.recorded) == ("decision", "triage", "no_decision_model", None)
+    assert (paused.kind, paused.step, paused.reason, paused.recorded) == ("task", "triage", None, None)
     [task] = paused.tasks
     assert isinstance(task, aip.Task) and (task.index, task.pass_, task.passes) == (0, None, [])
-    assert [q["name"] for q in task.questions] == ["billing", "tone"]
     assert task.answer_with == {"billing": "true_or_false", "tone": "choice"}
-    assert task.state == {"message": CALM}
+    assert task.labels == {"tone": ["angry", "calm"]}, "the values the agent may answer with"
+    assert task.state == {"message": CALM} and "Customer message:\n" + CALM in task.prompt
     assert paused.task is task
     assert paused.run_file == run_path(paused.run_id)
-    assert paused.to_json()["paused"] == "decision" and paused.to_json()["run_id"] == paused.run_id
+    assert paused.to_json()["paused"] == "task" and paused.to_json()["run_id"] == paused.run_id
     handle = RunFile.load(paused.run_file)
-    assert (handle.origin, handle.target, handle.name, handle.server, handle.recorded) == ("folder", str(EXAMPLE.resolve()), "billing_support", None, False)
+    assert (handle.origin, handle.target, handle.name, handle.server, handle.recorded) == ("folder", str(AGENT.resolve()), "billing_support_agent", None, False)
     assert bundles.is_cached(handle.bundle_id), "the folder's bundle is in the cache, so resume reopens it by id"
 
-    # a hand answer carries no confidence and by_tone's Confidence_Below lets it through: calm goes to the agent's reply
+    # an agent's answer is its value and nothing else; by_tone branches on it with no confidence check
     task = client.resume(paused, {"billing": True, "tone": "calm"})
     assert isinstance(task, aip.Paused) and (task.kind, task.step) == ("task", "reply")
+    assert task.task.state["tone"] == {"value": "calm"}
     done = client.resume(task, {"reply": "Sorry about that; the duplicate charge is refunded."})
     assert isinstance(done, aip.Done) and done.recorded is None
     record = client.run_record(done.run_id)
     assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
-    assert record.history[1]["answered_by"] == "agent"
-    assert record.history[2]["check"] == {"below": 0.6, "confidence": None, "fired": False, "reason": "hand"}
+    assert record.history[2]["check"] is None and (record.history[2]["value"], record.history[2]["to"]) == ("calm", "reply")
     assert record.status == "done" and record.result == {"message": CALM}
+
+
+def test_a_decision_needs_a_model(tmp_path):
+    with pytest.raises(aip.RunError) as exc:
+        local().run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
+    error = exc.value
+    assert (error.kind, error.step, error.resumable) == ("no_decision_model", "triage", True)
+    assert "configure one" in error.error["message"]
+    assert RunFile.load(error.run_file).status == "failed"
+    paused = local(model=True).resume(error)                                  # a model configured: the retry asks it
+    assert isinstance(paused, aip.Paused) and (paused.kind, paused.step) == ("task", "reply")
 
 
 def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
@@ -161,17 +176,17 @@ def test_on_pause_answers_in_process_or_stops(tmp_path):
 
     def answer(paused):
         seen.append((paused.kind, paused.step))
-        return {"billing": True, "tone": "angry"} if paused.kind == "decision" else {"reply": REPLY}
+        return {"billing": True, "tone": "angry"} if paused.step == "triage" else {"reply": REPLY}
 
-    done = client.run(EXAMPLE, {"message": ANGRY}, workdir=tmp_path, on_pause=answer)
-    assert isinstance(done, aip.Done) and seen == [("decision", "triage")]
-    paused = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path, on_pause=lambda _p: None)
-    assert isinstance(paused, aip.Paused) and paused.kind == "decision"
+    done = client.run(AGENT, {"message": ANGRY}, workdir=tmp_path, on_pause=answer)
+    assert isinstance(done, aip.Done) and seen == [("task", "triage")]
+    paused = client.run(AGENT, {"message": CALM}, workdir=tmp_path, on_pause=lambda _p: None)
+    assert isinstance(paused, aip.Paused) and (paused.kind, paused.step) == ("task", "triage")
 
 
 def test_a_bad_answer_leaves_the_pause_and_a_failed_step_is_retried(tmp_path):
-    folder = tmp_path / "billing-support"
-    shutil.copytree(EXAMPLE, folder)
+    folder = tmp_path / "billing-support-agent"
+    shutil.copytree(AGENT, folder)
     (folder / "scripts" / "escalate.py").write_text(FLAKY)
     client = local()
     paused = client.run(folder, {"message": ANGRY}, workdir=tmp_path)
@@ -205,7 +220,7 @@ def test_a_bad_answer_leaves_the_pause_and_a_failed_step_is_retried(tmp_path):
 
 
 def test_an_rl_file_runs_as_the_same_bundle(tmp_path):
-    client = local()
+    client = local(model=True)
     compiled = client.compile(EXAMPLE, tmp_path / "billing.rl")
     assert compiled.ok and compiled.output == tmp_path / "billing.rl" and compiled.name == "billing_support"
     paused = client.run(tmp_path / "billing.rl", {"message": CALM}, workdir=tmp_path)
@@ -320,9 +335,8 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     assert isinstance(paused, aip.Paused) and paused.recorded is True
     assert ("POST", "/bundles") in fake.requests[len(before):], "the folder's bundle is uploaded as a draft before the run is recorded"
     assert fake.runs[paused.run_id]["draft"] is True and fake.runs[paused.run_id]["status"] == "paused"
-    task = served.resume(paused, {"billing": True, "tone": "calm"})              # a hand calm: the check lets it through
-    assert isinstance(task, aip.Paused) and fake.runs[paused.run_id]["status"] == "paused"
-    done2 = served.resume(task, {"reply": "Sorry about that; refunded."})
+    assert (paused.kind, paused.step) == ("task", "reply") and fake.runs[paused.run_id]["status"] == "paused"
+    done2 = served.resume(paused, {"reply": "Sorry about that; refunded."})
     assert fake.runs[paused.run_id]["status"] == "done" and done2.recorded is True
     assert fake.requests.count(("POST", "/bundles")) == 1, "one upload per bundle id per client"
 
@@ -339,7 +353,7 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
 
 
 def test_a_server_that_is_down_does_not_stop_the_run(tmp_path):
-    client = aip.Client(Server("http://nowhere:1", session=DownSession()), agent="tests")
+    client = aip.Client(Server("http://nowhere:1", session=DownSession()), decision_client=FakeTypeSafe(0.9), agent="tests")
     paused = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
     assert isinstance(paused, aip.Paused) and paused.recorded is False
     assert client.recording_error.startswith("unreachable")
@@ -352,11 +366,11 @@ def test_a_server_that_is_down_does_not_stop_the_run(tmp_path):
 
 def test_a_cached_name_runs_without_the_server(served, tmp_path):
     served.pull("billing_support")
-    offline = aip.Client(Server("http://nowhere:1", session=DownSession()), agent="tests")
+    offline = aip.Client(Server("http://nowhere:1", session=DownSession()), decision_client=FakeTypeSafe(0.9), agent="tests")
     paused = offline.run("billing_support", {"message": CALM}, workdir=tmp_path)
     assert isinstance(paused, aip.Paused) and paused.recorded is False
     assert RunFile.load(paused.run_file).revision == "1"
-    nowhere = local()
+    nowhere = local(model=True)
     paused = nowhere.run("billing_support@1", {"message": CALM}, workdir=tmp_path)
     assert paused.recorded is None
 
@@ -378,10 +392,11 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
     """Each client command calls its `Client` method; the commands that are not client calls are
     listed, so a new command must be one or the other."""
     monkeypatch.chdir(tmp_path)
-    first = served.run(EXAMPLE, {"message": CALM})
+    served.publish(AGENT)                                                 # the command's own client has no model: run the agent one
+    first = served.run(AGENT, {"message": CALM})
     cases = [
         ("info", "describe", ["billing_support"]),
-        ("run", "run", ["billing_support", "--inputs", json.dumps({"message": CALM})]),
+        ("run", "run", ["billing_support_agent", "--inputs", json.dumps({"message": CALM})]),
         ("resume", "resume", [first.run_id, "--answers", json.dumps({"billing": True, "tone": "calm"})]),
         ("search", "search", ["refund"]),
         ("list", "list", []),
@@ -439,9 +454,10 @@ def test_the_docs_tool_example_runs(served, tmp_path, monkeypatch):
     namespace: dict = {}
     exec(code, namespace)
     namespace["client"] = served                                      # the configured server, here in-process
-    paused = json.loads(namespace["run_procedure"]("billing_support", {"message": CALM}))
-    assert (paused["paused"], paused["step"]) == ("decision", "triage")
+    served.publish(AGENT)
+    paused = json.loads(namespace["run_procedure"]("billing_support_agent", {"message": CALM}))
+    assert (paused["paused"], paused["step"]) == ("task", "triage")
     done = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "angry"}))
     assert done["done"] is True and done["run_id"] == paused["run_id"] and done["result"] == {"message": CALM}
-    error = json.loads(namespace["run_procedure"]("billing_support", {"msg": "wrong"}))
+    error = json.loads(namespace["run_procedure"]("billing_support_agent", {"msg": "wrong"}))
     assert (error["error"], error["resumable"]) == ("invalid_input", False)

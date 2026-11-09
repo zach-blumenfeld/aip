@@ -34,14 +34,14 @@ FIELD = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
 # 3 where the step goes. `Input` is a Start input line, `Branch` a route's `<value> -> <step>`.
 _RANK = {
     "Read": 0, "Input": 0,
-    "Answer_Questions": 1, "Agent_Fallback": 1, "History": 1, "Aggregations": 1, "Confidence_Below": 1, "Branch": 1,
+    "Answer_Questions": 1, "History": 1, "Aggregations": 1, "Confidence_Below": 1, "Branch": 1,
     "Run_Script": 1, "Command": 1, "Prompt": 1, "Use": 1,
     "Produce": 2,
     "Next_Step": 3, "Continue": 3, "Again": 3,
 }
 _ALLOWED = {
     "Start": ("Input", "Next_Step"),
-    "Decide": ("Read", "Answer_Questions", "Agent_Fallback", "History", "Produce", "Next_Step", "Continue", "Again"),
+    "Decide": ("Read", "Answer_Questions", "History", "Produce", "Next_Step", "Continue", "Again"),
     "Route": ("Read", "Confidence_Below", "Branch"),
     "Aggregate": ("Read", "Aggregations", "Produce", "Next_Step", "Continue", "Again"),
     "Execute": ("Read", "Run_Script", "Command", "Use", "Produce", "Next_Step", "Continue", "Again"),
@@ -389,7 +389,7 @@ class Parser:
             node = s.FlowClause(self.flow())
         elif kw == "Answer_Questions":
             node = self.questions(leading)
-        elif kw in ("Agent_Fallback", "History"):
+        elif kw == "History":
             self.next()
             flag = self.peek()
             if flag.kind != WORD or flag.text not in ("true", "false"):
@@ -436,9 +436,25 @@ class Parser:
         if self.is_punct(":"):
             self.next()
             decl.type = self.type()
+            if self.is_punct("["):
+                if dotted:
+                    raise self.fail(f"labels are declared where {key.dotted} is produced, not where it is read")
+                decl.labels = self.labels()
             if self.string_ahead():
                 decl.description = self.string("a description")
         return self.line_node(decl, tok, leading)
+
+    def labels(self) -> list[str]:
+        """`[a, b]` after a `choice` or `score` type, on a question or a produced key."""
+        self.expect_punct("[", "to open the labels")
+        labels: list[str] = []
+        while True:
+            labels.append(self.value("a label (lowercase letters, digits and underscores)"))
+            if self.is_punct(","):
+                self.next()
+                continue
+            self.expect_punct("]", "to close the labels")
+            return labels
 
     def declarations(self, dotted: bool) -> list[s.Declaration]:
         """`a, b.c`, or `a: type "d", b: type`, or one `key: type` per continuation line."""
@@ -499,16 +515,7 @@ class Parser:
         if canonical not in ANSWER_TYPES:
             raise self.error("an answer type (true_or_false, choice or score)")
         self.next()
-        labels: list[str] = []
-        if self.is_punct("["):
-            self.next()
-            while True:
-                labels.append(self.value("a label (lowercase letters, digits and underscores)"))
-                if self.is_punct(","):
-                    self.next()
-                    continue
-                self.expect_punct("]", "to close the labels")
-                break
+        labels = self.labels() if self.is_punct("[") else []
         instruction = self.string(f"the instruction for {name}, a string")
         question = self.line_node(s.Question(name, canonical, labels, instruction), tok, leading)
         while self.is_word() and self.is_punct(":", 1) and self.criterion_ahead():

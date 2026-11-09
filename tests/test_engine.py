@@ -145,46 +145,28 @@ class BillingSupport(EngineCase):
         self.assertEqual(route["check"], {"below": 0.6, "confidence": 0.55, "fired": True, "reason": "below"})
         self.assertEqual((route["value"], route["to"], route["result"]), (None, "escalate", {"to": "escalate"}))
 
-    def test_without_a_model_the_agent_answers_and_the_check_lets_the_hand_answer_through(self):
-        engine = self.engine(None)
-        run = engine.start(self.load(self.bundle), {"message": self.message})
-        self.assertEqual((run.status, run.pause["kind"], run.pause["step"], run.pause["reason"]),
-                         (PAUSED, "decision", "triage", "no_decision_model"))
-        [task] = run.pause["tasks"]
-        self.assertEqual([q["name"] for q in task["questions"]], ["billing", "tone"])
-        self.assertEqual(task["questions"][1]["labels"], ["angry", "calm"])
-        self.assertEqual(task["questions"][1]["criteria"][1], {"label": "calm", "text": "Neutral or polite, asking a question."})
-        self.assertEqual(task["answer_with"], {"billing": "true_or_false", "tone": "choice"})
-        self.assertEqual(task["state"], {"message": self.message})
+    def test_without_a_model_the_decision_fails_the_run_and_a_retry_with_one_goes_on(self):
+        """Spec 2.4: a Decide is always a model's; there is no agent fallback (plan L4)."""
+        procedure = self.load(self.bundle)
+        run = self.engine(None).start(procedure, {"message": self.message})
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.at), (FAILED, "no_decision_model", "triage", "step:triage"))
+        self.assertIn("configure one", run.error["message"])
+        self.assertEqual(self.steps_of(run), ["start"], "nothing is recorded for the decision")
+        with self.assertRaises(NotPaused):
+            self.engine(None).resume(run, {"billing": True, "tone": "calm"})
+        run = self.engine(ScriptedResolver({"triage": calm()})).retry(run)
+        self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "reply"))
+        self.assertEqual(run.history[1]["answered_by"], {"model": "scripted"})
 
-        run = engine.resume(run, {"billing": True, "tone": {"value": "calm", "confidence": 0.99}})
-        self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "reply"),
-                         "the check lets a hand answer through on its value, so calm goes to the agent's reply")
-        self.assertEqual(run.state["triage_decision"], {"billing": {"value": True}, "tone": {"value": "calm"}},
-                         "a hand answer is its value and nothing else")
-        triage = run.history[1]
-        self.assertEqual((triage["answered_by"], triage["result"]), ("agent", run.state["triage_decision"]))
-        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": None, "fired": False, "reason": "hand"})
-        run = engine.resume(run, {"reply": "Sorry about that. The policy allows a refund within 30 days."})
-        self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "triage", "by_tone", "reply", "end"]))
-
-    def test_a_hand_answer_is_checked_against_the_questions(self):
-        engine = self.engine(None)
-        run = engine.start(self.load(self.bundle), {"message": self.message})
-        with self.assertRaises(InvalidOutput) as caught:
-            engine.resume(run, {"billing": True, "tone": "furious"})
-        self.assertEqual(caught.exception.invalid, ["tone"])
-        self.assertIn("not one of the labels", caught.exception.message)
-        with self.assertRaises(InvalidOutput) as caught:
-            engine.resume(run, {"billing": "yes"})
-        self.assertEqual((caught.exception.missing, caught.exception.invalid), (["tone"], ["billing"]))
-        self.assertEqual(run.status, PAUSED, "the pause stands")
-
-    def test_a_failing_model_hands_the_decision_to_the_agent_when_the_step_allows_it(self):
+    def test_a_failing_model_fails_the_step_and_a_retry_asks_again(self):
         engine = self.engine(ScriptedResolver({}))  # no script for triage: KeyError
         run = engine.start(self.load(self.bundle), {"message": self.message})
-        self.assertEqual((run.status, run.pause["kind"]), (PAUSED, "decision"))
-        self.assertTrue(run.pause["reason"].startswith("decision_model_failed: KeyError"), run.pause["reason"])
+        self.assertEqual((run.status, run.error["error"], run.error["step"]), (FAILED, "decision_model_failed", "triage"))
+        self.assertTrue(run.error["cause"].startswith("KeyError"), run.error["cause"])
+        run = engine.retry(run)
+        self.assertEqual((run.status, run.error["error"]), (FAILED, "decision_model_failed"))
+        run = self.engine(ScriptedResolver({"triage": angry()})).retry(run)
+        self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "triage", "by_tone", "escalate", "end"]))
 
     def test_the_inputs_are_checked_before_anything_runs(self):
         engine = self.engine(ScriptedResolver({"triage": calm()}))
@@ -254,6 +236,56 @@ class BillingSupport(EngineCase):
         if os.name == "posix":
             script = self.home / "cache" / self.bundle.id / "scripts" / "escalate.py"
             self.assertEqual(script.stat().st_mode & 0o777, self.bundle.file("scripts/escalate.py").mode)
+
+
+@needs_relate
+class BillingSupportAgent(EngineCase):
+    """`billing-support-agent`: the same procedure with the agent deciding in a `Task_Agent`
+    under declared labels (spec 2.4), so it runs with no model at all and the route branches on
+    the agent's answer with no confidence check."""
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = compiled("billing-support-agent")
+        self.message = "Why was I charged twice this month?"
+
+    def test_the_agent_classifies_and_the_route_branches_on_its_answer(self):
+        engine = self.engine(None)
+        procedure = self.load(self.bundle)
+        run = engine.start(procedure, {"message": self.message})
+        self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "triage"))
+        [task] = run.pause["tasks"]
+        self.assertIn("Customer message:\n" + self.message, task["prompt"])
+        self.assertEqual(task["answer_with"], {"billing": "true_or_false", "tone": "choice"})
+        self.assertEqual(task["labels"], {"tone": ["angry", "calm"]}, "the pause names the values the agent may answer with")
+        self.assertEqual(task["state"], {"message": self.message})
+        self.assertEqual(procedure.labels_of(["tone"]), ["angry", "calm"], "the labels live on the key")
+
+        run = engine.resume(run, {"billing": True, "tone": "calm"})
+        self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "reply"))
+        self.assertEqual((run.state["billing"], run.state["tone"]), ({"value": True}, {"value": "calm"}),
+                         "an agent's answer is its value and nothing else")
+        route = run.history[2]
+        self.assertEqual((route["read"], route["check"], route["value"], route["to"]), ("tone", None, "calm", "reply"))
+        self.assertEqual(run.pause["tasks"][0]["state"]["tone"], {"value": "calm"})
+        run = engine.resume(run, {"reply": "Sorry about that. The policy allows a refund within 30 days."})
+        self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "triage", "by_tone", "reply", "end"]))
+
+    def test_an_angry_answer_runs_the_script(self):
+        engine = self.engine(None)
+        run = engine.start(self.load(self.bundle), {"message": self.message})
+        run = engine.resume(run, {"billing": True, "tone": {"value": "angry"}})
+        self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "triage", "by_tone", "escalate", "end"]))
+        self.assertEqual(run.history[3]["stdin"]["state"], {"message": self.message, "tone": {"value": "angry"}})
+        self.assertEqual(run.state["queue"], "tier2")
+
+    def test_the_answer_is_checked_against_the_produce_keys(self):
+        engine = self.engine(None)
+        run = engine.start(self.load(self.bundle), {"message": self.message})
+        with self.assertRaises(InvalidOutput) as caught:
+            engine.resume(run, {"billing": "yes"})
+        self.assertEqual((caught.exception.missing, caught.exception.invalid), (["tone"], ["billing"]))
+        self.assertEqual(run.status, PAUSED, "the pause stands")
 
 
 AGGREGATE = '''
@@ -369,12 +401,9 @@ class Aggregations(EngineCase):
         self.assertEqual(self.steps_of(run), ["start", "check", "judge", "summarize", "by_all", "end"])
         self.assertEqual(set(run.result), {"work", "summary"})
 
-    def test_hand_answers_have_no_probability_and_fail_every_bar(self):
-        engine = self.engine(None)
-        source = AGGREGATE.replace("History true", "History true\n  Agent_Fallback true").replace("Produce judgement", "Agent_Fallback true\n  Produce judgement")
-        run = engine.start(self.load(program(source)), {"work": "w", "policy": "p"})
-        run = engine.resume(run, {"pii": True, "claims": True})
-        run = engine.resume(run, {"tone": "calm", "risk": 0})
+    def test_answers_without_probabilities_fail_every_bar(self):
+        """A model that returns bare values (no probabilities) is unknown under a bar, so every bar fails closed."""
+        _, _, run = self.run_with({"pii": {"value": True}, "claims": {"value": True}}, {"tone": {"value": "calm"}, "risk": {"value": 0}})
         summary = run.state["summary"]
         self.assertEqual(summary["all_hold"], {"value": True}, "no bar: the condition counts as it is")
         self.assertEqual(summary["both"], {"value": False})
@@ -402,7 +431,7 @@ Execute check "Is n even?" {
   Read n
   Run_Script scripts/check.py
   Use assets/limits.json
-  Produce even: true_or_false, size: choice
+  Produce even: true_or_false, size: choice [small, large]
   Next_Step by_even
 }
 
@@ -661,53 +690,28 @@ class DynamicPolicy(EngineCase):
                          (FAILED, "loop_cap", "review", 21, 20))
         self.assertEqual([e["step"] for e in run.history], ["start", "draft"])
 
-    def test_without_a_model_one_pause_carries_every_pass_and_a_missing_answer_fails_its_pass(self):
-        source = self.bundle.source.replace("Produce verdict", "Agent_Fallback true\n      Produce verdict")
-        bundle = program(source, {f.path: f.data.decode() for f in self.bundle.files})
-        engine = self.engine(None)
-        run = engine.start(self.load(bundle), {"task": "t", "policies": self.POLICIES})
-        run = engine.resume(run, {"work": "w"})
-        self.assertEqual((run.status, run.pause["kind"], run.pause["step"], run.pause["reason"]), (PAUSED, "decision", "check", "no_decision_model"))
-        tasks = run.pause["tasks"]
-        self.assertEqual([(t["index"], t["pass"]) for t in tasks], [(0, 0), (1, 1), (2, 2)])
-        self.assertEqual(tasks[1]["passes"], [{"loop": "revise", "pass": 0}, {"loop": "review", "pass": 1}])
-        self.assertIn("be short", tasks[1]["questions"][0]["instruction"])
-        self.assertEqual(tasks[1]["answer_with"], {"follows": "true_or_false"})
-        self.assertEqual(tasks[1]["state"], {"work": "w"})
-        # a bad answer is refused and the pause stands
-        with self.assertRaises(InvalidOutput):
-            engine.resume(run, {"0": {"follows": True}, "1": {"follows": "yes"}, "2": {"follows": True}})
-        self.assertEqual(run.status, PAUSED)
-        # a missing one fails its pass, and the run; the answered passes are recorded
-        run = engine.resume(run, {"0": {"follows": True}, "2": {"follows": True}})
-        self.assertEqual((run.status, run.error["error"], run.error["pass"], run.error["missing"]), (FAILED, "invalid_output", 1, ["1"]))
-        self.assertEqual([(e["step"], e["pass"]) for e in run.history], [("start", None), ("draft", None), ("check", 0), ("check", 2)])
-        self.assertEqual(run.history[2]["answered_by"], "agent")
-        # a retry asks for the missing pass alone
-        run = engine.retry(run)
-        self.assertEqual((run.status, [(t["index"], t["pass"]) for t in run.pause["tasks"]]), (PAUSED, [(0, 1)]))
-        run = engine.resume(run, {"follows": False})
-        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"))
-        self.assertEqual([(e["step"], e["pass"]) for e in run.history][4:],
-                         [("check", 1), ("review", 0), ("summarize_check", 0)], "the retried pass is recorded after the others")
-        self.assertEqual([v["follows"] for v in run.state["verdicts"]], [{"value": True}, {"value": False}, {"value": True}])
+    def test_without_a_model_the_batch_fails_at_its_first_pass_and_a_retry_with_one_goes_on(self):
+        procedure = self.load(self.bundle)
+        run = self.engine(None).start(procedure, {"task": "t", "policies": self.POLICIES})
+        run = self.engine(None).resume(run, {"work": "w"})
+        self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["pass"]), (FAILED, "no_decision_model", "check", 0))
+        self.assertEqual(run.error["passes"], [{"loop": "revise", "pass": 0}, {"loop": "review", "pass": 0}])
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history], [("start", None), ("draft", None)])
+        holds = ScriptedResolver({"check": {"follows": answers.true_or_false(0.9)}})
+        run = self.engine(holds).retry(run)
+        self.assertEqual((run.status, run.error), (DONE, None), "with a model the batch runs, every policy holds, the loop exits")
+        self.assertEqual(len(holds.requests), 1, "one call for the batch")
+        self.assertEqual([(e["step"], e["pass"]) for e in run.history][2:5], [("check", 0), ("check", 1), ("check", 2)])
 
-    def test_a_failing_model_hands_the_batch_to_the_agent_or_fails_it(self):
-        source = self.bundle.source.replace("Produce verdict", "Agent_Fallback true\n      Produce verdict")
-        bundle = program(source, {f.path: f.data.decode() for f in self.bundle.files})
+    def test_a_failing_model_fails_the_batch_and_a_retry_makes_one_call_again(self):
         resolver = ScriptedResolver({})
         engine = self.engine(resolver)
-        run = engine.start(self.load(bundle), {"task": "t", "policies": self.POLICIES})
-        run = engine.resume(run, {"work": "w"})
-        self.assertEqual((run.status, run.pause["kind"], len(run.pause["tasks"])), (PAUSED, "decision", 3))
-        self.assertTrue(run.pause["reason"].startswith("decision_model_failed: KeyError"))
-        self.assertEqual(len(resolver.requests), 1, "one call for the batch")
         run = engine.start(self.load(self.bundle), {"task": "t", "policies": self.POLICIES})
         run = engine.resume(run, {"work": "w"})
         self.assertEqual((run.status, run.error["error"], run.error["pass"]), (FAILED, "decision_model_failed", 0))
-        self.assertEqual(len(resolver.requests), 2)
+        self.assertEqual(len(resolver.requests), 1, "one call for the batch")
         run = engine.retry(run)
-        self.assertEqual((run.status, len(resolver.requests)), (FAILED, 3), "a retry makes one call for the batch again")
+        self.assertEqual((run.status, len(resolver.requests)), (FAILED, 2), "a retry makes one call for the batch again")
 
     def test_a_stray_or_missing_key_in_the_batched_reply_is_invalid_output(self):
         resolver = ScriptedResolver({"check": lambda r: {q.name: answers.true_or_false(0.9) for q in r.questions} | {"other__0": answers.true_or_false(0.9)}})
@@ -850,6 +854,24 @@ class TicketTriage(EngineCase):
 
     def test_the_record_matches_at_batch_one(self):
         self.assertEqual(without_timestamps(self.drive(1).history), without_timestamps(self.drive(10).history))
+
+    def test_a_bad_answer_is_refused_a_missing_one_fails_its_pass_and_a_retry_asks_for_it_alone(self):
+        engine = Engine(ScriptedResolver({"classify": triage_answers}), home=self.home, workdir=self.tmp, batch=10, clock=CLOCK)
+        run = engine.start(self.load(self.bundle), {"tickets": self.TICKETS, "policy": self.POLICY})
+        self.assertEqual([(t["index"], t["pass"]) for t in run.pause["tasks"]], [(0, 0), (1, 2)])
+        with self.assertRaises(InvalidOutput):
+            engine.resume(run, {"0": {"reply": "ok"}, "1": {"reply": 7}})
+        self.assertEqual(run.status, PAUSED, "a bad answer is refused and the pause stands")
+        run = engine.resume(run, {"0": {"reply": "We refund within 30 days, of course."}})
+        self.assertEqual((run.status, run.error["error"], run.error["pass"], run.error["missing"]), (FAILED, "invalid_output", 2, ["1"]))
+        recorded = [(e["step"], e["pass"]) for e in run.history]
+        self.assertIn(("draft", 0), recorded, "the answered pass is recorded")
+        self.assertIn(("escalate", 1), recorded, "the pass that finished is recorded")
+        self.assertNotIn(("draft", 2), recorded, "the unanswered pass is not")
+        run = engine.retry(run)
+        self.assertEqual((run.status, run.pause["step"], [(t["index"], t["pass"]) for t in run.pause["tasks"]]), (PAUSED, "draft", [(0, 2)]))
+        run = engine.resume(run, {"reply": "We refund within 30 days. I checked your plan."})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "summarize"))
 
 
 LOOPS = '''

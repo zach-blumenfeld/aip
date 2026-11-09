@@ -108,9 +108,9 @@ def collect_files(folder: Path) -> list[FileEntry]:
     return out
 
 
-def _assemble(program: s.Program, source: str, files: list[FileEntry], compiler: str) -> Bundle:
+def _assemble(program: s.Program, source: str, files: list[FileEntry], compiler: str, sources: dict[str, str]) -> Bundle:
     id = bundle_id(source, files)
-    graph = build_graph(program, files, id, compiler)
+    graph = build_graph(program, files, id, compiler, sources)
     graph.node(PROCEDURE_ID).properties["source"] = source
     return Bundle(program.name, source, files, graph, id, LANGUAGE_VERSION, compiler)
 
@@ -123,10 +123,11 @@ def compile_source(source: str, files: list[FileEntry], file: str | None = None,
         program = parse(source, file)
     except ParseError as exc:
         return None, [Diagnostic(**exc.to_diagnostic())]
-    diagnostics = check(program, None, file, files={f.path for f in files})
+    sources: dict[str, str] = {}
+    diagnostics = check(program, None, file, files={f.path for f in files}, sources=sources)
     if has_errors(diagnostics):
         return None, diagnostics
-    return _assemble(program, source, files, compiler_version() if compiler is None else compiler), diagnostics
+    return _assemble(program, source, files, compiler_version() if compiler is None else compiler, sources), diagnostics
 
 
 def compile_folder(folder: Path | str, source: str | None = None) -> tuple[Bundle | None, list[Diagnostic]]:
@@ -144,10 +145,11 @@ def compile_folder(folder: Path | str, source: str | None = None) -> tuple[Bundl
         except UnicodeDecodeError as exc:
             return None, [Diagnostic("syntax_error", "error", f"{SOURCE_FILE} is not UTF-8: {exc.reason} at byte {exc.start}",
                                      str(file), 1, 1, 1, 1, None)]
-    program, diagnostics = check_source(source, str(file), folder)
+    sources: dict[str, str] = {}
+    program, diagnostics = check_source(source, str(file), folder, sources=sources)
     if program is None or has_errors(diagnostics):
         return None, diagnostics
-    return _assemble(program, source, collect_files(folder), compiler_version()), diagnostics
+    return _assemble(program, source, collect_files(folder), compiler_version(), sources), diagnostics
 
 
 # ---------------------------------------------------------------- the file

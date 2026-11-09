@@ -80,9 +80,9 @@ CODES: dict[str, str] = {
     "unknown_label": "error",
     "comparison_required": "error",
     "confidence_on_aggregate": "error",
+    "confidence_on_agent_answer": "error",
+    "confidence_on_input": "error",
     "source_not_read": "error",
-    "confidence_on_unmeasured_source": "warning",
-    "unmeasured_route": "warning",
     # resources
     "missing_file": "error",
     "missing_requires": "error",
@@ -114,6 +114,29 @@ class Diagnostic:
         if self.file:
             where = f"{self.file}:{where}"
         return f"{where}: {self.severity} {self.code}: {self.message}"
+
+
+# ---------------------------------------------------------------- source classes
+
+# The class of an answer by the kind of the step that produced it (spec 2.2): what a route's
+# `Confidence_Below` or a condition's `With Confidence_Above` may sit on is `measured` (a
+# decision model's answer, which always carries a confidence) or `scripted` (a script's, which
+# may); an `agent`'s answer, an `input` and an `aggregated` answer never carry one, so a check
+# on them is an error. The order is the precedence when the arms of a route produce one key
+# from steps of different kinds: the least measured class names the answer, so governance sees
+# a route an agent may steer as `agent`.
+SOURCE_CLASSES = {"Task_Agent": "agent", "Start": "input", "Aggregate": "aggregated", "Execute": "scripted", "Decide": "measured"}
+SOURCE_PRECEDENCE = ("agent", "input", "aggregated", "scripted", "measured")
+# The code a confidence check on each class reports; None where it is allowed.
+CONFIDENCE_ERRORS = {"agent": "confidence_on_agent_answer", "input": "confidence_on_input", "aggregated": "confidence_on_aggregate",
+                     "scripted": None, "measured": None}
+
+
+def source_class(classes) -> str:
+    """The one class for an answer whose producers have the given classes (`SOURCE_PRECEDENCE`);
+    `measured` for none."""
+    found = set(classes)
+    return next((c for c in SOURCE_PRECEDENCE if c in found), "measured")
 
 
 # ---------------------------------------------------------------- types and the state
@@ -316,6 +339,7 @@ class Checker:
         self.for_keys: dict[str, str] = {}                # key -> the For whose body produces it
         self.first_execute: s.Step | None = None
         self.path: tuple[str, ...] = ()
+        self.sources: dict[str, str] = {}                 # route name -> the source class of the answer it reads
 
     # ------------------------------------------------------------ reporting
 
@@ -450,6 +474,10 @@ class Checker:
             for d in st.produces:
                 if d.type is None:
                     self.report("missing_type", d, f"Produce {d.key.name} needs a type: {d.key.name}: <type>", name)
+        if st.kind in ("Start", "Execute", "Task_Agent"):
+            for d in st.inputs + st.produces:
+                if d.type is not None:
+                    self.check_key_labels(d, name)
         for d in st.inputs + st.produces:
             if d.key.name in RESERVED_KEYS:
                 self.report("reserved_key", d, f"{d.key.name} is the runtime's: index names the pass inside a loop body and "
@@ -476,6 +504,22 @@ class Checker:
             if c.label not in valid:
                 self.report("unknown_label", c, f"the criterion {c.label} names no value of {q.name}; its values are {_list(valid)}", step,
                             end=(c.line, c.column + len(c.label)))
+
+    def check_key_labels(self, d: s.Declaration, step: str):
+        """A `choice` or `score` key declared where it is produced lists its labels, as a question
+        does; any other type has none (spec 2.4)."""
+        k = d.key.name
+        if d.type in ("choice", "score"):
+            word = "labels" if d.type == "choice" else "levels"
+            if len(d.labels) < 2:
+                self.report("question_labels", d, f"{k} is a {d.type} key and lists its {word} in brackets, at least two: "
+                            f"{k}: {d.type} [a, b]", step)
+            for i, label in enumerate(d.labels):
+                if label in d.labels[:i]:
+                    self.report("question_labels", d, f"the {word[:-1]} {label} is listed twice on {k}", step)
+        elif d.labels:
+            what = "a true_or_false key, whose values are true and false" if d.type == "true_or_false" else f"{Type(d.type).describe()}"
+            self.report("question_labels", d, f"{k} is {what}; labels are for a choice or a score", step)
 
     def check_file(self, path: str, node: s.Node, step: str, clause: str):
         pp = PurePosixPath(path)
@@ -707,7 +751,8 @@ class Checker:
             return Type("aggregation", fields=fields, sources=(name,))
         if d.type is None:
             return Type()
-        return Type(d.type, labels=("true", "false") if d.type == "true_or_false" else None, sources=(name,))
+        labels = ("true", "false") if d.type == "true_or_false" else tuple(d.labels) if d.labels else None
+        return Type(d.type, labels=labels, sources=(name,))
 
     def check_reads(self, st: s.Step, m_in: State, name: str):
         for d in st.reads:
@@ -769,30 +814,33 @@ class Checker:
 
     # ------------------------------------------------------------ routes, conditions, aggregations
 
-    def classify(self, sources: tuple[str, ...]) -> tuple[str, str]:
-        """The source class of an answer (spec 2.2) and the steps responsible for it."""
+    def classify(self, sources: tuple[str, ...]) -> dict[str, list[str]]:
+        """The source classes of an answer (spec 2.2, `SOURCE_CLASSES`), each with the steps that
+        produce it under that class."""
         classes: dict[str, list[str]] = {}
         for src in sources:
             node = self.nodes.get(src)
-            if isinstance(node, s.Step) and node.kind == "Decide":
-                c = "unmeasured" if node.flag("Agent_Fallback") else "measured"
-            elif isinstance(node, s.Step) and node.kind == "Task_Agent":
-                c = "unmeasured"
-            elif isinstance(node, s.Step) and node.kind == "Aggregate":
-                c = "aggregated"
-            else:
-                c = "deterministic"
-            classes.setdefault(c, []).append(src)
-        for c in ("aggregated", "unmeasured", "measured", "deterministic"):
-            if c in classes:
-                return c, _list(classes[c])
-        return "deterministic", ""
+            kind = node.kind if isinstance(node, s.Step) else None
+            classes.setdefault(SOURCE_CLASSES.get(kind, "measured"), []).append(src)
+        return classes
 
-    def has_deterministic(self, sources: tuple[str, ...]) -> str:
-        """The deterministic steps among an answer's sources, for a route whose other sources are hands."""
-        found = [src for src in sources
-                 if not (isinstance(self.nodes.get(src), s.Step) and self.nodes[src].kind in ("Decide", "Task_Agent", "Aggregate"))]
-        return _list(found) if found else ""
+    def check_confidence(self, node: s.Node, dotted: str, classes: dict[str, list[str]], step: str, what: str, where: str):
+        """A `Confidence_Below` or `With Confidence_Above` on an answer: allowed on a decision
+        model's or a script's, an error on an agent's, an input or an aggregation (spec 2.4)."""
+        on_a_path = " on one path" if len(classes) > 1 else ""
+        for cls, culprits in classes.items():
+            code = CONFIDENCE_ERRORS[cls]
+            if code is None:
+                continue
+            if cls == "aggregated":
+                message = (f"{dotted} is an aggregation{on_a_path}, which has no confidence by design (spec 2.5), so {what} "
+                           f"cannot apply to it; {where}")
+            elif cls == "agent":
+                message = (f"{dotted} is the agent's answer{on_a_path} (produced by {_list(culprits)}), which has a value and no "
+                           f"confidence, so {what} cannot apply to it; {where}, or ask a decision model in a Decide")
+            else:
+                message = (f"{dotted} is an input of Start{on_a_path}, which has no confidence, so {what} cannot apply to it; {where}")
+            self.report(code, node, message, step)
 
     @staticmethod
     def not_an_answer(dotted: str, t: Type, where: str) -> str:
@@ -834,20 +882,10 @@ class Checker:
             if missing:
                 self.report_head("missing_branch", st, f"Route {name} has no branch for {_list(missing)}; a route names every value "
                                  f"{dotted} can take")
-        cls, culprits = self.classify(t.sources)
+        classes = self.classify(t.sources)
+        self.sources[name] = source_class(classes)
         if st.check is not None:
-            if cls == "aggregated":
-                self.report("confidence_on_aggregate", st.check, f"{dotted} is an aggregation, which has no confidence by design (spec 2.5), "
-                            "so Confidence_Below cannot check one; route on its value alone", name)
-            elif cls == "deterministic":
-                self.report("confidence_on_unmeasured_source", st.check, f"{dotted} comes from {culprits}, not a decision model, so it carries "
-                            "no confidence and this check always fires; route on its value alone", name)
-            elif cls == "unmeasured" and self.has_deterministic(t.sources):
-                self.report("confidence_on_unmeasured_source", st.check, f"{dotted} comes from a script or an input on one path "
-                            f"({self.has_deterministic(t.sources)}), which carries no confidence, so this check fires on that path", name)
-        elif cls == "unmeasured":
-            self.report_head("unmeasured_route", st, f"Route {name} branches on {dotted}, which may be answered by hand ({culprits}), with "
-                             "no Confidence_Below check; nothing records how sure the answer was")
+            self.check_confidence(st.check, dotted, classes, name, "Confidence_Below", "route on its value alone")
 
     def check_aggregate(self, st: s.Step, m_in: State, name: str):
         read_roots = {r.key.name for r in st.reads}
@@ -891,16 +929,8 @@ class Checker:
             elif t.labels is not None and cond.value not in t.labels:
                 self.report("unknown_label", cond, f"{cond.value} is not a {word} of {dotted}; its {word}s are {_list(t.labels)}", step)
         if cond.confidence_above is not None:
-            cls, culprits = self.classify(t.sources)
-            if cls == "aggregated":
-                self.report("confidence_on_aggregate", cond, f"{dotted} is an aggregation, which has no confidence by design (spec 2.5); "
-                            "With Confidence_Above cannot apply to it", step)
-            elif cls == "unmeasured":
-                self.report("confidence_on_unmeasured_source", cond, f"{dotted} may be answered by hand ({culprits}); a hand answer has no "
-                            f"probability, so With Confidence_Above counts every one against {where}", step)
-            elif cls == "deterministic":
-                self.report("confidence_on_unmeasured_source", cond, f"{dotted} comes from {culprits}, not a decision model, and carries no "
-                            f"probability, so With Confidence_Above counts every answer against {where}", step)
+            self.check_confidence(cond, dotted, self.classify(t.sources), step, "With Confidence_Above",
+                                  f"drop the bar and let every answer count as it is in {where}")
 
     # ------------------------------------------------------------ loops
 
@@ -1034,14 +1064,21 @@ class Checker:
 # ---------------------------------------------------------------- entry points
 
 def check(program: s.Program, folder: Path | str | None = None, file: str | None = None, *,
-          files: set[str] | None = None) -> list[Diagnostic]:
+          files: set[str] | None = None, sources: dict[str, str] | None = None) -> list[Diagnostic]:
     """Every diagnostic for a parsed program, sorted by position. `folder` is the program
     directory, for the checks on files; `files` are the program's file paths when they are in
-    hand instead (a bundle's); without either those checks are skipped."""
-    return Checker(program, Path(folder) if folder is not None else None, file, files).run()
+    hand instead (a bundle's); without either those checks are skipped. A dict passed as
+    `sources` is filled with the source class of the answer each route reads (route name to
+    one of `SOURCE_PRECEDENCE`), which the graph writes on the route's `READ_BY` edge."""
+    checker = Checker(program, Path(folder) if folder is not None else None, file, files)
+    diagnostics = checker.run()
+    if sources is not None:
+        sources.update(checker.sources)
+    return diagnostics
 
 
-def check_source(source: str, file: str | None = None, folder: Path | str | None = None) -> tuple[s.Program | None, list[Diagnostic]]:
+def check_source(source: str, file: str | None = None, folder: Path | str | None = None, *,
+                 sources: dict[str, str] | None = None) -> tuple[s.Program | None, list[Diagnostic]]:
     """Parse and check source text. A syntax error is the one diagnostic (`syntax_error`)."""
     from aip_spec.parser import parse
 
@@ -1049,7 +1086,7 @@ def check_source(source: str, file: str | None = None, folder: Path | str | None
         program = parse(source, file)
     except ParseError as exc:
         return None, [Diagnostic(**exc.to_diagnostic())]
-    return program, check(program, folder, file)
+    return program, check(program, folder, file, sources=sources)
 
 
 def check_path(path: Path | str) -> tuple[s.Program | None, list[Diagnostic]]:

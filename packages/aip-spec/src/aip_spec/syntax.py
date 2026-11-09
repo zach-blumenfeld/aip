@@ -84,10 +84,13 @@ class KeyRef(Node):
 @dataclass
 class Declaration(Node):
     """`name`, or `name: type`, or `name: type "description"`, in `Read`, `Produce` and the
-    inputs of `Start`. `key` may be dotted in a `Read`."""
+    inputs of `Start`. `key` may be dotted in a `Read`. A `choice` or `score` key declared where
+    it is produced (a `Produce` of an `Execute` or `Task_Agent`, a `Start` input) lists its
+    `labels` after the type, `tone: choice [angry, calm] "..."`, as a question does (spec 2.4)."""
     key: KeyRef
     type: str | None = None
     description: Str | None = None
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -141,7 +144,7 @@ class QuestionsClause(Clause):
 
 @dataclass
 class FlagClause(Clause):
-    """`Agent_Fallback true` or `History true`."""
+    """`History true` (the one flag a `Decide` has)."""
     keyword: str
     value: bool
 
@@ -270,7 +273,7 @@ class Step(Node):
         return found[-1].flow if found else None
 
     def flag(self, keyword: str) -> bool:
-        """`Agent_Fallback` or `History`: the value written, or False when absent."""
+        """`History`: the value written, or False when absent."""
         return any(c.value for c in self._of(FlagClause) if c.keyword == keyword)
 
     @property

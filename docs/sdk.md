@@ -17,9 +17,10 @@ client = aip.Client(agent="my-framework 2.1")                 # who the record s
 With no argument the client points where `aip config` points, which may be nowhere: then runs
 work and are not recorded, and the catalog methods raise `NoServer`. `decision_client=`
 injects a TypeSafe client; otherwise the configured key (`TYPESAFE_API_KEY`, `aip config
---decision-model`) decides, and without one a decision is the agent's where the step says
-`Agent_Fallback true` and fails the run (`no_decision_model`, resumable) where not. `home=`
-moves `~/.aip` (default `AIP_HOME`).
+--decision-model`) decides, and without one a `Decide` fails the run (`no_decision_model`,
+resumable once a key is set); a procedure that must run without a model has the agent decide in
+a `Task_Agent`, as `examples/language/billing-support-agent` does. `home=` moves `~/.aip`
+(default `AIP_HOME`).
 
 ## Running
 
@@ -43,8 +44,9 @@ directory); `batch` how many `For` passes run at once (default 10, `aip config -
 - `aip.Paused`: `kind` (`task` or `decision`), `step`, `reason` (for a decision: why the agent
   is asked), `tasks` (a list of `aip.Task`, one per `For` pass waiting at the step; one outside a
   loop), `run_id`, `run_file`, `recorded`. A `Task` has `index` (what the answer is keyed by),
-  `pass_`, `passes`, `state`, `answer_with`, and `prompt` and `references` for a task or
-  `questions` for a decision. `paused.task` is the one task of a pause outside a loop.
+  `pass_`, `passes`, `state`, `answer_with`, `labels` (the values each `choice` or `score` in
+  `answer_with` may take), and `prompt` and `references` for a task or `questions` for a
+  decision. `paused.task` is the one task of a pause outside a loop.
 - `aip.Done`: `run_id`, `result`, `run_file`, `recorded`.
 
 `recorded` is `True` when the server has this stop, `False` when the post failed

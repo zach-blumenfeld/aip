@@ -17,7 +17,7 @@ def source(name: str) -> str:
 class Examples(unittest.TestCase):
     def test_every_example_parses_and_round_trips(self):
         files = sorted(EXAMPLES.glob("*/procedure.aip"))
-        self.assertEqual(len(files), 4, files)
+        self.assertEqual(len(files), 5, files)
         for file in files:
             with self.subTest(file=file.parent.name):
                 text = file.read_text(encoding="utf-8")
@@ -27,7 +27,7 @@ class Examples(unittest.TestCase):
                 self.assertEqual(format_program(parse(formatted)), formatted, "the formatter is idempotent")
 
     def test_bundled_examples_are_the_language_examples(self):
-        self.assertEqual(example_names(), ["billing-support", "dynamic-policy", "fixed-policy", "ticket-triage"])
+        self.assertEqual(example_names(), ["billing-support", "billing-support-agent", "dynamic-policy", "fixed-policy", "ticket-triage"])
         self.assertTrue((example_dir("billing-support") / "procedure.aip").is_file())
         with self.assertRaises(FileNotFoundError):
             example_dir("nope")
@@ -75,12 +75,23 @@ class BillingSupport(unittest.TestCase):
         self.assertEqual(tone.instruction, s.NameRef("tone_question"))
         self.assertEqual([(c.label, c.text.value) for c in tone.criteria],
                          [("angry", "Frustrated, demanding, or threatening to leave."), ("calm", "Neutral or polite, asking a question.")])
-        self.assertTrue(d.flag("Agent_Fallback"))
         self.assertFalse(d.flag("History"))
         self.assertEqual([k.key.dotted for k in d.produces], ["triage_decision"])
-        fallback = next(c for c in d.clauses if isinstance(c, s.FlagClause))
-        self.assertEqual(len(fallback.leading), 2, "the two comment lines above Agent_Fallback belong to it")
-        self.assertTrue(fallback.leading[0].startswith("# The quickstart"))
+        self.assertEqual([type(c).__name__ for c in d.clauses], ["ReadClause", "QuestionsClause", "ProduceClause", "FlowClause"],
+                         "a Decide is its questions and its key; there is no Agent_Fallback")
+
+    def test_labelled_produce(self):
+        """`billing-support-agent`: the agent's answers are produced under declared labels."""
+        agent = parse((EXAMPLES / "billing-support-agent" / "procedure.aip").read_text(encoding="utf-8"))
+        t = agent.step("triage")
+        self.assertEqual(t.kind, "Task_Agent")
+        billing, tone = t.produces
+        self.assertEqual((billing.key.name, billing.type, billing.labels), ("billing", "true_or_false", []))
+        self.assertEqual((tone.key.name, tone.type, tone.labels, tone.description.value), ("tone", "choice", ["angry", "calm"], "How upset the customer is."))
+        self.assertEqual(agent.step("by_tone").check, None, "no confidence check on an agent's answer")
+        inline = parse('Procedure p "x"\nStart "s" {\n  level: score [low, mid, high] "The level."\n  Next_Step end\n}\n')
+        [inp] = inline.step("start").inputs
+        self.assertEqual((inp.type, inp.labels), ("score", ["low", "mid", "high"]))
 
     def test_route(self):
         r = self.p.step("by_tone")
@@ -200,7 +211,6 @@ class Aliases(unittest.TestCase):
             decide a "d" {
               reads m
               questions { q: noul "Yes?"  c: choice [x, y] "Which?" }
-              fallback true
               history true
               return dec
               go_to r
@@ -215,7 +225,7 @@ class Aliases(unittest.TestCase):
         start, a, r, agg, e, t, end = p.steps()
         self.assertEqual((start.inputs[0].type, start.flow.kind), ("list", "Next_Step"))
         self.assertEqual([q.type for q in a.questions], ["true_or_false", "choice"])
-        self.assertTrue(a.flag("Agent_Fallback") and a.flag("History"))
+        self.assertTrue(a.flag("History"))
         self.assertEqual((a.produces[0].key.dotted, a.flow), ("dec", s.Flow("Next_Step", "r")))
         self.assertEqual((r.particle, [b.value for b in r.branches]), ("On", ["x", "y"]))
         self.assertEqual([(g.mode, g.condition.operator, g.condition.value, g.condition.confidence_above) for g in agg.aggregations],

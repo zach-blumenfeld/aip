@@ -220,17 +220,17 @@ class RequiresUnmet(StepError):
 
 
 class NoDecisionModel(StepError):
-    """A `Decide` step with no model configured and no `Agent_Fallback`."""
+    """A `Decide` step with no model configured. Every decision needs one (spec 2.4)."""
 
     kind = "no_decision_model"
 
     def __init__(self, step: str):
-        super().__init__(step, f"{step} is a decision, no decision model is configured, and the step does not allow "
-                               "Agent_Fallback; configure a model and retry the run")
+        super().__init__(step, f"{step} is a decision and no decision model is configured; a Decide is always answered by a "
+                               "decision model, so configure one (aip config --decision-model KEY) and retry the run")
 
 
 class DecisionModelFailed(StepError):
-    """The decision model raised, and the step does not allow `Agent_Fallback`."""
+    """The decision model raised on a `Decide` step."""
 
     kind = "decision_model_failed"
 

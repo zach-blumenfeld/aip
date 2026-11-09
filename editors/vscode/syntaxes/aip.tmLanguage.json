@@ -257,7 +257,7 @@
     },
     "clause": {
       "name": "keyword.other.clause.aip",
-      "match": "(?i)^\\s*(Answer_Questions|Questions|Agent_Fallback|Fallback|History|Aggregations|Continue|Next_Pass|Use_When|Trigger_When|Do_Not_Use_When|Requires|Avoid|Anti_Pattern)\\b"
+      "match": "(?i)^\\s*(Answer_Questions|Questions|History|Aggregations|Continue|Next_Pass|Use_When|Trigger_When|Do_Not_Use_When|Requires|Avoid|Anti_Pattern)\\b"
     },
     "type": {
       "name": "support.type.aip",

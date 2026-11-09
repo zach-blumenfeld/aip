@@ -401,7 +401,7 @@ def config_command(argv: list[str]) -> int:
     parser.add_argument("--token", default=None, help="the bearer token for the server (an empty string forgets it)")
     parser.add_argument("--decision-model", default=None, metavar="KEY",
                         help="the TypeSafe API key this client decides with (an empty string forgets it). Without one, a "
-                             "decision is the agent's where the step allows Agent_Fallback and fails the run where not")
+                             "Decide step fails the run (no_decision_model) until a key is set and the run is resumed")
     parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once by default")
     parser.add_argument("--clear", action="store_true", help="forget everything")
     args = parser.parse_args(argv)

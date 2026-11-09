@@ -87,9 +87,9 @@ class TheGraph(unittest.TestCase):
         self.assertEqual(props(g, "step:triage") | {"line": 0, "column": 0, "end_line": 0, "end_column": 0},
                          {"id": "step:triage", "bundle_id": props(g, PROCEDURE_ID)["bundle_id"], "name": "triage", "kind": "Decide",
                           "description": "Classify whether the message is about billing and how upset the customer is.",
-                          "agent_fallback": True, "history": False, "produces": "triage_decision",
+                          "history": False, "produces": "triage_decision",
                           "line": 0, "column": 0, "end_line": 0, "end_column": 0})
-        self.assertEqual(props(g, "step:triage")["line"], 33)
+        self.assertEqual(props(g, "step:triage")["line"], 34)
         q = props(g, "question:triage.tone")
         self.assertEqual((q["type"], q["labels"], q["order"], q["criteria_labels"]), ("choice", ["angry", "calm"], 1, ["angry", "calm"]))
         self.assertTrue(q["instruction"].startswith("How upset is the customer?"), "a named string is resolved")
@@ -98,12 +98,16 @@ class TheGraph(unittest.TestCase):
         self.assertEqual(one(g, "BELOW", "step:by_tone", "step:escalate")["below"], 0.6)
         self.assertEqual(one(g, "BRANCH", "step:by_tone", "step:escalate")["value"], "angry")
         self.assertEqual(one(g, "BRANCH", "step:by_tone", "step:reply")["value"], "calm")
-        self.assertEqual(one(g, "READS", "step:by_tone", "key:triage_decision")["field"], "tone")
-        self.assertEqual({k.id: k.properties.get("type") for k in g.with_label("Key")},
-                         {"key:message": "string", "key:triage_decision": "decision", "key:ticket_id": "integer",
-                          "key:queue": "string", "key:reply": "string"})
-        self.assertEqual(props(g, "key:ticket_id")["description"], "The tier-2 ticket opened for the message.")
-        self.assertEqual([e.end for e in g.edges_of("PRODUCES", "step:escalate")], ["key:ticket_id", "key:queue"])
+        read = one(g, "READ_BY", "data:triage_decision", "step:by_tone")
+        self.assertEqual((read["field"], read["source"]), ("tone", "measured"), "data flows left to right; a route's edge says what feeds it")
+        self.assertEqual(bare(one(g, "READ_BY", "data:triage_decision", "step:escalate")), {"field": "tone"}, "only a route's edge has a source")
+        self.assertEqual({k.id: k.properties.get("type") for k in g.with_label("Data")},
+                         {"data:message": "string", "data:triage_decision": "decision", "data:ticket_id": "integer",
+                          "data:queue": "string", "data:reply": "string"})
+        self.assertEqual(len(g.edges_of("SUPPLIES", PROCEDURE_ID)), 5)
+        self.assertEqual(props(g, "data:ticket_id")["description"], "The tier-2 ticket opened for the message.")
+        self.assertNotIn("labels", props(g, "data:triage_decision"), "a decision's labels are on its questions")
+        self.assertEqual([e.end for e in g.edges_of("PRODUCES", "step:escalate")], ["data:ticket_id", "data:queue"])
         self.assertEqual(props(g, "step:escalate")["script"], "scripts/escalate.py")
         one(g, "RUNS", "step:escalate", "file:scripts/escalate.py")
         self.assertEqual(bare(one(g, "USES", "step:escalate", "file:assets/config.json")), {}, "an asset has no description")
@@ -118,7 +122,20 @@ class TheGraph(unittest.TestCase):
         p = props(g, PROCEDURE_ID)
         self.assertEqual((p["requires_interpreter"], p["requires_version"], len(p["use_when"]), len(p["avoid"])), ("python", "3.10", 2, 2))
         self.assertEqual([e.end for e in g.edges_of("NEXT", "step:start")], ["step:triage"])
-        self.assertEqual(one(g, "NEXT", "step:start", "step:triage")["line"], 30, "a flow edge carries the clause's span")
+        self.assertEqual(one(g, "NEXT", "step:start", "step:triage")["line"], 31, "a flow edge carries the clause's span")
+
+    def test_billing_support_agent(self):
+        """The agent decides: labels on the produced key, the route's source is `agent`, no check."""
+        g = compiled("billing-support-agent").graph
+        self.assertEqual(g.node("step:triage").labels, ("Step", "Task_Agent"))
+        tone = props(g, "data:tone")
+        self.assertEqual((tone["type"], tone["labels"], tone["description"]), ("choice", ["angry", "calm"], "How upset the customer is."))
+        self.assertEqual(props(g, "data:billing")["type"], "true_or_false")
+        self.assertNotIn("labels", props(g, "data:billing"), "a true_or_false has no label list")
+        self.assertEqual(bare(one(g, "READ_BY", "data:tone", "step:by_tone")), {"source": "agent"})
+        self.assertEqual(g.edges_of("BELOW", "step:by_tone"), [])
+        self.assertNotIn("check_below", props(g, "step:by_tone"))
+        self.assertEqual([e.end for e in g.edges_of("PRODUCES", "step:triage")], ["data:billing", "data:tone"])
 
     def test_ticket_triage_loops(self):
         g = compiled("ticket-triage").graph
@@ -126,11 +143,11 @@ class TheGraph(unittest.TestCase):
         self.assertEqual(g.node("loop:each_ticket").labels, ("Loop", "For"))
         self.assertEqual((loop["kind"], loop["mode"], loop["item"], loop["at_most"], loop["collect_key"], loop["collect_into"]),
                          ("For", "Over", "ticket", 50, "reply", "replies"))
-        one(g, "OVER", "loop:each_ticket", "key:tickets")
-        one(g, "BINDS", "loop:each_ticket", "key:ticket")
-        one(g, "COLLECTS", "loop:each_ticket", "key:reply")
-        one(g, "PRODUCES", "loop:each_ticket", "key:replies")
-        self.assertEqual(props(g, "key:replies")["type"], "list")
+        one(g, "OVER", "loop:each_ticket", "data:tickets")
+        one(g, "BINDS", "loop:each_ticket", "data:ticket")
+        one(g, "COLLECTS", "loop:each_ticket", "data:reply")
+        one(g, "PRODUCES", "loop:each_ticket", "data:replies")
+        self.assertEqual(props(g, "data:replies")["type"], "list")
         self.assertEqual([(e.end, e.properties["order"]) for e in g.edges_of("CONTAINS", "loop:each_ticket")],
                          [("step:classify", 0), ("step:by_tone", 1), ("step:draft", 2), ("step:escalate", 3), ("step:check", 4),
                           ("loop:revise", 5)])
@@ -140,36 +157,36 @@ class TheGraph(unittest.TestCase):
         revise = props(g, "loop:revise")
         self.assertEqual((revise["kind"], revise["mode"], revise["at_most"], revise["at_cap"], revise["until_answer"]),
                          ("Loop", "Until", 3, "Else_Fail", "passed"))
-        self.assertEqual(bare(one(g, "WATCHES", "loop:revise", "key:passed")), {}, "a bare true_or_false condition: no field, no comparison")
+        self.assertEqual(bare(one(g, "WATCHES", "loop:revise", "data:passed")), {}, "a bare true_or_false condition: no field, no comparison")
         one(g, "CONTINUES", "loop:revise", "loop:each_ticket")
         one(g, "AGAIN", "step:fix", "step:check")
         self.assertEqual(one(g, "BRANCH", "step:by_tone", "step:draft")["value"], "calm")
-        self.assertEqual(props(g, "key:passed")["type"], "true_or_false")
+        self.assertEqual(props(g, "data:passed")["type"], "true_or_false")
 
     def test_dynamic_policy_interpolation_and_nesting(self):
         g = compiled("dynamic-policy").graph
-        self.assertEqual(bare(one(g, "READS", "step:check", "key:policy")), {"interpolated": True})
-        self.assertEqual(bare(one(g, "READS", "step:check", "key:work")), {})
+        self.assertEqual(bare(one(g, "READ_BY", "data:policy", "step:check")), {"interpolated": True})
+        self.assertEqual(bare(one(g, "READ_BY", "data:work", "step:check")), {})
         self.assertEqual([e.end for e in g.edges_of("CONTAINS", "loop:revise")], ["loop:review", "step:summarize_check", "step:fix"])
         one(g, "ENTERS", "loop:revise", "loop:review")
         one(g, "ENTERS", "loop:review", "step:check")
         one(g, "CONTINUES", "step:check", "loop:review")
         one(g, "NEXT", "loop:review", "step:summarize_check")
         self.assertIn("{policy}", props(g, "question:check.follows")["instruction"])
-        watches = one(g, "WATCHES", "loop:revise", "key:check_summary")
+        watches = one(g, "WATCHES", "loop:revise", "data:check_summary")
         self.assertEqual(watches["field"], "all_hold")
         agg = props(g, "aggregation:summarize_check.all_hold")
         self.assertEqual((agg["mode"], agg["source"], agg["confidence_above"]), ("All", "verdicts.follows", 0.7))
-        self.assertEqual(one(g, "OVER", "aggregation:summarize_check.all_hold", "key:verdicts")["field"], "follows")
-        self.assertEqual(props(g, "key:verdicts")["type"], "list")
-        self.assertEqual(props(g, "key:verdict")["type"], "decision")
+        self.assertEqual(one(g, "OVER", "aggregation:summarize_check.all_hold", "data:verdicts")["field"], "follows")
+        self.assertEqual(props(g, "data:verdicts")["type"], "list")
+        self.assertEqual(props(g, "data:verdict")["type"], "decision")
 
     def test_fixed_policy_aggregation(self):
         g = compiled("fixed-policy").graph
         self.assertEqual(one(g, "AGGREGATES", "step:summarize_check", "aggregation:summarize_check.all_hold"), {"order": 0})
-        self.assertEqual(one(g, "OVER", "aggregation:summarize_check.all_hold", "key:policy_check"), {})
-        self.assertEqual(props(g, "key:check_summary")["type"], "aggregation")
-        self.assertEqual(props(g, "key:policy_check")["type"], "decision")
+        self.assertEqual(one(g, "OVER", "aggregation:summarize_check.all_hold", "data:policy_check"), {})
+        self.assertEqual(props(g, "data:check_summary")["type"], "aggregation")
+        self.assertEqual(props(g, "data:policy_check")["type"], "decision")
         self.assertEqual(props(g, "step:summarize_check")["produces"], "check_summary")
 
     def test_runtime_keys(self):
@@ -179,11 +196,11 @@ class TheGraph(unittest.TestCase):
         bundle, diagnostics = compile_source(source, [])
         self.assertEqual(diagnostics, [])
         g = bundle.graph
-        self.assertEqual((props(g, "key:index")["runtime"], props(g, "key:index")["type"]), (True, "integer"))
-        one(g, "PRODUCES", "loop:f", "key:index")
-        one(g, "PRODUCES", "loop:f", "key:iterations")
-        one(g, "READS", "step:u", "key:iterations")
-        self.assertIsNone(props(g, "key:i").get("type"), "an item of a plain list has no known type")
+        self.assertEqual((props(g, "data:index")["runtime"], props(g, "data:index")["type"]), (True, "integer"))
+        one(g, "PRODUCES", "loop:f", "data:index")
+        one(g, "PRODUCES", "loop:f", "data:iterations")
+        one(g, "READ_BY", "data:iterations", "step:u")
+        self.assertIsNone(props(g, "data:i").get("type"), "an item of a plain list has no known type")
 
     def test_json_form_leaves_the_contents_out(self):
         bundle = compiled("billing-support")
@@ -278,15 +295,22 @@ class TheBundleFile(unittest.TestCase):
     def test_a_hand_edit_is_tampered(self):
         bundle = compiled("billing-support")
         edits = {
-            "a step": "MATCH (s:Step {name: 'triage'}) SET s.agent_fallback = false",
+            "a step": "MATCH (s:Step {name: 'triage'}) SET s.history = true",
+            "a question's labels": "MATCH (q:Question {name: 'tone'}) SET q.labels = ['angry', 'calm', 'furious']",
             "the source": "MATCH (p:Procedure) SET p.source = replace(p.source, 'Confidence_Below 0.6', 'Confidence_Below 0.9')",
             "a file": "MATCH (f:File {path: 'assets/config.json'}) SET f.text = '{}'",
             "an edge": "MATCH (:Route)-[b:BRANCH {value: 'angry'}]->() SET b.value = 'furious'",
+            "a route's source class": "MATCH (:Data)-[r:READ_BY]->(:Route) SET r.source = 'agent'",
             "a new node": "CREATE (:Step:Decide {id: 'step:extra', bundle_id: $b, name: 'extra', kind: 'Decide'})",
         }
-        for what, cypher in edits.items():
+        agent = compiled("billing-support-agent")
+        agent_edits = {
+            "a key's labels": "MATCH (d:Data {name: 'tone'}) SET d.labels = ['angry', 'calm', 'furious']",
+            "a key's type": "MATCH (d:Data {name: 'billing'}) SET d.type = 'boolean'",
+        }
+        for what, cypher in [*edits.items(), *agent_edits.items()]:
             with self.subTest(what):
-                out = write_bundle(bundle, self.tmp / "t.rl")
+                out = write_bundle(agent if what in agent_edits else bundle, self.tmp / "t.rl")
                 with relate.open(out, read_only=False) as conn:
                     conn.execute(cypher, {"b": bundle.id})
                 with self.assertRaises(BundleError) as caught:
@@ -390,7 +414,7 @@ class CompileAndExportCommands(unittest.TestCase):
         report = json.loads(out)
         self.assertEqual(report["file"], str(example / "procedure.aip"))
         self.assertEqual([(d["code"], d["line"]) for d in report["diagnostics"] if d["severity"] == "error"][:2],
-                         [("unknown_step", 45), ("unreachable_step", 48)])
+                         [("unknown_step", 43), ("unreachable_step", 46)])
         with redirect_stdin(io.StringIO(source.replace("by_tonne", "by_tone"))):
             code, out, _ = self.run_cli("compile", "--check", "--json", "--stdin", str(example))
         self.assertEqual(code, 0)

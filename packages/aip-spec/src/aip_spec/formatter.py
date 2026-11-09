@@ -55,12 +55,20 @@ def _flow(f: s.Flow) -> str:
     return f.kind if f.step is None else f"{f.kind} {f.step}"
 
 
+def _typed(d: s.Declaration) -> str:
+    """`key: type [labels]`, without the description."""
+    text = f"{d.key.dotted}: {d.type}"
+    if d.labels:
+        text += f" [{', '.join(d.labels)}]"
+    return text
+
+
 def _declaration(d: s.Declaration) -> str:
-    text = d.key.dotted
-    if d.type:
-        text += f": {d.type}"
-        if d.description is not None:
-            text += " " + _str(d.description)
+    if not d.type:
+        return d.key.dotted
+    text = _typed(d)
+    if d.description is not None:
+        text += " " + _str(d.description)
     return text
 
 
@@ -154,13 +162,13 @@ class Writer:
         # Route branches line up on their arrows; Start inputs line up their descriptions.
         width = max((len(c.value) for c in step.clauses if isinstance(c, s.BranchClause)), default=0)
         inputs = [c.input for c in step.clauses if isinstance(c, s.InputClause)]
-        input_width = max((len(f"{d.key.dotted}: {d.type}") for d in inputs if d.description is not None), default=0)
+        input_width = max((len(_typed(d)) for d in inputs if d.description is not None), default=0)
         for clause in step.clauses:
             if isinstance(clause, s.ReadClause):
                 self.keys("Read", clause, depth)
             elif isinstance(clause, s.InputClause):
                 d = clause.input
-                text = f"{d.key.dotted}: {d.type}"
+                text = _typed(d)
                 if d.description is not None:
                     text = f"{text.ljust(input_width)} {_str(d.description)}"
                 self.line(text, depth, _merge(clause, d))

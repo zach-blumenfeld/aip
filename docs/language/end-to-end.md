@@ -30,11 +30,13 @@ to a call, the review `Loop` goes round until the aggregation holds. The run end
 `End` step's keys and is recorded locally with the bundle id on every entry.
 
 Then the same with no decision model configured: the run stops at the first `Decide` and says
-so, unless the step allows `Agent_Fallback`, in which case the agent answers and the record
-shows a hand answer with no confidence, which the route's check lets through on its value.
+so (`no_decision_model`), and `aip resume` asks the model once one is configured. A procedure
+that must run without a model has the agent decide in a `Task_Agent` under declared labels, as
+`billing-support-agent` does; its route branches on the agent's answer and checks no confidence.
+(Revised 2026-11-09: `Agent_Fallback`, which let the agent answer a `Decide` by hand, is gone.)
 
 Needs: everything in `docs/language/runtime.md`: loading, the state rules, each step kind, batching,
-the record; the decision model client; the agent protocol for `Task_Agent` and fallback.
+the record; the decision model client; the agent protocol for `Task_Agent`.
 
 ## Scene 3: look at a run
 
@@ -60,8 +62,8 @@ a graph layer (the projection of bundles and runs); bundles immutable by id; the
 ## Scene 5: ask governance questions
 
 In the console, or by query: which routes fired their confidence check this week and on which
-revision; which routes branch on an unmeasured answer; which policy fails the aggregation most
-often; which runs used a hand answer; what the lineage of the `End` step's `reply` is, back to
+revision; which routes branch on an agent's answer (the `source` on the route's `READ_BY` edge);
+which policy fails the aggregation most often; what the lineage of the `End` step's `reply` is, back to
 the decision and the ticket. Each question is one query over the projected graph, and the
 answer names bundle ids.
 
@@ -105,7 +107,7 @@ window in which the runtime still loads the old format with a warning.
 | Editor grammar | 1 | `editors/vscode` | done |
 | Linter the editor can run | 1 | this page | done: `aip compile --check --json [--stdin] <folder>` prints every diagnostic with its span, and the extension shows them as squiggles on every change (plan E1, 2026-11-09) |
 | Runtime: state, steps, loops, batching, record | 2, 3 | `docs/language/runtime.md` | done (R1 and R2, 2026-11-09, `src/aip/model`): the state, every step kind, answers, routes, aggregations, `For` and `Loop` in every form, batching with one model call per batch of single-`Decide` passes, batched pauses, the cache, the record with passes and the identity fields |
-| Decision model client; `Agent_Fallback` | 2 | spec 2.4, runtime | done (R2, R3): `aip.model.typesafe.TypeSafeResolver` makes the answer objects; the CLI and SDK wire the key from `aip config --decision-model` or `TYPESAFE_API_KEY` |
+| Decision model client; decisions need a model | 2 | spec 2.4, runtime | done (R2, R3, L4): `aip.model.typesafe.TypeSafeResolver` makes the answer objects; the CLI and SDK wire the key from `aip config --decision-model` or `TYPESAFE_API_KEY`; `Agent_Fallback` removed 2026-11-09, the agent decides in a `Task_Agent` under labels (`billing-support-agent`) |
 | Run view | 3 | runtime: the record | exists for the old format; needs passes, aggregations, answer objects |
 | Server: record layer, graph layer, immutable bundles | 4, 5, 6 | spec 3, runtime | exists for the old format; needs `.rl` bundles merged into the store |
 | Governance queries and export to a graph file | 5 | runtime: the record | partly exists; needs aggregation and pass queries, export |

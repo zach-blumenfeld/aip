@@ -100,11 +100,13 @@ CASES = [
      'Route r "r" { Read agg.all  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read agg }\n', 5, 29, "r"),
     ("source_not_read", START + NOUL.replace("Next_Step r", "Next_Step a")
      + 'Aggregate a "a" { Read m  Aggregations { all: All dec }  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n', 4, 51, "a"),
-    ("confidence_on_unmeasured_source", 'Requires python 3.10\n' + START.replace("d }", "e }")
-     + 'Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Next_Step r }\n'
-     + 'Route r "r" { Read passed  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read passed }\n', 5, 28, "r"),
-    ("unmeasured_route", START + NOUL.replace("Produce", "Agent_Fallback true  Produce")
-     + 'Route r "r" { Read dec.q  true -> end  false -> end }\nEnd "e" { Read dec }\n', 4, 1, "r"),
+    ("confidence_on_agent_answer", START.replace("d }", "t }") + 'Task_Agent t "t" { Read m  Produce passed: true_or_false  Next_Step r }\n'
+     + 'Route r "r" { Read passed  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read passed }\n', 4, 28, "r"),
+    ("confidence_on_input", 'Start "s" { tone: choice [a, b]  Next_Step r }\nRoute r "r" { Read tone  Confidence_Below 0.5 -> end  a -> end  b -> end }\n'
+     'End "e" { Read tone }\n', 3, 26, "r"),
+    ("question_labels", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce tone: choice  Next_Step end }\nEnd "e" { Read tone }\n', 3, 36, "t"),
+    ("question_labels", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce ok: true_or_false [yes, no]  Next_Step end }\nEnd "e" { Read ok }\n', 3, 36, "t"),
+    ("question_labels", 'Start "s" { level: score [low, low]  Next_Step end }\nEnd "e" { Read level }\n', 2, 13, "start"),
     ("missing_file", 'Requires python 3.10\n' + START.replace("d }", "e }")
      + 'Execute e "e" { Read m  Run_Script nope.py  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 4, 25, "e"),
     ("missing_requires", START.replace("d }", "e }") + 'Execute e "e" { Read m  Run_Script scripts/x.py  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 3, 1, "e"),
@@ -260,25 +262,69 @@ class Conditions(unittest.TestCase):
     def test_until_answer_produced_before_the_loop_and_renewed_by_again(self):
         self.assertEqual([d.code for d in check_path(EXAMPLES / "ticket-triage")[1]], [])
 
-    def test_confidence_bar_on_a_script_answer_warns_and_on_an_aggregation_fails(self):
-        body = ('Requires python 3.10\nStart "s" { m: string  Next_Step l }\nLoop l Until passed With Confidence_Above 0.8, At_Most 3 {\n'
-                '  Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Continue }\n  Next_Step end\n}\nEnd "e" { Read passed }\n')
-        [d] = diagnostics(body)
-        self.assertEqual((d.code, d.severity, d.step), ("confidence_on_unmeasured_source", "warning", "l"))
-        self.assertIn("comes from e, not a decision model", d.message)
+    def test_a_confidence_bar_is_allowed_on_a_script_answer_and_an_error_on_an_aggregation_an_agent_or_an_input(self):
+        scripted = ('Requires python 3.10\nStart "s" { m: string  Next_Step l }\nLoop l Until passed With Confidence_Above 0.8, At_Most 3 {\n'
+                    '  Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Continue }\n  Next_Step end\n}\nEnd "e" { Read passed }\n')
+        self.assertEqual(codes(scripted), [], "a script may supply a confidence, so a bar on its answer is allowed")
         body = (START + NOUL.replace("Next_Step r", "Next_Step a")
                 + 'Aggregate a "a" { Read dec  Aggregations { all: All dec }  Produce agg  Next_Step b }\n'
                 'Aggregate b "b" { Read agg  Aggregations { again: All agg.all With Confidence_Above 0.5 }  Produce agg2  Next_Step end }\nEnd "e" { Read agg2 }\n')
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.step), ("confidence_on_aggregate", "b"))
+        agent = scripted.replace('Execute e "e" { Read m  Run_Script scripts/x.py ', 'Task_Agent e "e" { Read m ')
+        [d] = diagnostics(agent)
+        self.assertEqual((d.code, d.severity, d.step, d.line), ("confidence_on_agent_answer", "error", "l", 4))
+        self.assertIn("the agent's answer (produced by e)", d.message)
+        inp = ('Start "s" { items: list  ok: true_or_false  Next_Step a }\n'
+               'Aggregate a "a" { Read ok  Aggregations { all: All ok With Confidence_Above 0.5 }  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n')
+        [d] = diagnostics(inp)
+        self.assertEqual((d.code, d.step), ("confidence_on_input", "a"))
 
-    def test_a_check_on_a_hand_answer_is_not_a_warning(self):
-        body = (START + NOUL.replace("Produce", "Agent_Fallback true  Produce")
-                + 'Route r "r" { Read dec.q  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read dec }\n')
-        self.assertEqual(codes(body), [])
-        body = (START.replace("d }", "t }") + 'Task_Agent t "t" { Read m  Produce passed: true_or_false  Next_Step r }\n'
-                + 'Route r "r" { Read passed  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read passed }\n')
-        self.assertEqual(codes(body), [])
+    def test_a_check_on_an_agent_answer_is_an_error_and_a_route_on_its_value_is_not(self):
+        """Spec 2.4: an agent decides in a Task_Agent under declared labels; its answer has no
+        confidence, so a route reads its value and may not check what is not there."""
+        agent = (START.replace("d }", "t }") + 'Task_Agent t "t" { Read m  Produce tone: choice [angry, calm]  Next_Step r }\n'
+                 + 'Route r "r" { Read tone  Confidence_Below 0.5 -> end  angry -> end  calm -> end }\nEnd "e" { Read tone }\n')
+        [d] = diagnostics(agent)
+        self.assertEqual((d.code, d.severity, d.line, d.column, d.step), ("confidence_on_agent_answer", "error", 4, 26, "r"))
+        self.assertIn("produced by t", d.message)
+        self.assertIn("route on its value alone", d.message)
+        plain = agent.replace("Confidence_Below 0.5 -> end  ", "")
+        self.assertEqual(codes(plain), [], "no check: the route branches on the agent's answer")
+        # the labels are known, so a route over the answer is checked like one over a question
+        missing, wrong = diagnostics(plain.replace("calm -> end", "furious -> end"))  # the step's head, then the branch
+        self.assertEqual((wrong.code, missing.code), ("unknown_label", "missing_branch"))
+        self.assertIn("its values are angry and calm", wrong.message)
+        [d] = diagnostics(plain.replace("  calm -> end", ""))
+        self.assertEqual((d.code, d.step), ("missing_branch", "r"))
+        self.assertIn("no branch for calm", d.message)
+        # a check on a key that one arm's agent produces is an error on that path
+        mixed = ('Requires python 3.10\n' + START + NOUL
+                 + 'Route r "r" { Read dec.q  true -> e  false -> t }\n'
+                 'Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Next_Step r2 }\n'
+                 'Task_Agent t "t" { Read m  Produce passed: true_or_false  Next_Step r2 }\n'
+                 'Route r2 "r2" { Read passed  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read passed }\n')
+        [d] = diagnostics(mixed)
+        self.assertEqual((d.code, d.step), ("confidence_on_agent_answer", "r2"))
+        self.assertIn("on one path", d.message)
+
+    def test_the_source_class_of_every_route(self):
+        """What the graph writes on a route's READ_BY edge (spec 2.2): the class of the answer it reads."""
+        sources: dict = {}
+        check(parse(PREFIX + START + DECIDE + 'Route r "r" { Read dec.q  a -> end  b -> end }\nEnd "e" { Read dec }\n'), sources=sources)
+        self.assertEqual(sources, {"r": "measured"})
+        body = ('Requires python 3.10\nStart "s" { m: string  flag: true_or_false  Next_Step e }\n'
+                'Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Next_Step r }\n'
+                'Route r "r" { Read passed  true -> t  false -> t2 }\n'
+                'Task_Agent t "t" { Read m  Produce tone: choice [a, b]  Next_Step r2 }\n'
+                'Task_Agent t2 "t" { Read m  Produce tone: choice [a, b]  Next_Step r2 }\n'
+                'Route r2 "r2" { Read tone  a -> agg  b -> agg }\n'
+                'Aggregate agg "g" { Read passed  Aggregations { all: All passed }  Produce s  Next_Step r3 }\n'
+                'Route r3 "r3" { Read s.all  true -> r4  false -> r4 }\n'
+                'Route r4 "r4" { Read flag  true -> end  false -> end }\nEnd "e" { Read s }\n')
+        sources = {}
+        self.assertEqual([d.code for d in check(parse(PREFIX + body), sources=sources)], [])
+        self.assertEqual(sources, {"r": "scripted", "r2": "agent", "r3": "aggregated", "r4": "input"})
 
     def test_aggregation_sources(self):
         loop = ('Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 5, Collect verdict Into verdicts {\n'
@@ -389,18 +435,17 @@ class CompileCommand(unittest.TestCase):
         report = json.loads(out)
         self.assertEqual((report["procedure"], report["ok"], report["diagnostics"]), ("billing_support", True, []))
         self.assertTrue(report["file"].endswith("procedure.aip"))
-        warned = next(body for code, body, *_ in CASES if code == "confidence_on_unmeasured_source")
+        noted = next(body for code, body, *_ in CASES if code == "unused_name")
         with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp) / "scripted"
-            (folder / "scripts").mkdir(parents=True)
-            (folder / "scripts" / "x.py").write_text("print('{\"passed\": true}')\n", encoding="utf-8")
-            (folder / "procedure.aip").write_text(PREFIX + warned, encoding="utf-8")
+            folder = Path(tmp) / "noted"
+            folder.mkdir(parents=True)
+            (folder / "procedure.aip").write_text(PREFIX + noted, encoding="utf-8")
             code, out, err = self.run_cli("compile", "--check", "--json", str(folder))
         self.assertEqual((code, err), (0, ""))
         report = json.loads(out)
-        self.assertEqual((report["ok"], len(report["diagnostics"])), (True, 1))
+        self.assertEqual((report["ok"], len(report["diagnostics"])), (True, 1), "an info does not fail the compile")
         self.assertEqual(set(report["diagnostics"][0]), {"code", "severity", "message", "file", "line", "column", "end_line", "end_column", "step"})
-        self.assertEqual(report["diagnostics"][0]["code"], "confidence_on_unmeasured_source")
+        self.assertEqual((report["diagnostics"][0]["code"], report["diagnostics"][0]["severity"]), ("unused_name", "info"))
 
     def test_errors_fail_the_command(self):
         with tempfile.TemporaryDirectory() as tmp:

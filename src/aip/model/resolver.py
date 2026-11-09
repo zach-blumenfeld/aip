@@ -4,8 +4,8 @@ A resolver is anything with a `name` and a `decide(request)` method that returns
 one answer object per question (`aip.model.answers`), under the question's name, and the name
 of the model that gave them. The engine renders the questions, projects the state, calls the
 resolver once per decision, checks the answers against the questions and writes the one
-decision key. A resolver that raises fails the step, or hands it to the agent when the step says
-`Agent_Fallback true`.
+decision key. A resolver that raises fails the step (`decision_model_failed`), and no resolver
+at all fails it too (`no_decision_model`): every `Decide` is a model's (spec 2.4).
 
 A batch of `For` passes whose body is one `Decide` is one request with every pass's questions,
 each name suffixed with the pass index (`follows__3`; `aip.model.steps.batch_request`), and the

@@ -1,6 +1,6 @@
 """The CLI's JSON contract (`docs/cli-json.md`): every example in the doc is what `aip run` and
-`aip resume` print for `billing-support` (and, for the batched pause, `ticket-triage`), run with
-no server configured, without a decision model and with a fake one. Before comparing, the
+`aip resume` print for `billing-support` with a fake decision model, `billing-support-agent`
+with none, and, for the batched pause, `ticket-triage`, all run with no server configured. Before comparing, the
 run's id becomes the doc's `SAMPLE_ID`, `run_file` is reduced to its file name and a script's
 `seconds` to `<seconds>`, so nothing else varies. The stderr line about recording is checked too.
 Everything here opens a Relate store, so it skips with the install hint where Relate is missing."""
@@ -25,7 +25,8 @@ from aip.client.runs import RunFile, run_path
 
 REPO = Path(__file__).parent.parent
 DOC = REPO / "docs" / "cli-json.md"
-EXAMPLE = example_dir("billing-support")
+EXAMPLE = example_dir("billing-support")            # triage is a Decide: needs a model
+AGENT = example_dir("billing-support-agent")        # triage is a Task_Agent: runs with none
 TRIAGE = example_dir("ticket-triage")
 BLOCK = re.compile(r"<!-- cli-json: (?P<name>[a-z-]+) -->\s*```(?:json|jsonl)\n(?P<body>.*?)```", re.DOTALL)
 
@@ -144,10 +145,10 @@ class CliJson(unittest.TestCase):
                 mock.patch("typesafe_sdk.TypeSafeClient", FakeTypeSafe):
             yield
 
-    def variant(self, edit=None, script: str | None = None) -> Path:
-        """billing-support with another escalate script, or its source edited."""
-        folder = self.tmp / "billing-support"
-        shutil.copytree(EXAMPLE, folder)
+    def variant(self, edit=None, script: str | None = None, example: Path = AGENT) -> Path:
+        """An example (the agent one by default) with another escalate script, or its source edited."""
+        folder = self.tmp / example.name
+        shutil.copytree(example, folder)
         if script is not None:
             (folder / "scripts" / "escalate.py").write_text(script, newline="\n")
         if edit is not None:
@@ -157,24 +158,25 @@ class CliJson(unittest.TestCase):
 
     # ----------------------------------------------------------------- the doc's examples
 
-    def test_decision_pause_bad_answer_hand_answer_task_pause_done(self):
-        code, [pause], err = self.run_(EXAMPLE, {"message": CALM})
+    def test_agent_triage_pause_bad_answer_task_pause_done(self):
+        code, [pause], err = self.run_(AGENT, {"message": CALM})                 # the agent decides: no model needed
         self.assertEqual((code, err), (0, NOT_RECORDED))
-        self.assert_documented("paused-decision", pause)
+        self.assert_documented("paused-task-labels", pause)
 
-        code, [error], _ = self.resume({"billing": True})                       # one of two questions
+        code, [error], _ = self.resume({"billing": True})                       # one of two keys
         self.assertEqual(code, 1)
         self.assert_documented("error-invalid-output", error)
         self.assertEqual(RunFile.load(self.run_file).status, "paused", "a bad answer leaves the pause")
 
-        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})       # by hand: no confidence, the check lets it through
+        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})       # the route branches on the agent's answer
         self.assertEqual((code, pause.get("paused"), pause.get("step")), (0, "task", "reply"))
+        self.assertEqual(pause["tasks"][0]["state"]["tone"], {"value": "calm"}, "an agent's answer is its value and nothing else")
         code, [done], _ = self.resume({"reply": REPLY})
         self.assertEqual((code, done.get("done")), (0, True))
         history = RunFile.load(self.run_file).run["history"]
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "reply", "end"])
-        self.assertEqual(history[1]["answered_by"], "agent")
-        self.assertEqual(history[2]["check"], {"below": 0.6, "confidence": None, "fired": False, "reason": "hand"})
+        self.assertEqual(history[1]["result"], {"billing": {"value": True}, "tone": {"value": "calm"}})
+        self.assertEqual((history[2]["check"], history[2]["value"], history[2]["to"]), (None, "calm", "reply"))
 
         with self.decision_model(0.9):                                           # a model sure of calm: the check passes
             code, [pause], _ = self.run_(EXAMPLE, {"message": CALM})
@@ -189,16 +191,15 @@ class CliJson(unittest.TestCase):
         self.assertEqual(history[2]["check"], {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None})
 
     def test_the_answer_can_be_keyed_by_task_index_or_listed(self):
-        self.run_(EXAMPLE, {"message": CALM})
+        self.run_(AGENT, {"message": CALM})
         code, [done], _ = self.resume({"0": {"billing": True, "tone": "angry"}})
         self.assertEqual((code, done.get("done")), (0, True))
-        self.run_(EXAMPLE, {"message": CALM})
+        self.run_(AGENT, {"message": CALM})
         code, [done], _ = self.resume([{"billing": True, "tone": "angry"}])
         self.assertEqual((code, done.get("done")), (0, True))
 
-    def test_no_decision_model_without_agent_fallback_fails_until_a_model_answers(self):
-        folder = self.variant(lambda text: text.replace("  Agent_Fallback true\n", ""))
-        code, [error], err = self.run_(folder, {"message": CALM})
+    def test_a_decision_without_a_model_fails_until_a_model_answers(self):
+        code, [error], err = self.run_(EXAMPLE, {"message": CALM})
         self.assertEqual((code, err), (1, NOT_RECORDED))
         self.assert_documented("error-no-decision-model", error)
         held = RunFile.load(self.run_file)
@@ -211,14 +212,13 @@ class CliJson(unittest.TestCase):
         self.assertEqual(RunFile.load(self.run_file).run["history"][1]["answered_by"], {"model": "jev-1"})
 
     def test_progress_on_the_angry_branch(self):
-        code, [start, pause], _ = self.run_(EXAMPLE, {"message": ANGRY}, "--progress")
-        self.assertEqual((code, pause["paused"]), (0, "decision"))
-        self.assertEqual(start, {"event": "step", "step": "start", "kind": "Start", "pass": None, "passes": []})
-        code, printed, _ = self.resume({"billing": True, "tone": "angry"}, "--progress")
+        with self.decision_model(0.1):                                           # a model sure of angry
+            code, printed, _ = self.run_(EXAMPLE, {"message": ANGRY}, "--progress")
         self.assertEqual(code, 0)
         lines, final = printed[:-1], printed[-1]
-        self.assertEqual([l["step"] for l in lines], ["triage", "by_tone", "escalate", "end"])
-        self.assertIsInstance(lines[2]["seconds"], float)
+        self.assertEqual([l["step"] for l in lines], ["start", "triage", "by_tone", "escalate", "end"])
+        self.assertEqual(lines[0], {"event": "step", "step": "start", "kind": "Start", "pass": None, "passes": []})
+        self.assertIsInstance(lines[3]["seconds"], float)
         self.assert_documented("progress", printed)
         self.assertTrue(final["done"])
 
@@ -281,7 +281,7 @@ class CliJson(unittest.TestCase):
         self.assertIn("Traceback", err)
 
     def test_every_documented_example_is_exercised(self):
-        names = {"paused-decision", "paused-task", "paused-tasks", "done", "error-invalid-output", "error-invalid-input",
+        names = {"paused-task-labels", "paused-task", "paused-tasks", "done", "error-invalid-output", "error-invalid-input",
                  "error-script-failed", "error-no-decision-model", "progress"}
         self.assertEqual(set(self.docs), names)
 

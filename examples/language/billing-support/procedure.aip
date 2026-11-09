@@ -4,8 +4,9 @@
 # One decision classifies the message, a route sends angry or uncertain customers to a
 # script that opens a tier-2 ticket, and the agent drafts a reply for everyone else.
 #
-# Agent_Fallback true lets the walkthrough run with no TypeSafe key: the agent answers triage
-# by hand, and by_tone's confidence check lets a hand answer through on its value.
+# triage is a Decide, so a run needs a decision model configured (aip config --decision-model);
+# by_tone's confidence check reads the model's confidence in the tone. billing-support-agent
+# is the same procedure with the agent classifying the message in a Task_Agent instead.
 
 Procedure billing_support
   "Turn an inbound billing message into either a tier-2 ticket or a drafted reply.
@@ -38,9 +39,6 @@ Decide triage "Classify whether the message is about billing and how upset the c
       angry: "Frustrated, demanding, or threatening to leave."
       calm:  "Neutral or polite, asking a question."
   }
-  # The quickstart keeps agent_fallback on so the walkthrough runs without a TypeSafe key.
-  # A hand answer carries no confidence; by_tone's check lets it through. Production turns it off.
-  Agent_Fallback true
   Produce triage_decision
   Next_Step by_tone
 }

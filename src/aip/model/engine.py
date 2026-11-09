@@ -25,14 +25,15 @@ when its batch completes, pass by pass in input order, so the record is the same
 batch size; a pass that fails fails the run, and the passes of its batch that finished are
 recorded.
 
-**Pauses.** A `Task_Agent` step always pauses; a `Decide` step pauses when no model is
-configured, or the model fails, and the step says `Agent_Fallback true` (otherwise it fails,
-`no_decision_model` or `decision_model_failed`). A pause is `{"kind": "task" | "decision",
-"step", "tasks": [...]}`, one task per pass waiting at the step; outside a loop there is one.
-A task carries `index` (its position in the list), `pass` and `passes` (which pass of which
-loop), `prompt`, `state`, `references` and `answer_with` (the `Produce` keys and types), or for
-a decision `questions` and `answer_with` (the question names and types), plus the pause's `reason`
-when a model failed. `resume` takes the answers keyed by task index (`{"0": {...}}`), or one
+**Pauses.** A `Task_Agent` step always pauses; a `Decide` step never does: with no model
+configured it fails the run (`no_decision_model`), and so does a model that raises
+(`decision_model_failed`), and `retry` asks again. (The language lost `Agent_Fallback` in plan
+L4, so `agent_fallback` is never on a step and the `decision` pause below is unreachable; R4
+removes it.) A pause is `{"kind": "task", "step", "tasks": [...]}`, one task per pass waiting
+at the step; outside a loop there is one. A task carries `index` (its position in the list),
+`pass` and `passes` (which pass of which loop), `prompt`, `state`, `references`, `answer_with`
+(the `Produce` keys and types) and `labels` (the values a `choice` or `score` among them may
+take). `resume` takes the answers keyed by task index (`{"0": {...}}`), or one
 answer object when there is one task; an answer that does not fit raises `InvalidOutput` and the
 pause stands; a task left unanswered fails its pass.
 

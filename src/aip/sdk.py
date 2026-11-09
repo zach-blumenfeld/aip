@@ -105,8 +105,9 @@ class RunError(AipError):
 class Task:
     """One task of a pause (runtime.md, Pauses): `index` is what the answer is keyed by; `pass_`
     and `passes` say which loop pass is waiting. A `task` pause's task carries `prompt`, `state`,
-    `references` and `answer_with` (the `Produce` keys and types); a `decision` pause's carries
-    `questions`, `state` and `answer_with` (the question names and types)."""
+    `references`, `answer_with` (the `Produce` keys and types) and `labels` (the values each
+    `choice` or `score` among them may take); a `decision` pause's carries `questions`, `state`
+    and `answer_with` (the question names and types)."""
     index: int
     pass_: int | None
     passes: list[JSON]
@@ -115,12 +116,14 @@ class Task:
     prompt: str | None = None
     references: list[JSON] | None = None
     questions: list[JSON] | None = None
+    labels: dict[str, list[str]] = field(default_factory=dict)
     data: JSON = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, data: JSON) -> "Task":
         return cls(data["index"], data.get("pass"), list(data.get("passes") or []), data.get("state") or {},
-                   data.get("answer_with") or {}, data.get("prompt"), data.get("references"), data.get("questions"), data)
+                   data.get("answer_with") or {}, data.get("prompt"), data.get("references"), data.get("questions"),
+                   dict(data.get("labels") or {}), data)
 
 
 @dataclass(frozen=True)

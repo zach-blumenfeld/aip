@@ -1,0 +1,73 @@
+# billing-support-agent/procedure.aip
+#
+# billing-support with the agent deciding. The same message, script and reply, but triage is a
+# Task_Agent that produces its answers under declared labels instead of a Decide that asks a
+# decision model, so the procedure runs on a machine with no model configured.
+#
+# What changes beside it: an agent's answer is a value and nothing else, so by_tone branches on
+# the tone and has no Confidence_Below check (the compiler refuses one on an agent's answer:
+# confidence_on_agent_answer). Side by side with billing-support, this is model vs agent.
+
+Procedure billing_support_agent
+  "Turn an inbound billing message into either a tier-2 ticket or a drafted reply.
+   The agent classifies the message; a script opens the ticket; the agent drafts
+   the reply against the refund policy."
+
+  Use_When
+    "A customer message about a charge, invoice, refund, or subscription arrives."
+    "Support asks to triage a billing complaint, and no decision model is configured."
+  Do_Not_Use_When
+    "The message is about product bugs or feature requests rather than billing."
+  Requires python 3.10
+  Avoid
+    "Replying to an angry customer with a templated answer instead of escalating."
+    "Promising a refund the policy does not cover."
+
+triage_prompt = """Read the customer's message and classify it.
+
+Customer message:
+{message}
+
+Answer `billing` with true when the message is about a charge, invoice, refund, or
+subscription payment, and `tone` with `angry` for explicit frustration, threats to cancel,
+or demands, else `calm`."""
+help_reference = "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days."
+
+Start "The customer's message, as support received it." {
+  message: string "The customer's message, verbatim."
+  Next_Step triage
+}
+
+Task_Agent triage triage_prompt {
+  Read message
+  Produce billing: true_or_false       "Whether the message is about billing."
+          tone:    choice [angry, calm] "How upset the customer is."
+  Next_Step by_tone
+}
+
+Route On by_tone "Angry customers go to a human queue; calm ones get a drafted reply." {
+  Read tone
+  angry -> escalate
+  calm  -> reply
+}
+
+Execute escalate "Open a tier-2 ticket for the message." {
+  Read message, tone
+  Run_Script scripts/escalate.py
+  Use assets/config.json
+  Produce ticket_id: integer "The tier-2 ticket opened for the message."
+           queue: string      "The queue the ticket was routed to."
+  Next_Step end
+}
+
+Task_Agent With reply "Draft a calm reply grounded in the refund policy." {
+  Read message, tone
+  Prompt assets/reply.md
+  Use assets/policy.md, references/help.md help_reference
+  Produce reply: string "The drafted reply to send the customer."
+  Next_Step end
+}
+
+End "The original message plus either a ticket or a drafted reply." {
+  Read message
+}

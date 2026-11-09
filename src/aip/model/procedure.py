@@ -26,8 +26,9 @@ FLOW_TYPES = ("NEXT", "CONTINUES", "AGAIN", "BRANCH", "BELOW")
 
 @dataclass(frozen=True)
 class Read:
-    """A `READS` edge: the key, its declared type, the field after it (`tone` in
-    `triage_decision.tone`), and whether it is an interpolation rather than a `Read`."""
+    """A `READ_BY` edge (`(Data)-[:READ_BY]->(Step)`): the key, its declared type, the field
+    after it (`tone` in `triage_decision.tone`), and whether it is an interpolation rather than
+    a `Read`."""
     key: str
     type: str | None
     field: str | None = None
@@ -49,9 +50,12 @@ class Read:
 
 @dataclass(frozen=True)
 class Produce:
+    """A `PRODUCES` edge: the key, its type, its description, and for a `choice` or `score` key
+    produced by an `Execute`, a `Task_Agent` or `Start` its declared labels (spec 2.4)."""
     key: str
     type: str | None
     description: str | None = None
+    labels: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -286,10 +290,10 @@ class Procedure:
         p = dict(row["p"])
         loop = Loop(id, p["name"], p["kind"], p["mode"], p, p.get("item"), p.get("at_most"), p.get("times"), p.get("at_cap"),
                     p.get("collect_key"), p.get("collect_into"))
-        over = self._one("MATCH (l {bundle_id: $b, id: $id})-[o:OVER]->(k:Key) RETURN k.name AS name, o.field AS field", id=id)
+        over = self._one("MATCH (l {bundle_id: $b, id: $id})-[o:OVER]->(k:Data) RETURN k.name AS name, o.field AS field", id=id)
         if over is not None:
             loop.over = [over["name"], *(over["field"].split(".") if over.get("field") else [])]
-        watch = self._one("MATCH (l {bundle_id: $b, id: $id})-[w:WATCHES]->(k:Key) RETURN k.name AS name, properties(w) AS w", id=id)
+        watch = self._one("MATCH (l {bundle_id: $b, id: $id})-[w:WATCHES]->(k:Data) RETURN k.name AS name, properties(w) AS w", id=id)
         if watch is not None:
             w = watch["w"]
             loop.until = Until([watch["name"], *(w["field"].split(".") if w.get("field") else [])], w.get("operator"), w.get("value"),
@@ -309,12 +313,12 @@ class Procedure:
         props = dict(row["p"])
         step = Step(id, props["name"], props["kind"], props.get("description") or "", props)
         step.reads = [Read(r["name"], r.get("type"), r.get("field"), bool(r.get("interpolated")))
-                      for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[r:READS]->(k:Key) "
+                      for r in self._rows("MATCH (k:Data)-[r:READ_BY]->(s {bundle_id: $b, id: $id}) "
                                           "RETURN k.name AS name, k.type AS type, r.field AS field, r.interpolated AS interpolated, "
                                           "r.line AS line, r.column AS column ORDER BY r.line, r.column", id=id)]
-        step.produces = [Produce(r["name"], r.get("type"), r.get("description"))
-                         for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:PRODUCES]->(k:Key) "
-                                             "RETURN k.name AS name, k.type AS type, k.description AS description, "
+        step.produces = [Produce(r["name"], r.get("type"), r.get("description"), list(r["labels"]) if r.get("labels") else None)
+                         for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:PRODUCES]->(k:Data) "
+                                             "RETURN k.name AS name, k.type AS type, k.description AS description, k.labels AS labels, "
                                              "e.line AS line, e.column AS column ORDER BY e.line, e.column", id=id)]
         step.flows = [Flow(r["type"], r["to"], r["p"].get("value"), r["p"].get("below"), bool(r["p"].get("continues")))
                       for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:NEXT|CONTINUES|AGAIN|BRANCH|BELOW]->(t) "
@@ -347,23 +351,25 @@ class Procedure:
         return FileEntry.from_properties(row["f"]).data.decode("utf-8")
 
     def given_by_hand(self, name: str) -> bool:
-        """Whether every producer of a root key is an agent's hand when it carries no confidence:
-        a `Decide` (answered by the agent under `Agent_Fallback`) or a `Task_Agent`. A script's or
-        an input's answer is not, and a confidence check on it fires when the confidence is absent."""
+        """Whether every producer of a root key is a `Decide` or a `Task_Agent`. Since the
+        language lost `Agent_Fallback` (plan L4) a `Decide` is always a model's and a route's
+        check may not sit on a `Task_Agent`'s answer, so this is dead at any check; R4 removes
+        it with `reason: hand`."""
         if name not in self._by_hand:
-            kinds = [r["kind"] for r in self._rows("MATCH (s:Step {bundle_id: $b})-[:PRODUCES]->(:Key {name: $name}) "
+            kinds = [r["kind"] for r in self._rows("MATCH (s:Step {bundle_id: $b})-[:PRODUCES]->(:Data {name: $name}) "
                                                    "RETURN s.kind AS kind", name=name)]
             self._by_hand[name] = bool(kinds) and all(k in ("Decide", "Task_Agent") for k in kinds)
         return self._by_hand[name]
 
     def key_type(self, name: str) -> str | None:
-        row = self._one("MATCH (k:Key {bundle_id: $b, name: $name}) RETURN k.type AS type", name=name)
+        row = self._one("MATCH (k:Data {bundle_id: $b, name: $name}) RETURN k.type AS type", name=name)
         return row["type"] if row else None
 
     def labels_of(self, path: list[str]) -> list[str] | None:
-        """The labels of the answer a dotted path names (`triage_decision.tone` → the question's
-        labels), following a collected list to its per-pass key; None for a `true_or_false`, a
-        script's answer, or an unknown path."""
+        """The labels of the answer a dotted path names: a question's for `triage_decision.tone`,
+        the key's own for a `choice` or `score` an `Execute`, a `Task_Agent` or `Start` produced
+        under labels (`Produce tone: choice [angry, calm]`), following a collected list to its
+        per-pass key; None for a `true_or_false` or an unknown path."""
         key = tuple(path)
         if key not in self._labels:
             self._labels[key] = self._find_labels(list(path))
@@ -371,15 +377,18 @@ class Procedure:
 
     def _find_labels(self, path: list[str]) -> list[str] | None:
         root, rest = path[0], path[1:]
-        type = self.key_type(root)
+        row = self._one("MATCH (k:Data {bundle_id: $b, name: $name}) RETURN k.type AS type, k.labels AS labels", name=root)
+        type = row["type"] if row else None
         if type == "list":
-            row = self._one("MATCH (l:Loop {bundle_id: $b})-[:PRODUCES]->(:Key {name: $name}), (l)-[:COLLECTS]->(k:Key) "
+            row = self._one("MATCH (l:Loop {bundle_id: $b})-[:PRODUCES]->(:Data {name: $name}), (l)-[:COLLECTS]->(k:Data) "
                             "RETURN k.name AS name", name=root)
             return self._find_labels([row["name"], *rest]) if row else None
         if type == "decision" and rest:
-            row = self._one("MATCH (d:Decide {bundle_id: $b})-[:PRODUCES]->(:Key {name: $name}), (d)-[:ASKS]->(q:Question {name: $q}) "
+            row = self._one("MATCH (d:Decide {bundle_id: $b})-[:PRODUCES]->(:Data {name: $name}), (d)-[:ASKS]->(q:Question {name: $q}) "
                             "RETURN q.labels AS labels", name=root, q=rest[0])
             return list(row["labels"]) if row and row.get("labels") else None
+        if type in ("choice", "score") and not rest and row.get("labels"):
+            return list(row["labels"])
         return None
 
     def describe(self) -> JSON:

@@ -31,7 +31,6 @@ ALIASES: dict[str, tuple[str, ...]] = {
     # clauses
     "Read": ("Reads", "Input"),
     "Answer_Questions": ("Questions",),
-    "Agent_Fallback": ("Fallback",),
     "History": (),
     "Confidence_Below": (),
     "Confidence_Above": ("Confidence", "Conf"),

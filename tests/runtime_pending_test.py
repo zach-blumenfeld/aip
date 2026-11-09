@@ -37,7 +37,7 @@ class AipLanguageCommands(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             code = main(["fmt", "--check", *(str(example_dir(n)) for n in example_names())])
         self.assertIn(code, (0, 1), out.getvalue())
-        self.assertEqual(out.getvalue().count("\n"), 4)
+        self.assertEqual(out.getvalue().count("\n"), len(example_names()), "one line per example")
 
     def test_version_names_the_language(self):
         out = io.StringIO()
