@@ -1,0 +1,49 @@
+{
+  "name": "aip-console",
+  "version": "0.8.0",
+  "description": "The AIP console (formerly inspector): catalog, source, run console, history and governance for an AIP server, or local runs of a skill folder.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zach-blumenfeld/aip-console.git"
+  },
+  "homepage": "https://github.com/zach-blumenfeld/aip-console#readme",
+  "bugs": {
+    "url": "https://github.com/zach-blumenfeld/aip-console/issues"
+  },
+  "type": "module",
+  "bin": {
+    "aip-console": "bin/aip-console.mjs",
+    "aip-inspector": "bin/aip-console.mjs"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "start": "node bin/aip-console.mjs",
+    "typecheck": "tsc -b",
+    "e2e": "playwright test",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "fflate": "^0.8.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  }
+}

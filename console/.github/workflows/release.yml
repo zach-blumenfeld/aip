@@ -1,0 +1,228 @@
+name: Release to npm
+
+# Manual trigger from the Actions tab, after the release PR is merged. Reads the version from
+# package.json (and checks package-lock.json agrees), refuses if the tag exists, builds the
+# bundle, packs the tarball and checks it carries bin/ and dist/, pushes the tag, STAGES
+# `aip-console` on npm with provenance, and cuts a GitHub Release whose notes are the
+# `## [X.Y.Z]` section of CHANGELOG.md.
+#
+# Staged, not published: npm's staged publishing puts the version in a holding area that is not
+# installable until a maintainer approves it with 2FA, on npmjs.com (the package's "Staged
+# Packages" tab → Approve) or with `npm stage approve <stage-id>`. That approval is the last
+# step of a release and is always a person's. The stage job runs in the `release` GitHub
+# environment and authenticates with npm's trusted publishing (OIDC, `id-token: write`, no
+# token): the package page names this repository, `release.yml` and the `release` environment
+# as its trusted publisher, and `npm stage publish` is the one action a trusted publisher is
+# always allowed. The environment and the trusted publisher are set up by hand once (aip issue
+# #17, "Before starting").
+#
+# `target: dry-run` is the rehearsal for a new or changed workflow: same checks, same build,
+# same tarball, then `npm stage publish --dry-run` (nothing is uploaded), no tag is pushed and
+# no GitHub Release is created. It can be repeated at the same version.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "npm stages the version for your approval on npmjs.com. dry-run is the rehearsal: nothing uploaded, no tag, no GitHub Release."
+        type: choice
+        options: [npm, dry-run]
+        default: npm
+
+jobs:
+  build:
+    name: Check, build, pack, tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # push the tag
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      tarball: ${{ steps.v.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve the version from package.json
+        id: v
+        # package.json is the source of truth; package-lock.json repeats it, so the two must
+        # agree before anything is built (`npm version` keeps them together).
+        run: |
+          version=$(node -p "require('./package.json').version")
+          locked=$(node -p "require('./package-lock.json').version")
+          if [ "$version" != "$locked" ]; then
+            echo "::error::versions differ: package.json $version, package-lock.json $locked. Run 'npm version $version --no-git-tag-version' in the release PR."
+            exit 1
+          fi
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a SemVer version (X.Y.Z, with an optional -prerelease)"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "tarball=aip-console-$version.tgz"
+          } >> "$GITHUB_OUTPUT"
+          echo "version $version"
+
+      - name: Refuse to release a version that already has a tag
+        # Forces a version bump before re-running. Without this, a re-run after a successful
+        # tag-and-publish would try to double-publish. Runs for dry-run too: a rehearsal of a
+        # version that has shipped is a mistake.
+        run: |
+          if git ls-remote --tags origin "refs/tags/${{ steps.v.outputs.tag }}" | grep -q .; then
+            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump package.json before re-running."
+            exit 1
+          fi
+
+      - name: Install, build, pack
+        # Before tagging, so a build failure leaves the repo clean. `npm pack` runs the build
+        # again through `prepack`; that is what `npm publish` will do too, so it is checked here.
+        run: |
+          npm ci
+          npm run build
+          rm -f ./*.tgz
+          npm pack
+          test -f "${{ steps.v.outputs.tarball }}"
+
+      - name: Check the tarball carries the launcher and the bundle
+        # The package is `bin/aip-console.mjs` plus the built `dist/` it serves; a tarball
+        # without either installs but cannot run.
+        run: |
+          tar -tzf "${{ steps.v.outputs.tarball }}" | tee tarball.txt
+          for f in package/bin/aip-console.mjs package/dist/index.html; do
+            if ! grep -qx "$f" tarball.txt; then
+              echo "::error::$f is missing from ${{ steps.v.outputs.tarball }}"
+              exit 1
+            fi
+          done
+          if ! grep -q '^package/dist/assets/.*\.js$' tarball.txt; then
+            echo "::error::no dist/assets/*.js in ${{ steps.v.outputs.tarball }}"
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        # Pulls the section under `## [<version>] ...` up to (but not including) the next
+        # `## [...` heading. Empty file is fine; the GitHub Release just won't have a body.
+        run: |
+          awk -v ver="${{ steps.v.outputs.version }}" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          echo "----- release-notes.md -----"
+          cat release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::CHANGELOG.md has no '## [${{ steps.v.outputs.version }}]' section; the GitHub Release will have no notes."
+          fi
+
+      - name: Upload the tarball and the notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.v.outputs.version }}
+          path: |
+            ${{ steps.v.outputs.tarball }}
+            release-notes.md
+          if-no-files-found: error
+
+      - name: Create and push the tag
+        if: inputs.target == 'npm'
+        # Before the staging: a failure there leaves a tag with no release behind it, which is
+        # visible and recoverable (delete the tag, fix, re-run).
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.v.outputs.tag }}" -m "Release ${{ steps.v.outputs.tag }}"
+          git push origin "${{ steps.v.outputs.tag }}"
+
+  stage:
+    name: Stage aip-console on npm
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://www.npmjs.com/package/aip-console
+    permissions:
+      contents: read
+      id-token: write    # npm trusted publishing and the provenance attestation
+    outputs:
+      stage-id: ${{ steps.stage.outputs.stage-id }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # No registry-url: it would write an `_authToken=${NODE_AUTH_TOKEN}` line to .npmrc,
+          # and an empty token makes npm skip the OIDC exchange.
+
+      - name: Use an npm with staged publishing
+        # `npm stage` arrived in npm 11.15.0; the npm bundled with Node may be older.
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Stage (dry run)
+        if: inputs.target == 'dry-run'
+        # Prints what would be uploaded and uploads nothing. No OIDC exchange.
+        run: npm stage publish "${{ needs.build.outputs.tarball }}" --access public --dry-run
+
+      - name: Stage
+        id: stage
+        if: inputs.target == 'npm'
+        # npm exchanges the job's OIDC token with the registry (trusted publishing) and puts the
+        # version in the package's staging area. `--provenance` attaches the Sigstore attestation.
+        # The stage id is what `npm stage approve` takes; the Approve button on npmjs.com needs
+        # nothing.
+        run: |
+          npm stage publish "${{ needs.build.outputs.tarball }}" --access public --provenance --json | tee stage.json
+          id=$(node -p "JSON.parse(require('fs').readFileSync('stage.json','utf8')).stageId ?? ''")
+          echo "stage-id=$id" >> "$GITHUB_OUTPUT"
+          echo "staged ${{ needs.build.outputs.version }} with id ${id:-(none printed)}"
+
+      - name: How to approve
+        if: inputs.target == 'npm'
+        run: |
+          {
+            echo "## aip-console ${{ needs.build.outputs.version }} is staged on npm"
+            echo
+            echo "Nobody can install it until you approve it (2FA):"
+            echo
+            echo "- on npmjs.com: https://www.npmjs.com/package/aip-console → **Staged Packages** → **Approve**, or"
+            echo "- in a terminal: \`npm stage approve ${{ steps.stage.outputs.stage-id }}\`"
+            echo
+            echo "Then verify from a clean directory (needs an \`aip\` 0.7.0 or newer on the PATH):"
+            echo
+            echo '```'
+            echo "npx aip-console@${{ needs.build.outputs.version }} --help"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: GitHub Release
+    if: inputs.target == 'npm'
+    needs: [build, stage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create the GitHub Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+
+      - name: Create GitHub Release
+        # After the staging, so a staging failure doesn't leave behind a GitHub Release
+        # pointing at nothing on npm. The tag already exists; the action attaches to it. The
+        # version is installable once the maintainer approves it on npmjs.com.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: ${{ needs.build.outputs.tag }}
+          body_path: release-notes.md
+          files: ${{ needs.build.outputs.tarball }}
+          fail_on_unmatched_files: true
