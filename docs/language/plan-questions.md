@@ -219,7 +219,7 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     from two decisions) were handed to the step under one name, and one was lost without a
     word. It is a compile error, `ambiguous_read`, naming both reads and the fix: read the keys
     whole (`Read review, revise`) and name the field in the script or the template.
-40. **Decided in R5 (2026-11-09), where the plan left a choice.** (a) A pause is answered whole:
+41. **Decided in R5 (2026-11-09), where the plan left a choice.** (a) A pause is answered whole:
     a task left out refuses the answers (`missing_tasks`) as an extra one does (`invalid_tasks`),
     and nothing is applied. R2 had a missing index fail its pass, which is the
     failed-then-bare-resume dance the reports asked to be rid of. (b) The runtime's loop keys are
