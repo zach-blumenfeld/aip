@@ -124,7 +124,7 @@ def test_the_calm_arm_with_the_agent_deciding_from_a_folder(tmp_path):
     record = client.run_record(done.run_id)
     assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
     assert record.history[2]["check"] is None and (record.history[2]["value"], record.history[2]["to"]) == ("calm", "reply")
-    assert record.status == "done" and record.result == {"message": CALM}
+    assert record.status == "done" and record.result == {"message": CALM, "reply": "Sorry about that; the duplicate charge is refunded."}
 
 
 def test_a_decision_needs_a_model(tmp_path):
@@ -169,8 +169,8 @@ def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
     assert task.task.answer_with == {"reply": "string"}
     assert task.task.references == [{"path": "references/help.md", "description": mock.ANY}]
     done = client.resume(task.run_id, {"reply": REPLY})                       # by id, as `aip resume` does
-    assert isinstance(done, aip.Done) and done.result == {"message": CALM}
-    assert done.to_json() == {"done": True, "result": {"message": CALM}, "run_id": task.run_id, "run_file": str(task.run_file)}
+    assert isinstance(done, aip.Done) and done.result == {"message": CALM, "reply": REPLY}, "the reply path returns the reply, no ticket"
+    assert done.to_json() == {"done": True, "result": {"message": CALM, "reply": REPLY}, "run_id": task.run_id, "run_file": str(task.run_file)}
     record = client.run_record(done.run_id)
     assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
     assert record.history[1]["answered_by"] == {"model": "jev-1", "endpoint": "https://api.typesafe.ai"}
@@ -183,7 +183,7 @@ def test_the_angry_arm_runs_the_script_with_on_step_and_identity(tmp_path, monke
     lines = []
     client = aip.Client(decision_client=FakeTypeSafe(0.1), agent="tests")
     done = client.run(EXAMPLE, {"message": ANGRY}, workdir=tmp_path, on_step=lines.append, agent="my-agent 1.0")
-    assert isinstance(done, aip.Done) and done.result == {"message": ANGRY}
+    assert isinstance(done, aip.Done) and set(done.result) == {"message", "ticket_id", "queue"} and done.result["queue"] == "tier2"
     assert [(l["step"], l["kind"]) for l in lines] == [("start", "Start"), ("triage", "Decide"), ("by_tone", "Route"),
                                                        ("escalate", "Execute"), ("end", "End")]
     assert lines[2]["to"] == "escalate" and lines[1]["answered_by"]["model"] == "jev-1" and isinstance(lines[3]["seconds"], float)
@@ -290,7 +290,8 @@ def test_typed_errors(tmp_path):
 def test_describe_a_folder():
     d = local().describe(EXAMPLE)
     assert isinstance(d, aip.Description)
-    assert (d.name, d.inputs, d.result, d.revision) == ("billing_support", {"message": "string"}, {"message": "string"}, None)
+    assert (d.name, d.inputs, d.result, d.revision) == ("billing_support", {"message": "string"},
+                                                        {"message": "string", "ticket_id": "integer", "queue": "string", "reply": "string"}, None)
     assert [(s["name"], s["kind"]) for s in d.steps] == [("start", "Start"), ("triage", "Decide"), ("by_tone", "Route"),
                                                          ("escalate", "Execute"), ("reply", "Task_Agent"), ("end", "End")]
     assert d.example_inputs == {"message": "<string>"}
@@ -494,6 +495,7 @@ def test_the_docs_tool_example_runs(served, tmp_path, monkeypatch):
     paused = json.loads(namespace["run_procedure"]("billing_support_agent", {"message": CALM}))
     assert (paused["paused"], paused["step"]) == ("task", "triage")
     done = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "angry"}))
-    assert done["done"] is True and done["run_id"] == paused["run_id"] and done["result"] == {"message": CALM}
+    assert done["done"] is True and done["run_id"] == paused["run_id"]
+    assert (done["result"]["message"], done["result"]["queue"], set(done["result"])) == (CALM, "tier2", {"message", "ticket_id", "queue"})
     error = json.loads(namespace["run_procedure"]("billing_support_agent", {"msg": "wrong"}))
     assert (error["error"], error["resumable"]) == ("invalid_input", False)

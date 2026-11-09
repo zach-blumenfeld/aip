@@ -275,7 +275,8 @@ class CliJson(unittest.TestCase):
         (self.tmp / "ticket-service-up").touch()
         code, [done], _ = self.resume(None)                                      # the retry runs the step again
         self.assertEqual((code, done.get("done")), (0, True))
-        self.assertEqual(done["result"], {"message": ANGRY})
+        self.assertEqual((done["result"]["message"], done["result"]["queue"], set(done["result"])), (ANGRY, "tier2", {"message", "ticket_id", "queue"}),
+                         "the result is what the path produced: the ticket, and no reply")
         history = RunFile.load(self.run_file).run["history"]
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "escalate", "end"])
         self.assertEqual(history[3]["result"], {"ticket_id": 7, "queue": "tier2"})

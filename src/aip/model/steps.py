@@ -120,12 +120,9 @@ def labels_of(step: Step) -> dict[str, list[str]]:
 
 
 def expects(procedure: Procedure, step: Step) -> dict[str, str | None]:
-    """The next step's `Read` keys with their types, handed to a script as `expects`."""
-    flow = step.next
-    if flow is None or procedure.is_loop(flow.to):
-        return {}
-    following = procedure.step(flow.to)
-    return {r.name: (r.type or procedure.key_type(r.key)) if r.field is None else None for r in following.declared_reads}
+    """The step's own `Produce` keys with their types, handed to a script as `expects`: what its
+    stdout must hold (a hand-rolled script reads it instead of the procedure)."""
+    return {p.key: p.type or procedure.key_type(p.key) for p in step.produces}
 
 
 # ---------------------------------------------------------------- rendering
@@ -183,8 +180,15 @@ def start(step: Step, inputs: Any) -> JSON:
 
 
 def end(step: Step, state: JSON) -> JSON:
-    """The result: the `End` step's `Read` keys."""
-    return project(step, state)
+    """The result: the `End` step's `Read` keys that the path taken produced. A key named there
+    but produced only on another path is left out, so a run reports what it did."""
+    result: JSON = {}
+    for r in step.declared_reads:
+        try:
+            result[r.name] = lookup(state, r.path)
+        except KeyError:
+            continue
+    return result
 
 
 # ---------------------------------------------------------------- Decide
@@ -480,7 +484,7 @@ def run_script(step: str, script: str, argv: list[str], stdin: JSON, cwd: Path, 
 def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python: str | None, timeout: float | None,
             workdir: Path | None) -> tuple[JSON, JSON, float]:
     """Run the step's script from the unpacked bundle at `root`: stdin is `{"state": the Read
-    keys, "assets": the Use files by stem, "expects": the next step's Read keys}`, stdout the
+    keys, "assets": the Use files by stem, "expects": the step's own Produce keys with their types}`, stdout the
     `Produce` keys. Returns the checked outputs, the stdin sent, and the seconds taken."""
     script = step.file("RUNS")
     if script is None:

@@ -63,7 +63,7 @@ procedure means; this page says what running one entails.
   resolution.
 - `Execute`: the runtime checks the machine has what `Requires` names before the first
   `Execute` of a run, launches the script from the cache with one JSON object on stdin (the
-  `Read` keys as `state`, the `Use` assets by stem, the next step's `Read` keys as `expects`),
+  `Read` keys as `state`, the `Use` assets by stem, its own `Produce` keys with their types as `expects`),
   and takes the JSON object on stdout as the step's `Produce` keys. A non-zero exit fails the
   step. An answer-typed key among them is the bare value or an object with `value` and, when the
   script measured them, the `confidence` and `probabilities` a model's answer carries (spec 2.4);
@@ -90,7 +90,8 @@ index, or with the one object when there is one task; an answer that does not fi
 keys is refused, nothing is applied, and the pause stands; a task left unanswered fails its
 pass (and so the run), and a retry asks for it again. The step's record entry is written when
 the answer is accepted.
-- `End`: the state must hold the `Read` keys; they are the result.
+- `End`: the result is the `Read` keys the path taken produced; a key named there but produced
+  only on another path is left out, so a run reports what it did (a ticket, or a reply).
 
 ## Loops
 

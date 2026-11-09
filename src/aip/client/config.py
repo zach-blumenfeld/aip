@@ -6,7 +6,7 @@ batch size. The environment overrides each: `AIP_SERVER`, `AIP_TOKEN`, `AIP_DECI
 `AIP_DECISION_MODEL_KEY`, `AIP_BATCH`. The decision model is an endpoint with the TypeSafe API
 shape (plan question 7): the URL defaults to TypeSafe's and the key is the endpoint's; a model
 is configured when either is set, and with none every `Decide` fails the run
-(`no_decision_model`) until one is. No server means runs work and are not recorded. The identity
+(`no_decision_model`) until one is. With no server, runs work but are not recorded. The identity
 of a run (`agent`, `session`; runtime.md, The record) comes from `--agent` / `AIP_AGENT` and
 `--session` / `AIP_SESSION`; `user` is the server's to fill from the token.
 """

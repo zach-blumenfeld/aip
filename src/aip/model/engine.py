@@ -249,7 +249,8 @@ class Engine:
     def _step(self, run: Run, cursor: Cursor, step: Step) -> None:
         procedure = run.procedure
         state = cursor.state
-        steps.check_reads(procedure, step, state)
+        if step.kind != "End":                 # End takes what the path produced (steps.end)
+            steps.check_reads(procedure, step, state)
         match step.kind:
             case "End":
                 result = steps.end(step, state)

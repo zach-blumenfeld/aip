@@ -107,7 +107,8 @@ class BillingSupport(EngineCase):
 
         run = engine.resume(run, {"reply": "Sorry about that. The policy allows a refund within 30 days."})
         self.assertEqual((run.status, run.error), (DONE, None))
-        self.assertEqual(run.result, {"message": self.message}, "End reads message only")
+        self.assertEqual(run.result, {"message": self.message, "reply": "Sorry about that. The policy allows a refund within 30 days."},
+                         "End names the ticket keys too, but this path produced the reply")
         self.assertEqual(self.steps_of(run), ["start", "triage", "by_tone", "reply", "end"])
         reply = run.history[3]
         self.assertEqual(reply["result"], {"reply": "Sorry about that. The policy allows a refund within 30 days."})
@@ -125,7 +126,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(escalate["stdin"]["state"], {"message": self.message, "tone": run.state["triage_decision"]["tone"]},
                          "Read triage_decision.tone gives the script the one answer as tone")
         self.assertEqual(json.loads(escalate["stdin"]["assets"]["config"]), {"queue": "tier2", "sla_hours": 4})
-        self.assertEqual(escalate["stdin"]["expects"], {"message": "string"}, "the next step's Read keys")
+        self.assertEqual(escalate["stdin"]["expects"], {"ticket_id": "integer", "queue": "string"}, "the step's own Produce keys")
         self.assertEqual(escalate["result"]["queue"], "tier2")
         self.assertIsInstance(escalate["result"]["ticket_id"], int)
         self.assertIsInstance(escalate["seconds"], float)
@@ -474,7 +475,7 @@ import json, sys
 p = json.load(sys.stdin)
 n = p["state"]["n"]
 limits = json.loads(p["assets"]["limits"])
-assert p["expects"] == {"even": "true_or_false"}, p["expects"]
+assert p["expects"] == {"even": "true_or_false", "size": "choice"}, p["expects"]   # the step's own Produce keys
 assert "AIP_WORKDIR" in __import__("os").environ
 print(json.dumps({"even": n % 2 == 0, "size": {"value": "small" if n < limits["big"] else "large"}}))
 '''

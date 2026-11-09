@@ -417,7 +417,7 @@ def config_command(argv: list[str]) -> int:
     if writes:
         print(f"{'cleared' if args.clear else 'wrote'} {s.path}")
     if s.server is None:
-        print(f"server: none (runs work and are not recorded; {CONFIGURE_HINT})")
+        print(f"server: none (runs are not recorded; {CONFIGURE_HINT})")
     else:
         print(f"server: {s.server}  (from {s.source})")
         print(f"token:  {'set' if s.token_set else 'none'}")

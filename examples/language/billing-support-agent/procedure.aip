@@ -69,5 +69,5 @@ Task_Agent With reply "Draft a calm reply grounded in the refund policy." {
 }
 
 End "The original message plus either a ticket or a drafted reply." {
-  Read message
+  Read message, ticket_id, queue, reply
 }

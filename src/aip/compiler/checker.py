@@ -704,9 +704,12 @@ class Checker:
         if st.kind == "Route":
             self.check_route(st, m_in, name)
             return must, may, set()
-        self.check_reads(st, m_in, name)
         if st.kind == "End":
+            # The result is what the run produced: End may name a key only some paths produce, and
+            # the result carries the ones the path taken did (it must still be produced somewhere).
+            self.check_reads(st, y_in, name)
             return must, may, set()
+        self.check_reads(st, m_in, name)
         if st.kind == "Decide":
             for q in st.questions:
                 self.check_text(q.instruction, m_in, name)

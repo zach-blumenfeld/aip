@@ -225,14 +225,15 @@ below); a task left unanswered fails its pass and the run, and a retry asks for 
 {
   "done": true,
   "result": {
-    "message": "I was charged twice for March. Could you check?"
+    "message": "I was charged twice for March. Could you check?",
+    "reply": "Thanks for flagging this; duplicate charges are refunded in full within 5 business days."
   },
   "run_id": "4f1c9a2e7b3d5068",
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
-`result` is the `End` step's `Read` keys. What every step read and produced along the way is
+`result` is the `End` step's `Read` keys that the path produced: here the reply, and on the angry path the ticket and its queue instead. What every step read and produced along the way is
 the run's record: the run file's `run.history` (`aip runs <run_id>` prints the run), one entry
 per step run with `step`, `kind`, `pass`, `passes`, `at`, `input` and `result`; a decision's
 `answered_by` (`{"model": "jev-1", "endpoint": "https://api.typesafe.ai"}`, the model the reply
@@ -373,7 +374,7 @@ no step paused, so one `run` printed the whole record and the final object.
 {"event": "step", "step": "by_tone", "kind": "Route", "pass": null, "passes": [], "to": "escalate"}
 {"event": "step", "step": "escalate", "kind": "Execute", "pass": null, "passes": [], "seconds": "<seconds>"}
 {"event": "step", "step": "end", "kind": "End", "pass": null, "passes": []}
-{"done": true, "result": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel."}, "run_id": "4f1c9a2e7b3d5068", "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
+{"done": true, "result": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel.", "ticket_id": 35566, "queue": "tier2"}, "run_id": "4f1c9a2e7b3d5068", "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
 ```
 
 ## `--version`

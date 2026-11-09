@@ -121,7 +121,7 @@ class BillingSupport(unittest.TestCase):
 
     def test_end(self):
         end = self.p.step("end")
-        self.assertEqual([r.key.dotted for r in end.reads], ["message"])
+        self.assertEqual([r.key.dotted for r in end.reads], ["message", "ticket_id", "queue", "reply"])
         self.assertIsNone(end.flow)
 
     def test_positions(self):

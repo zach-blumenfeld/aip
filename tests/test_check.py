@@ -199,9 +199,10 @@ class StateRules(unittest.TestCase):
         body = ('Start "s" { m: string  Next_Step l }\nLoop l Until dec.q, At_Most 3 {\n'
                 '  Decide d "d" { Read m  Answer_Questions { q: noul "?" }  Produce dec  Next_Step r }\n'
                 '  Route r "r" { Read dec.q  true -> Continue  false -> t }\n'
-                '  Task_Agent t "t" { Read m  Produce extra: string  Continue }\n  Next_Step end\n}\nEnd "e" { Read dec, extra }\n')
+                '  Task_Agent t "t" { Read m  Produce extra: string  Continue }\n  Next_Step u\n}\n'
+                'Task_Agent u "u" { Read dec, extra  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
         [d] = diagnostics(body)
-        self.assertEqual((d.code, d.step), ("unavailable_key", "end"))
+        self.assertEqual((d.code, d.step), ("unavailable_key", "u"))
         self.assertIn("extra", d.message)
         self.assertEqual(codes(body.replace("Read dec, extra", "Read dec")), [])
 
@@ -325,6 +326,15 @@ class Conditions(unittest.TestCase):
         sources = {}
         self.assertEqual([d.code for d in check(parse(PREFIX + body), sources=sources)], [])
         self.assertEqual(sources, {"r": "scripted", "r2": "agent", "r3": "aggregated", "r4": "input"})
+
+    def test_end_may_name_what_only_some_paths_produce(self):
+        body = ('Start "s" { m: string  Next_Step d }\nDecide d "d" { Read m  Answer_Questions { q: noul "?" }  Produce dec  Next_Step r }\n'
+                'Route r "r" { Read dec.q  true -> a  false -> b }\n'
+                'Task_Agent a "a" { Read m  Produce ticket: string  Next_Step end }\nTask_Agent b "b" { Read m  Produce reply: string  Next_Step end }\n')
+        self.assertEqual(codes(body + 'End "e" { Read m, ticket, reply }\n'), [], "End takes what the path produced")
+        other = body.replace("Produce reply: string  Next_Step end", "Produce reply: string  Next_Step c") + 'Task_Agent c "c" { Read ticket  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n'
+        self.assertEqual(codes(other), ["unavailable_key"], "any other step still needs the key on every path")
+        self.assertEqual(codes(body + 'End "e" { Read m, nothing }\n'), ["unknown_key"], "but it must be produced somewhere")
 
     def test_aggregation_sources(self):
         loop = ('Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 5, Collect verdict Into verdicts {\n'
