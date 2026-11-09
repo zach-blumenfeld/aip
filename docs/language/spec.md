@@ -145,7 +145,7 @@ A keyword is recognised by its position, not reserved: a word that opens a step,
 
 **Strings.** A double-quoted string may span lines; `\"`, `\\`, `\n` and `\t` are its escapes. A triple-quoted string (`"""..."""`) may also span lines and has no escapes: what is written is what it says. In either, `{key}` or `{decision.question}` is an interpolation (section 2.1, "Questions composed from data"); any other brace is a brace.
 
-**Header.** `Procedure <name> "<description>"`, then the lines that say when the procedure applies: `Use_When`, `Do_Not_Use_When`, `Requires`, `Avoid` (section 6). Each of `Use_When`, `Do_Not_Use_When` and `Avoid` takes one or more strings, on the keyword's line or one per line below it, and may be repeated; `Requires` takes an interpreter and a version (`Requires python 3.10`). The header ends where the first named string, step or loop begins. The start step is written out like any other, so a reader sees the inputs where the procedure begins.
+**Header.** `Procedure <name> "<description>"`, then the lines that say when the procedure applies: `Use_When`, `Do_Not_Use_When`, `Requires`, `Avoid` (section 6). Each of `Use_When`, `Do_Not_Use_When` and `Avoid` takes one or more strings, on the keyword's line or one per line below it, and may be repeated; `Requires` takes an interpreter and a version (`Requires python 3.10`). The header ends where the first step, loop or named string below it begins. Named strings (`<name> = "..."`) may also sit above the header, as the first lines of the file, where a reader meets the texts before the structure; the formatter keeps each one where it was written. The start step is written out like any other, so a reader sees the inputs where the procedure begins.
 
 **Names for long strings.** `<name> = "..."` at top level, anywhere in the file, gives a string a name; a step then uses the name where it would have written the string. Strings may span lines in triple quotes. A name holds a string and nothing else: no concatenation, no reference to another name, no use as a key. Unused names are an `info`.
 
@@ -362,12 +362,12 @@ The canonical spelling is Title_Case with an underscore between words. The compi
 
 | Keyword | Meaning | Aliases |
 |---|---|---|
-| `Procedure <name> "<description>"` | Opens the file; one per file | |
+| `Procedure <name> "<description>"` | The header; one per file; only named strings may come before it | |
 | `Use_When "..."` | A situation the procedure is for (one string per line) | `Trigger_When` |
 | `Do_Not_Use_When "..."` | A situation it is not for | |
 | `Requires <interpreter> <version>` | What an `Execute` step needs on the machine | |
 | `Avoid "..."` | An anti-pattern for the agent | `Anti_Pattern` |
-| `<name> = "..."` | Names a string for use anywhere a string is expected (2.1) | |
+| `<name> = "..."` | Names a string for use anywhere a string is expected (2.1); may appear above the header or anywhere between steps | |
 
 ### Step kinds
 

@@ -8,7 +8,7 @@ PREFIX = 'Procedure p "x"\n'  # line 1 of every case below
 
 # (name, source after the Procedure line, line, column, a fragment of the message)
 CASES = [
-    ("no procedure", 'Start "s" { Next_Step end }\n', 1, 1, "expected 'Procedure <name>' to open the file"),
+    ("no procedure", 'Start "s" { Next_Step end }\n', 1, 1, "expected 'Procedure <name>' to open the file (only named strings may come before it)"),
     ("procedure name", 'Procedure "x"\n', 1, 11, "the procedure's name"),
     ("procedure description", "Procedure p\nStart \"s\" {}\n", 2, 1, "the procedure's description, a string"),
     ("header string", 'Use_When\nStart "s" {}\n', 3, 1, "expected a string after 'Use_When', got 'Start'"),
@@ -106,7 +106,7 @@ class SyntaxErrors(unittest.TestCase):
     def test_without_a_file_the_message_starts_with_the_position(self):
         with self.assertRaises(ParseError) as caught:
             parse("")
-        self.assertEqual(str(caught.exception), "1:1: expected 'Procedure <name>' to open the file, got the end of the file")
+        self.assertEqual(str(caught.exception), "1:1: expected 'Procedure <name>' to open the file (only named strings may come before it), got the end of the file")
 
 
 if __name__ == "__main__":

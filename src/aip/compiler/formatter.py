@@ -101,6 +101,10 @@ class Writer:
     # ------------------------------------------------------------ the program
 
     def program(self, p: s.Program) -> list[str]:
+        above = [i for i in p.items if isinstance(i, s.NamedString) and i.before_header]
+        if above:
+            self.named_strings(above)
+            self.blank()
         self.comments(p.leading, 0)
         self.line(f"Procedure {p.name}", 0, _Trailing(p.trailing))
         self.line(_str(p.description), 1, p.description)
@@ -109,19 +113,18 @@ class Writer:
             for clause in p.header:
                 self.header_clause(clause)
         # Consecutive named strings stay together, their `=` aligned; everything else gets a blank line.
+        items = [i for i in p.items if not (isinstance(i, s.NamedString) and i.before_header)]
         n = 0
-        while n < len(p.items):
+        while n < len(items):
             self.blank()
-            if isinstance(p.items[n], s.NamedString):
+            if isinstance(items[n], s.NamedString):
                 run = []
-                while n < len(p.items) and isinstance(p.items[n], s.NamedString):
-                    run.append(p.items[n])
+                while n < len(items) and isinstance(items[n], s.NamedString):
+                    run.append(items[n])
                     n += 1
-                width = max(len(ns.name) for ns in run)
-                for ns in run:
-                    self.line(f"{ns.name.ljust(width)} = {ns.text.literal()}", 0, ns)
+                self.named_strings(run)
             else:
-                self.item(p.items[n], 0)
+                self.item(items[n], 0)
                 n += 1
         if p.end_comments:
             self.blank()
@@ -129,6 +132,11 @@ class Writer:
         while self.lines and self.lines[-1] == "":
             self.lines.pop()
         return self.lines
+
+    def named_strings(self, run: list[s.NamedString]) -> None:
+        width = max(len(ns.name) for ns in run)
+        for ns in run:
+            self.line(f"{ns.name.ljust(width)} = {ns.text.literal()}", 0, ns)
 
     def header_clause(self, clause) -> None:
         if isinstance(clause, s.Requires):

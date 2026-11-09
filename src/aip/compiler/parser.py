@@ -247,13 +247,19 @@ class Parser:
     # ------------------------------------------------------------ the program
 
     def program(self) -> s.Program:
+        # Named strings may open the file, above the header, where a reader sees the texts first.
+        prologue: list[s.NamedString] = []
+        while self.is_word() and self.kw() is None and self.is_punct("=", 1):
+            ns = self.named_string()
+            ns.before_header = True
+            prologue.append(ns)
         leading = self.take()
         start = self.peek()
         if self.kw() != "Procedure":
-            raise self.error("'Procedure <name>' to open the file")
+            raise self.error("'Procedure <name>' to open the file (only named strings may come before it)")
         self.next()
         name = self.ident("the procedure's name (lowercase letters, digits and underscores)")
-        program = s.Program(name, None, [], [])  # type: ignore[arg-type]  # the description follows
+        program = s.Program(name, None, [], prologue)  # type: ignore[arg-type]  # the description follows
         program.leading = leading
         self.trailing_target = program
         lead = self.take()

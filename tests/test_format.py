@@ -93,6 +93,20 @@ class Canonical(unittest.TestCase):
         text = format_source('Procedure p "x"\nExecute e "x" {\nRead m\nRun_Script s.py\nProduce a: string "A", b: integer\nNext_Step end\n}\n')
         self.assertIn('  Produce a: string "A"\n          b: integer\n', text)
 
+    def test_named_strings_may_open_the_file_and_stay_there(self):
+        above = ('q = "Is it about a charge?"\nlonger_name = "Angry means threats or demands."\n\n'
+                 '# the procedure\nProcedure p\n  "x"\n\nStart "s" {\n  m: string\n  Next_Step d\n}\n\n'
+                 'Decide d "d" {\n  Read m\n  Answer_Questions {\n    billing: true_or_false q\n    tone: choice [angry, calm] longer_name\n  }\n'
+                 '  Produce dec\n  Next_Step end\n}\n\nEnd "e" {\n  Read dec\n}\n')
+        program = parse(above)
+        self.assertEqual(sorted(program.named_strings), ["longer_name", "q"])
+        self.assertTrue(all(ns.before_header for ns in program.named_strings.values()))
+        formatted = format_program(program)
+        self.assertTrue(formatted.startswith('q           = "Is it about a charge?"\nlonger_name = "Angry means threats or demands."\n\n# the procedure\nProcedure p'), formatted)
+        self.assertEqual(format_program(parse(formatted)), formatted)
+        below = parse(formatted.split("\n\n", 1)[1] + "\n" + formatted.split("\n\n", 1)[0] + "\n")
+        self.assertFalse(any(ns.before_header for ns in below.named_strings.values()), "below the header they stay below")
+
     def test_a_labelled_produce_round_trips(self):
         source = ('Procedure p "x"\nTask t "x" {\nRead m\nProduce tone: choice [angry,calm] "T", level: score [low, high]\nNext_Step end\n}\n'
                   'Start "s" { kind: choice [a, b] "K"  Next_Step t }\n')

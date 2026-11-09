@@ -350,6 +350,7 @@ class Requires(Node):
 class NamedString(Node):
     name: str
     text: Text
+    before_header: bool = False   # written above the `Procedure` line; the formatter keeps it there
 
 
 Item = NamedString | Step | ForLoop | Loop
