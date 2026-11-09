@@ -1,71 +1,91 @@
 # aip-console
 
-The console (formerly inspector) for [AIP](https://github.com/zach-blumenfeld/aip): catalog, source and
-revision diff, run console, history and governance. It is an npm package with its own small Node process;
-the aip server serves no UI.
+The console (formerly inspector) for [AIP](https://github.com/zach-blumenfeld/aip): the catalog, each
+procedure as a card canvas with its source, the run console, history and the audit queries. It is an
+npm package with its own small Node process; the aip server serves no UI.
 
 ```
-npx aip-console --server http://localhost:8000      # or: npx aip-console ./some-skill-folder
+npx aip-console                                     # the server `aip config` names (`local` included)
+npx aip-console --server http://localhost:8000      # or a server by its address
+npx aip-console ./some-procedure-folder             # or one folder, with no server
 ```
 
 The package installs two commands, `aip-console` and `aip-inspector`, which are the same. The process
 serves the page on `http://localhost:4280/` (`--port`), and:
 
-- **the page calls the server directly** for catalog, history and governance: nothing is proxied. The aip
-  server answers CORS for loopback origins, where the console runs (`aip server --allow-origin` adds others).
+- **the page calls the server directly** for the catalog, the runs and the audit queries: nothing is
+  proxied. The aip server answers CORS for loopback origins, where the console runs (`aip server
+  --allow-origin` adds others). When the server is the one `aip config server local` names, which `aip`
+  starts on demand and stops when idle, the console wakes it when the page finds nothing answering.
 - **runs go through the `aip` CLI on this machine.** Starting a run spawns `aip run <name> --progress`;
-  answering a pause, or retrying a failed step, spawns `aip resume <run-id> --progress`. Each JSON line the
-  CLI prints (aip's `docs/cli-json.md`: one per completed step, then the pause, done or error object) is
-  relayed to the page as it arrives, over a server-sent event stream. Cancel kills the CLI and the
-  scripts it started. So scripts run here, next to the data: their files land in the working directory
-  (`--workdir`, default the current one), and decisions are resolved by this machine's decision model
-  (`aip config --decision-model`), or answered on the page when there is none. The CLI itself is started
-  from an empty directory and given the working directory as `--workdir`, so a folder in the working
-  directory named like a published skill (`./billing-support`) does not turn a served run into a local one.
+  answering a pause, or retrying a failed step, spawns `aip resume <run-id> --progress`. Each JSON line
+  the CLI prints (aip's `docs/cli-json.md`: one per history entry, then the paused, done or error
+  object) is relayed to the page as it arrives, over a server-sent event stream. Cancel kills the CLI
+  and the scripts it started. So scripts run here, next to the data: their files land in the working
+  directory (`--workdir`, default the current one); a `Decide` is answered by the decision model this
+  machine's `aip config` names; and the CLI records the run on the server itself, as agent `console`
+  in the browser tab's session. The CLI is started from an empty directory and given the working
+  directory as `--workdir`, so a folder there named like a published procedure does not turn a
+  catalog run into a folder's.
 
-Without `--server`, the console uses the server `aip config` names. With a skill folder instead, runs are
-local (`aip run ./folder`) and the catalog, history and governance pages are hidden.
+With a program directory (one holding `procedure.aip`) instead of a server, the console shows that
+folder's procedure, compiled by the CLI each time the page opens, runs it locally and unrecorded, and
+lists this machine's runs of it; the catalog, source and audit pages are hidden.
 
 At startup the console runs `aip --version` and refuses to start if `aip` is missing or older than
-`0.8.0` (`uv tool install agent-instruction-protocol`, or the aip repo's installer): the console reads and edits
-format 0.8, whose `start` step, decision `confidence` and `fallback`, router confidence check and `no_decision_model`
-stop date from that release. `--aip PATH` (or `AIP_BIN`) picks another `aip` than the one on the PATH.
+`0.9.0` (`uv tool install 'agent-instruction-protocol[server]'`, or the aip repo's installer): it
+reads bundles, pauses that carry tasks and the 0.9 run record, which date from that release. `--aip
+PATH` (or `AIP_BIN`) picks another `aip` than the one on the PATH.
 
 The console's process answers only pages on this machine: it listens on 127.0.0.1, refuses a foreign
 `Host` (DNS rebinding) and any post that is not same-origin JSON, since a post starts a run.
 
-Routes are hash-based: `#/` catalog (with what each name's scripts require, and a place to publish a skill zip:
-a folder with `SKILL.md`, zipped, is unpacked in the page and posted to the server, which validates it and names
-the skill from the frontmatter, so an existing name gets a new revision and the same bytes land on the revision
-already there; the validator's issues are listed when it is refused), `#/p/<name>[@rev]` procedure
-(its `requires`, each step's inputs and outputs, the graph as control flow, as key-level data flow, or as run
-traffic, where every recorded run of the revision is read and each edge thickens with the runs that took it, each
-step wears the runs that reached it and how many failed there, and a table below ranks the steps by reach; the
-graph draws top-down or, with `left to right` ticked, across the page, a choice the browser remembers for the run page
-too; pin
-and retire, and `download zip`: the revision as `<name>@<rev>.zip` with one `<name>/` folder inside, the Agent Skills
-layout, packed in the page from the manifest and the files),
-`#/p/<ref>/files[/<path>]` source manifest and viewer (with the same download), `#/p/<name>/diff[/<a>..<b>]` the diff between two
-revisions (manifest by hash, line diff for changed text files, both computed client-side),
-`#/run[/<ref>]` the run console, `#/runs[/<id>]` history (each step's declared state in and out, the
-machine that ran it, each decision's resolver and the confidence its model recorded, and whether a router's
-confidence check fired and why), `#/governance` the corpus queries of
-`GET /governance` as lists (with the runs each fired check sent elsewhere for `confidence-fired`, the source class
-of each flagged router for `unmeasured-routes`, the model/by-hand split of `manual-decisions` and the stderr clients
-reported for `failing-scripts`), plus a form to keep a query of your own on the server, which a Neo4j-backed
-server stores and runs read-only and lists beside the built-ins, and `#/server` (the console's server, and a
-bearer token for this tab).
+## Pages
 
-## Studio
+Routes are hash-based.
 
-`#/studio` builds a procedure in the browser: steps, edges, typed inputs and outputs, with lint on every edit.
-It exports a skill zip with a placeholder for each script and template. **Complete with an agent** writes the
-scaffold to `<workdir>/studio/<name>/` and gives you one prompt to paste into your coding agent. The Studio watches
-the folder, validates the agent's work with `aip-spec` (on the PATH, or `--aip-spec PATH`), checks it against your
-design, runs its scripts, and only then lets you accept it.
+- `#/` **catalog**: the published names with the revision each runs as, search by what a procedure
+  does, and a toggle that lists the *drafts* apart (bundles the server holds with no revision, because
+  a run of a folder or an `.rl` file was recorded against them).
+- `#/p/<name>[@rev]` **procedure**: the **card canvas**, then what `aip info` says (when to use it,
+  inputs, result, what its scripts require), and the name's revisions with pin and retire. A draft
+  opens as `#/p/bundle:<bundle id>`.
+- `#/p/<ref>/files[/<path>]` **source**: `procedure.aip` as it was stored, in the colours of the
+  grammar the VS Code extension ships, and the bundle's files. `#/p/<name>/diff[/<a>..<b>]` compares
+  two revisions file by file, with a line diff for each changed text file.
+- `#/run[/<ref>]` **run console**: a field per input, the steps as the CLI reports them, the run's
+  record as it stands at each stop, and a form per pause. A pause may carry several tasks at once
+  (the passes of a `For` batch waiting at one step): they are shown together and answered together.
+- `#/runs` **history**, filtered by procedure, status, agent, session, user, and draft or published
+  (the address carries the filters); `#/runs/<id>` is **one run's record**.
+- `#/audit` the server's **audit queries** as lists, with their parameters as filters and a form to
+  keep a query of your own.
+- `#/server` the console's server, and a bearer token for this tab.
 
-- [Tutorial](examples/studio/README.md): an example design taken to a finished skill, agent step included.
-- [Reference](docs/studio.md): every Studio feature.
+### The card canvas
+
+One card per step: its kind as a badge, its description as the title, what it reads and produces
+(off the graph's `READ_BY` and `PRODUCES` edges), a decision's questions, an aggregate's
+aggregations, a script or a prompt file, and one port per way out, each quoting the description of
+the step it leads to. A route has a port per label and one for its `Confidence_Below` check, and
+says whose answer steers it (a model's, a script's, an agent's). Loops are frames around the cards
+of their body, with the loop's header and its own way out. Drag to pan, wheel or buttons to zoom,
+`fit` to see it whole; click a card to read the lines of `procedure.aip` that wrote it, click a port
+to go where it leads. It is drawn from the bundle's own graph: `GET /catalog/{ref}/graph` on the
+server, or `aip compile --json` through the launcher for a folder. The component (`src/canvas/`)
+keeps no console state, so the VS Code extension's preview can draw the same picture.
+
+### A run's record
+
+The record is the run's history as the runtime wrote it; the page answers what the raw JSON leaves a
+reader to work out. Every step says how long it took, and the run where its time went (its steps,
+the model, waiting on agents). A decision says which model answered and how sure it was of each
+answer; a task says which agent and session answered it and after how long; a route says what it
+read, where it went, and whether its confidence check fired and on what numbers; an aggregate says
+how each answer counted and which the confidence bar turned. The passes of a loop are nested under
+the loop, each with the test that let it run, and the loop says why it ended (its condition held,
+its items ran out, it hit its cap). A run of a draft wears a `draft` badge, in the list and on its
+page.
 
 ## Developing
 
@@ -79,31 +99,39 @@ For hot reload, keep that process running and start Vite beside it: `npm run dev
 `http://localhost:5173/` and proxies `/console` to the console's process (`CONSOLE`, default
 `http://localhost:4280`).
 
-To start a server, from a clone of the aip repo:
+To have a server with something in it, from the repository root (one level up):
 
 ```
-uv run aip server --backend filesystem --root /tmp/aip-root --port 8000
-AIP_SERVER=http://localhost:8000 uv run aip publish "$(uv run aip-spec example billing-support --out /tmp)"
+uv run aip server --port 8000
+AIP_SERVER=http://localhost:8000 uv run aip publish examples/language/billing-support-agent
 ```
 
 ## Tests
 
-`npm run e2e` needs the sibling aip repo (`AIP_REPO`, default `../aip`) and `uv`. Before anything starts,
-`e2e/prepare.mjs` writes a fresh `.aip-e2e/`: an `aip` on the consoles' PATH that runs the aip repo's CLI,
-and two revisions of aip-spec's `billing-support` whose escalate script files its ticket under the run's
-working directory (and fails, or stalls, when the message asks it to). Then the bundle is built and three
-processes start: a filesystem-backed `aip server`, the console against it, and the console on the first
-revision's folder. Global setup publishes both revisions. The CLI runs with its own `AIP_HOME`, no
-`AIP_CONFIG` and no `TYPESAFE_API_KEY`, so nothing on your machine changes what the specs see, and every
-decision pauses for the page to answer.
+`npm test` runs node's test runner over the modules that need no browser: the grammar tokenizer on
+the example programs, the canvas's model and layout on graphs the compiler printed, a run's history
+nested under its loops on records the server kept, the forms' typing, the launcher's reading of what
+`aip` prints. Node 22.18 or newer (it runs the TypeScript as it is).
 
-The `console` project drives both branches from the run page (the escalate script's ticket must land in the
-console's working directory), a failing script and its retry, cancel, history with attribution, governance, skill
-zips (a download matches the manifest byte for byte, an upload under its own name makes a revision, the same zip
-lands on it again, a downloaded zip uploads back onto its revision, and a broken one lists the validator's issues),
-the 0.6a0 views over fixture runs posted to the run API (a model-answered decision, a script reported from
-another machine, a failed script), and the launcher itself (an old `aip` on the PATH, `aip config`, the loopback guards). The `folder` project
-runs the same skill from the folder console with no server.
+`npm run e2e` drives the real thing and needs this repository's `aip` (`AIP_REPO`, default `..`)
+with Relate installed (`../scripts/install-relate.sh`), and `uv`. Before anything starts,
+`e2e/prepare.mjs` writes a fresh `.aip-e2e/`: an `aip` on the consoles' PATH that runs the
+checkout's CLI, and procedures copied from `../examples/language` (two revisions of
+`billing-support-agent` whose escalate script files its ticket under the run's working directory and
+fails, or stalls, when the message asks it to; the loop examples as shipped). Then the bundle is
+built and four processes start: `e2e/model.mjs`, a decision model with the TypeSafe API shape that
+answers from marks in the text it is given (`[angry]` picks a label, `[unsure]` lowers the
+confidence, `[break:WORD]` fails the questions that mention WORD); an `aip server` on a Relate store
+under `.aip-e2e/`; the console against it; and the console on the first revision's folder. Global
+setup publishes the procedures. The CLI runs with its own `AIP_HOME` and no `AIP_CONFIG`, so nothing
+on your machine changes what the specs see.
 
-First time: `npx playwright install chromium`, or skip the download and drive an installed Google Chrome
-with `PLAYWRIGHT_CHANNEL=chrome npm run e2e`.
+The `console` project covers the canvas (cards, ports, frames, the source slice, pan and zoom), the
+source view and the diff, the run page (an agent that decides, a model that decides and a check that
+fires, a failing script and its retry, a loop, a loop at its cap, several tasks at once), history
+with its filters and the record of a run, drafts, the audit queries, and the launcher itself (an old
+`aip` on the PATH, `aip config`, the loopback guards). The `folder` project runs a folder with no
+server.
+
+First time: `npx playwright install chromium`, or skip the download and drive an installed Google
+Chrome with `PLAYWRIGHT_CHANNEL=chrome npm run e2e`.

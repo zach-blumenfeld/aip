@@ -1,12 +1,11 @@
 import { Catalog } from "./views/Catalog";
-import { Procedure } from "./views/Procedure";
+import { FolderProcedure, Procedure } from "./views/Procedure";
 import { Source } from "./views/Source";
 import { Diff } from "./views/Diff";
 import { Run } from "./views/Run";
 import { RunPage, Runs } from "./views/History";
-import { Governance } from "./views/Governance";
+import { Audit } from "./views/Audit";
 import { Server } from "./views/Server";
-import { Studio } from "./views/Studio";
 import { consoleConfig, isFolderMode } from "./api/console";
 import { href, useRoute, type Route } from "./router";
 
@@ -16,13 +15,12 @@ export function App() {
   return (
     <>
       <header>
-        <a href={href(folder ? { page: "run" } : { page: "catalog" })}><strong>aip console</strong></a>
+        <a href={href({ page: "catalog" })}><strong>aip console</strong></a>
         <nav className="top-nav">
-          {!folder && <a href={href({ page: "catalog" })}>catalog</a>}
+          <a href={href({ page: "catalog" })}>{folder ? "procedure" : "catalog"}</a>
           <a href={href({ page: "run" })}>run</a>
-          {!folder && <a href={href({ page: "runs" })}>history</a>}
-          {!folder && <a href={href({ page: "governance" })}>governance</a>}
-          <a href={href({ page: "studio" })}>studio</a>
+          <a href={href({ page: "runs" })}>history</a>
+          {!folder && <a href={href({ page: "audit" })}>audit</a>}
         </nav>
         {folder ? <span className="muted server-link" data-testid="console-target">folder {consoleConfig().folder}</span>
                 : <a className="muted server-link" data-testid="console-target" href={href({ page: "server" })}>{consoleConfig().server}</a>}
@@ -39,23 +37,25 @@ function ServerPage({ route }: { route: Route }) {
     case "source": return <Source reference={route.ref} path={route.path} />;
     case "diff": return <Diff name={route.name} a={route.a} b={route.b} />;
     case "run": return <Run reference={route.ref} />;
-    case "runs": return <Runs name={route.name} status={route.status} />;
+    case "runs": return <Runs route={route} />;
     case "run-detail": return <RunPage id={route.id} />;
-    case "governance": return <Governance name={route.name} />;
-    case "studio": return <Studio importRef={route.import} fresh={route.fresh} />;
+    case "audit": return <Audit name={route.name} />;
     case "server": return <Server />;
     case "missing": return <p className="error">No page at <code>{route.hash}</code>.</p>;
   }
 }
 
-/** A folder has no server behind it: no catalog, history or governance, only local runs of the folder. */
+/** A folder has no server behind it: its procedure, local runs of it, and this machine's run files of it. */
 function FolderPage({ route }: { route: Route }) {
-  if (route.page === "studio") return <Studio fresh={route.fresh} />;
-  if (route.page === "run" || route.page === "catalog") return <Run />;
+  if (route.page === "catalog") return <FolderProcedure />;
+  if (route.page === "run") return <Run />;
+  if (route.page === "runs") return <Runs route={route} />;
+  if (route.page === "run-detail") return <RunPage id={route.id} />;
   return (
     <p className="muted" data-testid="folder-mode">
-      This console runs the folder <code>{consoleConfig().folder}</code> locally, with no server: there is no catalog,
-      history or governance. Start it with <code>--server URL</code> for those; <a href={href({ page: "run" })}>run</a> the folder here.
+      This console runs the folder <code>{consoleConfig().folder}</code> locally, with no server: there is no catalog, source
+      view or audit. Start it with <code>--server URL</code> for those; here you can read the <a href={href({ page: "catalog" })}>procedure</a>,{" "}
+      <a href={href({ page: "run" })}>run</a> it and see its <a href={href({ page: "runs" })}>runs</a>.
     </p>
   );
 }

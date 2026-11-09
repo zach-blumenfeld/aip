@@ -1,0 +1,107 @@
+/* The card canvas (Canvas.tsx). Every size here that layout.ts also knows is the same number there
+   (SIZE): a card's rows are one line each and clipped, so the layout needs no measuring. The classes
+   are prefixed so the component can sit in any page (the console, the VS Code preview). */
+.aipc {
+  --aipc-line: color-mix(in srgb, currentColor 22%, transparent);
+  --aipc-fill: color-mix(in srgb, currentColor 5%, Canvas);
+  --aipc-Start: #5a7d9a;
+  --aipc-Decide: #3b6fd6;
+  --aipc-Route: #b8860b;
+  --aipc-Aggregate: #8a4fbf;
+  --aipc-Execute: #2e8b57;
+  --aipc-Task_Agent: #a0522d;
+  --aipc-End: #777;
+  --aipc-loop: #c2185b;
+  font-size: 13px;
+  line-height: 18px;
+}
+.aipc-tools { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
+.aipc-tools button { font: inherit; min-width: 1.8rem; }
+.aipc-zoom { min-width: 3rem; text-align: center; opacity: 0.7; }
+.aipc-hint { opacity: 0.55; margin-left: 0.5rem; }
+.aipc-body { display: flex; gap: 0.75rem; min-height: 16rem; }
+.aipc-view {
+  flex: 1; min-width: 0; position: relative; overflow: hidden; border: 1px solid var(--aipc-line); border-radius: 6px;
+  cursor: grab; touch-action: none; user-select: none;
+  background-image: radial-gradient(var(--aipc-line) 1px, transparent 1px); background-size: 16px 16px;
+}
+.aipc-view:active { cursor: grabbing; }
+.aipc-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+
+.aipc-card {
+  position: absolute; box-sizing: border-box; padding: 10px; overflow: hidden; cursor: pointer; z-index: 2;
+  background: Canvas; border: 1px solid var(--aipc-line); border-left: 4px solid var(--aipc-kind, var(--aipc-line)); border-radius: 6px;
+}
+.aipc-card.open { outline: 2px solid var(--aipc-kind); }
+.aipc-card.visited { box-shadow: 0 0 0 2px color-mix(in srgb, var(--aipc-kind) 55%, transparent); }
+.aipc-card:focus-visible { outline: 2px solid var(--aipc-kind); }
+.aipc-kind-Start { --aipc-kind: var(--aipc-Start); }
+.aipc-kind-Decide { --aipc-kind: var(--aipc-Decide); }
+.aipc-kind-Route { --aipc-kind: var(--aipc-Route); }
+.aipc-kind-Aggregate { --aipc-kind: var(--aipc-Aggregate); }
+.aipc-kind-Execute { --aipc-kind: var(--aipc-Execute); }
+.aipc-kind-Task_Agent { --aipc-kind: var(--aipc-Task_Agent); }
+.aipc-kind-End { --aipc-kind: var(--aipc-End); }
+
+.aipc-head { height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aipc-head code, .aipc-frame-head code, .aipc-detail-head code { opacity: 0.7; }
+.aipc-kind {
+  display: inline-block; font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 999px;
+  color: var(--aipc-kind, var(--aipc-loop)); border: 1px solid var(--aipc-kind, var(--aipc-loop));
+}
+.aipc-title {
+  height: 40px; line-height: 20px; font-size: 14px; font-weight: 600; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.aipc-section { margin-top: 6px; }
+.aipc-label { height: 18px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.55; }
+.aipc-row { height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.aipc-ports { margin-top: 6px; }
+.aipc-port {
+  display: flex; gap: 5px; align-items: center; width: 100%; height: 22px; box-sizing: border-box; padding: 0 0 0 4px; margin: 0;
+  font: inherit; color: inherit; text-align: left; background: none; border: 0; border-top: 1px solid var(--aipc-line); cursor: pointer;
+}
+.aipc-port:hover { background: var(--aipc-fill); }
+.aipc-port-label { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600; }
+.aipc-port-below .aipc-port-label { color: var(--aipc-Route); }
+.aipc-port-continue .aipc-port-label, .aipc-port-again .aipc-port-label { color: var(--aipc-loop); }
+.aipc-port-arrow { flex: none; opacity: 0.6; }
+.aipc-port-quote { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.75; }
+
+.aipc-frame {
+  position: absolute; box-sizing: border-box; border: 1.5px dashed var(--aipc-loop); border-radius: 8px; z-index: 0;
+  background: color-mix(in srgb, var(--aipc-loop) 4%, transparent);
+}
+.aipc-frame.open { border-style: solid; }
+.aipc-frame.visited { background: color-mix(in srgb, var(--aipc-loop) 9%, transparent); }
+.aipc-frame-head {
+  display: block; width: 100%; box-sizing: border-box; padding: 0 10px; margin: 0; font: inherit; color: inherit; text-align: left;
+  background: none; border: 0; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.aipc-frame-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; opacity: 0.8; }
+.aipc-frame-foot { position: absolute; left: 16px; right: 0; }
+
+.aipc-wires { position: absolute; left: 0; top: 0; z-index: 1; pointer-events: none; overflow: visible; }
+.aipc-wire { fill: none; stroke: color-mix(in srgb, currentColor 45%, transparent); stroke-width: 1.3; }
+.aipc-wire.lit { stroke: currentColor; stroke-width: 2; }
+.aipc-wire-below { stroke-dasharray: 5 3; }
+.aipc-wire-continue, .aipc-wire-again { stroke: color-mix(in srgb, var(--aipc-loop) 65%, transparent); }
+.aipc-wires marker path { fill: color-mix(in srgb, currentColor 60%, transparent); }
+
+.aipc-detail {
+  flex: none; width: min(34rem, 45%); overflow: auto; box-sizing: border-box; padding: 0.5rem 0.75rem;
+  border: 1px solid var(--aipc-line); border-radius: 6px;
+}
+.aipc-detail-head { display: flex; gap: 0.4rem; align-items: center; }
+.aipc-detail-head button { margin-left: auto; font: inherit; }
+.aipc-detail-title { font-size: 14px; font-weight: 600; margin: 0.4rem 0; white-space: pre-line; }
+.aipc-detail-section { margin-top: 0.5rem; }
+.aipc-detail-section ul { margin: 0.1rem 0; padding-left: 1.1rem; }
+.aipc-detail-quote { opacity: 0.7; }
+.aipc-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+.aipc-source pre, .aipc-source ol { margin: 0.2rem 0; font-size: 12px; }
+@media (max-width: 56rem) {
+  .aipc-body { flex-direction: column; height: auto !important; }
+  .aipc-view { min-height: 60vh; }
+  .aipc-detail { width: auto; }
+}

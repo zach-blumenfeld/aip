@@ -1,242 +1,272 @@
-// Response shapes of the AIP server API (server-design.md §4.2). Only what the
-// views read is typed; everything else stays `unknown` until a view needs it.
+// The shapes the page reads: the aip server's replies (aip docs/server-design.md, section 2) and the
+// run record (aip docs/cli-json.md, The run file), which is the same JSON whether the server hands it
+// back or the CLI prints it from this machine's run file. Only what a view reads is typed. Types only:
+// nothing here exists at run time.
+
+import type { Graph } from "../canvas/model.ts";
+
+// ------------------------------------------------------------------ the catalog
 
 export interface Revision {
   revision: string;
+  bundle_id: string;
   published_at: string;
   retired: boolean;
 }
 
+/** One name of `GET /catalog`. */
 export interface CatalogEntry {
   name: string;
-  description: string;
+  /** Of the revision the name resolves to. */
+  description: string | null;
   pinned: string | null;
-  /** The newest live revision; null once every revision is retired, when the name no longer resolves. */
+  /** The newest live revision; null once every revision is retired. */
   latest: string | null;
+  /** What the bare name runs: the pinned revision, else the latest; null when nothing is live. */
+  resolves: string | null;
+  /** Newest first. */
   revisions: Revision[];
 }
 
 export interface SearchHit {
   name: string;
   revision: string;
+  bundle_id: string;
   description: string;
   score: number;
 }
 
-export type StepKind = "start" | "decision" | "router" | "execution" | "client_task" | "end";
-
-/** What the validator made of what feeds a router's branch key, stored with the revision at publish: a start input
- *  or a script's output (`deterministic`), a decision model whose confidence the router checks (`measured`), or a
- *  probabilistic choice with no calibrated number behind it (`unmeasured`). */
-export type SourceClass = "deterministic" | "measured" | "unmeasured";
-
-/** A router's confidence check: below `below`, or with `key` absent or null, the run goes to `to`. A branch key
- *  the client answered by hand is not checked. */
-export interface ConfidenceCheck { key: string; below: number; to: string }
-
-export interface StepDetail {
+/** One bundle of `GET /bundles`: a draft has no revision. */
+export interface BundleRow {
+  bundle_id: string;
   name: string;
-  kind: StepKind;
-  order: number;
   description: string | null;
-  branch_on?: string;   // router
-  /** router: the class of its source, null for a router the validator could not classify. */
-  source_class?: SourceClass | null;
-  /** router: its confidence check, null when it has none. */
-  check?: ConfidenceCheck | null;
-  /** decision: whether the client may answer by hand when it has no decision model. */
-  fallback?: boolean;
-  /** decision: the question names whose `<question>_confidence` the step emits. */
-  confidence?: string[];
-  script?: string;      // execution
-  timeout?: number | null;
-  /** How the script is launched, from its folder; null is `python <script>`. */
-  command?: string[] | null;
-  template?: string;    // client_task
-  framing?: boolean;
+  stored_at: string;
+  draft: boolean;
+  revision: string | null;
 }
 
-export interface Edge { from: string; to: string }
-export interface Branch { router: string; value: string; to: string }
+export type StepKind = "Start" | "Decide" | "Route" | "Aggregate" | "Execute" | "Task_Agent" | "End";
 
-export interface StepInput {
-  step: string;
-  order: number;
+export interface StepSummary { name: string; kind: StepKind; description: string | null; loop: string | null; line: number }
+
+export interface LoopSummary {
   name: string;
-  type: string;
-  description: string | null;
+  kind: "For" | "Loop";
+  mode: string | null;
+  /** The loop's header after its name: `Until check_summary.all_hold, At_Most 3, Else_Fail`. */
+  header: string;
+  body: string[];
+  loop: string | null;
+  line: number;
 }
 
-/** A key an execution or client_task step adds to the state; same shape as an input. */
-export type StepOutput = StepInput;
-
-/** What the machine that runs the scripts must have (the procedure's `requires`). */
-export interface Requires {
-  interpreter: { name: string; version: string | null };
-  packages: string[];
-  tools: string[];
-}
-
-export interface Question {
-  step: string;
-  order: number;
+/** What `aip info --json` prints and `GET /catalog/{ref}` and `GET /bundles/{id}` return. */
+export interface Description {
   name: string;
-  type: string;
-  instructions: string;
-  criteria: string | null;   // JSON text
-  /** Whether the step emits `<name>_confidence` into the state (the decision's `confidence` list names it). */
-  confidence: boolean;
-}
-
-export interface Resource {
-  step: string;
-  path: string;
-  role: "script" | "template" | "asset" | "reference";
-  description: string | null;
-}
-
-export interface FileEntry { path: string; size: number; sha256: string; mode: number }
-
-/** A warning or info the validator reported at publish, kept with the revision; `step` names the step it is on. */
-export interface PublishIssue { code: string; severity: "warning" | "info"; step: string | null; location: string | null; message: string }
-
-/** `GET /catalog/{ref}`: describe() plus the `aip info` fields and the projection. */
-export interface ProcedureInfo {
-  name: string;
-  revision: string;
-  id: string;
+  bundle_id: string;
   description: string;
-  aip_version: string | null;
-  published_at: string;
-  retired: boolean;
-  purpose: string;
-  trigger_when: string[];
+  use_when: string[];
   do_not_use_when: string[];
-  anti_patterns: string[];
-  example_input: Record<string, unknown>;
-  start: { step: string; kind: StepKind; inputs: Record<string, string> };
-  end: { step: string; kind: StepKind; inputs: Record<string, string> };
-  steps: Record<string, StepKind>;
-  /** Per decision: `fallback` and the questions whose confidence it emits. */
-  decisions: Record<string, { fallback: boolean; confidence: string[] }>;
-  /** Per router: its branch key and its check, with `to` the step's name. */
-  routers: Record<string, { branch_on: string; confidence: ConfidenceCheck | null }>;
-  step_details: StepDetail[];
-  edges: Edge[];
-  branches: Branch[];
-  inputs: StepInput[];
-  outputs: StepOutput[];
-  /** Null for a procedure with no execution steps. */
-  requires: Requires | null;
-  questions: Question[];
-  resources: Resource[];
-  /** The validator's warnings and infos at publish (unmeasured routes, a key with several producers). */
-  issues: PublishIssue[];
-  files: FileEntry[];
+  avoid: string[];
+  /** What the machine that runs the scripts must have; null when the procedure names nothing. */
+  requires: { interpreter: string | null; version: string | null } | null;
+  steps: StepSummary[];
+  loops: LoopSummary[];
+  /** The `Start` step's keys and their types. */
+  inputs: Record<string, string | null>;
+  input_descriptions: Record<string, string>;
+  /** The `End` step's keys and their types. */
+  result: Record<string, string | null>;
+  example_inputs: Record<string, unknown>;
+  revision?: string | null;
+  draft?: boolean;
+  published_at?: string;
+  retired?: boolean;
+  stored_at?: string;
 }
 
-export interface ApiErrorBody {
-  error: { kind: string; message: string; location?: string; issues?: ValidationIssue[] };
+/** `GET /catalog/{ref}/graph`, `GET /bundles/{id}/graph`: the bundle's graph with the source and the files' text. */
+export interface BundleGraph {
+  name: string;
+  revision: string | null;
+  draft: boolean;
+  bundle_id: string;
+  graph: Graph;
 }
 
-// ---------------------------------------------------------------- run history (GET /runs/{id})
+/** A file of a bundle, read off its `File` node. */
+export interface BundleFile { path: string; size: number; sha256: string; mode: number; text: string | null; base64: string | null }
 
-/** Who answered a decision: the client's decision model, or the client by hand (`fallback: true` on the step). */
-export interface Attribution {
-  resolver: "typesafe" | "manual";
-  model: string | null;
-  /** Per question, the probability the model put on the answer it gave: TypeSafe's confidence for a choice or
-   *  score, `|2p - 1|` for a yes/no. Null for a manual answer: nobody invents a number. */
-  confidence: Record<string, number> | null;
+export interface ApiErrorBody { error: { kind: string; message: string; location?: string } }
+
+// ------------------------------------------------------------------ the run record
+
+export interface Identity { agent: string | null; session: string | null; user: string | null }
+
+/** One enclosing loop of an entry or a task, and which pass of it. */
+export interface PassRef { loop: string; pass: number }
+
+/** An answer (spec 2.4): a decision model's carries `confidence` and `probabilities`, a script's may, an
+ *  agent's and an aggregation's are the value alone. */
+export interface AnswerObject {
+  value: boolean | string | number | null;
+  confidence?: number;
+  probabilities?: Record<string, number>;
+  /** A score question's expected value. */
+  score?: number;
+  /** A true_or_false question's probability of true. */
+  noul?: number;
 }
 
-/** A decision's recorded result: one collapsed value per question. */
-export interface DecisionResult {
-  answers: Record<string, boolean | string | number>;
+/** A route's `Confidence_Below`, as it went. */
+export interface Check { below: number; confidence: number | null; fired: boolean; reason?: string }
+
+/** How one answer counted in an aggregation or an `Until`. */
+export interface Resolution {
+  /** In an aggregation, the answer judged (`policy_check.pii`); in an `Until`, `answer`. */
+  source?: string;
+  answer?: string;
+  value: unknown;
+  holds: boolean;
+  /** The probability the answer put on the condition, which a `With Confidence_Above` bar reads. */
+  probability: number | null;
+  barred: boolean;
 }
 
-/** A client task's recorded result, written when the client answered: the task it was given and its answer. */
-export interface ClientTaskResult {
-  task: string;
-  references: { uri: string; description: string }[];
-  answer: Record<string, unknown>;
-}
+/** The test at a loop's head that let a pass run. */
+export interface UntilTest { where: string; holds: boolean; resolution: Resolution | null }
 
-/** What a router's confidence check made of the state: whether it fired, and why (`low`: the key was under the
- *  bound; `absent`: nothing wrote the key; `null`: the key was null). `manual`, never fired: the branch key was
- *  answered by hand, so the check was skipped and the answer took its branch. */
-export interface CheckOutcome { fired: boolean; reason: "low" | "absent" | "null" | "manual" | null }
+/** How a loop ended: `until`, `items`, `times` or `cap`; `where` is `head` or the step that produced the answer. */
+export interface LoopExit { reason: string; where?: string; resolution?: Resolution | null }
 
-/** One history entry: what a step received and produced. The first is the start step's, its `input` the start
- *  input. Routers record the branch they took (`result.to`) and, with a check, `result.confidence`. */
+export interface Reference { path: string; description: string | null }
+
+/** One entry of a run's history: what a step read and produced. A loop writes one too, when it exits. */
 export interface HistoryEntry {
   step: string;
-  kind: StepKind | "error";
+  kind: StepKind | "For" | "Loop";
+  pass: number | null;
+  passes: PassRef[];
+  at: string;
   input: Record<string, unknown>;
   result: Record<string, unknown>;
-  /** Decisions: who answered. */
-  attribution?: Attribution;
-  /** Execution steps: wall time on the client that ran the script. */
+  /** The step's own wall time. */
   seconds?: number;
-  /** Execution steps: the client machine that ran the script (on an error entry, it is in `result`). */
-  host?: string;
-  /** Errors: the kind of the step that failed. */
-  step_kind?: StepKind;
+  /** A `Decide`: the model and endpoint; a `Task_Agent`: the agent and session that resumed with the answer. */
+  answered_by?: { model?: string | null; endpoint?: string | null; agent?: string | null; session?: string | null };
+  /** A `Decide`: the model call alone, and whether it went out with other passes in one call. */
+  model_seconds?: number;
+  history_sent?: boolean;
+  batched?: boolean;
+  batch_size?: number;
+  /** A `Route`: the dotted key it read, its check, the branch value taken (null when the check fired), where it went. */
+  read?: string;
+  check?: Check | null;
+  value?: string | null;
+  to?: string;
+  /** An `Aggregate`: per aggregation, how each answer counted. */
+  resolutions?: Record<string, Resolution[]>;
+  /** An `Execute`. */
+  script?: string;
+  stdin?: unknown;
+  /** A `Task_Agent`: the task as handed over, and how long the agent took. */
+  prompt?: string;
+  references?: Reference[];
+  waited_seconds?: number;
+  /** A loop's own entry. */
+  exit?: LoopExit;
+  /** On the first entry of a `Loop Until` pass. */
+  until?: UntilTest;
 }
 
-export type RunStatus = "running" | "paused" | "done" | "failed";
+/** One task of a pause: a `For` pass waiting at the step, or the one task outside a loop. */
+export interface Task {
+  index: number;
+  pass: number | null;
+  passes: PassRef[];
+  prompt: string;
+  state: Record<string, unknown>;
+  references: Reference[];
+  /** The keys to answer with, and their types. */
+  answer_with: Record<string, string>;
+  /** For each `choice` or `score` key, the values it may take. */
+  labels: Record<string, string[]>;
+  /** In a capped `Loop`: whether this pass is the last the cap allows, and the cap. */
+  last_pass?: boolean;
+  pass_of?: number;
+}
 
+export interface Pause { kind: string; step: string; tasks: Task[]; since?: string }
+
+/** A failed run's error (aip docs/cli-json.md, Error). */
+export interface RunErrorBody {
+  error: string;
+  step: string | null;
+  message: string;
+  resumable?: boolean;
+  loop?: string;
+  cap?: number;
+  count?: number;
+  script?: string;
+  exit_code?: number;
+  stderr?: string;
+  missing?: string[];
+  invalid?: string[];
+  missing_tasks?: number[];
+  invalid_tasks?: number[];
+  model?: string;
+  endpoint?: string;
+  cause?: string;
+}
+
+export type RunStatus = "paused" | "done" | "failed";
+
+/** One row of `GET /runs` (and of `aip runs --json`, which has no `bundle_id` or `entries`). */
 export interface RunSummary {
   run_id: string;
   name: string;
-  revision: string;
+  revision: string | null;
+  bundle_id?: string;
   status: RunStatus;
-  started_at: string;
-  updated_at: string;
-  steps: number;
+  draft: boolean;
+  identity: Identity;
+  started: string | null;
+  finished: string | null;
+  created: string | null;
+  updated: string | null;
+  entries?: number;
 }
 
-/** Where a run waits, in the client's pause shape (aip docs/cli-json.md) with `kind` for `paused`. */
-export type RunPause =
-  | { kind: "client_task"; step: string; task: string; state: Record<string, unknown>; references: { uri: string; description: string }[]; answer_with: Record<string, string> }
-  | { kind: "decision"; step: string; state: Record<string, unknown>; questions: Record<string, unknown> }
-  | { kind: "execute"; step: string; script: string }
-  | { kind: "error"; step: string; error: string }
-  | { kind: "done"; state: Record<string, unknown>; step?: undefined };
-
-/** `GET /runs/{id}`: the summary fields plus the full history and the pause block. */
-export interface RunDetail {
+/** A run, whole: `GET /runs/{id}`, or `aip runs <id> --json` from this machine's run file. */
+export interface RunRecord {
   run_id: string;
+  bundle_id: string;
   name: string;
-  revision: string;
+  revision: string | null;
+  draft: boolean;
   status: RunStatus;
-  started_at: string;
-  updated_at: string;
-  pause: RunPause | null;
+  /** `step:<name>` or `loop:<name>`: where a paused run waits or a failed one stopped; null once done. */
+  position: string | null;
+  started: string | null;
+  finished: string | null;
+  created?: string | null;
+  updated?: string | null;
+  identity: Identity;
+  state: Record<string, unknown>;
   history: HistoryEntry[];
+  pause: Pause | null;
+  error: RunErrorBody | null;
+  result: Record<string, unknown> | null;
+  /** What `aip run` was given, on this machine's run file. */
+  target?: string;
+  recorded?: boolean;
 }
 
-// ------------------------------------------------------------------- governance (§7, §10.5)
+// ------------------------------------------------------------------ audit
 
-/** One entry of `GET /governance`: a named corpus query and where to ask it. */
-/** One query of `GET /governance`: a built-in, or one stored on the server (`builtin: false`), which runs read-only. */
-export interface GovernanceQuery { query: string; description: string; path: string; builtin: boolean }
+/** One query of `GET /audit`: a built-in, or one stored on the server. `needs` names parameters it cannot run without. */
+export interface AuditQuery { query: string; description: string; builtin: boolean; needs: string[]; path: string }
 
-/** A row of `GET /governance/{query}`: flat, with the columns the query defines. */
-export type GovernanceRow = Record<string, unknown>;
-
-// ------------------------------------------------------------------- publish (POST /catalog)
-
-/** One issue of the server's validation, in a 422 `invalid_skill` envelope (`issues`), or a warning of a
- *  publish that went through. Paths are relative to the upload. */
-export interface ValidationIssue {
-  path: string;
-  kind: string;
-  message: string;
-  location?: string;
-  /** Absent on an error. An info never fails a publish. */
-  severity?: "warning" | "info";
-}
-
-/** `POST /catalog`: the revision the files became (the existing one when nothing changed). */
-export interface PublishResult { name: string; revision: string; id: string; warnings: ValidationIssue[] }
+/** A row of `GET /audit/{query}`: flat, with the columns the query defines. */
+export type AuditRow = Record<string, unknown>;

@@ -1,0 +1,666 @@
+{
+ "batch": 10,
+ "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+ "created": "2026-11-09T22:38:41.178+00:00",
+ "draft": true,
+ "error": {
+  "cap": 3,
+  "count": 3,
+  "error": "loop_cap",
+  "loop": "revise",
+  "message": "revise ran 3 passes without its condition holding (At_Most 3, Else_Fail)",
+  "pass": null,
+  "passes": [],
+  "step": null
+ },
+ "finished": "2026-11-09T22:38:41.246+00:00",
+ "frames": [],
+ "identity": {
+  "agent": "codex",
+  "session": null,
+  "user": "zach"
+ },
+ "loops": {},
+ "name": "fixed_policy",
+ "passes": [],
+ "pause": null,
+ "position": "loop:revise",
+ "requires_checked": false,
+ "result": null,
+ "revision": null,
+ "run_id": "f334071a5332466e",
+ "started": "2026-11-09T22:38:41.177+00:00",
+ "state": {
+  "check_summary": {
+   "all_hold": {
+    "value": false
+   }
+  },
+  "policy_check": {
+   "claims": {
+    "confidence": 0.4,
+    "noul": 0.3,
+    "value": false
+   },
+   "length": {
+    "confidence": 0.4,
+    "noul": 0.3,
+    "value": false
+   },
+   "pii": {
+    "confidence": 0.4,
+    "noul": 0.3,
+    "value": false
+   },
+   "tone": {
+    "confidence": 0.4,
+    "noul": 0.3,
+    "value": false
+   }
+  },
+  "request": "a welcome note",
+  "work": "Welcome"
+ },
+ "status": "failed",
+ "updated": "2026-11-09T22:38:41.246+00:00",
+ "history": [
+  {
+   "at": "2026-11-09T22:38:41.177+00:00",
+   "input": {
+    "request": "a welcome note"
+   },
+   "kind": "Start",
+   "pass": null,
+   "passes": [],
+   "result": {},
+   "seconds": 0.0,
+   "step": "start"
+  },
+  {
+   "answered_by": {
+    "agent": "codex",
+    "session": null
+   },
+   "at": "2026-11-09T22:38:41.212+00:00",
+   "input": {
+    "request": "a welcome note"
+   },
+   "kind": "Task_Agent",
+   "pass": null,
+   "passes": [],
+   "prompt": "# Write the work\n\nWrite what the request below asks for. Follow the house policy exactly; it is attached.\n\nRequest:\na welcome note\n\nPolicy:\n# House policy for customer-facing writing\n\n1. No personal data: no names of private individuals, no account numbers, no addresses.\n2. Every factual claim about the product is one the approved claims list supports; nothing is\n   promised beyond it. Writing that makes no claim about the product passes.\n3. Plain and courteous tone: no superlatives, no pressure, no blame.\n4. Under 300 words.\n\n\nApproved claims:\n# Approved claims about the product\n\nThe only factual claims customer-facing writing may make about the product. Anything else about\nthe product is left out, however likely it is to be true.\n\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.\n\n\nReturn JSON with `work` (the text).\n",
+   "references": [],
+   "result": {
+    "work": "Welcome"
+   },
+   "seconds": 0.001,
+   "step": "draft",
+   "waited_seconds": 0.034
+  },
+  {
+   "answered_by": {
+    "endpoint": "https://api.typesafe.ai",
+    "model": "jev-1"
+   },
+   "at": "2026-11-09T22:38:41.213+00:00",
+   "history_sent": false,
+   "input": {
+    "work": "Welcome"
+   },
+   "kind": "Decide",
+   "model_seconds": 0.0,
+   "pass": 0,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 0
+    }
+   ],
+   "result": {
+    "claims": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "length": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "pii": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "tone": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "check",
+   "until": {
+    "holds": false,
+    "resolution": null,
+    "where": "head"
+   }
+  },
+  {
+   "at": "2026-11-09T22:38:41.213+00:00",
+   "input": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "length": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "pii": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "tone": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     }
+    }
+   },
+   "kind": "Aggregate",
+   "pass": 0,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 0
+    }
+   ],
+   "resolutions": {
+    "all_hold": [
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.pii",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.claims",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.tone",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.length",
+      "value": false
+     }
+    ]
+   },
+   "result": {
+    "all_hold": {
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "summarize_check"
+  },
+  {
+   "answered_by": {
+    "agent": "codex",
+    "session": null
+   },
+   "at": "2026-11-09T22:38:41.226+00:00",
+   "input": {
+    "check_summary": {
+     "all_hold": {
+      "value": false
+     }
+    },
+    "policy_check": {
+     "claims": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "length": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "pii": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "tone": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     }
+    },
+    "request": "a welcome note",
+    "work": "Welcome"
+   },
+   "kind": "Task_Agent",
+   "pass": 0,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 0
+    }
+   ],
+   "prompt": "# Revise the work\n\nThe policy check below has one answer per policy (`pii`, `claims`, `tone`, `length`). A policy\nfailed when its `value` is `false`, or when its `noul`, the probability the model put on the\npolicy holding, is not above 0.7: the check counts an answer the model was not more than 0.7\nsure of as failed (`confidence` is a different number and is not the one the check reads).\n`check_summary.all_hold` is `false` because at least one failed. Revise the work so the failed\npolicies pass, changing nothing else.\n\nRequest:\na welcome note\n\nWork:\nWelcome\n\nPolicy check:\n{\"pii\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"claims\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"tone\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"length\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}}\n\nCheck summary:\n{\"all_hold\": {\"value\": false}}\n\nPolicy:\n# House policy for customer-facing writing\n\n1. No personal data: no names of private individuals, no account numbers, no addresses.\n2. Every factual claim about the product is one the approved claims list supports; nothing is\n   promised beyond it. Writing that makes no claim about the product passes.\n3. Plain and courteous tone: no superlatives, no pressure, no blame.\n4. Under 300 words.\n\n\nApproved claims:\n# Approved claims about the product\n\nThe only factual claims customer-facing writing may make about the product. Anything else about\nthe product is left out, however likely it is to be true.\n\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.\n\n\nReturn JSON with `work` (the revised text).\n",
+   "references": [],
+   "result": {
+    "work": "Welcome"
+   },
+   "seconds": 0.0,
+   "step": "fix",
+   "waited_seconds": 0.012
+  },
+  {
+   "answered_by": {
+    "endpoint": "https://api.typesafe.ai",
+    "model": "jev-1"
+   },
+   "at": "2026-11-09T22:38:41.226+00:00",
+   "history_sent": false,
+   "input": {
+    "work": "Welcome"
+   },
+   "kind": "Decide",
+   "model_seconds": 0.0,
+   "pass": 1,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 1
+    }
+   ],
+   "result": {
+    "claims": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "length": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "pii": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "tone": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "check",
+   "until": {
+    "holds": false,
+    "resolution": {
+     "answer": "check_summary.all_hold",
+     "barred": false,
+     "holds": false,
+     "probability": null,
+     "value": false
+    },
+    "where": "head"
+   }
+  },
+  {
+   "at": "2026-11-09T22:38:41.227+00:00",
+   "input": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "length": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "pii": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "tone": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     }
+    }
+   },
+   "kind": "Aggregate",
+   "pass": 1,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 1
+    }
+   ],
+   "resolutions": {
+    "all_hold": [
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.pii",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.claims",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.tone",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.length",
+      "value": false
+     }
+    ]
+   },
+   "result": {
+    "all_hold": {
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "summarize_check"
+  },
+  {
+   "answered_by": {
+    "agent": "codex",
+    "session": null
+   },
+   "at": "2026-11-09T22:38:41.236+00:00",
+   "input": {
+    "check_summary": {
+     "all_hold": {
+      "value": false
+     }
+    },
+    "policy_check": {
+     "claims": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "length": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "pii": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "tone": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     }
+    },
+    "request": "a welcome note",
+    "work": "Welcome"
+   },
+   "kind": "Task_Agent",
+   "pass": 1,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 1
+    }
+   ],
+   "prompt": "# Revise the work\n\nThe policy check below has one answer per policy (`pii`, `claims`, `tone`, `length`). A policy\nfailed when its `value` is `false`, or when its `noul`, the probability the model put on the\npolicy holding, is not above 0.7: the check counts an answer the model was not more than 0.7\nsure of as failed (`confidence` is a different number and is not the one the check reads).\n`check_summary.all_hold` is `false` because at least one failed. Revise the work so the failed\npolicies pass, changing nothing else.\n\nRequest:\na welcome note\n\nWork:\nWelcome\n\nPolicy check:\n{\"pii\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"claims\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"tone\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"length\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}}\n\nCheck summary:\n{\"all_hold\": {\"value\": false}}\n\nPolicy:\n# House policy for customer-facing writing\n\n1. No personal data: no names of private individuals, no account numbers, no addresses.\n2. Every factual claim about the product is one the approved claims list supports; nothing is\n   promised beyond it. Writing that makes no claim about the product passes.\n3. Plain and courteous tone: no superlatives, no pressure, no blame.\n4. Under 300 words.\n\n\nApproved claims:\n# Approved claims about the product\n\nThe only factual claims customer-facing writing may make about the product. Anything else about\nthe product is left out, however likely it is to be true.\n\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.\n\n\nReturn JSON with `work` (the revised text).\n",
+   "references": [],
+   "result": {
+    "work": "Welcome"
+   },
+   "seconds": 0.0,
+   "step": "fix",
+   "waited_seconds": 0.009
+  },
+  {
+   "answered_by": {
+    "endpoint": "https://api.typesafe.ai",
+    "model": "jev-1"
+   },
+   "at": "2026-11-09T22:38:41.236+00:00",
+   "history_sent": false,
+   "input": {
+    "work": "Welcome"
+   },
+   "kind": "Decide",
+   "model_seconds": 0.0,
+   "pass": 2,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 2
+    }
+   ],
+   "result": {
+    "claims": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "length": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "pii": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    },
+    "tone": {
+     "confidence": 0.4,
+     "noul": 0.3,
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "check",
+   "until": {
+    "holds": false,
+    "resolution": {
+     "answer": "check_summary.all_hold",
+     "barred": false,
+     "holds": false,
+     "probability": null,
+     "value": false
+    },
+    "where": "head"
+   }
+  },
+  {
+   "at": "2026-11-09T22:38:41.237+00:00",
+   "input": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "length": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "pii": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "tone": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     }
+    }
+   },
+   "kind": "Aggregate",
+   "pass": 2,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 2
+    }
+   ],
+   "resolutions": {
+    "all_hold": [
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.pii",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.claims",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.tone",
+      "value": false
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.3,
+      "source": "policy_check.length",
+      "value": false
+     }
+    ]
+   },
+   "result": {
+    "all_hold": {
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "summarize_check"
+  },
+  {
+   "answered_by": {
+    "agent": "codex",
+    "session": null
+   },
+   "at": "2026-11-09T22:38:41.245+00:00",
+   "input": {
+    "check_summary": {
+     "all_hold": {
+      "value": false
+     }
+    },
+    "policy_check": {
+     "claims": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "length": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "pii": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     },
+     "tone": {
+      "confidence": 0.4,
+      "noul": 0.3,
+      "value": false
+     }
+    },
+    "request": "a welcome note",
+    "work": "Welcome"
+   },
+   "kind": "Task_Agent",
+   "pass": 2,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 2
+    }
+   ],
+   "prompt": "# Revise the work\n\nThe policy check below has one answer per policy (`pii`, `claims`, `tone`, `length`). A policy\nfailed when its `value` is `false`, or when its `noul`, the probability the model put on the\npolicy holding, is not above 0.7: the check counts an answer the model was not more than 0.7\nsure of as failed (`confidence` is a different number and is not the one the check reads).\n`check_summary.all_hold` is `false` because at least one failed. Revise the work so the failed\npolicies pass, changing nothing else.\n\nRequest:\na welcome note\n\nWork:\nWelcome\n\nPolicy check:\n{\"pii\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"claims\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"tone\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}, \"length\": {\"value\": false, \"confidence\": 0.4, \"noul\": 0.3}}\n\nCheck summary:\n{\"all_hold\": {\"value\": false}}\n\nPolicy:\n# House policy for customer-facing writing\n\n1. No personal data: no names of private individuals, no account numbers, no addresses.\n2. Every factual claim about the product is one the approved claims list supports; nothing is\n   promised beyond it. Writing that makes no claim about the product passes.\n3. Plain and courteous tone: no superlatives, no pressure, no blame.\n4. Under 300 words.\n\n\nApproved claims:\n# Approved claims about the product\n\nThe only factual claims customer-facing writing may make about the product. Anything else about\nthe product is left out, however likely it is to be true.\n\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.\n\n\nReturn JSON with `work` (the revised text).\n",
+   "references": [],
+   "result": {
+    "work": "Welcome"
+   },
+   "seconds": 0.0,
+   "step": "fix",
+   "waited_seconds": 0.008
+  },
+  {
+   "at": "2026-11-09T22:38:41.246+00:00",
+   "exit": {
+    "reason": "cap",
+    "resolution": {
+     "answer": "check_summary.all_hold",
+     "barred": false,
+     "holds": false,
+     "probability": null,
+     "value": false
+    },
+    "where": "head"
+   },
+   "input": {},
+   "kind": "Loop",
+   "pass": null,
+   "passes": [],
+   "result": {
+    "iterations": 3
+   },
+   "step": "revise"
+  }
+ ]
+}

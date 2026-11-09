@@ -1,0 +1,1068 @@
+{
+ "nodes": [
+  {
+   "id": "procedure",
+   "labels": [
+    "Procedure"
+   ],
+   "properties": {
+    "id": "procedure",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "ticket_triage",
+    "description": "Classify a batch of support tickets, draft replies, escalate the uncertain ones.",
+    "language_version": "0.9",
+    "compiler_version": "0.9.0",
+    "requires_interpreter": "python",
+    "requires_version": "3.10",
+    "line": 7,
+    "column": 1,
+    "end_line": 81,
+    "end_column": 1
+   }
+  },
+  {
+   "id": "file:scripts/escalate.py",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:scripts/escalate.py",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "path": "scripts/escalate.py",
+    "size": 398,
+    "mode": 420,
+    "sha256": "412ef0d8ce51c4c850b849c602dfc6376aaec983e4a85300d895964105635e20"
+   }
+  },
+  {
+   "id": "file:scripts/policy_check.py",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:scripts/policy_check.py",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "path": "scripts/policy_check.py",
+    "size": 505,
+    "mode": 420,
+    "sha256": "4c438fcb114a89e836de5a3637b762d318fbf3924f33cb75e7be6c136afe07e3"
+   }
+  },
+  {
+   "id": "step:start",
+   "labels": [
+    "Step",
+    "Start"
+   ],
+   "properties": {
+    "id": "step:start",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "start",
+    "kind": "Start",
+    "description": "The batch of tickets and the policy every reply must follow.",
+    "line": 14,
+    "column": 1,
+    "end_line": 18,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:tickets",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:tickets",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "tickets",
+    "type": "list"
+   }
+  },
+  {
+   "id": "data:policy",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:policy",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "policy",
+    "type": "string"
+   }
+  },
+  {
+   "id": "loop:each_ticket",
+   "labels": [
+    "Loop",
+    "For"
+   ],
+   "properties": {
+    "id": "loop:each_ticket",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "each_ticket",
+    "kind": "For",
+    "mode": "Over",
+    "item": "ticket",
+    "at_most": 50,
+    "collect_key": "reply",
+    "collect_into": "replies",
+    "line": 20,
+    "column": 1,
+    "end_line": 70,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:ticket",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:ticket",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "ticket"
+   }
+  },
+  {
+   "id": "data:reply",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:reply",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "reply",
+    "type": "string"
+   }
+  },
+  {
+   "id": "data:replies",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:replies",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "replies",
+    "type": "list"
+   }
+  },
+  {
+   "id": "step:classify",
+   "labels": [
+    "Step",
+    "Decide"
+   ],
+   "properties": {
+    "id": "step:classify",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "classify",
+    "kind": "Decide",
+    "description": "What kind of ticket is this and how does the customer sound?",
+    "line": 21,
+    "column": 3,
+    "end_line": 29,
+    "end_column": 4,
+    "history": false,
+    "produces": "classification"
+   }
+  },
+  {
+   "id": "data:classification",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:classification",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "classification",
+    "type": "decision"
+   }
+  },
+  {
+   "id": "question:classify.billing",
+   "labels": [
+    "Question"
+   ],
+   "properties": {
+    "id": "question:classify.billing",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "billing",
+    "type": "true_or_false",
+    "instruction": "Is this a billing question?",
+    "order": 0,
+    "line": 24,
+    "column": 7,
+    "end_line": 24,
+    "end_column": 59
+   }
+  },
+  {
+   "id": "question:classify.tone",
+   "labels": [
+    "Question"
+   ],
+   "properties": {
+    "id": "question:classify.tone",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "tone",
+    "type": "choice",
+    "labels": [
+     "calm",
+     "angry"
+    ],
+    "instruction": "How does the customer sound?",
+    "order": 1,
+    "line": 25,
+    "column": 7,
+    "end_line": 25,
+    "end_column": 67
+   }
+  },
+  {
+   "id": "step:by_tone",
+   "labels": [
+    "Step",
+    "Route"
+   ],
+   "properties": {
+    "id": "step:by_tone",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "by_tone",
+    "kind": "Route",
+    "description": "Calm customers get a drafted reply; angry or uncertain ones are escalated.",
+    "line": 31,
+    "column": 3,
+    "end_line": 36,
+    "end_column": 4,
+    "check_below": 0.6
+   }
+  },
+  {
+   "id": "step:draft",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:draft",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "draft",
+    "kind": "Task_Agent",
+    "description": "Write a reply that follows the policy.",
+    "line": 38,
+    "column": 3,
+    "end_line": 42,
+    "end_column": 4
+   }
+  },
+  {
+   "id": "step:escalate",
+   "labels": [
+    "Step",
+    "Execute"
+   ],
+   "properties": {
+    "id": "step:escalate",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "escalate",
+    "kind": "Execute",
+    "description": "Open a ticket in the tier-2 queue.",
+    "line": 44,
+    "column": 3,
+    "end_line": 50,
+    "end_column": 4,
+    "script": "scripts/escalate.py"
+   }
+  },
+  {
+   "id": "data:queue",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:queue",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "queue",
+    "type": "string"
+   }
+  },
+  {
+   "id": "step:check",
+   "labels": [
+    "Step",
+    "Execute"
+   ],
+   "properties": {
+    "id": "step:check",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "check",
+    "kind": "Execute",
+    "description": "Does the reply quote the policy correctly?",
+    "line": 52,
+    "column": 3,
+    "end_line": 57,
+    "end_column": 4,
+    "script": "scripts/policy_check.py"
+   }
+  },
+  {
+   "id": "data:passed",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:passed",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "passed",
+    "type": "true_or_false"
+   }
+  },
+  {
+   "id": "loop:revise",
+   "labels": [
+    "Loop"
+   ],
+   "properties": {
+    "id": "loop:revise",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "revise",
+    "kind": "Loop",
+    "mode": "Until",
+    "at_most": 3,
+    "at_cap": "Else_Fail",
+    "until_answer": "passed",
+    "line": 59,
+    "column": 3,
+    "end_line": 67,
+    "end_column": 4
+   }
+  },
+  {
+   "id": "step:fix",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:fix",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "fix",
+    "kind": "Task_Agent",
+    "description": "Revise the reply so it quotes the policy correctly.",
+    "line": 60,
+    "column": 5,
+    "end_line": 64,
+    "end_column": 6
+   }
+  },
+  {
+   "id": "step:summarize",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:summarize",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "summarize",
+    "kind": "Task_Agent",
+    "description": "Summarize the batch for the team lead.",
+    "line": 72,
+    "column": 1,
+    "end_line": 76,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:summary",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:summary",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "summary",
+    "type": "string"
+   }
+  },
+  {
+   "id": "step:end",
+   "labels": [
+    "Step",
+    "End"
+   ],
+   "properties": {
+    "id": "step:end",
+    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "name": "end",
+    "kind": "End",
+    "description": "Every ticket has a reply or an escalation, and the lead has a summary.",
+    "line": 78,
+    "column": 1,
+    "end_line": 80,
+    "end_column": 2
+   }
+  }
+ ],
+ "edges": [
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:scripts/escalate.py",
+   "properties": {}
+  },
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:scripts/policy_check.py",
+   "properties": {}
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:start",
+   "properties": {}
+  },
+  {
+   "type": "STARTS_AT",
+   "start": "procedure",
+   "end": "step:start",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:tickets",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:start",
+   "end": "data:tickets",
+   "properties": {
+    "line": 15,
+    "column": 3,
+    "end_line": 15,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:policy",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:start",
+   "end": "data:policy",
+   "properties": {
+    "line": 16,
+    "column": 3,
+    "end_line": 16,
+    "end_column": 17
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:start",
+   "end": "loop:each_ticket",
+   "properties": {
+    "line": 17,
+    "column": 3,
+    "end_line": 17,
+    "end_column": 24
+   }
+  },
+  {
+   "type": "HAS_LOOP",
+   "start": "procedure",
+   "end": "loop:each_ticket",
+   "properties": {}
+  },
+  {
+   "type": "OVER",
+   "start": "loop:each_ticket",
+   "end": "data:tickets",
+   "properties": {
+    "line": 20,
+    "column": 22,
+    "end_line": 20,
+    "end_column": 29
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:ticket",
+   "properties": {}
+  },
+  {
+   "type": "BINDS",
+   "start": "loop:each_ticket",
+   "end": "data:ticket",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:reply",
+   "properties": {}
+  },
+  {
+   "type": "COLLECTS",
+   "start": "loop:each_ticket",
+   "end": "data:reply",
+   "properties": {
+    "line": 20,
+    "column": 53,
+    "end_line": 20,
+    "end_column": 79
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:replies",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "loop:each_ticket",
+   "end": "data:replies",
+   "properties": {
+    "line": 20,
+    "column": 53,
+    "end_line": 20,
+    "end_column": 79
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:each_ticket",
+   "end": "step:classify",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "ENTERS",
+   "start": "loop:each_ticket",
+   "end": "step:classify",
+   "properties": {}
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:each_ticket",
+   "end": "step:by_tone",
+   "properties": {
+    "order": 1
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:each_ticket",
+   "end": "step:draft",
+   "properties": {
+    "order": 2
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:each_ticket",
+   "end": "step:escalate",
+   "properties": {
+    "order": 3
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:each_ticket",
+   "end": "step:check",
+   "properties": {
+    "order": 4
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:each_ticket",
+   "end": "loop:revise",
+   "properties": {
+    "order": 5
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "loop:each_ticket",
+   "end": "step:summarize",
+   "properties": {
+    "line": 69,
+    "column": 3,
+    "end_line": 69,
+    "end_column": 22
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:classify",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:ticket",
+   "end": "step:classify",
+   "properties": {
+    "line": 22,
+    "column": 10,
+    "end_line": 22,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:classification",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:classify",
+   "end": "data:classification",
+   "properties": {
+    "line": 27,
+    "column": 13,
+    "end_line": 27,
+    "end_column": 27
+   }
+  },
+  {
+   "type": "ASKS",
+   "start": "step:classify",
+   "end": "question:classify.billing",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "ASKS",
+   "start": "step:classify",
+   "end": "question:classify.tone",
+   "properties": {
+    "order": 1
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:classify",
+   "end": "step:by_tone",
+   "properties": {
+    "line": 28,
+    "column": 5,
+    "end_line": 28,
+    "end_column": 22
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:by_tone",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:classification",
+   "end": "step:by_tone",
+   "properties": {
+    "field": "tone",
+    "source": "measured",
+    "line": 32,
+    "column": 10,
+    "end_line": 32,
+    "end_column": 29
+   }
+  },
+  {
+   "type": "BELOW",
+   "start": "step:by_tone",
+   "end": "step:escalate",
+   "properties": {
+    "below": 0.6,
+    "line": 33,
+    "column": 5,
+    "end_line": 33,
+    "end_column": 37
+   }
+  },
+  {
+   "type": "BRANCH",
+   "start": "step:by_tone",
+   "end": "step:draft",
+   "properties": {
+    "value": "calm",
+    "line": 34,
+    "column": 5,
+    "end_line": 34,
+    "end_column": 19
+   }
+  },
+  {
+   "type": "BRANCH",
+   "start": "step:by_tone",
+   "end": "step:escalate",
+   "properties": {
+    "value": "angry",
+    "line": 35,
+    "column": 5,
+    "end_line": 35,
+    "end_column": 22
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:draft",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:ticket",
+   "end": "step:draft",
+   "properties": {
+    "line": 39,
+    "column": 10,
+    "end_line": 39,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:policy",
+   "end": "step:draft",
+   "properties": {
+    "line": 39,
+    "column": 18,
+    "end_line": 39,
+    "end_column": 24
+   }
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:draft",
+   "end": "data:reply",
+   "properties": {
+    "line": 40,
+    "column": 13,
+    "end_line": 40,
+    "end_column": 26
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:draft",
+   "end": "step:check",
+   "properties": {
+    "line": 41,
+    "column": 5,
+    "end_line": 41,
+    "end_column": 20
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:escalate",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:ticket",
+   "end": "step:escalate",
+   "properties": {
+    "line": 45,
+    "column": 10,
+    "end_line": 45,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:escalate",
+   "end": "data:reply",
+   "properties": {
+    "line": 47,
+    "column": 13,
+    "end_line": 47,
+    "end_column": 26
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:queue",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:escalate",
+   "end": "data:queue",
+   "properties": {
+    "line": 48,
+    "column": 13,
+    "end_line": 48,
+    "end_column": 26
+   }
+  },
+  {
+   "type": "RUNS",
+   "start": "step:escalate",
+   "end": "file:scripts/escalate.py",
+   "properties": {}
+  },
+  {
+   "type": "CONTINUES",
+   "start": "step:escalate",
+   "end": "loop:each_ticket",
+   "properties": {
+    "line": 49,
+    "column": 5,
+    "end_line": 49,
+    "end_column": 13
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:check",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:reply",
+   "end": "step:check",
+   "properties": {
+    "line": 53,
+    "column": 10,
+    "end_line": 53,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:policy",
+   "end": "step:check",
+   "properties": {
+    "line": 53,
+    "column": 17,
+    "end_line": 53,
+    "end_column": 23
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:passed",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:check",
+   "end": "data:passed",
+   "properties": {
+    "line": 55,
+    "column": 13,
+    "end_line": 55,
+    "end_column": 34
+   }
+  },
+  {
+   "type": "RUNS",
+   "start": "step:check",
+   "end": "file:scripts/policy_check.py",
+   "properties": {}
+  },
+  {
+   "type": "NEXT",
+   "start": "step:check",
+   "end": "loop:revise",
+   "properties": {
+    "line": 56,
+    "column": 5,
+    "end_line": 56,
+    "end_column": 21
+   }
+  },
+  {
+   "type": "HAS_LOOP",
+   "start": "procedure",
+   "end": "loop:revise",
+   "properties": {}
+  },
+  {
+   "type": "WATCHES",
+   "start": "loop:revise",
+   "end": "data:passed",
+   "properties": {
+    "line": 59,
+    "column": 21,
+    "end_line": 59,
+    "end_column": 27
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:revise",
+   "end": "step:fix",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "ENTERS",
+   "start": "loop:revise",
+   "end": "step:fix",
+   "properties": {}
+  },
+  {
+   "type": "CONTINUES",
+   "start": "loop:revise",
+   "end": "loop:each_ticket",
+   "properties": {
+    "line": 66,
+    "column": 5,
+    "end_line": 66,
+    "end_column": 13
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:fix",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:reply",
+   "end": "step:fix",
+   "properties": {
+    "line": 61,
+    "column": 12,
+    "end_line": 61,
+    "end_column": 17
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:policy",
+   "end": "step:fix",
+   "properties": {
+    "line": 61,
+    "column": 19,
+    "end_line": 61,
+    "end_column": 25
+   }
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:fix",
+   "end": "data:reply",
+   "properties": {
+    "line": 62,
+    "column": 15,
+    "end_line": 62,
+    "end_column": 28
+   }
+  },
+  {
+   "type": "AGAIN",
+   "start": "step:fix",
+   "end": "step:check",
+   "properties": {
+    "line": 63,
+    "column": 7,
+    "end_line": 63,
+    "end_column": 18
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:summarize",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:replies",
+   "end": "step:summarize",
+   "properties": {
+    "line": 73,
+    "column": 8,
+    "end_line": 73,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:summary",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:summarize",
+   "end": "data:summary",
+   "properties": {
+    "line": 74,
+    "column": 11,
+    "end_line": 74,
+    "end_column": 26
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:summarize",
+   "end": "step:end",
+   "properties": {
+    "line": 75,
+    "column": 3,
+    "end_line": 75,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:end",
+   "properties": {}
+  },
+  {
+   "type": "ENDS_AT",
+   "start": "procedure",
+   "end": "step:end",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:summary",
+   "end": "step:end",
+   "properties": {
+    "line": 79,
+    "column": 8,
+    "end_line": 79,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:replies",
+   "end": "step:end",
+   "properties": {
+    "line": 79,
+    "column": 17,
+    "end_line": 79,
+    "end_column": 24
+   }
+  }
+ ]
+}

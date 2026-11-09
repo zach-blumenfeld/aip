@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { api, serverUrl, setToken, token } from "../api/client";
+import { api, describe, serverUrl, setToken, token } from "../api/client";
 import { consoleConfig } from "../api/console";
-import { describe } from "./Source";
 
-/** The server this console was started for, and the bearer token this browser sends it (design §11: the
- *  token never outlives the session, so it lives in sessionStorage). The server itself is fixed by
- *  `aip-console --server URL` (or `aip config`), since the runs the console starts use it too. */
+/** The server this console was started for, and the bearer token this browser sends it (never beyond the
+ *  session, so it lives in sessionStorage). The server itself is fixed by `aip-console --server URL` (or
+ *  `aip config`), since the runs the console starts are recorded on it too. */
 export function Server() {
   const [bearer, setBearer] = useState(token());
   const [note, setNote] = useState<string | null>(null);
@@ -28,16 +27,24 @@ export function Server() {
     <article className="server">
       <h1>Server</h1>
       <dl>
-        <dt>server</dt><dd><code data-testid="server-url">{config.server}</code> <span className="muted small">from <code>aip-console --server</code>, else <code>aip config</code>; the page calls it directly</span></dd>
-        <dt>runs</dt><dd>by <code>aip {config.aip.version}</code> (format {config.aip.format}) on this machine, in <code>{config.workdir}</code></dd>
+        <dt>server</dt>
+        <dd>
+          <code data-testid="server-url">{config.server}</code>{" "}
+          <span className="muted small">
+            {config.local
+              ? <>the local server: <code>aip</code> starts it on this machine when a command needs it, and it stops when idle</>
+              : <>from <code>aip-console --server</code>, else <code>aip config</code>; the page calls it directly</>}
+          </span>
+        </dd>
+        <dt>runs</dt><dd>by <code>aip {config.aip.version}</code> (language {config.aip.language}) on this machine, in <code>{config.workdir}</code></dd>
       </dl>
       <form onSubmit={(e) => { e.preventDefault(); void save(); }} className="fields">
         <label className="field">bearer token
           <input type="password" aria-label="bearer token" value={bearer} autoComplete="off"
                  onChange={(e) => setBearer(e.target.value)} />
           <span className="muted small">
-            What this page sends: needed off localhost, and for pin and retire (the <code>publish</code> scope). Kept for this
-            tab's session only. Runs use the CLI's own token (<code>aip config --token</code>).
+            What this page sends: needed off localhost, and for pin, retire and stored audit queries (the <code>publish</code> scope).
+            Kept for this tab's session only. Runs use the CLI's own token (<code>aip config --token</code>).
           </span>
         </label>
         <div className="actions">

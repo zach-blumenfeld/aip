@@ -14,6 +14,9 @@ export default defineConfig({
     port: Number(process.env.PORT ?? 5173),
     strictPort: true,
     proxy: { "/console": { target: launcher, changeOrigin: true } },
+    // src/highlight/Code.tsx imports the grammar and its colours from the VS Code extension beside this
+    // folder (../editors/vscode), so the dev server may read one level up.
+    fs: { allow: [".."] },
   },
   build: { outDir: "dist", emptyOutDir: true },
 });

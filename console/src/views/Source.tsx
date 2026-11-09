@@ -1,107 +1,83 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, ApiError, type FileBytes } from "../api/client";
-import type { FileEntry } from "../api/types";
-import { asText, splitLines } from "../diff/lines";
-import { href } from "../router";
-import { DownloadZip } from "./Zip";
+import { allFiles, describe, graphOf } from "../api/client";
+import type { BundleFile, BundleGraph } from "../api/types";
+import { Code, isProcedureSource } from "../highlight/Code.tsx";
+import { bundleOf, href } from "../router";
+import { DraftBadge } from "./Record";
 
-/** View 2a: the file manifest of a revision and a viewer for one file. */
+/** What a bundle was compiled from: `procedure.aip`, byte for byte as it was stored, in the colours of the
+ *  grammar the VS Code extension ships, and the files beside it. All of it comes with the bundle's graph. */
 export function Source({ reference, path }: { reference: string; path?: string }) {
-  const [files, setFiles] = useState<FileEntry[] | null>(null);
-  const [revision, setRevision] = useState<string | null>(null);
+  const [bundle, setBundle] = useState<BundleGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const name = reference.split("@")[0];
 
   useEffect(() => {
-    setFiles(null);
-    setRevision(null);
+    setBundle(null);
     setError(null);
-    api.files(reference).then(setFiles).catch((e: unknown) => setError(describe(e)));
-    // The zip is named after the exact revision, which a bare name or `@latest` leaves to the catalog to say.
-    api.info(reference).then((info) => setRevision(info.revision)).catch(() => undefined);
+    graphOf(reference).then(setBundle).catch((e: unknown) => setError(describe(e)));
   }, [reference]);
 
+  const files = useMemo(() => (bundle ? allFiles(bundle) : []), [bundle]);
+
   if (error) return <p className="error" role="alert">{error}</p>;
-  if (files === null) return <p className="muted">Loading files of {reference}…</p>;
+  if (bundle === null) return <p className="muted">Loading the source of {reference}…</p>;
   const total = files.reduce((n, f) => n + f.size, 0);
+  const open = path ?? "procedure.aip";
+  const file = files.find((f) => f.path === open);
 
   return (
     <article className="source">
       <nav className="crumbs">
-        <a href={href({ page: "catalog" })}>catalog</a> / <a href={href({ page: "procedure", ref: reference })}><code>{reference}</code></a> / files
+        <a href={href({ page: "catalog" })}>catalog</a> / <a href={href({ page: "procedure", ref: reference })}><code>{bundle.name}</code></a> / source
         {path && <> / <code>{path}</code></>}
       </nav>
-      <h1>{name} <span className="muted rev">source{reference.includes("@") ? ` @${reference.split("@")[1]}` : ""}</span></h1>
+      <h1>{bundle.name} <span className="muted rev">source{bundle.revision ? ` @${bundle.revision}` : ""}</span> <DraftBadge draft={bundle.draft} /></h1>
       <p className="muted">
-        {files.length} files, {formatSize(total)} · <a href={href({ page: "diff", name })}>compare revisions</a>
-        {revision && <> · <DownloadZip name={name} revision={revision} /></>}
+        {files.length} files, {formatSize(total)} · bundle <code title={bundle.bundle_id}>{bundle.bundle_id.slice(0, 12)}</code>
+        {!bundleOf(reference) && <> · <a href={href({ page: "diff", name: bundle.name })}>compare revisions</a></>}
+        {" "}· <code>aip get {bundle.revision ? `${bundle.name}@${bundle.revision}` : bundle.name} --out DIR</code> writes this folder
       </p>
 
       <div className="source-grid">
-        <table aria-label="file manifest" className="compact manifest">
+        <table aria-label="files" className="compact manifest">
           <thead><tr><th>path</th><th>size</th><th>sha256</th><th>mode</th></tr></thead>
           <tbody>
             {files.map((f) => (
-              <tr key={f.path} aria-current={f.path === path ? "true" : undefined}>
+              <tr key={f.path} aria-current={f.path === open ? "true" : undefined} data-testid="file-row" data-path={f.path}>
                 <td><a href={href({ page: "source", ref: reference, path: f.path })}><code>{f.path}</code></a></td>
                 <td className="num">{formatSize(f.size)}</td>
-                <td><code title={f.sha256}>{f.sha256.slice(0, 12)}</code></td>
+                <td>{f.sha256 ? <code title={f.sha256}>{f.sha256.slice(0, 12)}</code> : <span className="muted" title="The source is the bundle's own text; the bundle id is its hash with the files'.">—</span>}</td>
                 <td><code>{(f.mode & 0o777).toString(8)}</code></td>
               </tr>
             ))}
           </tbody>
         </table>
-        {path ? <FileViewer reference={reference} path={path} entry={files.find((f) => f.path === path)} />
-              : <p className="muted">Pick a file to view it.</p>}
+        {file ? <FileViewer file={file} /> : <p className="error" role="alert">No file {open} in this bundle.</p>}
       </div>
     </article>
   );
 }
 
-function FileViewer({ reference, path, entry }: { reference: string; path: string; entry?: FileEntry }) {
-  const [data, setData] = useState<FileBytes | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setData(null);
-    setError(null);
-    api.file(reference, path).then(setData).catch((e: unknown) => setError(describe(e)));
-  }, [reference, path]);
-
-  const text = useMemo(() => (data ? asText(data.bytes) : null), [data]);
-  // A blob URL carries the bytes we already fetched with the token, so the download
-  // needs no second, unauthenticated request.
-  const downloadUrl = useMemo(
-    () => (data && text === null ? URL.createObjectURL(new Blob([data.bytes as BlobPart], { type: data.mediaType })) : null),
-    [data, text],
-  );
-  useEffect(() => () => { if (downloadUrl) URL.revokeObjectURL(downloadUrl); }, [downloadUrl]);
-
-  if (error) return <p className="error" role="alert">{error}</p>;
-  if (!data) return <p className="muted">Loading {path}…</p>;
-  const size = entry?.size ?? data.bytes.length;
+function FileViewer({ file }: { file: BundleFile }) {
+  // A file that is not UTF-8 text is kept as base64: offered as a download, not shown.
+  const download = useMemo(() => {
+    if (file.text !== null || file.base64 === null) return null;
+    const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+    return URL.createObjectURL(new Blob([bytes as BlobPart]));
+  }, [file]);
+  useEffect(() => () => { if (download) URL.revokeObjectURL(download); }, [download]);
 
   return (
     <section className="file-view" aria-label="file">
-      <h2><code>{path}</code> <span className="muted">· {formatSize(size)} · {data.mediaType}</span></h2>
-      {text === null ? (
+      <h2><code>{file.path}</code> <span className="muted">· {formatSize(file.size)}</span></h2>
+      {file.text === null ? (
         <p data-testid="binary-file">
-          Binary file. <a href={downloadUrl ?? "#"} download={path.split("/").pop()}>Download {formatSize(size)}</a>
+          Not text. <a href={download ?? "#"} download={file.path.split("/").pop()}>Download {formatSize(file.size)}</a>
         </p>
       ) : (
-        <Code text={text} />
+        <Code text={file.text} aip={isProcedureSource(file.path)} />
       )}
     </section>
-  );
-}
-
-/** Monospace text with line numbers from CSS counters. */
-export function Code({ text }: { text: string }) {
-  const lines = splitLines(text);
-  return (
-    <ol className="code" data-testid="file-text">
-      {lines.map((line, i) => <li key={i}>{line === "" ? "​" : line}</li>)}
-    </ol>
   );
 }
 
@@ -109,8 +85,4 @@ export function formatSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-export function describe(e: unknown): string {
-  return e instanceof ApiError ? `${e.kind}: ${e.message}` : String(e);
 }

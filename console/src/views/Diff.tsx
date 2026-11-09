@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../api/client";
-import type { CatalogEntry, FileEntry } from "../api/types";
-import { asText, diffLines, diffManifests, type LineOp, type ManifestChange } from "../diff/lines";
+import { allFiles, api, describe } from "../api/client";
+import type { BundleFile, CatalogEntry } from "../api/types";
+import { diffLines, diffManifests, type LineOp, type ManifestChange } from "../diff/lines";
 import { href, navigate } from "../router";
-import { describe, formatSize } from "./Source";
+import { formatSize } from "./Source";
 
-/** View 2b: two revisions of one name compared at the manifest level, with a line diff per changed text file. */
+/** Two revisions of one name compared file by file (procedure.aip among them), with a line diff per changed text file. */
 export function Diff({ name, a, b }: { name: string; a?: string; b?: string }) {
   const [entry, setEntry] = useState<CatalogEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,13 +18,12 @@ export function Diff({ name, a, b }: { name: string; a?: string; b?: string }) {
     }).catch((e: unknown) => setError(describe(e)));
   }, [name]);
 
-  // Without an explicit pair, compare the resolved revision (pinned, else latest)
-  // with the one published before it.
+  // Without an explicit pair, compare the revision the name resolves to with the one published before it.
   useEffect(() => {
     if (!entry || (a && b)) return;
     const revs = entry.revisions.map((r) => r.revision);
     if (revs.length === 0) return;
-    const to = b ?? entry.pinned ?? entry.latest ?? revs[0];
+    const to = b ?? entry.resolves ?? revs[0];
     const idx = revs.indexOf(to);
     const from = a ?? revs[idx + 1] ?? revs[idx - 1] ?? to;
     navigate({ page: "diff", name, a: from, b: to });
@@ -47,7 +46,7 @@ export function Diff({ name, a, b }: { name: string; a?: string; b?: string }) {
         <RevisionSelect label="to" entry={entry} value={b} onChange={(v) => pick("b", v)} />
         <button type="button" onClick={() => navigate({ page: "diff", name, a: b, b: a })}>swap</button>
       </div>
-      <ManifestDiff name={name} a={a} b={b} />
+      <FilesDiff name={name} a={a} b={b} />
     </article>
   );
 }
@@ -68,24 +67,23 @@ function RevisionSelect({ label, entry, value, onChange }: { label: string; entr
   );
 }
 
-function ManifestDiff({ name, a, b }: { name: string; a: string; b: string }) {
-  const [manifests, setManifests] = useState<[FileEntry[], FileEntry[]] | null>(null);
+function FilesDiff({ name, a, b }: { name: string; a: string; b: string }) {
+  const [sides, setSides] = useState<[BundleFile[], BundleFile[]] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setManifests(null);
+    setSides(null);
     setError(null);
-    Promise.all([api.files(`${name}@${a}`), api.files(`${name}@${b}`)])
-      .then(setManifests).catch((e: unknown) => setError(describe(e)));
+    Promise.all([api.graph(`${name}@${a}`), api.graph(`${name}@${b}`)])
+      .then(([ga, gb]) => setSides([allFiles(ga), allFiles(gb)])).catch((e: unknown) => setError(describe(e)));
   }, [name, a, b]);
 
-  const changes = useMemo(() => (manifests ? diffManifests(manifests[0], manifests[1]) : []), [manifests]);
+  const changes = useMemo(() => (sides ? diffManifests(sides[0], sides[1]) : []), [sides]);
 
   if (error) return <p className="error" role="alert">{error}</p>;
-  if (!manifests) return <p className="muted">Loading manifests…</p>;
+  if (!sides) return <p className="muted">Loading both revisions…</p>;
 
   const count = (s: ManifestChange["status"]) => changes.filter((c) => c.status === s).length;
-  const changed = changes.filter((c) => c.status !== "unchanged");
 
   return (
     <>
@@ -93,25 +91,22 @@ function ManifestDiff({ name, a, b }: { name: string; a: string; b: string }) {
         {a === b ? "Same revision on both sides." :
           `${count("added")} added, ${count("removed")} removed, ${count("changed")} changed, ${count("unchanged")} unchanged`}
       </p>
-      <table aria-label="manifest diff" className="compact manifest">
-        <thead><tr><th>status</th><th>path</th><th>size</th><th>sha256</th></tr></thead>
+      <table aria-label="files diff" className="compact manifest">
+        <thead><tr><th>status</th><th>path</th><th>size</th></tr></thead>
         <tbody>
           {changes.map((c) => (
-            <tr key={c.path} className={`status-${c.status}`} data-status={c.status}>
+            <tr key={c.path} className={`status-${c.status}`} data-status={c.status} data-path={c.path}>
               <td><span className="status-tag">{c.status}</span></td>
               <td>
                 <code>{c.path}</code>
                 {c.status !== "removed" && <> <a className="muted" href={href({ page: "source", ref: `${name}@${b}`, path: c.path })}>view</a></>}
               </td>
               <td className="num">{sizeCell(c)}</td>
-              <td>{hashCell(c)}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      {changed.filter((c) => c.status === "changed").map((c) => (
-        <FileDiff key={c.path} name={name} a={a} b={b} change={c} />
-      ))}
+      {changes.filter((c) => c.status === "changed").map((c) => <FileDiff key={c.path} change={c} />)}
     </>
   );
 }
@@ -123,42 +118,17 @@ function sizeCell(c: ManifestChange): string {
   return formatSize(c.b!.size);
 }
 
-function hashCell(c: ManifestChange) {
-  const short = (f: FileEntry) => <code title={f.sha256}>{f.sha256.slice(0, 12)}</code>;
-  if (c.status === "added") return short(c.b!);
-  if (c.status === "removed") return short(c.a!);
-  if (c.status === "changed") {
-    const modeNote = c.a!.mode !== c.b!.mode ? <span className="muted"> · mode {(c.a!.mode & 0o777).toString(8)} → {(c.b!.mode & 0o777).toString(8)}</span> : null;
-    return c.a!.sha256 === c.b!.sha256 ? <>{short(c.b!)}{modeNote}</> : <>{short(c.a!)} → {short(c.b!)}{modeNote}</>;
-  }
-  return short(c.b!);
-}
-
 const CONTEXT = 3;
 
-function FileDiff({ name, a, b, change }: { name: string; a: string; b: string; change: ManifestChange }) {
-  const [ops, setOps] = useState<LineOp[] | "binary" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setOps(null);
-    if (change.a!.sha256 === change.b!.sha256) { setOps([]); return; } // mode-only change
-    Promise.all([api.file(`${name}@${a}`, change.path), api.file(`${name}@${b}`, change.path)])
-      .then(([fa, fb]) => {
-        const ta = asText(fa.bytes), tb = asText(fb.bytes);
-        setOps(ta === null || tb === null ? "binary" : diffLines(ta, tb));
-      })
-      .catch((e: unknown) => setError(describe(e)));
-  }, [name, a, b, change]);
-
+function FileDiff({ change }: { change: ManifestChange }) {
+  const ta = change.a!.text, tb = change.b!.text;
+  const ops = useMemo(() => (ta === null || tb === null ? null : ta === tb ? [] : diffLines(ta, tb)), [ta, tb]);
   return (
     <section className="file-diff" data-testid="file-diff" data-path={change.path}>
       <h2><code>{change.path}</code></h2>
-      {error && <p className="error" role="alert">{error}</p>}
-      {ops === null && !error && <p className="muted">Loading both versions…</p>}
-      {ops === "binary" && <p className="muted">Binary files differ ({formatSize(change.a!.size)} → {formatSize(change.b!.size)}).</p>}
-      {Array.isArray(ops) && ops.length === 0 && <p className="muted">Contents identical; only the mode changed.</p>}
-      {Array.isArray(ops) && ops.length > 0 && <Hunks ops={ops} />}
+      {ops === null && <p className="muted">Files that are not text differ ({formatSize(change.a!.size)} → {formatSize(change.b!.size)}).</p>}
+      {ops !== null && ops.length === 0 && <p className="muted">Contents identical; only the mode changed.</p>}
+      {ops !== null && ops.length > 0 && <Hunks ops={ops} />}
     </section>
   );
 }

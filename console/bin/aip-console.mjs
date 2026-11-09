@@ -2,47 +2,47 @@
 // aip-console (also installed as aip-inspector): serve the console's page from this machine and run
 // procedures through the `aip` CLI.
 //
-//   aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH] [--aip-spec PATH]
+//   aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH]
 //
-// The page calls the AIP server directly for catalog, history and governance; nothing is proxied.
-// Interactive runs go through the CLI, next to the data: the page posts to this process, which
-// spawns `aip run --progress` or `aip resume --progress` and relays each JSON line it prints to
-// the page as a server-sent event, so scripts run here and their files land in the working
-// directory. With a FOLDER instead of a server, runs are local and the server pages are hidden.
+// The page calls the AIP server directly for the catalog, the runs and the audit queries; nothing is
+// proxied. Runs go through the CLI, next to the data: the page posts to this process, which spawns
+// `aip run --progress` or `aip resume --progress` and relays each JSON line it prints to the page as a
+// server-sent event, so scripts run here, the decision model is the one this machine's `aip config`
+// names, and the run is recorded on the server by the CLI itself. With a FOLDER (a program directory,
+// one holding procedure.aip) instead of a server, runs are local and unrecorded and the server pages
+// are hidden.
 //
 // Endpoints, all under /console/ and only for this machine (loopback Host, same-origin posts):
-//   GET  /console/config       {mode, server, folder, workdir, aip: {version, format}, minimum}
-//   GET  /console/skill?ref=   `aip info --json` and `--example-input` for the ref (or the folder)
-//   POST /console/run          {ref, input}            -> event stream of `aip run --progress`
-//   POST /console/resume       {run_id, input?}        -> event stream of `aip resume --progress`
-//   POST /console/cancel       {session}               kills that session's `aip` and its scripts
-//   POST /console/validate     {name, files}           `aip-spec validate` on those files: {status, valid, issues}
-//   POST /console/upgrade      {name, files}           `aip upgrade` on those files: {status, valid, issues, output, skillMd}
-//   POST /console/probe        {name, files, script, stdin, timeout}
-//                                                      runs one Python script of those files: {code, stdout, stderr, ...}
-//   POST /console/handoff      {name, files}           writes the scaffold to <workdir>/studio/<name>/ for an agent: {dir}
-//   POST /console/handoff/read {name}                  that folder's files and a hash of them: {dir, files, hash}
-// These are the Studio's agent fill-in (docs/plans/STUDIO-PLAN.md, S6). validate and probe write the files to a fresh
-// temporary folder `<name>/` and remove it after. `files` is [{path, mode, b64}]. Without `aip-spec` the validate
-// endpoint answers 503 `aip_spec_missing` saying how to install it. A handoff never deletes: a folder already at
-// the path is moved to <workdir>/studio/.previous/ first.
+//   GET  /console/config          {mode, server, local, folder, workdir, aip: {version, language}, minimum}
+//   GET  /console/procedure?ref=  `aip info <ref> --json` (the folder's, in folder mode)
+//   GET  /console/graph           folder mode: `aip compile --check --json` on the folder, with `source`,
+//                                 the text of its procedure.aip
+//   POST /console/run             {ref, inputs, session}      -> event stream of `aip run --progress`
+//   POST /console/resume          {run_id, answers?, session} -> event stream of `aip resume --progress`
+//   POST /console/cancel          {process}                   kills that `aip` and its scripts
+//   GET  /console/record?run_id=  `aip runs <run_id> --json`: the run, from this machine's run file or the server
+//   GET  /console/runs            `aip runs --json`; in folder mode, this machine's runs of the folder
+//   POST /console/wake            starts the local server when the console's server is `aip config server local`
 //
-// An event stream sends `event: session` (its id) first, then one `data:` event per line the CLI
-// printed (step lines, then the final pause, done or error object), then `event: exit` with the
-// exit code, signal and stderr. Closing the stream kills the subprocess too.
+// An event stream sends `event: process` (its id, to cancel by) first, then one `data:` event per line
+// the CLI printed (step lines, then the final paused, done or error object), then `event: exit` with
+// the exit code, signal and stderr. Closing the stream kills the subprocess too. Every run the console
+// starts is recorded with `agent: console` and the page's `session`.
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The oldest `aip` this console speaks to: 0.8.0, format 0.8 (`agent-instruction-protocol`, with `aip-spec` beside
- *  it): the `start` step, decision `confidence` and `fallback`, the router's confidence check and the
- *  `no_decision_model` stop in the CLI JSON contract (docs/cli-json.md) all date from it. */
-export const MINIMUM_AIP = "0.8.0";
+/** The oldest `aip` this console speaks to: 0.9.0, language 0.9: bundles, `aip run` of a folder or a name,
+ *  pauses that carry tasks, `aip runs <id> --json`, `aip compile --json` (aip docs/cli-json.md). */
+export const MINIMUM_AIP = "0.9.0";
+
+/** Who the console's runs are recorded as (`aip run --agent`). */
+export const AGENT = "console";
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const TYPES = {
@@ -73,10 +73,17 @@ export function compareVersions(a, b) {
   return 0;
 }
 
-/** `aip --version`: `{version, format}`, or `{problem}` saying why this aip cannot be used. */
+/** What `aip --version` printed, read: `{version, language}`, or null when the line is not the 0.9 one
+ *  (`aip <version> language <language>`; through 0.8 it said `format`). */
+export function parseVersionLine(line) {
+  const m = /^aip (\S+) language (\S+)$/.exec(line.trim());
+  return m && versionKey(m[1]) !== null ? { version: m[1], language: m[2] } : null;
+}
+
+/** `aip --version`: `{version, language}`, or `{problem}` saying why this aip cannot be used. */
 export function checkAip(bin) {
   const out = spawnSync(bin, ["--version"], { encoding: "utf8" });
-  const install = "Install or upgrade it: `uv tool install --upgrade agent-instruction-protocol` (or the installer, " +
+  const install = "Install or upgrade it: `uv tool install --upgrade 'agent-instruction-protocol[server]'` (or the installer, " +
                   "`curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash`), " +
                   "or point --aip (or AIP_BIN) at one.";
   if (out.error) {
@@ -84,39 +91,45 @@ export function checkAip(bin) {
                       `(${out.error.code ?? out.error.message}). ${install}` };
   }
   const line = `${out.stdout ?? ""}`.trim().split("\n")[0] ?? "";
-  const m = /^aip (\S+) format (\S+)$/.exec(line);
-  if (out.status !== 0 || !m || versionKey(m[1]) === null) {
+  const found = out.status === 0 ? parseVersionLine(line) : null;
+  if (!found) {
     const said = (line || `${out.stderr ?? ""}`.trim().split("\n")[0] || `exit ${out.status}`);
     return { problem: `aip-console needs aip ${MINIMUM_AIP} or newer; \`${bin} --version\` said "${said}", ` +
                       `which is older than the console's CLI contract. ${install}` };
   }
-  if (compareVersions(m[1], MINIMUM_AIP) < 0) {
-    return { problem: `aip-console needs aip ${MINIMUM_AIP} or newer; \`${bin}\` is aip ${m[1]}. ${install}` };
+  if (compareVersions(found.version, MINIMUM_AIP) < 0) {
+    return { problem: `aip-console needs aip ${MINIMUM_AIP} or newer; \`${bin}\` is aip ${found.version}. ${install}` };
   }
-  return { version: m[1], format: m[2] };
+  return found;
 }
 
-/** The server `aip config` points at, or null. */
+/** The `server:` line of `aip config`, read: `{server, local}`. `server` is null for `none`; `local` says it is
+ *  the one a command starts on this machine (`server: local  http://127.0.0.1:8247, started when ...`). */
+export function parseConfiguredServer(text) {
+  const m = /^server: (\S+)(?:[ \t]+(\S+))?/m.exec(text ?? "");
+  if (!m || m[1] === "none") return { server: null, local: false };
+  if (m[1] === "local") return { server: (m[2] ?? "").replace(/,$/, "") || null, local: true };
+  return { server: m[1], local: false };
+}
+
 function configuredServer(bin) {
-  const out = spawnSync(bin, ["config"], { encoding: "utf8" });
-  const m = /^server: (\S+)/m.exec(out.stdout ?? "");
-  return m ? m[1] : null;
+  return parseConfiguredServer(spawnSync(bin, ["config"], { encoding: "utf8" }).stdout);
 }
 
 // ------------------------------------------------------------------ arguments
 
-const USAGE = `usage: aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH] [--aip-spec PATH]
+const USAGE = `usage: aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH]
 
-  --server URL   the AIP server the page and the runs use (default: what \`aip config\` names)
-  FOLDER         a skill folder instead: runs are local, the catalog, history and governance are hidden
+  --server URL   the AIP server the page reads and the runs are recorded on (default: what \`aip config\` names;
+                 \`local\` is the server aip starts on this machine when a command needs it)
+  FOLDER         a program directory (procedure.aip) instead: runs are local and unrecorded, and the catalog,
+                 history and audit pages are hidden
   --port N       where to serve the console (default 4280; 0 picks a free port)
   --workdir DIR  the runs' working directory, where scripts read and write files (default the current one)
-  --aip PATH     the aip CLI to run (default $AIP_BIN, else \`aip\` on PATH); needs ${MINIMUM_AIP} or newer
-  --aip-spec PATH
-                 the validator the Studio checks an agent's fill-in with (default $AIP_SPEC_BIN, else \`aip-spec\`)`;
+  --aip PATH     the aip CLI to run (default $AIP_BIN, else \`aip\` on PATH); needs ${MINIMUM_AIP} or newer`;
 
 function parseArgs(argv) {
-  const args = { port: 4280, workdir: process.cwd(), aip: process.env.AIP_BIN || "aip", aipSpec: process.env.AIP_SPEC_BIN || "aip-spec" };
+  const args = { port: 4280, workdir: process.cwd(), aip: process.env.AIP_BIN || "aip" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = () => {
@@ -127,7 +140,6 @@ function parseArgs(argv) {
     else if (a === "--port") args.port = Number(value());
     else if (a === "--workdir") args.workdir = path.resolve(value());
     else if (a === "--aip") args.aip = value();
-    else if (a === "--aip-spec") args.aipSpec = value();
     else if (a === "-h" || a === "--help") { console.log(USAGE); process.exit(0); }
     else if (a.startsWith("-")) fail(`unknown option ${a}`);
     else if (args.target === undefined) args.target = a;
@@ -144,20 +156,29 @@ function fail(message) {
 
 // ------------------------------------------------------------------ the subprocesses
 
-/** Running `aip` sessions by id, so a page can cancel one. */
-const sessions = new Map();
+/** Running `aip` processes by id, so a page can cancel one. */
+const running = new Map();
+
+const SESSION = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** The environment of one `aip`: the console's, with who is running. */
+function envFor(setup, session) {
+  const env = { ...setup.env, AIP_AGENT: AGENT };
+  if (typeof session === "string" && SESSION.test(session)) env.AIP_SESSION = session;
+  return env;
+}
 
 /** Spawn `aip <args>` and stream what it prints to `res` as server-sent events. */
-function stream(res, setup, args, input) {
+function stream(res, setup, args, input, session) {
   const id = randomBytes(8).toString("hex");
   res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive" });
   const send = (event, data) => res.write(`${event ? `event: ${event}\n` : ""}data: ${data}\n\n`);
-  send("session", JSON.stringify({ session: id }));
+  send("process", JSON.stringify({ process: id }));
 
   // Its own process group, so cancelling stops the scripts it started as well.
-  const child = spawn(setup.aip, args, { cwd: setup.cwd, env: setup.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
-  const session = { child, done: false, cancelled: false };
-  sessions.set(id, session);
+  const child = spawn(setup.aip, args, { cwd: setup.cwd, env: envFor(setup, session), detached: true, stdio: ["pipe", "pipe", "pipe"] });
+  const entry = { child, done: false, cancelled: false };
+  running.set(id, entry);
   let stderr = "";
   let buffered = "";
   child.stdout.setEncoding("utf8");
@@ -173,11 +194,11 @@ function stream(res, setup, args, input) {
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { if (stderr.length < STDERR_LIMIT) stderr += chunk; });
   const finish = (code, signal, error) => {
-    if (session.done) return;
-    session.done = true;
-    sessions.delete(id);
+    if (entry.done) return;
+    entry.done = true;
+    running.delete(id);
     if (buffered.trim()) send(null, buffered.trim());
-    send("exit", JSON.stringify({ code, signal, cancelled: session.cancelled, stderr: stderr.slice(0, STDERR_LIMIT),
+    send("exit", JSON.stringify({ code, signal, cancelled: entry.cancelled, stderr: stderr.slice(0, STDERR_LIMIT),
                                   ...(error ? { error } : {}) }));
     res.end();
   };
@@ -186,12 +207,23 @@ function stream(res, setup, args, input) {
   child.stdin.on("error", () => {});
   child.stdin.end(input === undefined ? "" : JSON.stringify(input));
   // The page went away: nobody will read the outcome, so stop the run where it is.
-  res.on("close", () => { if (!session.done) kill(session); });
+  res.on("close", () => { if (!entry.done) kill(entry); });
 }
 
-function kill(session) {
-  session.cancelled = true;
-  try { process.kill(-session.child.pid, "SIGTERM"); } catch { session.child.kill("SIGTERM"); }
+function kill(entry) {
+  entry.cancelled = true;
+  try { process.kill(-entry.child.pid, "SIGTERM"); } catch { entry.child.kill("SIGTERM"); }
+}
+
+/** `aip <args>` run to its end: `{status, stdout, stderr}`. */
+function aip(setup, args) {
+  const out = spawnSync(setup.aip, args, { cwd: setup.cwd, env: envFor(setup), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return { status: out.error ? null : out.status, stdout: `${out.stdout ?? ""}`, stderr: `${out.stderr ?? ""}${out.error ? out.error.message : ""}` };
+}
+
+/** What a failed `aip` said, for an error envelope. */
+function said(out, what) {
+  return (out.stderr.trim() || out.stdout.trim() || `${what} exited with ${out.status}`).replace(/^aip: /, "");
 }
 
 // ------------------------------------------------------------------ http
@@ -229,185 +261,7 @@ function serveFile(req, res) {
   res.end(readFileSync(file));
 }
 
-/** `aip info <ref> --json` and `--example-input`, for the run page's start form. */
-function skill(setup, ref) {
-  const run = (flag) => spawnSync(setup.aip, ["info", ref, flag], { cwd: setup.cwd, env: setup.env, encoding: "utf8" });
-  const info = run("--json");
-  if (info.error || info.status !== 0) {
-    return { error: `${info.stderr || info.stdout || info.error?.message || ""}`.trim() || `aip info exited with ${info.status}` };
-  }
-  const example = run("--example-input");
-  return { info: JSON.parse(info.stdout), example_input: example.status === 0 ? JSON.parse(example.stdout) : {} };
-}
-
-// ------------------------------------------------------------------ the Studio's checks (S6a)
-
-const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const PROBE_LIMIT = 1024 * 1024;
-
-/** `files` ([{path, mode, b64}]) written under a fresh temporary `<name>/`; the caller removes `root`. Throws on a
- *  path that would leave the folder. */
-function writeSkill(name, files) {
-  const folder = typeof name === "string" && SKILL_NAME.test(name) ? name : "skill";
-  const root = mkdtempSync(path.join(tmpdir(), "aip-console-check-"));
-  const dir = path.join(root, folder);
-  try {
-    writeFiles(dir, files);
-  } catch (e) {
-    rmSync(root, { recursive: true, force: true });
-    throw e;
-  }
-  return { root, dir };
-}
-
-/** `files` written under `dir`; throws on a path that would leave it. */
-function writeFiles(dir, files) {
-  if (!Array.isArray(files) || files.length === 0) throw new Error("files must be a non-empty list");
-  for (const f of files) {
-    const rel = `${f?.path ?? ""}`;
-    if (!rel || rel.startsWith("/") || rel.split("/").some((p) => p === "" || p === "." || p === "..")) throw new Error(`unsafe path ${rel}`);
-    const file = path.join(dir, rel);
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, Buffer.from(`${f.b64 ?? ""}`, "base64"));
-    chmodSync(file, Number.isInteger(f.mode) ? f.mode & 0o777 : 0o644);
-  }
-}
-
-// What a skill folder's snapshot leaves out (as zip.ts does): tool droppings, not the skill's files.
-const SKIP_DIRS = new Set([".git", "__pycache__", ".aip", "__MACOSX", "node_modules", ".venv"]);
-const SKIP_FILES = new Set([".DS_Store", ".aip-manifest.json"]);
-const HANDOFF_LIMIT = 3 * 1024 * 1024;
-
-/** The folder a handoff of skill `name` lives in. */
-function handoffDir(setup, name) {
-  if (typeof name !== "string" || !SKILL_NAME.test(name)) throw new Error("name must be the skill's kebab-case name");
-  return path.join(setup.workdir, "studio", name);
-}
-
-/** The scaffold written to <workdir>/studio/<name>/ for an agent to edit in place. What was there is moved aside. */
-function handoff(setup, body) {
-  const dir = handoffDir(setup, body.name);
-  let previous = null;
-  if (existsSync(dir)) {
-    previous = path.join(setup.workdir, "studio", ".previous", `${body.name}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
-    mkdirSync(path.dirname(previous), { recursive: true });
-    renameSync(dir, previous);
-  }
-  writeFiles(dir, body.files);
-  return { dir, previous };
-}
-
-/** The handoff folder's files (regular files only, no links), and a hash of paths, modes and bytes so the page can
- *  tell when the agent has changed something. */
-function readHandoff(setup, body) {
-  const dir = handoffDir(setup, body.name);
-  if (!existsSync(dir)) return { dir, files: [], hash: null, missing: true };
-  const files = [];
-  let total = 0;
-  const walk = (rel) => {
-    for (const item of readdirSync(path.join(dir, rel)).sort()) {
-      const sub = rel ? `${rel}/${item}` : item;
-      const st = lstatSync(path.join(dir, sub));
-      if (st.isDirectory()) { if (!SKIP_DIRS.has(item)) walk(sub); continue; }
-      if (!st.isFile() || SKIP_FILES.has(item) || item.endsWith(".pyc")) continue;
-      total += st.size;
-      if (total > HANDOFF_LIMIT) throw new Error(`the folder holds more than ${HANDOFF_LIMIT / 1024 / 1024} MB`);
-      files.push({ path: sub, mode: st.mode & 0o777, b64: readFileSync(path.join(dir, sub)).toString("base64") });
-    }
-  };
-  walk("");
-  const hash = createHash("sha256");
-  for (const f of files) hash.update(`${f.path}\0${f.mode}\0${f.b64}\0`);
-  return { dir, files, hash: hash.digest("hex") };
-}
-
-/** Whether `aip-spec` runs here; a working one is remembered, a missing one is looked for again next time. */
-let specChecked = false;
-function aipSpecProblem(setup) {
-  if (specChecked) return null;
-  const out = spawnSync(setup.aipSpec, ["--version"], { env: setup.env, encoding: "utf8" });
-  if (!out.error && out.status === 0) { specChecked = true; return null; }
-  return `The Studio checks an agent's result with the real validator, and \`${setup.aipSpec}\` could not be run ` +
-         `(${out.error ? out.error.code ?? out.error.message : `exit ${out.status}`}). Install it with ` +
-         "`uv tool install aip-spec` (or the installer, `curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash`), " +
-         "or point --aip-spec (or AIP_SPEC_BIN) at one.";
-}
-
-/** `aip-spec validate` on the files: its exit status and the issues it printed on stderr, one JSON object a line. */
-function validate(setup, body) {
-  const { root, dir } = writeSkill(body.name, body.files);
-  try {
-    const out = spawnSync(setup.aipSpec, ["validate", dir], { env: setup.env, encoding: "utf8" });
-    const issues = `${out.stderr ?? ""}`.split("\n").filter((l) => l.startsWith("{")).flatMap((l) => {
-      try {
-        const i = JSON.parse(l);
-        return [{ ...i, path: typeof i.path === "string" && i.path.startsWith(dir) ? path.relative(dir, i.path) || "SKILL.md" : i.path }];
-      } catch { return []; }
-    });
-    return { status: out.status, valid: out.status === 0, issues, output: `${out.stdout ?? ""}`.replaceAll(dir, body.name ?? "skill").trim() };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-/** `aip upgrade` on the files (a skill in an earlier format moved to the current one): the command's exit status
- *  (0 valid, 1 written but still invalid, 2 refused and nothing written), what it printed, the validator's issues,
- *  and the rewritten SKILL.md when one was written. */
-function upgrade(setup, body) {
-  const { root, dir } = writeSkill(body.name, body.files);
-  try {
-    const before = readFileSync(path.join(dir, "SKILL.md"), "utf8");
-    const out = spawnSync(setup.aip, ["upgrade", dir], { cwd: setup.cwd, env: setup.env, encoding: "utf8" });
-    if (out.error) throw new Error(`\`${setup.aip} upgrade\` could not be run (${out.error.code ?? out.error.message})`);
-    const issues = `${out.stderr ?? ""}`.split("\n").filter((l) => l.startsWith("{")).flatMap((l) => {
-      try {
-        const i = JSON.parse(l);
-        return [{ ...i, path: typeof i.path === "string" && i.path.startsWith(dir) ? path.relative(dir, i.path) || "SKILL.md" : i.path }];
-      } catch { return []; }
-    });
-    const after = readFileSync(path.join(dir, "SKILL.md"), "utf8");
-    const noise = `${out.stderr ?? ""}`.split("\n").filter((l) => l && !l.startsWith("{")).join("\n");
-    const output = `${out.stdout ?? ""}${noise ? `\n${noise}` : ""}`.replaceAll(dir, body.name ?? "skill").trim();
-    return { status: out.status, valid: out.status === 0, issues, output, skillMd: after !== before ? after : null };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-/** The program `name` resolves to on PATH, or null. */
-function onPath(name, env) {
-  for (const dir of `${env.PATH ?? ""}`.split(path.delimiter)) {
-    if (dir && existsSync(path.join(dir, name)) && statSync(path.join(dir, name)).isFile()) return path.join(dir, name);
-  }
-  return null;
-}
-
-/** One script of the files run the way aip runs a `python` step: from the skill's folder, `python <script>`, the
- *  payload on stdin, AIP_WORKDIR an empty folder. Only Python: the Studio's scripts are Python (v1). */
-function probe(setup, body) {
-  const script = `${body.script ?? ""}`;
-  if (!script.startsWith("scripts/")) throw new Error("script must be a path under scripts/");
-  const python = onPath("python", setup.env) ?? onPath("python3", setup.env);
-  if (!python) return Promise.resolve({ code: null, error: "no `python` (or `python3`) on this machine's PATH" });
-  const timeout = Math.min(Math.max(Number(body.timeout) || 30, 1), 120) * 1000;
-  const { root, dir } = writeSkill(body.name, body.files);
-  const work = path.join(root, "work");
-  mkdirSync(work);
-  return new Promise((resolve) => {
-    const child = spawn(python, [script], { cwd: dir, env: { ...setup.env, AIP_WORKDIR: work }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "", stderr = "", timedOut = false;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (c) => { if (stdout.length < PROBE_LIMIT) stdout += c; });
-    child.stderr.on("data", (c) => { if (stderr.length < STDERR_LIMIT) stderr += c; });
-    const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, timeout);
-    const done = (out) => { clearTimeout(timer); rmSync(root, { recursive: true, force: true }); resolve(out); };
-    child.on("error", (e) => done({ code: null, error: `could not run ${python}: ${e.message}` }));
-    child.on("close", (code, signal) => done({ code, signal, timedOut, stdout, stderr: stderr.slice(0, STDERR_LIMIT) }));
-    child.stdin.on("error", () => {});
-    child.stdin.end(JSON.stringify(body.stdin ?? {}));
-  });
-}
+const RUN_ID = /^[0-9a-zA-Z_-]{4,64}$/;
 
 function handler(setup, port) {
   const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
@@ -428,49 +282,62 @@ function handler(setup, port) {
     try {
       const route = `${req.method} ${url.pathname}`;
       if (route === "GET /console/config") {
-        return json(res, 200, { mode: setup.mode, server: setup.server, folder: setup.folder, workdir: setup.workdir,
+        return json(res, 200, { mode: setup.mode, server: setup.server, local: setup.local, folder: setup.folder, workdir: setup.workdir,
                                 aip: setup.aipVersion, minimum: MINIMUM_AIP });
       }
-      if (route === "GET /console/skill") {
+      if (route === "GET /console/procedure") {
         const ref = setup.folder ?? url.searchParams.get("ref");
         if (!ref) return problem(res, 400, "invalid_input", "ref is required");
-        const out = skill(setup, ref);
-        return out.error ? problem(res, 422, "invalid_input", out.error) : json(res, 200, out);
+        const out = aip(setup, ["info", ref, "--json"]);
+        return out.status === 0 ? json(res, 200, JSON.parse(out.stdout)) : problem(res, 422, "invalid_input", said(out, "aip info"));
+      }
+      if (route === "GET /console/graph") {
+        if (!setup.folder) return problem(res, 404, "not_found", "the graph of a published procedure comes from the server (GET /catalog/{ref}/graph)");
+        // Exit 1 with a report is a program with errors: the page shows the diagnostics.
+        const out = aip(setup, ["compile", "--check", "--json", setup.folder]);
+        let report;
+        try { report = JSON.parse(out.stdout); } catch { return problem(res, 422, "invalid_input", said(out, "aip compile")); }
+        return json(res, 200, { ok: report.ok === true, bundle_id: report.bundle_id ?? null, diagnostics: report.diagnostics ?? [],
+                                graph: report.graph ?? null, source: readFileSync(path.join(setup.folder, "procedure.aip"), "utf8") });
       }
       if (route === "POST /console/run") {
         const body = await readJson(req);
         const ref = setup.folder ?? body.ref;
         if (typeof ref !== "string" || !ref) return problem(res, 400, "invalid_input", "ref is required");
-        return stream(res, setup, ["run", ref, "--progress", "--input", "-", "--workdir", setup.workdir], body.input ?? {});
+        return stream(res, setup, ["run", ref, "--progress", "--inputs", "-", "--workdir", setup.workdir], body.inputs ?? {}, body.session);
       }
       if (route === "POST /console/resume") {
         const body = await readJson(req);
-        if (typeof body.run_id !== "string" || !/^[0-9a-zA-Z_-]+$/.test(body.run_id)) {
-          return problem(res, 400, "invalid_input", "run_id is required");
-        }
+        if (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)) return problem(res, 400, "invalid_input", "run_id is required");
         const args = ["resume", body.run_id, "--progress"];
-        if (body.input !== undefined && body.input !== null) args.push("--input", "-");
-        return stream(res, setup, args, body.input ?? undefined);
+        const answered = body.answers !== undefined && body.answers !== null;
+        if (answered) args.push("--answers", "-");
+        return stream(res, setup, args, answered ? body.answers : undefined, body.session);
       }
       if (route === "POST /console/cancel") {
         const body = await readJson(req);
-        const session = sessions.get(body.session);
-        if (!session) return problem(res, 404, "not_found", "no running session with that id");
-        kill(session);
-        return json(res, 200, { cancelled: body.session });
+        const entry = running.get(body.process);
+        if (!entry) return problem(res, 404, "not_found", "no running aip with that id");
+        kill(entry);
+        return json(res, 200, { cancelled: body.process });
       }
-      if (route === "POST /console/validate") {
-        const body = await readJson(req);
-        const missing = aipSpecProblem(setup);
-        if (missing) return problem(res, 503, "aip_spec_missing", missing);
-        return json(res, 200, validate(setup, body));
+      if (route === "GET /console/record") {
+        const id = url.searchParams.get("run_id") ?? "";
+        if (!RUN_ID.test(id)) return problem(res, 400, "invalid_input", "run_id is required");
+        const out = aip(setup, ["runs", id, "--json"]);
+        return out.status === 0 ? json(res, 200, JSON.parse(out.stdout)) : problem(res, 404, "not_found", said(out, "aip runs"));
       }
-      if (route === "POST /console/upgrade") return json(res, 200, upgrade(setup, await readJson(req)));
-      if (route === "POST /console/handoff") return json(res, 200, handoff(setup, await readJson(req)));
-      if (route === "POST /console/handoff/read") return json(res, 200, readHandoff(setup, await readJson(req)));
-      if (route === "POST /console/probe") {
-        const body = await readJson(req);
-        return json(res, 200, await probe(setup, body));
+      if (route === "GET /console/runs") {
+        const out = aip(setup, ["runs", "--json", "--limit", "200"]);
+        if (out.status !== 0) return problem(res, 502, "server", said(out, "aip runs"));
+        const runs = JSON.parse(out.stdout);
+        return json(res, 200, setup.folder ? runs.filter((r) => r.target === setup.folder) : runs);
+      }
+      if (route === "POST /console/wake") {
+        if (!setup.local) return problem(res, 404, "not_found", "the console's server is not a local one");
+        // Any command that asks the server something starts it when nothing answers (aip docs/server-design.md).
+        const out = aip(setup, ["list"]);
+        return out.status === 0 ? json(res, 200, { awake: true }) : problem(res, 502, "server", said(out, "aip list"));
       }
       return problem(res, 404, "not_found", `no endpoint ${route}`);
     } catch (e) {
@@ -483,49 +350,56 @@ function handler(setup, port) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const aip = checkAip(args.aip);
-  if (aip.problem) {
-    console.error(aip.problem);
+  const aipVersion = checkAip(args.aip);
+  if (aipVersion.problem) {
+    console.error(aipVersion.problem);
     process.exit(1);
   }
   if (!existsSync(path.join(DIST, "index.html"))) {
-    console.error(`aip-console: no built page at ${DIST}; run \`npm run build\` in the console's checkout`);
+    console.error(`aip-console: no built page at ${DIST}; run \`npm run build\` in the console's folder`);
     process.exit(1);
   }
 
-  let mode, server = null, folder = null;
+  let mode, server = null, local = false, folder = null;
   if (args.server !== undefined && args.target !== undefined) fail("give --server or a FOLDER, not both");
   if (args.target !== undefined) {
-    folder = path.resolve(args.target);
-    if (!existsSync(path.join(folder, "SKILL.md"))) fail(`${args.target} is not a skill folder (no SKILL.md)`);
+    if (!existsSync(args.target)) fail(`${args.target} does not exist`);
+    folder = realpathSync(path.resolve(args.target));
+    if (!existsSync(path.join(folder, "procedure.aip"))) fail(`${args.target} is not a program directory (no procedure.aip)`);
     mode = "folder";
   } else {
-    server = args.server ?? configuredServer(args.aip);
-    if (!server) fail("no server: pass --server URL or a skill FOLDER, or set one with `aip config --server URL`");
+    const found = args.server === undefined || args.server === "local" ? configuredServer(args.aip) : { server: args.server, local: false };
+    if (args.server === "local" && !found.local) fail("`aip config` does not name a local server; run `aip config server local` first");
+    server = found.server;
+    local = found.local;
+    if (!server) fail("no server: pass --server URL or a program FOLDER, or set one with `aip config server local` (or `aip config server URL`)");
     server = server.replace(/\/+$/, "");
     mode = "server";
   }
   if (!existsSync(args.workdir) || !statSync(args.workdir).isDirectory()) fail(`--workdir ${args.workdir} is not a directory`);
 
-  const env = { ...process.env };
-  if (server) env.AIP_SERVER = server;
-  // `aip` runs from an empty directory, never the workdir: `aip run billing-support` runs ./billing-support when
+  // What the CLI records on: the console's server (`local` by name, so the CLI starts it when it has
+  // stopped), and nothing in folder mode.
+  const env = { ...process.env, AIP_SERVER: mode === "folder" ? "none" : local ? "local" : server };
+  // `aip` runs from an empty directory, never the workdir: `aip run billing_support` runs ./billing_support when
   // that path exists, so a folder of the name in the workdir would turn a served run into a local one. The
   // workdir reaches the run as `--workdir` (AIP_WORKDIR for its scripts).
   const cwd = mkdtempSync(path.join(tmpdir(), "aip-console-"));
   process.on("exit", () => rmSync(cwd, { recursive: true, force: true }));
-  const setup = { mode, server, folder, workdir: path.resolve(args.workdir), cwd, aip: args.aip, aipSpec: args.aipSpec, aipVersion: aip, env };
+  const setup = { mode, server, local, folder, workdir: path.resolve(args.workdir), cwd, aip: args.aip, aipVersion, env };
+  // A local server that has stopped is started before the page asks it anything.
+  if (local) aip(setup, ["list"]);
 
   const http = createServer();
   // Loopback only: the page can start runs on this machine.
   http.listen(args.port, "127.0.0.1", () => {
     const port = http.address().port;
     http.on("request", handler(setup, port));
-    console.log(`aip-console: http://localhost:${port}/  (${mode === "folder" ? `folder ${folder}` : `server ${server}`}; ` +
-                `aip ${aip.version}; workdir ${args.workdir})`);
+    console.log(`aip-console: http://localhost:${port}/  (${mode === "folder" ? `folder ${folder}` : `server ${server}${local ? " (local)" : ""}`}; ` +
+                `aip ${aipVersion.version}; workdir ${args.workdir})`);
   });
   const stop = () => {
-    for (const session of sessions.values()) kill(session);
+    for (const entry of running.values()) kill(entry);
     http.close();
     process.exit(0);
   };

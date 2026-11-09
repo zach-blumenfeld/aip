@@ -3,7 +3,7 @@
 // LCS over the lines between the common prefix and suffix is instant, and it
 // keeps the bundle free of a diff dependency.
 
-import type { FileEntry } from "../api/types";
+import type { BundleFile as FileEntry } from "../api/types";
 
 export type FileStatus = "added" | "removed" | "changed" | "unchanged";
 
@@ -23,7 +23,9 @@ export function diffManifests(a: FileEntry[], b: FileEntry[]): ManifestChange[] 
     const fa = byA.get(path), fb = byB.get(path);
     if (!fa) return { path, status: "added", b: fb };
     if (!fb) return { path, status: "removed", a: fa };
-    const same = fa.sha256 === fb.sha256 && fa.mode === fb.mode;
+    // procedure.aip is read off the bundle's Procedure node, which keeps its text and no hash: compare the text.
+    const sameBytes = fa.sha256 && fb.sha256 ? fa.sha256 === fb.sha256 : fa.text === fb.text;
+    const same = sameBytes && fa.mode === fb.mode;
     return { path, status: same ? "unchanged" : "changed", a: fa, b: fb };
   });
 }

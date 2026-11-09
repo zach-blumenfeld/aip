@@ -1,33 +1,37 @@
 import { useEffect, useState } from "react";
 
 // Hash routes, so the console's process serves one page with no fallback rule. In folder mode only
-// #/run (and #/, which shows it) apply; the others need a server.
-//                         #/                          catalog
-//                         #/p/<ref>                   procedure page, ref = name or name@rev
-//                         #/p/<ref>/files[/<path>]    source: the manifest, and one file open
-//                         #/p/<name>/diff[/<a>..<b>]  diff between two revisions of name
-//                         #/run[/<ref>]               run console: pick a procedure, then drive it through the CLI
-//                         #/runs[?name=&status=]      history: the runs the server persisted
-//                         #/runs/<id>                 one run replayed as a trace over the step graph
-//                         #/governance[?name=]        the corpus queries of GET /governance as lists
-//                         #/studio[?import=<ref>|?new] build a procedure in the browser, exported as a skill zip;
-//                                                     import a revision into a new draft, or start a blank one
-//                         #/server                    the console's server, and the bearer token for this browser
+// #/ (the folder's procedure), #/run and #/runs apply; the others need a server.
+//   #/                          catalog (folder mode: the folder's procedure)
+//   #/p/<ref>                   a procedure: its card canvas, header, revisions
+//   #/p/<ref>/files[/<path>]    source: procedure.aip and the bundle's files, one open
+//   #/p/<name>/diff[/<a>..<b>]  diff between two revisions of a name
+//   #/run[/<ref>]               run console: pick a procedure, then drive it through the CLI
+//   #/runs[?name=&status=&agent=&session=&user=&draft=]   history: the runs the server holds
+//   #/runs/<id>                 one run's record
+//   #/audit[?name=]             the audit queries of GET /audit
+//   #/server                    the console's server, and the bearer token for this browser
+//
+// <ref> is `name`, `name@rev`, `name@latest`, or `bundle:<bundle id>` for a bundle the store holds
+// with no revision (a draft), which has no name to resolve.
 export type Route =
   | { page: "catalog" }
   | { page: "procedure"; ref: string }
   | { page: "source"; ref: string; path?: string }
   | { page: "diff"; name: string; a?: string; b?: string }
   | { page: "run"; ref?: string }
-  | { page: "runs"; name?: string; status?: string }
+  | { page: "runs"; name?: string; status?: string; agent?: string; session?: string; user?: string; draft?: boolean }
   | { page: "run-detail"; id: string }
-  | { page: "governance"; name?: string }
-  | { page: "studio"; import?: string; fresh?: boolean }
+  | { page: "audit"; name?: string }
   | { page: "server" }
   | { page: "missing"; hash: string };
 
 const decodePath = (p: string) => p.split("/").map(decodeURIComponent).join("/");
 const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
+
+/** The reference of a bundle by id, and back. */
+export const bundleRef = (bundleId: string) => `bundle:${bundleId}`;
+export const bundleOf = (ref: string): string | null => (ref.startsWith("bundle:") ? ref.slice(7) : null);
 
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#/, "").replace(/^\/+/, "");
@@ -46,17 +50,15 @@ export function parseHash(hash: string): Route {
   m = /^runs(?:\?(.*))?$/.exec(path);
   if (m) {
     const q = new URLSearchParams(m[1] ?? "");
-    return { page: "runs", name: q.get("name") ?? undefined, status: q.get("status") ?? undefined };
+    const draft = q.get("draft");
+    return { page: "runs", name: q.get("name") ?? undefined, status: q.get("status") ?? undefined, agent: q.get("agent") ?? undefined,
+             session: q.get("session") ?? undefined, user: q.get("user") ?? undefined,
+             draft: draft === "true" ? true : draft === "false" ? false : undefined };
   }
   m = /^runs\/([^/?]+)$/.exec(path);
   if (m) return { page: "run-detail", id: decodeURIComponent(m[1]) };
-  m = /^governance(?:\?(.*))?$/.exec(path);
-  if (m) return { page: "governance", name: new URLSearchParams(m[1] ?? "").get("name") ?? undefined };
-  m = /^studio(?:\?(.*))?$/.exec(path);
-  if (m) {
-    const q = new URLSearchParams(m[1] ?? "");
-    return { page: "studio", import: q.get("import") ?? undefined, fresh: q.has("new") || undefined };
-  }
+  m = /^audit(?:\?(.*))?$/.exec(path);
+  if (m) return { page: "audit", name: new URLSearchParams(m[1] ?? "").get("name") ?? undefined };
   if (path === "server") return { page: "server" };
   return { page: "missing", hash };
 }
@@ -76,12 +78,15 @@ export function href(route: Route): string {
       const q = new URLSearchParams();
       if (route.name) q.set("name", route.name);
       if (route.status) q.set("status", route.status);
+      if (route.agent) q.set("agent", route.agent);
+      if (route.session) q.set("session", route.session);
+      if (route.user) q.set("user", route.user);
+      if (route.draft !== undefined) q.set("draft", String(route.draft));
       const qs = q.toString();
       return `#/runs${qs ? "?" + qs : ""}`;
     }
     case "run-detail": return `#/runs/${encodeURIComponent(route.id)}`;
-    case "governance": return `#/governance${route.name ? "?name=" + encodeURIComponent(route.name) : ""}`;
-    case "studio": return route.import ? `#/studio?import=${encodeURIComponent(route.import)}` : route.fresh ? "#/studio?new" : "#/studio";
+    case "audit": return `#/audit${route.name ? "?name=" + encodeURIComponent(route.name) : ""}`;
     case "server": return "#/server";
     case "missing": return route.hash;
   }

@@ -1,15 +1,16 @@
 {
   "name": "aip-console",
-  "version": "0.8.0",
-  "description": "The AIP console (formerly inspector): catalog, source, run console, history and governance for an AIP server, or local runs of a skill folder.",
+  "version": "0.9.0",
+  "description": "The AIP console (formerly inspector): catalog, card canvas, source, run console, history and audit for an AIP server, or local runs of a procedure folder.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zach-blumenfeld/aip-console.git"
+    "url": "git+https://github.com/zach-blumenfeld/aip.git",
+    "directory": "console"
   },
-  "homepage": "https://github.com/zach-blumenfeld/aip-console#readme",
+  "homepage": "https://github.com/zach-blumenfeld/aip/tree/main/console#readme",
   "bugs": {
-    "url": "https://github.com/zach-blumenfeld/aip-console/issues"
+    "url": "https://github.com/zach-blumenfeld/aip/issues"
   },
   "type": "module",
   "bin": {
@@ -28,6 +29,7 @@
     "build": "tsc -b && vite build",
     "start": "node bin/aip-console.mjs",
     "typecheck": "tsc -b",
+    "test": "node --test \"test/*.test.ts\" \"test/*.test.mjs\"",
     "e2e": "playwright test",
     "prepack": "npm run build"
   },

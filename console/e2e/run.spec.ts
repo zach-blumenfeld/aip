@@ -1,202 +1,206 @@
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, test, type Page } from "@playwright/test";
-import { CHECKED, CHECKED_REVISION_DIR, SERVER, WORKDIR, aip } from "./aip";
+import { expect, test } from "@playwright/test";
+import { AGENT, BILLING, DYNAMIC, FIXED, SERVER, TRIAGE, WORKDIR } from "./aip";
+import { answer, done, entry, fill, pausedAt, pick, runIdOf, start, task } from "./pages";
 
-// The run console drives `aip run --progress` and `aip resume --progress` through the console's process. The
-// CLI has no decision model here, so `triage` pauses for the page to answer; the router then sends angry
-// messages to the escalate script, which runs on this machine and files its ticket under the console's
-// working directory, and calm ones to the client task.
+// The run console: every run goes through the `aip` CLI the console spawns, on this machine, and is
+// recorded on the server as agent `console` in the tab's session.
 
-interface RunRecord {
-  status: string;
-  history: { step: string; kind: string; result: Record<string, unknown>; attribution?: { resolver: string } }[];
-}
+test("a task that decides, then a task that does the work: the agent's answers steer the run", async ({ page }) => {
+  await start(page, AGENT, { message: "Could you explain the $12 on my bill?" });
+  const triage = await pausedAt(page, "triage");
+  await expect(triage.getByTestId("task-prompt")).toContainText("explain the $12");
+  await pick(triage, "billing", "true");
+  await pick(triage, "tone", "calm");
+  await answer(triage);
 
-async function record(page: Page, runId: string): Promise<RunRecord> {
-  const res = await page.request.get(`${SERVER}/runs/${runId}`);
-  expect(res.ok()).toBeTruthy();
-  return (await res.json()) as RunRecord;
-}
+  const reply = await pausedAt(page, "reply");
+  await expect(reply.getByTestId("references")).toContainText("references/help.md");
+  await fill(reply, "reply", "The $12 is your monthly plan.");
+  await answer(reply);
+  await done(page);
+  await expect(page.getByTestId("run-result")).toContainText("The $12 is your monthly plan.");
 
-async function startAndTriage(page: Page, message: string, tone: "angry" | "calm"): Promise<string> {
-  await page.goto("./#/run/billing-support");
-  await expect(page.getByTestId("run-status")).toHaveText("not started");
-  const start = page.getByTestId("pause-start");
-  await expect(start.getByTestId("payload")).toContainText('"message"');     // prefilled from the example input
-  await start.getByLabel("message", { exact: true }).fill(message);
-  await expect(start.getByTestId("payload")).toContainText(message.slice(0, 20));
-  await start.getByRole("button", { name: "Start" }).click();
+  // The record on the page: who answered each task, and where the route went on the agent's answer.
+  await expect(entry(page, "triage").getByTestId("answered-by")).toContainText("console");
+  await expect(entry(page, "by_tone").getByTestId("route-to")).toHaveText("reply");
+  await expect(entry(page, "by_tone")).toContainText("no confidence check");
+  await expect(entry(page, "triage").getByTestId("entry-time")).toHaveText(/^\+\d/);
 
-  const decision = page.getByTestId("pause-decision");
-  await expect(decision).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("run-status")).toHaveText("paused");
-  await expect(decision.getByTestId("pause-state")).toContainText(message.slice(0, 20));
-  await decision.getByRole("group", { name: "billing" }).getByRole("radio", { name: /^yes/ }).check();
-  await decision.getByRole("group", { name: "tone" }).getByRole("radio", { name: new RegExp(`^${tone}`) }).check();
-  await expect(page.getByTestId("run-id")).toHaveText(/^[0-9a-f]{16}$/);
-  const runId = (await page.getByTestId("run-id").textContent())!.trim();
-  await decision.getByRole("button", { name: "Answer" }).click();
-  return runId;
-}
+  // It was recorded on the server, under this tab's session.
+  await expect(page.getByTestId("run-recorded")).toHaveAttribute("data-recorded", "true");
+  const session = (await page.getByTestId("session-id").textContent())!.trim();
+  const recorded = await (await fetch(`${SERVER}/runs/${await runIdOf(page)}`)).json() as { identity: { agent: string; session: string }; draft: boolean; revision: string };
+  expect(recorded.identity).toMatchObject({ agent: "console", session });
+  expect(recorded).toMatchObject({ draft: false, revision: "2" });
+});
 
-function ticketFile(id: unknown): string {
-  return path.join(WORKDIR, "tickets", `${id}.json`);
-}
+test("the script runs on this machine: its ticket lands in the console's working directory", async ({ page }) => {
+  const message = "Charged twice for March and nobody answers. Fix it today or I cancel.";
+  await start(page, AGENT, { message });
+  const triage = await pausedAt(page, "triage");
+  await pick(triage, "billing", "true");
+  await pick(triage, "tone", "angry");
+  await answer(triage);
+  await done(page);
+  await expect(page.getByTestId("trace").getByRole("listitem")).toContainText(["start", "triage", "by_tone", "escalate", "end"]);
+  await expect(entry(page, "escalate").getByTestId("script")).toHaveText("scripts/escalate.py");
 
-test("an angry message runs the escalation script on this machine", async ({ page }) => {
-  const message = "I was charged twice and I want my money back NOW or I cancel!";
-  const runId = await startAndTriage(page, message, "angry");
-
-  await expect(page.getByTestId("run-status")).toHaveText("done", { timeout: 20_000 });
-  // the start and end steps print no progress line
-  const trace = page.getByTestId("trace").getByRole("listitem");
-  await expect(trace).toHaveText([/triage.*decision.*manual/, /by-tone.*router.*escalate/, /escalate.*execution.*s$/]);
-  await expect(page.getByTestId("final-state")).toContainText(message);
-
-  // The server recorded what the client's script returned; the ticket file is on this side.
-  const run = await record(page, runId);
-  expect(run.status).toBe("done");
-  const escalate = run.history.find((h) => h.step === "escalate")!;
-  expect(escalate.result.queue).toBe("tier2");
-  const file = ticketFile(escalate.result.ticket_id);
+  const result = JSON.parse((await page.getByTestId("run-result").textContent())!) as { ticket_id: number; queue: string };
+  const file = path.join(WORKDIR, "tickets", `${result.ticket_id}.json`);
   expect(existsSync(file)).toBe(true);
   expect(JSON.parse(readFileSync(file, "utf8")).message).toBe(message);
-
-  // The run is in the history, with the decision's attribution.
-  await page.getByTestId("run-done").getByRole("link", { name: "history" }).click();
-  await expect(page).toHaveURL(new RegExp(`#/runs/${runId}$`));
-  await expect(page.getByTestId("run-status")).toHaveText("done");
-  const triage = page.locator('[data-testid="run-step"][data-step="triage"]');
-  await expect(triage.getByTestId("attribution")).toHaveAttribute("data-resolver", "manual");
-  await expect(triage.getByTestId("attribution")).toContainText("resolver manual");
-  await expect(triage.locator('[data-question="tone"] [data-testid="answer-value"]')).toHaveText('"angry"');
-  await expect(triage.locator('[data-question="tone"] [data-testid="answer-confidence"]')).toContainText("none");
-  await expect(page.locator('[data-testid="run-step"][data-step="escalate"]')).toContainText("ran on the client");
 });
 
-test("a decision with fallback off stops a client that has no decision model, and says so", async ({ page }) => {
-  // The run console with no model reaches `triage` of billing-checked: its decision allows a manual answer, so the
-  // page gets the form; a hand answer is not checked (reason `manual`), so `calm` takes its branch to the reply task.
-  await page.goto(`./#/run/${CHECKED}`);
-  const start = page.getByTestId("pause-start");
-  await start.getByLabel("message", { exact: true }).fill("Why was I billed $12? [checked]");
-  await start.getByRole("button", { name: "Start" }).click();
-  const decision = page.getByTestId("pause-decision");
-  await expect(decision).toBeVisible({ timeout: 20_000 });
-  await expect(decision.getByTestId("manual-confidence-note")).toContainText("tone_confidence");
-  await decision.getByRole("group", { name: "billing" }).getByRole("radio", { name: /^yes/ }).check();
-  await decision.getByRole("group", { name: "tone" }).getByRole("radio", { name: /^calm/ }).check();
-  const runId = (await page.getByTestId("run-id").textContent())!.trim();
-  await decision.getByRole("button", { name: "Answer" }).click();
-  await expect(page.getByTestId("pause-client-task")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage.*manual/, /by-tone.*reply/]);
-  const run = await record(page, runId);
-  const route = run.history.find((h) => h.step === "by-tone")!;
-  expect(route.result).toMatchObject({ to: "reply", confidence: { fired: false, reason: "manual" } });
-  // the history page says the check was skipped, and why
-  await page.goto(`./#/runs/${runId}`);
-  const skipped = page.locator('[data-testid="run-step"][data-step="by-tone"]').getByTestId("check-outcome");
-  await expect(skipped).toHaveAttribute("data-fired", "false");
-  await expect(skipped).toHaveAttribute("data-reason", "manual");
-  await expect(skipped).toContainText("check skipped");
-
-  // The same skill with `fallback: false` on its decision: the CLI stops before posting anything.
-  const strict = path.join(WORKDIR, "billing-strict");
-  cpSync(CHECKED_REVISION_DIR, strict, { recursive: true });
-  const md = path.join(strict, "SKILL.md");
-  writeFileSync(md, readFileSync(md, "utf8").replace(/^name: billing-checked$/m, "name: billing-strict").replace("    fallback: true\n", "    fallback: false\n"));
-  const published = aip(["publish", strict]).trim();
-  expect(published).toMatch(/billing-strict@/);
-  await page.goto("./#/run/billing-strict");
-  await page.getByTestId("pause-start").getByLabel("message", { exact: true }).fill("Charged twice. [strict]");
-  await page.getByRole("button", { name: "Start" }).click();
-  const error = page.getByTestId("run-error");
-  await expect(error).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("run-status")).toHaveText("failed");
-  await expect(error.getByTestId("error-kind")).toHaveText("no_decision_model");
-  await expect(error).toContainText("triage");
-  await expect(error.getByTestId("no-decision-model")).toContainText("fallback: false");
-  await expect(error.getByRole("button", { name: "Retry" })).toBeVisible();      // resumable once a key is configured
-  const object = JSON.parse((await error.getByTestId("error-object").textContent())!) as Record<string, unknown>;
-  expect(object).toMatchObject({ error: "no_decision_model", step: "triage", fallback: false, resumable: true });
-});
-
-test("a calm message pauses as a client task that is answered in the page", async ({ page }) => {
-  const runId = await startAndTriage(page, "Hi, could you tell me why I was billed $12 this month?", "calm");
-
-  const task = page.getByTestId("pause-client-task");
-  await expect(task).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("run-status")).toHaveText("paused");
-  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage/, /by-tone.*reply/]);
-  await expect(task.getByTestId("task")).toContainText("Write a short, calm reply");
-  await expect(task.getByTestId("task")).toContainText("billed $12");                 // {message} rendered
-  await expect(task.getByTestId("task")).toContainText("Refunds");                    // the policy asset rendered
-  await expect(task.getByTestId("references")).toContainText("references/help.md");
-  await expect(task.getByTestId("pause-state")).toContainText('"tone": "calm"');
-
-  // The answer carries only what `answer_with` asks for.
-  await task.getByLabel("reply", { exact: true }).fill("Thanks for asking: the $12 is your monthly plan charge.");
-  await expect(task.getByTestId("payload")).toHaveValue(/^\{\s*"reply": "Thanks for asking/);
-  await task.getByRole("button", { name: "Answer" }).click();
-
-  await expect(page.getByTestId("run-status")).toHaveText("done", { timeout: 20_000 });
-  await expect(page.getByTestId("trace").getByRole("listitem")).toHaveText([/triage/, /by-tone/, /reply.*client_task/]);
-  await expect(page.getByTestId("final-state")).toContainText("billed $12");
-  const run = await record(page, runId);
-  expect(run.status).toBe("done");
-  expect(run.history.map((h) => h.step)).toEqual(["start", "triage", "by-tone", "reply", "end"]);
-});
-
-test("a failing script shows the error object, and retry resumes once the cause is fixed", async ({ page }) => {
+test("a failing script stops the run where it was, and Retry runs the step again", async ({ page }) => {
   const down = path.join(WORKDIR, "ticket-service-down");
   writeFileSync(down, "");
   try {
-    const runId = await startAndTriage(page, "[outage] Charged twice, fix it now or I cancel!", "angry");
-
+    await start(page, AGENT, { message: "Nothing works and I want out. [outage]" });
+    const triage = await pausedAt(page, "triage");
+    await pick(triage, "billing", "true");
+    await pick(triage, "tone", "angry");
+    await answer(triage);
     const error = page.getByTestId("run-error");
-    await expect(error).toBeVisible({ timeout: 20_000 });
+    await expect(error).toHaveAttribute("data-kind", "script_failed", { timeout: 30_000 });
+    await expect(error.getByTestId("error-stderr")).toContainText("ticket service unreachable");
     await expect(page.getByTestId("run-status")).toHaveText("failed");
-    await expect(error.getByTestId("error-kind")).toHaveText("script_failed");
-    await expect(error.getByTestId("exit-code")).toHaveText("1");
-    await expect(error.getByTestId("error-stderr")).toHaveText("ticket service unreachable");
-    const object = JSON.parse((await error.getByTestId("error-object").textContent())!) as Record<string, unknown>;
-    expect(object).toMatchObject({ error: "script_failed", step: "escalate", script: "scripts/escalate.py", exit_code: 1,
-                                   run_id: runId, resumable: true });
-    expect((await record(page, runId)).status).toBe("failed");
-
-    rmSync(down);
-    await error.getByRole("button", { name: "Retry" }).click();
-    await expect(page.getByTestId("run-status")).toHaveText("done", { timeout: 20_000 });
-    await expect(page.getByTestId("trace").getByRole("listitem").last()).toHaveText(/escalate.*execution/);
-    const run = await record(page, runId);
-    expect(run.status).toBe("done");
-    expect(run.history.filter((h) => h.step === "escalate").map((h) => h.kind)).toEqual(["error", "execution"]);
   } finally {
     rmSync(down, { force: true });
   }
+  await page.getByTestId("retry").click();
+  await done(page);
+  await expect(entry(page, "escalate")).toBeVisible();
 });
 
-test("cancel stops the running aip", async ({ page }) => {
-  await startAndTriage(page, "[slow] Charged twice, fix it now!", "angry");
-  await expect(page.getByTestId("run-running")).toBeVisible();
-  // Give the CLI time to reach the script, which sleeps for a minute.
-  await page.waitForTimeout(3_000);
-  await page.getByTestId("run-running").getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByTestId("run-status")).toHaveText("cancelled", { timeout: 10_000 });
-  await expect(page.getByTestId("run-problem")).toContainText("Cancelled: aip stopped");
-  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+test("a decision is the model's: a sure answer routes by its value, an unsure one fires the route's check", async ({ page }) => {
+  await start(page, BILLING, { message: "This is the third double charge. Fix it today. [angry]" });
+  await done(page);
+  const decided = entry(page, "triage");
+  await expect(decided.getByTestId("answered-by")).toHaveAttribute("data-model", "e2e-1");
+  await expect(decided.locator('[data-testid="answer"][data-name="tone"]')).toHaveAttribute("data-value", "angry");
+  await expect(decided.locator('[data-testid="answer"][data-name="tone"]').getByTestId("answer-confidence")).toContainText("0.97");
+  const sure = entry(page, "by_tone").getByTestId("check");
+  await expect(sure).toHaveAttribute("data-fired", "false");
+  await expect(sure).toContainText("0.97 is not below 0.9");
+
+  // Calm, but the model is not sure: the check sends it to a person all the same.
+  await page.getByRole("button", { name: "new run" }).click();
+  const form = page.getByTestId("pause-start");
+  await fill(form, "message", "Hm. Saw two March charges, maybe I misread. [calm] [unsure]");
+  await page.getByTestId("pause-start-submit").click();
+  await done(page);
+  const fired = entry(page, "by_tone").getByTestId("check");
+  await expect(fired).toHaveAttribute("data-fired", "true");
+  await expect(fired).toHaveAttribute("data-reason", "below");
+  await expect(fired).toContainText("0.55 is below 0.9");
+  await expect(entry(page, "by_tone").getByTestId("route-to")).toHaveText("escalate");
 });
 
-test("an invalid start input is reported and no run is opened", async ({ page }) => {
-  await page.goto("./#/run/billing-support");
-  await page.getByTestId("payload").fill("{}");
-  await page.getByRole("button", { name: "Start" }).click();
+test("a loop: the passes nest under it, each says why it ran, and the loop says why it ended", async ({ page }) => {
+  await start(page, FIXED, { request: "A thank-you note to a customer who renewed." });
+  const draft = await pausedAt(page, "draft");
+  await fill(draft, "work", "Thanks, you absolute legend! [break:courteous]");
+  await answer(draft);
+
+  // The model found the tone policy broken: the loop's first pass asks for a fix, and says it is not the last.
+  const fix = await pausedAt(page, "fix");
+  await expect(task(fix, 0).getByTestId("last-pass")).toHaveCount(0);
+  const loop = page.locator('[data-testid="record-loop"][data-loop="revise"]');
+  await expect(loop).toHaveAttribute("data-exit", "open");
+  await expect(loop.getByTestId("loop-exit")).toContainText("inside it");
+  const failed = loop.locator('[data-testid="aggregation"][data-name="all_hold"]').first();
+  await expect(failed).toHaveAttribute("data-value", "false");
+  await expect(failed).toContainText("no confidence");
+  await fill(fix, "work", "Thank you for renewing your subscription.");
+  await answer(fix);
+  await done(page);
+
+  await expect(loop).toHaveAttribute("data-exit", "until");
+  await expect(loop).toHaveAttribute("data-passes", "2");
+  await expect(loop.getByTestId("loop-exit")).toContainText("its Until condition held at summarize_check, after 2 passes");
+  const passes = loop.getByTestId("record-pass");
+  await expect(passes.nth(0).getByTestId("until")).toContainText("not in the state yet");
+  await expect(passes.nth(1).getByTestId("until")).toContainText("check_summary.all_hold was false");
+  await expect(passes.nth(0).locator('[data-testid="record-entry"]')).toHaveCount(3);     // check, summarize_check, fix
+  await expect(passes.nth(1).locator('[data-testid="record-entry"]')).toHaveCount(2);     // check, summarize_check: it held
+  await expect(page.getByTestId("run-timing")).toContainText("waiting on agents");
+});
+
+test("a loop at its cap: the last fix is announced, and the failure is not retried", async ({ page }) => {
+  await start(page, FIXED, { request: "A note." });
+  const draft = await pausedAt(page, "draft");
+  await fill(draft, "work", "You fools. [break:courteous]");
+  await answer(draft);
+  for (const pass of [0, 1, 2]) {
+    const fix = page.locator('[data-testid="pause-task"][data-step="fix"]');
+    await expect(task(fix, 0)).toHaveAttribute("data-pass", String(pass), { timeout: 30_000 });
+    await expect(task(fix, 0).getByTestId("last-pass")).toHaveCount(pass === 2 ? 1 : 0);
+    await fill(fix, "work", `Still rude, take ${pass}. [break:courteous]`);
+    await answer(fix);
+  }
   const error = page.getByTestId("run-error");
-  await expect(error).toBeVisible({ timeout: 20_000 });
-  await expect(error.getByTestId("error-kind")).toHaveText("invalid_input");
-  await expect(error).toContainText("message");
+  await expect(error).toHaveAttribute("data-kind", "loop_cap", { timeout: 30_000 });
+  await expect(page.getByTestId("retry")).toHaveCount(0);
+  const loop = page.locator('[data-testid="record-loop"][data-loop="revise"]');
+  await expect(loop).toHaveAttribute("data-exit", "cap");
+  await expect(loop.getByTestId("loop-exit")).toContainText("reached its cap after 3 passes");
+});
+
+test("a batch: the passes waiting at one step are one pause, answered together", async ({ page }) => {
+  const tickets = ["Can I get a copy of my March invoice? [calm]", "Third double charge this year! [angry]", "How do I move to the annual plan? [calm]"];
+  await start(page, TRIAGE, { tickets: JSON.stringify(tickets), policy: "Duplicate charges are refunded within 5 business days." });
+  const drafts = await pausedAt(page, "draft");
+  await expect(drafts).toHaveAttribute("data-tasks", "2");
+  await expect(drafts.getByTestId("batched-note")).toContainText("answered together");
+  // The angry ticket was escalated by the script and finished its pass; the two calm ones wait, as passes 0 and 2.
+  await expect(task(drafts, 0)).toHaveAttribute("data-pass", "0");
+  await expect(task(drafts, 1)).toHaveAttribute("data-pass", "2");
+  await expect(task(drafts, 1).getByTestId("pause-state")).toContainText("annual plan");
+
+  await fill(task(drafts, 0), "reply", "Your March invoice is attached.");
+  await fill(task(drafts, 1), "reply", "The annual plan starts at your next cycle.");
+  await drafts.getByRole("button", { name: "Answer all 2" }).click();
+
+  await pausedAt(page, "summarize");
+  const loop = page.locator('[data-testid="record-loop"][data-loop="each_ticket"]');
+  await expect(loop).toHaveAttribute("data-exit", "items");
+  await expect(loop.getByTestId("record-pass")).toHaveCount(3);
+  await expect(loop.locator('[data-testid="record-entry"][data-step="draft"]')).toHaveCount(2);
+  await expect(loop.locator('[data-testid="record-entry"][data-step="escalate"]')).toHaveCount(1);
+});
+
+test("a For of decisions goes to the model in one call, and the record says so", async ({ page }) => {
+  await start(page, DYNAMIC, { task: "Write a note.", policies: JSON.stringify(["be polite", "be short", "use no names"]) });
+  const draft = await pausedAt(page, "draft");
+  await fill(draft, "work", "A very long draft. [break:short]");
+  await answer(draft);
+  const fix = await pausedAt(page, "fix");
+  const review = page.locator('[data-testid="record-loop"][data-loop="review"]').first();
+  await expect(review.getByTestId("record-pass")).toHaveCount(3);
+  await expect(review.locator('[data-testid="record-entry"][data-step="check"]').first().getByTestId("batched")).toContainText("one call for 3 passes");
+  await expect(review.locator('[data-testid="answer"][data-name="follows"]')).toHaveCount(3);
+  await expect(review.locator('[data-testid="answer"][data-name="follows"][data-value="false"]')).toHaveCount(1);
+  await fill(fix, "work", "A short draft.");
+  await answer(fix);
+  await done(page);
+});
+
+test("inputs the Start step refuses open no run", async ({ page }) => {
+  await page.goto(`./#/run/${TRIAGE}`);
+  const form = page.getByTestId("pause-start");
+  await expect(form).toBeVisible({ timeout: 30_000 });
+  await fill(form, "tickets", "not json");
+  await fill(form, "policy", "p");
+  await page.getByTestId("pause-start-submit").click();
+  await expect(form.getByRole("alert")).toContainText("tickets: not JSON");
+  await expect(page.getByTestId("run-status")).toHaveText("not started");
+
+  // A list of the wrong things gets as far as the CLI, which names the key.
+  await fill(form, "tickets", '"one ticket, not a list"');
+  await page.getByTestId("pause-start-submit").click();
+  await expect(page.getByTestId("run-error")).toHaveAttribute("data-kind", "invalid_input", { timeout: 30_000 });
   await expect(page.getByTestId("run-id")).toHaveCount(0);
-  await expect(error.getByRole("button", { name: "Retry" })).toHaveCount(0);
-  await expect(page.getByTestId("pause-start")).toBeVisible();          // fix the input and start again
+  await expect(form).toBeVisible();
 });

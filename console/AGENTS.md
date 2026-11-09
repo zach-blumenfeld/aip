@@ -1,110 +1,70 @@
-# AGENTS.md
+# AGENTS.md (console)
 
-Instructions for AI agents working **on** this repository. If you are an agent being asked to
-*use* AIP, read the aip repo's `skills/aip-runtime/SKILL.md` (running a published procedure) or
-`skills/aip-compile/SKILL.md` (compiling material into one) instead.
+The repository's `AGENTS.md`, one level up, is the one to read first: the privacy rule, the plan
+issue, the conventions and the release rules all hold here. This file says only what differs for
+`console/`.
 
-## What this repo is
+## What this folder is
 
-The console for [AIP](https://github.com/zach-blumenfeld/aip): catalog, source and revision diff,
-run console, history, governance, and the Studio that builds a procedure in the browser. It is one
-npm package, `aip-console`, with a small Node launcher (`bin/aip-console.mjs`) that serves the
-built page and runs procedures through the `aip` CLI on this machine; the aip server serves no UI.
-The package installs two commands, `aip-console` and `aip-inspector` (the old name, kept one more
-release). It has no runtime npm dependencies but `yaml`; everything else is a dev dependency.
+The console for AIP, the npm package `aip-console`: the catalog, each procedure as a card canvas
+with its source, the run console, history and the audit queries. It was a repository of its own
+(`aip-console`) through 0.8 and moved here at plan milestone C1 with its history (`git log --
+console/`). One small Node launcher (`bin/aip-console.mjs`) serves the built page and runs
+procedures through the `aip` CLI on this machine; the aip server serves no UI. The package
+installs two commands, `aip-console` and `aip-inspector` (the old name, kept one more release).
 
-The runtime and the format are Python packages in the aip repo (`agent-instruction-protocol` and
-`aip-spec`, one uv workspace, one version). This repo never vendors them: the e2e harness runs the
-sibling checkout (`AIP_REPO`, default `../aip`) behind `uv run`, and the launcher runs whatever
-`aip` is on the PATH.
+It never vendors the Python package: the launcher runs whatever `aip` is on the PATH, and the
+e2e harness runs this checkout's (`AIP_REPO`, default `..`) behind `uv run`.
 
-## Repo map
+## Map
 
 | Path | What's there |
 |---|---|
-| `bin/aip-console.mjs` | the launcher: argument parsing, `aip --version` and `MINIMUM_AIP`, the `/console/*` endpoints (run, resume, cancel, validate, probe, handoff), the static server; loopback only |
-| `src/` | the page: React + Vite, hash-routed. `api/` the typed client and the console's own endpoints; `views/` the pages; `graph/` the hand-rolled step graph layout; `diff/` line diffs; `run/protocol.ts` the launcher's event-stream protocol; `zip.ts` the skill zip reader and writer (`fflate`); `studio/` the Studio's Draft model, SKILL.md round-trip (`serialize.ts`), linter (`lint.ts`), scaffold, import, the agent prompt and checks, and `runtime-0.8.ts`, the runtime block verbatim |
-| `e2e/` | Playwright specs and the harness: `prepare.mjs` writes `.aip-e2e/`, `aip.ts` / `aip-spec.ts` run the sibling repo's CLIs, `global-setup.ts` publishes the fixtures; `playwright.config.ts` starts the aip server and two consoles |
-| `docs/studio.md`, `docs/studio-lint.md` | the Studio reference and its lint codes |
-| `docs/plans/` | the historical plans (`PLAN.md`, `STUDIO-PLAN.md`); current plans are GitHub issues on the aip repo |
-| `examples/studio/` | the Studio tutorial and its example design |
+| `bin/aip-console.mjs` | the launcher: arguments, `aip --version` against `MINIMUM_AIP`, the `/console/*` endpoints (run, resume, cancel, procedure, graph, record, runs, wake), the static server; loopback only. Its header comment lists every endpoint |
+| `src/api/` | `types.ts` the shapes the page reads (the server's replies, the run record); `client.ts` the server's API, called directly; `console.ts` the launcher's endpoints and the CLI's JSON lines |
+| `src/canvas/` | **the card canvas**, a component on its own with no console state: `model.ts` (a bundle's graph as cards, ports and frames), `layout.ts` (where they go; fixed sizes that `canvas.css` repeats), `Canvas.tsx`. The procedure page draws a revision with it; E2 bundles this folder into the VS Code extension and C2 adds editing on top, so nothing here may import from outside the folder |
+| `src/highlight/` | `textmate.ts`, a small TextMate tokenizer, and `Code.tsx`, which runs it over the grammar and the colours of `../editors/vscode` (imported at build time: there is no copy of the grammar or of a keyword list here) |
+| `src/record/model.ts` | a run's flat history nested under its loops, pass by pass, and the words for why a pass ran and why a loop ended |
+| `src/run/answers.ts` | a form's fields as the JSON `aip run --inputs` and `aip resume --answers` take |
+| `src/views/` | the pages: `Catalog`, `Procedure` (and `FolderProcedure`), `Source`, `Diff`, `Run`, `History` (the list and one run), `Record` (the record view both run pages share), `Audit`, `Server` |
+| `test/` | `npm test`: node's test runner over the modules above that need no browser, on fixtures written by the real compiler and server (`test/fixtures/`) |
+| `e2e/` | `npm run e2e`: Playwright specs and the harness. `prepare.mjs` writes `.aip-e2e/` from `../examples/language`, `model.mjs` is a decision model that answers from marks in the text (`[angry]`, `[unsure]`, `[break:WORD]`), `aip.ts` runs the checkout's CLI, `global-setup.ts` publishes; `playwright.config.ts` starts the model, the aip server and two consoles |
+| `docs/plans/` | the historical plans; current plans are issues |
 | `CHANGELOG.md` | the console's changelog |
-| `.github/workflows/release.yml` | the release workflow, below |
 
-## Conventions
+## Conventions that differ
 
-- **Node 20 or newer, npm.** `npm install` to set up; `npm run typecheck && npm run e2e` must pass
-  before any commit. The e2e suite needs `uv`, the sibling aip repo at `AIP_REPO` (default
-  `../aip`), and a browser (`npx playwright install chromium`, or `PLAYWRIGHT_CHANNEL=chrome`).
-- **Keep dependencies few.** Add a library only when a milestone names the need; the graph layout
-  and the diff are hand-rolled for that reason, and the zip reader is `fflate`, bundled by Vite.
-- **Do not change behaviour in a release branch.** If a test must change for a path or a version
-  string, say so in the commit; if it must change for a behaviour, stop and write it down in the
-  plan issue.
-- **Plans live in issues on the aip repo, not here.** The roadmap is
-  [aip#20](https://github.com/zach-blumenfeld/aip/issues/20); each release has a plan issue whose
-  Track C milestones are this repo's, each naming the command that proves it. A fresh agent
-  implements one milestone per session: read the plan's "Context" and "Rules", then only the first
-  unchecked milestone; run its proof, tick it, comment `Done <date>, commit <sha>: <one sentence>`,
-  commit. Product-visible questions sit under "Open items" with a default; take the default and say so.
-- **Never edit `../aip` from here.** Where the console and the format disagree, the format wins
-  (`packages/aip-spec` in the aip repo); say so in the commit.
+- **Node 24, npm** (22.18 is the least for `npm test`, which runs TypeScript as it is). `npm
+  install` to set up; `npm run typecheck && npm test && npm run e2e` must pass before a commit
+  that touches this folder. The e2e suite needs `uv`, Relate installed in the checkout's `.venv`
+  (`../scripts/install-relate.sh`; the server it starts stores in it) and a browser (`npx
+  playwright install chromium`, or `PLAYWRIGHT_CHANNEL=chrome`).
+- **Keep dependencies few.** Add a library only when a milestone names the need: the canvas
+  layout, the diff and the grammar tokenizer are hand-rolled for that reason. `yaml` and
+  `fflate` are left in `package.json` from the Studio and the skill zips and are no longer
+  imported; `npm uninstall yaml fflate` when next touching the lockfile.
+- **The modules `test/` imports** (`canvas/model.ts`, `canvas/layout.ts`, `highlight/textmate.ts`,
+  `record/model.ts`, `run/answers.ts`) import each other with the `.ts` extension and use only
+  syntax node can strip (no enums, no parameter properties), so they run under node unbuilt.
+- **Where the console and the runtime disagree, the runtime wins**: `../docs/cli-json.md` for the
+  CLI's JSON, `../docs/server-design.md` and `../src/aip/server/app.py` for the API,
+  `../docs/language/bundle.md` for the graph the canvas reads. Fix the console in the same
+  commit as the change it follows.
 
-## Versioning
+## Versioning and releasing
 
-- **Package version** `X.Y.Z` in `package.json` (and `package-lock.json`, which `npm version X.Y.Z
-  --no-git-tag-version` keeps in step), SemVer, pre-1.0 so breaking changes bump the minor. It tracks
-  the runtime release the console targets: 0.7.0 targets aip 0.7.0.
-- **`MINIMUM_AIP`** in `bin/aip-console.mjs` is the oldest `aip` the launcher accepts; it moves when
-  the console starts to depend on something newer in the CLI's JSON contract or the server API.
-- The console does not carry a format version. The runtime block it embeds
-  (`src/studio/runtime-0.8.ts`) is compared byte for byte to the aip repo's
-  `packages/aip-spec/src/aip_spec/runtime.md` by `e2e/studio-lint.spec.ts`; a format change in the
-  aip repo fails that test until the console catches up.
+The console has its own version (`package.json`, kept in step with `package-lock.json` by `npm
+version X.Y.Z --no-git-tag-version`) and its own tag, `console-vX.Y.Z`; it tracks the runtime
+release it targets. `MINIMUM_AIP` in `bin/aip-console.mjs` is the oldest `aip` the launcher
+accepts and moves when the console starts to depend on something newer in the CLI's JSON or the
+server's API.
 
-## Releasing
-
-Releases are cut by the **`.github/workflows/release.yml`** workflow, **triggered manually**
-(Actions → *Release to npm* → Run workflow) by a maintainer **after the release PR is merged to
-`main`**. The workflow reads the version from `package.json`, refuses if `package-lock.json`
-disagrees or if the tag already exists, runs `npm ci && npm run build && npm pack`, checks the
-tarball carries `bin/aip-console.mjs` and `dist/`, tags `vX.Y.Z`, **stages** `aip-console` on npm
-with `npm stage publish --provenance` from the `release` GitHub environment, and cuts a GitHub
-Release whose body is the matching `## [X.Y.Z]` section of `CHANGELOG.md`.
-
-**Staged, then approved by a person.** A staged version is held by npm and not installable until
-the maintainer approves it with 2FA: on npmjs.com, the package's *Staged Packages* tab → *Approve*,
-or `npm stage approve <stage-id>` (the id is in the run's summary). That approval is the last step
-of every release. The workflow authenticates with npm's trusted publishing (OIDC, no token): the
-package page names this repository, `release.yml` and the `release` environment as its trusted
-publisher, and `npm stage publish` is the one action a trusted publisher is always allowed, so no
-publish permission and no `NPM_TOKEN` secret exist. 0.7.0 was published by hand from a laptop
-before any of this existed.
-
-Running it with `target: dry-run` is the rehearsal for a new or changed workflow: same checks,
-same build, same tarball, then `npm stage publish --dry-run`, no tag and no GitHub Release. It can
-be repeated at the same version. A failed run that already pushed the tag is re-run after deleting
-the tag (`git push origin :refs/tags/vX.Y.Z`).
-
-So an agent's job for a release is **prep only — never build, tag, stage, approve or publish by hand:**
-
-1. **Set the version** with `npm version X.Y.Z --no-git-tag-version` (SemVer, pre-1.0 → breaking
-   changes bump the minor; match the aip release the console targets), and move `MINIMUM_AIP` if the
-   console now needs a newer `aip`.
-2. **Finalize `CHANGELOG.md`**: roll `## [Unreleased]` into a single `## [X.Y.Z] — <date>`
-   section (one section per release — the workflow extracts just that one). The `## [X.Y.Z]`
-   heading format is **load-bearing** (awk-matched); leave a fresh empty `## [Unreleased]` above
-   it.
-3. Open the release PR. The maintainer merges it, triggers the workflow, and approves the staged
-   version on npmjs.com.
-
-Never move or force-push a published tag.
-
-## When you're unsure
-
-- For the server API the page calls, the aip repo's `docs/server-design.md` and
-  `src/aip/server/app.py` are the shapes; `src/api/types.ts` here repeats them.
-- For the CLI's JSON lines the launcher relays, the aip repo's `docs/cli-json.md`.
-- For what a procedure may contain, the aip repo's `packages/aip-spec/docs/specification.md` is
-  the prose and `models.py` there is the law; `src/studio/lint.ts` here ports its rules.
-- For the Studio's behaviour, `docs/studio.md` here is the contract.
+Releases are cut by `.github/workflows/console-release.yml`, run by hand after the release PR is
+merged: it builds and packs from `console/`, pushes the tag, **stages** the version on npm with
+trusted publishing (no token), and cuts a GitHub Release from the matching `## [X.Y.Z]` section
+of `console/CHANGELOG.md`. A staged version is not installable until the maintainer approves it
+with 2FA on npmjs.com (or `npm stage approve <stage-id>`); `target: dry-run` rehearses without
+uploading or tagging. An agent's job is prep only: set the version, finalize the changelog
+(one `## [X.Y.Z] — <date>` section, the heading format is awk-matched), open the PR. Never build,
+tag, stage, approve or publish by hand. npm's trusted publisher for `aip-console` has to name
+this repository and `console-release.yml` (it named the old repository's `release.yml`).

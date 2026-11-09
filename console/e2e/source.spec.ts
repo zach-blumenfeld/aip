@@ -1,57 +1,62 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { CHANGED_FILE, NEW_LINE, OLD_LINE } from "./global-setup";
+import { AGENT, CHANGED_FILE, FIRST_REVISION_DIR, NEW_LINE, OLD_LINE } from "./aip";
 
-const FILES = ["SKILL.md", "assets/config.json", "assets/policy.md", "assets/reply.md",
-               "references/help.md", "scripts/escalate.py", "source/README.md"];
+// The source view: the stored procedure.aip, in the shipped grammar's colours, and the bundle's files;
+// and the diff between two revisions.
 
-test("the source page lists the manifest and shows a text file", async ({ page }) => {
-  await page.goto("./#/p/billing-support/files");
-  const manifest = page.getByRole("table", { name: "file manifest" });
-  await expect(manifest).toBeVisible();
-  for (const f of FILES) await expect(manifest.getByRole("link", { name: f, exact: true })).toHaveCount(1);
-  await expect(manifest.getByRole("row")).toHaveCount(FILES.length + 1);
+test("the source is procedure.aip as it was stored, coloured by the grammar the extension ships", async ({ page }) => {
+  await page.goto(`./#/p/${AGENT}@1/files`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(`${AGENT} source @1`);
+  const rows = page.getByTestId("file-row");
+  await expect(rows).toHaveText([/procedure\.aip/, /assets\/config\.json/, /assets\/policy\.md/, /assets\/reply\.md/, /references\/help\.md/, /scripts\/escalate\.py/]);
 
-  await manifest.getByRole("link", { name: "scripts/escalate.py", exact: true }).click();
-  await expect(page).toHaveURL(/\/files\/scripts\/escalate\.py$/);
-  const text = page.getByTestId("file-text");
-  await expect(text).toBeVisible();
-  await expect(text.getByRole("listitem").first()).toContainText(/python|import|json/i);
-  await expect(page.getByTestId("binary-file")).toHaveCount(0);
+  // Byte for byte: every line of the folder's file, in order.
+  const stored = readFileSync(path.join(FIRST_REVISION_DIR, "procedure.aip"), "utf8");
+  const code = page.getByTestId("file-text");
+  await expect(code).toHaveAttribute("data-language", "aip");
+  const lines = stored.replace(/\n$/, "").split("\n");
+  await expect(code.getByRole("listitem")).toHaveCount(lines.length);
+  const shown = await code.getByRole("listitem").allTextContents();
+  expect(shown.map((l) => l.replace("​", ""))).toEqual(lines);
+
+  // The grammar's scopes: step verbs, step names, clauses, types, labels, comments, strings.
+  const scoped = (scope: string) => code.locator(`[data-scope="${scope}"]`);
+  await expect(scoped("keyword.control.step.aip").first()).toHaveText("Procedure");
+  await expect(scoped("entity.name.function.step.aip").filter({ hasText: "triage" }).first()).toBeVisible();
+  await expect(scoped("keyword.other.clause.aip").filter({ hasText: "Produce" }).first()).toBeVisible();
+  await expect(scoped("support.type.answer.aip").filter({ hasText: "choice" }).first()).toBeVisible();
+  await expect(scoped("constant.other.label.aip").filter({ hasText: "angry" }).first()).toBeVisible();
+  await expect(scoped("comment.line.number-sign.aip").first()).toContainText("#");
+  // A verb is coloured as the extension colours it (one of its two palettes), and bold.
+  const verb = scoped("keyword.control.step.aip").first();
+  const colour = await verb.evaluate((el) => getComputedStyle(el).color);
+  expect(["rgb(255, 122, 178)", "rgb(194, 24, 91)"]).toContain(colour);
+  expect(Number(await verb.evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(600);
 });
 
-test("the diff shows the one changed line and nothing else", async ({ page }) => {
-  // The procedure page resolves to the newest revision and links to the diff with the previous one.
-  await page.goto("./#/p/billing-support");
-  await page.getByRole("link", { name: "diff with previous" }).click();
-  await expect(page).toHaveURL(/\/diff\/[0-9a-f]{16}\.\.[0-9a-f]{16}$/);
+test("a file beside the procedure opens as plain text", async ({ page }) => {
+  await page.goto(`./#/p/${AGENT}@1/files/${CHANGED_FILE}`);
+  await expect(page.locator('[data-testid="file-row"][aria-current="true"]')).toContainText(CHANGED_FILE);
+  const code = page.getByTestId("file-text");
+  await expect(code).not.toHaveAttribute("data-language", "aip");
+  await expect(code).toContainText(OLD_LINE);
+  await expect(code.locator("[data-scope]")).toHaveCount(0);
+});
 
-  await expect(page.getByTestId("diff-summary")).toHaveText(`0 added, 0 removed, 1 changed, ${FILES.length - 1} unchanged`);
-  const rows = page.getByRole("table", { name: "manifest diff" }).locator("tbody tr");
-  await expect(rows).toHaveCount(FILES.length);
-  const changedRows = page.locator('[aria-label="manifest diff"] tr[data-status="changed"]');
-  await expect(changedRows).toHaveCount(1);
-  await expect(changedRows).toContainText(CHANGED_FILE);
+test("the diff between two revisions names the file that changed and shows the line", async ({ page }) => {
+  await page.goto(`./#/p/${AGENT}/diff`);
+  // With no pair in the address, the latest is compared with the one before it.
+  await expect(page).toHaveURL(new RegExp(`#/p/${AGENT}/diff/1\\.\\.2$`));
+  await expect(page.getByTestId("diff-summary")).toHaveText("0 added, 0 removed, 1 changed, 5 unchanged");
+  await expect(page.locator('tr[data-status="changed"]')).toHaveAttribute("data-path", CHANGED_FILE);
+  await expect(page.locator('tr[data-path="procedure.aip"]')).toHaveAttribute("data-status", "unchanged");
+  const diff = page.locator(`[data-testid="file-diff"][data-path="${CHANGED_FILE}"]`);
+  await expect(diff.getByTestId("line-remove")).toContainText(OLD_LINE);
+  await expect(diff.getByTestId("line-add")).toContainText(NEW_LINE);
 
-  const fileDiff = page.getByTestId("file-diff");
-  await expect(fileDiff).toHaveCount(1);
-  await expect(fileDiff).toHaveAttribute("data-path", CHANGED_FILE);
-  await expect(fileDiff.getByTestId("line-remove")).toHaveCount(1);
-  await expect(fileDiff.getByTestId("line-add")).toHaveCount(1);
-  await expect(fileDiff.getByTestId("line-remove")).toContainText(OLD_LINE);
-  await expect(fileDiff.getByTestId("line-add")).toContainText(NEW_LINE);
-  await expect(fileDiff.getByTestId("line-remove")).not.toContainText("45 days");
-
-  // Swapping sides flips the direction of the change.
   await page.getByRole("button", { name: "swap" }).click();
-  await expect(fileDiff.getByTestId("line-remove")).toContainText(NEW_LINE);
-  await expect(fileDiff.getByTestId("line-add")).toContainText(OLD_LINE);
-});
-
-test("the same revision on both sides shows no changes", async ({ page }) => {
-  await page.goto("./#/p/billing-support/diff");
-  const to = page.getByRole("combobox", { name: "to revision" });
-  const revision = await to.inputValue();
-  await page.getByRole("combobox", { name: "from revision" }).selectOption(revision);
-  await expect(page.getByTestId("diff-summary")).toHaveText("Same revision on both sides.");
-  await expect(page.getByTestId("file-diff")).toHaveCount(0);
+  await expect(page).toHaveURL(/diff\/2\.\.1$/);
+  await expect(diff.getByTestId("line-add")).toContainText(OLD_LINE);
 });

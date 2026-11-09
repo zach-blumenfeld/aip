@@ -8,7 +8,3 @@ scratch/
 .idea/
 .claude
 *.tsbuildinfo
-examples/studio/*.zip
-
-# Studio agent handoff folders, when the console runs from the repo
-/studio/

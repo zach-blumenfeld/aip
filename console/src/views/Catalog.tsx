@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, ApiError } from "../api/client";
-import type { CatalogEntry, Requires, SearchHit } from "../api/types";
-import { href } from "../router";
-import { requiresText } from "./Requires";
-import { UploadZip } from "./Zip";
+import { api, describe } from "../api/client";
+import type { BundleRow, CatalogEntry, SearchHit } from "../api/types";
+import { bundleRef, href } from "../router";
+import { DraftBadge, when } from "./Record";
 
+/** The published procedures, searchable. Drafts (bundles the server holds with no revision, from runs of a folder
+ *  or a file) are not in the catalog; a toggle lists them below it. */
 export function Catalog() {
   const [entries, setEntries] = useState<CatalogEntry[] | null>(null);
   const [query, setQuery] = useState("");
@@ -12,23 +13,17 @@ export function Catalog() {
   const [error, setError] = useState<string | null>(null);
   // A name whose every revision is retired no longer resolves or runs: listed last, and hidden unless asked for.
   const [showRetired, setShowRetired] = useState(false);
+  const [showDrafts, setShowDrafts] = useState(false);
+  const [drafts, setDrafts] = useState<BundleRow[] | null>(null);
 
-  const fail = (e: unknown) => setError(e instanceof ApiError ? `${e.kind}: ${e.message}` : String(e));
+  const fail = (e: unknown) => setError(describe(e));
 
-  // What each name's resolved revision needs on the machine that runs its scripts; the listing does not carry it.
-  const [requires, setRequires] = useState<Record<string, Requires | null>>({});
-
-  const [version, setVersion] = useState(0);
-  useEffect(() => { api.catalog().then(setEntries).catch(fail); }, [version]);
+  useEffect(() => { api.catalog().then(setEntries).catch(fail); }, []);
   useEffect(() => {
-    for (const e of entries ?? []) {
-      if (e.latest === null) continue;   // nothing resolves: no revision to ask
-      api.info(e.name).then((info) => setRequires((r) => ({ ...r, [e.name]: info.requires }))).catch(() => undefined);
-    }
-  }, [entries]);
+    if (showDrafts && drafts === null) api.bundles(true).then(setDrafts).catch(fail);
+  }, [showDrafts, drafts]);
 
-  // Search replaces the table while the query is non-empty; debounced so typing
-  // does not fire a request per keystroke.
+  // Search replaces the table while the query is non-empty; debounced so typing does not fire a request per keystroke.
   useEffect(() => {
     const q = query.trim();
     if (!q) { setHits(null); return; }
@@ -36,21 +31,17 @@ export function Catalog() {
     return () => clearTimeout(t);
   }, [query]);
 
-  const link = (name: string, revision?: string) =>
-    href({ page: "procedure", ref: revision ? `${name}@${revision}` : name });
-
-  const retired = (entries ?? []).filter((e) => e.latest === null);
-  const live = (entries ?? []).filter((e) => e.latest !== null);
+  const link = (name: string, revision?: string) => href({ page: "procedure", ref: revision ? `${name}@${revision}` : name });
+  const retired = (entries ?? []).filter((e) => e.resolves === null);
+  const live = (entries ?? []).filter((e) => e.resolves !== null);
   const listed = showRetired ? [...live, ...retired] : live;
 
   return (
     <>
       <form role="search" onSubmit={(e) => e.preventDefault()}>
-        <input type="search" placeholder="Search procedures…" aria-label="search" value={query}
+        <input type="search" placeholder="Search procedures by what they do…" aria-label="search" value={query}
                onChange={(e) => setQuery(e.target.value)} autoFocus />
       </form>
-      <UploadZip onPublished={() => setVersion((v) => v + 1)} />
-      <p className="muted small"><a href={href({ page: "studio", fresh: true })} data-testid="new-in-studio">New in Studio</a>: build a procedure step by step and export it as a skill zip.</p>
       {error && <p className="error" role="alert">{error}</p>}
       {hits !== null ? (
         hits.length === 0 ? <p className="muted">No procedure matches “{query.trim()}”.</p> : (
@@ -62,44 +53,70 @@ export function Catalog() {
                   <td className="muted">{i + 1}</td>
                   <td><a href={link(h.name, h.revision)}><code>{h.name}</code></a></td>
                   <td>{h.description}</td>
-                  <td><code>{h.revision.slice(0, 8)}</code></td>
+                  <td><code>{h.revision}</code></td>
                   <td>{h.score.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )
-      ) : entries === null ? <p className="muted">Loading catalog…</p>
-        : entries.length === 0 ? <p className="muted">The catalog is empty.</p> : (
-          <>
-          {retired.length > 0 && (
-            <p className="muted small catalog-retired">
+      ) : entries === null ? <p className="muted">Loading catalog…</p> : (
+        <>
+          <p className="muted small catalog-retired">
+            {retired.length > 0 && (
               <label>
                 <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
-                {" "}show {retired.length} {retired.length === 1 ? "name" : "names"} with every revision retired
+                {" "}show {retired.length} {retired.length === 1 ? "name" : "names"} with every revision retired{" "}
               </label>
-            </p>
+            )}
+            <label>
+              <input type="checkbox" checked={showDrafts} data-testid="show-drafts" onChange={(e) => setShowDrafts(e.target.checked)} />
+              {" "}show drafts
+            </label>
+          </p>
+          {entries.length === 0 ? <p className="muted" data-testid="empty-catalog">Nothing is published. <code>aip publish FOLDER</code> publishes a procedure.</p> : (
+            <table aria-label="catalog">
+              <thead><tr><th>Name</th><th>Description</th><th>Runs as</th><th>Revisions</th></tr></thead>
+              <tbody>
+                {listed.map((e) => (
+                  <tr key={e.name} data-testid="catalog-row" data-name={e.name} data-retired={e.resolves === null ? "true" : undefined}>
+                    <td><a href={link(e.name)}><code>{e.name}</code></a></td>
+                    <td>{e.description}</td>
+                    <td>{e.resolves === null ? <span className="muted" data-testid="all-retired">all retired</span>
+                                             : <><code>@{e.resolves}</code>{e.pinned ? " (pinned)" : ""}</>}</td>
+                    <td>{e.revisions.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
-          <table aria-label="catalog">
-            <thead><tr><th>Name</th><th>Description</th><th>Latest</th><th>Revisions</th><th>Requires</th></tr></thead>
-            <tbody>
-              {listed.map((e) => (
-                <tr key={e.name} data-retired={e.latest === null ? "true" : undefined}>
-                  <td><a href={link(e.name)}><code>{e.name}</code></a></td>
-                  <td>{e.description}</td>
-                  <td>{e.latest === null ? <span className="muted" data-testid="all-retired">all retired</span>
-                                         : <><code>{e.latest.slice(0, 8)}</code>{e.pinned ? " (pinned)" : ""}</>}</td>
-                  <td>{e.revisions.length}</td>
-                  <td data-testid="catalog-requires">
-                    {e.latest === null ? <span className="muted">—</span>
-                      : e.name in requires ? <code>{requiresText(requires[e.name])}</code> : <span className="muted">…</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </>
-        )}
+          {showDrafts && (
+            <section data-testid="drafts">
+              <h2>Drafts</h2>
+              <p className="muted small">
+                Bundles the server holds with no revision: a run of a folder or an <code>.rl</code> file was recorded against each.
+                No name resolves to one; <code>aip publish</code> gives it a revision.
+              </p>
+              {drafts === null ? <p className="muted">Loading drafts…</p> : drafts.length === 0 ? <p className="muted" data-testid="no-drafts">No drafts.</p> : (
+                <table aria-label="drafts">
+                  <thead><tr><th>Name</th><th>Description</th><th>Bundle</th><th>Stored</th><th></th></tr></thead>
+                  <tbody>
+                    {drafts.map((d) => (
+                      <tr key={d.bundle_id} data-testid="draft-row" data-name={d.name}>
+                        <td><a href={href({ page: "procedure", ref: bundleRef(d.bundle_id) })}><code>{d.name}</code></a> <DraftBadge draft /></td>
+                        <td>{d.description}</td>
+                        <td><code title={d.bundle_id}>{d.bundle_id.slice(0, 12)}</code></td>
+                        <td className="when">{when(d.stored_at)}</td>
+                        <td><a href={href({ page: "runs", name: d.name, draft: true })}>runs</a></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          )}
+        </>
+      )}
     </>
   );
 }
