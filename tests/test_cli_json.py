@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-from aip_spec import LANGUAGE_VERSION, example_dir, relate
+from aip.compiler import LANGUAGE_VERSION, example_dir, relate
 
 from aip.client.cli import main
 from aip.client.runs import RunFile, run_path

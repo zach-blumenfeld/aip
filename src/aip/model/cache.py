@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from aip_spec import FileEntry
+from aip.compiler import FileEntry
 
 
 def aip_home() -> Path:

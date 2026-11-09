@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from aip_spec import example_dir
+from aip.compiler import example_dir
 from fastapi.testclient import TestClient
 
 from aip.client.backend import HttpBackend, LocalBackend

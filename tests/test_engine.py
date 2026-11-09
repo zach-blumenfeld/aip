@@ -12,7 +12,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from aip_spec import FileEntry, compile_folder, compile_source, example_dir, relate
+from aip.compiler import FileEntry, compile_folder, compile_source, example_dir, relate
 
 from aip.model import (
     DONE, FAILED, PAUSED, Engine, InvalidInput, InvalidOutput, NotPaused, Procedure, ScriptedResolver, answers,

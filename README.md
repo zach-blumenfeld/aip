@@ -130,12 +130,11 @@ Tool-call counts were about equal, and wall clock was lower on the AIP side in t
 
 ## Project Structure
 
-Two Python packages live in this repository as a uv workspace, and the console is its own repository:
+One Python package lives in this repository, and the console is its own repository:
 
 | package | where | what it holds | install |
 |---|---|---|---|
-| `aip-spec` | [`packages/aip-spec/`](packages/aip-spec/) | the format: pydantic models, JSON Schema, the runtime block, and the `aip-spec` validator CLI; it bundles the `aip-compile` skill ([`skills/aip-compile/`](skills/aip-compile/)) and the example ([`examples/`](examples/)) | `uv tool install aip-spec` |
-| `agent-instruction-protocol` | this repo's root (`src/aip/`) | the runtime: the `aip` CLI and Python SDK, `aip server`, the Neo4j backend, and the `aip-runtime` skill ([`skills/aip-runtime/`](skills/aip-runtime/)); it depends on `aip-spec` at the same version | `uv tool install "agent-instruction-protocol[server]"` |
+| `agent-instruction-protocol` | this repo's root (`src/aip/`) | the `aip` command and Python SDK: the language's compiler (`aip compile`, `fmt`, `export`; `src/aip/compiler/`), the runtime, `aip server` with its backends, the skills ([`skills/`](skills/)) and the example programs ([`examples/`](examples/)). Through 0.8 the language was a second package, `aip-spec`; it is part of this one since 0.9 | `uv tool install "agent-instruction-protocol[server]"` |
 | `aip-console` | [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
 
 ## Quick Start
@@ -189,9 +188,8 @@ Optional: `aip config --decision-model KEY` with a [TypeSafe](https://typesafe.a
 ### Other ways to install
 
 ```bash
-uv tool install aip-spec                                 # format only: the `aip-spec` validator; `aip-spec skill install` adds the compiling skill
-uv tool install "agent-instruction-protocol[server]"     # the `aip` command with `aip server`; pulls aip-spec in as a library
-pip install aip-spec "agent-instruction-protocol[server]"   # into a virtualenv instead of uv's tool directory
+uv tool install "agent-instruction-protocol[server]"     # the `aip` command with `aip server`; the compiler is part of it
+pip install "agent-instruction-protocol[server]"         # into a virtualenv instead of uv's tool directory
 aip skill install                   # both skills, every detected agent
 aip skill install claude-code       # one agent;  aip skill list  shows them
 aip skill install --path ./.claude/skills    # a project-local skills directory
@@ -441,13 +439,13 @@ uv run pytest -q                                       # the Neo4j backend tests
 uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall agent-instruction-protocol` removes it
 ```
 
-`aip-spec` is a workspace member at `packages/aip-spec/`, so `uv sync` installs it editable alongside the runtime and `uv run pytest -q` at the root runs both packages' tests (`packages/aip-spec/tests` is in `testpaths`). The two `pyproject.toml` files carry the same version, and the runtime pins `aip-spec==<that version>`.
+The compiler, the runtime, the server and the client are one package (`src/aip/`), so `uv sync` installs everything editable and `uv run pytest -q` at the root runs every test. Writing or reading a bundle needs Relate, which is not on PyPI yet: `scripts/install-relate.sh` installs the pinned wheel into `.venv`, and the bundle and engine tests skip without it.
 
 The design behind the client-server architecture is [`docs/server-design.md`](docs/server-design.md).
 
 ### Versioning and releases
 
-Both packages share one version and release together; the format version (`FORMAT_VERSION`, currently `0.8`) moves only when the format changes; every format change ships `aip upgrade`. The rules are in the [roadmap](https://github.com/zach-blumenfeld/aip/issues/20) and, with the release process, in [`AGENTS.md`](AGENTS.md). Drift is caught automatically: the spec's schema-sync and runtime-block tests fail if its files disagree, validation of the bundled example fails on an `aip_version_mismatch`, and `tests/test_runtime_skill.py` fails if the `aip-runtime` skill's version lags `FORMAT_VERSION`.
+The package has one version; the format version (`FORMAT_VERSION`, currently `0.8`) moves only when the format changes; every format change ships `aip upgrade`. The rules are in the [roadmap](https://github.com/zach-blumenfeld/aip/issues/20) and, with the release process, in [`AGENTS.md`](AGENTS.md). Drift is caught automatically: the spec's schema-sync and runtime-block tests fail if its files disagree, validation of the bundled example fails on an `aip_version_mismatch`, and `tests/test_runtime_skill.py` fails if the `aip-runtime` skill's version lags `FORMAT_VERSION`.
 
 ### Changelog
 

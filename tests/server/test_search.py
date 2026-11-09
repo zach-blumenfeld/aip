@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from aip_spec import example_dir
+from aip.compiler import example_dir
 
 from aip.server.backends.filesystem import FilesystemBackend
 from aip.server.records import snapshot

@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import re
 
-from aip_spec import syntax as s
-from aip_spec.errors import ParseError
-from aip_spec.keywords import (
+from aip.compiler import syntax as s
+from aip.compiler.errors import ParseError
+from aip.compiler.keywords import (
     ANSWER_TYPES, FLOW_CLAUSES, HEADER_CLAUSES, LOOP_KINDS, STEP_KINDS, TYPE_ALIASES, keyword, type_name,
 )
-from aip_spec.lexer import EOF, PUNCT, STRING, WORD, Comment, Token, tokenize
+from aip.compiler.lexer import EOF, PUNCT, STRING, WORD, Comment, Token, tokenize
 
 IDENT = re.compile(r"[a-z][a-z0-9_]*")
 DOTTED = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*")

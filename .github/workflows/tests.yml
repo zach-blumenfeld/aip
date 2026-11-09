@@ -1,4 +1,4 @@
-# Runs both packages' tests on every push and pull request, on Linux and on native Windows.
+# Runs the tests on every push and pull request, on Linux and on native Windows.
 #
 # The Windows job exists because the server must start there (#24: the filesystem backend
 # imported the Unix-only `fcntl`); `tests/server/test_filelock.py` exercises the `msvcrt`
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.14
 
-      - name: Install the workspace
+      - name: Install the package
         run: uv sync --group dev
 
       - name: Install Relate
@@ -78,7 +78,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.14
 
-      - name: Install the workspace
+      - name: Install the package
         run: uv sync --group dev
 
       - name: Set up Node

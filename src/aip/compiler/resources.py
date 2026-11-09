@@ -1,9 +1,10 @@
 """Where the bundled example programs and the authoring skill live.
 
-The wheel carries the repository's `examples/` under `aip_spec/examples/` and the entries of
-`skills/aip-compile/` under `aip_spec/_skill/` (`hatch_build.py`). One copy on disk in the repo,
-no duplicates to keep in sync. In an editable checkout the wheel was never built, so both fall
-back to the repository root, found by walking up from this module (`packages/aip-spec/src/aip_spec/`).
+The wheel carries the repository's `examples/` under `aip/compiler/examples/` and the entries of
+`skills/aip-compile/` under `aip/compiler/_skill/` (`[tool.hatch.build.targets.wheel.force-include]`
+in `pyproject.toml`). One copy on disk in the repo, no duplicates to keep in sync. In an editable
+checkout the wheel was never built, so both fall back to the repository root, found by walking up
+from this module (`src/aip/compiler/`).
 
 The example programs are the language's, under `examples/language/<name>/procedure.aip`. The
 skill entries stay here for the runtime's `aip skill install` until the 0.9 skill replaces them."""
@@ -24,12 +25,12 @@ SKILL_FOLDER = Path("skills") / "aip-compile"
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return Path(__file__).resolve().parents[3]
 
 
 def skill_dir() -> Path:
     """The folder holding the authoring skill's `SKILL.md`, `references/`, and `assets/`."""
-    bundled = Path(str(files("aip_spec").joinpath("_skill")))
+    bundled = Path(str(files("aip.compiler").joinpath("_skill")))
     if (bundled / "SKILL.md").is_file():
         return bundled
     checkout = _repo_root() / SKILL_FOLDER
@@ -40,7 +41,7 @@ def skill_dir() -> Path:
 
 def examples_dir() -> Path:
     """The folder of example programs, each a directory with a `procedure.aip`."""
-    bundled = Path(str(files("aip_spec").joinpath("examples"))) / "language"
+    bundled = Path(str(files("aip.compiler").joinpath("examples"))) / "language"
     if bundled.is_dir():
         return bundled
     root = _repo_root() / EXAMPLES_FOLDER

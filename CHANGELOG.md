@@ -3,11 +3,11 @@
 All notable changes to AIP are documented in this file.
 
 Since `0.7.0` the runtime (the `agent-instruction-protocol` distribution, the `aip` command and
-package) and the format (`aip-spec`, in `packages/aip-spec/`) live in this repository and
-release together under one version, so there is one changelog. From `0.4a0` to `0.6a1` the
-format had its own repository and changelog, and the two histories are interleaved below with
-each section marked `(aip)` or `(aip-spec)`. Versions `0.3a3` and earlier predate the split and
-cover both.
+package) and the format (`aip-spec`) live in this repository and release together under one
+version, so there is one changelog; since `0.9.0` they are one package. From `0.4a0` to `0.6a1`
+the format had its own repository and changelog, and the two histories are interleaved below
+with each section marked `(aip)` or `(aip-spec)`. Versions `0.3a3` and earlier predate the split
+and cover both.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -16,6 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 The 0.9 release replaces the YAML procedure format with a text language, `procedure.aip`
 (`docs/language/spec.md`). 0.8 skills do not load in 0.9 and there is no upgrade tool; the plan
 is aip-dev#1. The milestones land one at a time below.
+
+### Changed
+- **One package.** The language's parser, checker, formatter, graph and bundle, the `aip-spec` package through 0.8, are part of `agent-instruction-protocol` as `aip.compiler`; `pip install agent-instruction-protocol` is the whole install and `aip --version` prints one line, `aip <version> language <language version>`. `aip compile`, `aip fmt` and `aip export` are unchanged, including `aip compile --json` for the editor; the `aip-spec` command is gone (it was the same three commands under another name), and a Python import of `aip_spec` becomes `aip.compiler`. The `aip-spec` distribution on PyPI stays at 0.8 with no further release. Why: a 0.9 procedure is a bundle only the runtime can run, so nobody installs the compiler alone; the extension, CI, the SDK and the MCP server all go through `aip`.
 
 ### Added
 - **Labels on a produced answer, and the agent deciding in a `Task_Agent`** (`docs/language/spec.md` 2.1, 2.4; plan L4). An `Execute`, a `Task_Agent` or a `Start` input declares a `choice` or `score` with its labels, as a question does: `Produce tone: choice [angry, calm] "..."`. The compiler knows them, so a route over such an answer is checked like one over a question (`unknown_label`, `missing_branch`), a `choice` or `score` key without them is `question_labels`, and the formatter writes them back. A `Task_Agent` pause carries `labels`, the values the agent may answer with, beside `answer_with`. The new example `examples/language/billing-support-agent` is `billing-support` with `triage` as a `Task_Agent` producing `billing: true_or_false` and `tone: choice [angry, calm]`, the route on `tone` with no confidence check, the same script and reply: side by side the two show model vs agent, and the agent one runs on a machine with no decision model.

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from aip_spec import syntax as s
+from aip.compiler import syntax as s
 
 INDENT = "  "
 _BARE_PATH = re.compile(r"[A-Za-z0-9_.](?:[A-Za-z0-9_./]|-(?!>))*")
@@ -24,7 +24,7 @@ def format_program(program: s.Program) -> str:
 
 def format_source(source: str, file: str | None = None) -> str:
     """Parse `source` and write it back canonically. Raises ParseError as `parse` does."""
-    from aip_spec.parser import parse
+    from aip.compiler.parser import parse
 
     return format_program(parse(source, file))
 

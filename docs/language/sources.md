@@ -8,9 +8,11 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
 - You are in a **private mirror** of the public `zach-blumenfeld/aip`. The worktree is
   `~/dev/aip-0.9` on branch `release-0.9.0`; its push remote is `dev` (the mirror). `origin` is
   the public repo: never push there (AGENTS.md, "This is the private 0.9 mirror").
-- **The 0.8 code you are replacing is in this same tree**: the runtime under `src/aip/`, the format
-  under `packages/aip-spec/`, the server under `src/aip/server/`, the Neo4j backend at
-  `src/aip/server/backends/neo4j.py`, the skills under `skills/`, the examples under `examples/`.
+- **The 0.8 code you are replacing is in this same tree**: the runtime under `src/aip/`, the server
+  under `src/aip/server/`, the Neo4j backend at `src/aip/server/backends/neo4j.py`, the skills
+  under `skills/`, the examples under `examples/`. The language is `src/aip/compiler/` (until L5,
+  2026-11-09, it was the separate package `aip-spec` under `packages/`; the old format's prose
+  is `docs/specification-0.8.md`).
   AGENTS.md's repo map describes it. Read the piece you replace before replacing it; the records,
   the governance queries and the HTTP contract carry over in shape.
 - **A Relate backend already exists as a reference**: branch `cypherlite-backend` on the mirror
@@ -40,8 +42,8 @@ nothing mentioning it leaves the mirrors.**
 |---|---|---|
 | Source and releases | `github.com/neo4j-labs/cypherlite` | visibility is *internal*: web fetches 404; `gh api repos/neo4j-labs/cypherlite/...` works with Zach's login. Moving to `github.com/relatedb/relate` (404 today). |
 | Pinned release | **v0.16.1**, 2026-11-04 | the last release under the old name. Wheels: `neo4j_cypherlite-0.16.1-cp39-abi3-{macosx_10_12_x86_64, macosx_11_0_arm64, manylinux2014_x86_64, manylinux2014_aarch64, win_amd64}.whl` on the release's assets. **Install with `scripts/install-relate.sh`** (into `.venv`, or into the environment it is given): it fetches the platform's wheel through the GitHub API (`gh` logged in or `GH_TOKEN`; the plain download URL answers 404 while the repository is internal), checks its sha256 against the five pinned in the script (the release's `SHA256SUMS` covers only the CLI binaries), caches it under `~/.cache/aip/relate/`, and runs `uv pip install`. Not declared in any `pyproject.toml`: `uv lock` would have to fetch it and cannot (L3's note on open item 2). **Import name `cypherlite`.** CI installs it only when the secret `RELATE_GH_TOKEN` is set; otherwise the bundle tests skip. |
-| The rename | main branch | `surfaces/relate-python/pyproject.toml` is already `relate-db`, module `relate`; the CLI is `relate`; bundles are `.rl`. The next release ships under those names. `aip_spec/relate.py` is the one module that imports the engine (`relate`, else `cypherlite`) and names bundles `.rl`; since v0.16.1 recognises its single-file form by the `.cl` suffix alone, it writes beside the target as `<name>.rl.tmp.cl` and renames, and opens an `.rl` through a temporary `.cl` link. Both go when the rename ships. |
-| The CLI binary | release assets `cypherlite-{darwin,linux}-{arm64,amd64}`, `cypherlite-windows-amd64.exe` | in `SHA256SUMS`. `cypherlite query --database x.rl "..."` does not open an `.rl` at v0.16.1 (it is read as a directory); copy or link the file to `x.cl` first, or use `aip_spec.relate.open` from Python. |
+| The rename | main branch | `surfaces/relate-python/pyproject.toml` is already `relate-db`, module `relate`; the CLI is `relate`; bundles are `.rl`. The next release ships under those names. `aip/compiler/relate.py` is the one module that imports the engine (`relate`, else `cypherlite`) and names bundles `.rl`; since v0.16.1 recognises its single-file form by the `.cl` suffix alone, it writes beside the target as `<name>.rl.tmp.cl` and renames, and opens an `.rl` through a temporary `.cl` link. Both go when the rename ships. |
+| The CLI binary | release assets `cypherlite-{darwin,linux}-{arm64,amd64}`, `cypherlite-windows-amd64.exe` | in `SHA256SUMS`. `cypherlite query --database x.rl "..."` does not open an `.rl` at v0.16.1 (it is read as a directory); copy or link the file to `x.cl` first, or use `aip.compiler.relate.open` from Python. |
 | Docs site | https://neo4j-labs.github.io/cypherlite/ and https://relatedb.ai/ | public. `llms.txt` at either root is the whole reference in one file. |
 | Reference docs, snapshotted at v0.16.1 | `docs/language/relate/` in this tree | `python-library.md` (connect, execute, parameters, `read_only=True`, Arrow), `storage-formats.md` (directory, `.cl`/`.rl` single file, codecs, format version), `cli-flags.md` (`--load`, `--read-only`, `clone`, `pull`, `push`, `serve`), `cypher-syntax.md`, `limitations.md`, `llms.txt`. Prefer these to live fetches; refresh them when the pin moves. |
 | Repo docs not snapshotted | `docs/adr/`, `docs/api/python/`, `docs/guides/backup-restore.md`, `docs/engine-architecture.md` | via `gh api repos/neo4j-labs/cypherlite/contents/<path>?ref=v0.16.1`, base64 in `.content`. |

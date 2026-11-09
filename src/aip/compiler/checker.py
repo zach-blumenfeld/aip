@@ -25,9 +25,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from aip_spec import syntax as s
-from aip_spec.errors import ParseError
-from aip_spec.keywords import ANSWER_TYPES
+from aip.compiler import syntax as s
+from aip.compiler.errors import ParseError
+from aip.compiler.keywords import ANSWER_TYPES
 
 SOURCE_FILE = "procedure.aip"
 RESOURCE_DIRS = ("assets", "references", "scripts")
@@ -1080,7 +1080,7 @@ def check(program: s.Program, folder: Path | str | None = None, file: str | None
 def check_source(source: str, file: str | None = None, folder: Path | str | None = None, *,
                  sources: dict[str, str] | None = None) -> tuple[s.Program | None, list[Diagnostic]]:
     """Parse and check source text. A syntax error is the one diagnostic (`syntax_error`)."""
-    from aip_spec.parser import parse
+    from aip.compiler.parser import parse
 
     try:
         program = parse(source, file)

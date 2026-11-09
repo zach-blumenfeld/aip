@@ -3,7 +3,7 @@
 An agent is detected by a marker directory under the home directory and has a skills
 directory beside it; a skill is installed by copying its folder to
 `<skills_dir>/<skill name>/`. The catalog mirrors neo4j-cli's and knowledge-index's so users
-have one mental model across tools. `aip-spec skill install` installs the authoring skill
+have one mental model across tools. Through 0.8, `aip-spec skill install` installed the authoring skill
 through this module, and `aip skill install` installs it and `aip-runtime` through the
 same functions, so adding an agent is one line in `AGENTS`. `install` keeps a record of what
 it wrote where and removes its own earlier folders that are no longer in the set; `prune`
@@ -92,7 +92,7 @@ def detected_agents() -> list[Agent]:
 
 def frontmatter(folder: Path) -> dict:
     """The folder's `SKILL.md` frontmatter as a dict; empty when there is none to read."""
-    from aip_spec.skill import FRONTMATTER_PATTERN
+    from aip.compiler.skill import FRONTMATTER_PATTERN
 
     import yaml
 
@@ -145,7 +145,7 @@ def target_dirs(agent: str | None = None, path: Path | None = None) -> list[tupl
 # the ones it wrote earlier that are no longer in its set (a renamed, split or dropped skill) and
 # never anything else. One file, `skills.json` under `AIP_HOME` (else `~/.aip`, where the runtime
 # keeps its run files): {"version": 1, "dirs": {<skills dir>: {<tool>: [<folder name>, ...]}}}.
-# Entries are per tool because `aip skill install` writes two skills and `aip-spec skill install`
+# Entries are per tool because `aip skill install` writes two skills and 0.8's `aip-spec skill install`
 # one; each only cleans up after its own earlier runs.
 RECORD_VERSION = 1
 

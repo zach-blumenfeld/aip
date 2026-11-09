@@ -1,7 +1,7 @@
 """The AIP runtime's engine: a compiled procedure behind a Relate connection, the state, the
 steps, the answers, and the run loop.
 
-    from aip_spec import compile_folder
+    from aip.compiler import compile_folder
     from aip.model import Engine, Procedure, ScriptedResolver
 
     bundle, diagnostics = compile_folder("examples/language/billing-support")

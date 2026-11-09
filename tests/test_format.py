@@ -1,14 +1,14 @@
-"""The formatter and `aip-spec fmt`: canonical spelling and layout, idempotence, the exit codes."""
+"""The formatter and `aip fmt`: canonical spelling and layout, idempotence, the exit codes."""
 
 import contextlib
 import io
 import unittest
 from pathlib import Path
 
-from aip_spec import format_program, format_source, parse
-from aip_spec.cli import main
+from aip.compiler import format_program, format_source, parse
+from aip.client.cli import main
 
-EXAMPLES = Path(__file__).resolve().parents[3] / "examples" / "language"
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "language"
 
 MESSY = """# a comment
 procedure   messy   "A messy file."
@@ -162,7 +162,11 @@ class FmtCommand(unittest.TestCase):
         self.assertIn("not found", err)
 
     def test_version_and_help(self):
-        self.assertEqual(self.run_cli("--version"), (0, "0.9\n", ""))
+        from importlib.metadata import version
+
+        code, out, err = self.run_cli("--version")
+        self.assertEqual((code, out, err), (0, f"aip {version('agent-instruction-protocol')} language 0.9\n", ""),
+                         "one package, one version line")
         code, out, _ = self.run_cli()
         self.assertEqual(code, 0)
         self.assertIn("fmt", out)

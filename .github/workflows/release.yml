@@ -1,22 +1,21 @@
 name: Release to PyPI
 
 # Manual trigger from the Actions tab, after the release PR is merged. Reads the version from
-# both pyprojects (the release PR aligned them), refuses if they differ or the tag exists,
-# builds all four distributions, pushes the tag, publishes `aip-spec` and then
-# `agent-instruction-protocol` with PyPI Trusted Publishing, and cuts a GitHub Release whose
-# notes are the `## [X.Y.Z]` section of CHANGELOG.md.
+# pyproject.toml, refuses if the tag exists, builds the wheel and the sdist, pushes the tag,
+# publishes `agent-instruction-protocol` with PyPI Trusted Publishing, and cuts a GitHub Release
+# whose notes are the `## [X.Y.Z]` section of CHANGELOG.md.
 #
-# Two publish jobs because PyPI allows one pending publisher per (repo, workflow, environment):
-# `aip-spec` publishes from the `release-spec` environment and `agent-instruction-protocol`
-# from `release`. The spec goes first so the runtime's exact pin (`aip-spec==X.Y.Z`) resolves
-# the moment the runtime lands. The GitHub environments and the pending publishers are set up
-# by hand once (issue #17, "Before starting").
+# One publish job, from the `release` environment (PyPI allows one pending publisher per
+# (repo, workflow, environment)). Through 0.8 a second job published `aip-spec` from the
+# `release-spec` environment; the language folded into this package at 0.9 (plan L5), so that
+# environment and its publisher are unused and `aip-spec` stays at 0.8 on PyPI. The GitHub
+# environment and the pending publisher are set up by hand once (issue #17, "Before starting").
 #
-# `target: testpypi` is the dry run for a new or changed workflow: same checks, same build,
-# both uploads go to test.pypi.org (its own account and its own two pending publishers under
-# the same names), no tag is pushed and no GitHub Release is created. TestPyPI refuses a
-# filename it has seen before, so one dry run per version; to repeat, suffix the version
-# `.dev1` in both pyprojects on a scratch branch.
+# `target: testpypi` is the dry run for a new or changed workflow: same checks, same build, the
+# upload goes to test.pypi.org (its own account and its own pending publisher under the same
+# name), no tag is pushed and no GitHub Release is created. TestPyPI refuses a filename it has
+# seen before, so one dry run per version; to repeat, suffix the version `.dev1` on a scratch
+# branch.
 on:
   workflow_dispatch:
     inputs:
@@ -46,24 +45,14 @@ jobs:
       - name: Set up Python
         run: uv python install 3.14
 
-      - name: Resolve the version from both pyprojects
+      - name: Resolve the version from pyproject.toml
         id: v
-        # The two packages always share a version and the runtime pins the spec exactly, so
-        # all three numbers must agree before anything is built.
         run: |
           uv run --no-project python - <<'PY' >> "$GITHUB_OUTPUT"
-          import re, sys, tomllib, pathlib
-          runtime = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
-          spec = tomllib.loads(pathlib.Path("packages/aip-spec/pyproject.toml").read_text())["project"]
-          pin = next((d for d in runtime["dependencies"] if re.match(r"aip-spec\s*==", d)), "")
-          pinned = pin.split("==", 1)[1].strip() if pin else None
-          if not (runtime["version"] == spec["version"] == pinned):
-              print(f"::error::versions differ: pyproject.toml {runtime['version']}, "
-                    f"packages/aip-spec/pyproject.toml {spec['version']}, pin {pin or '(none)'}. "
-                    "Align all three in the release PR.", file=sys.stderr)
-              sys.exit(1)
-          print(f"version={runtime['version']}")
-          print(f"tag=v{runtime['version']}")
+          import tomllib, pathlib
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
+          print(f"version={project['version']}")
+          print(f"tag=v{project['version']}")
           PY
           echo "version $(grep '^version=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
 
@@ -73,27 +62,23 @@ jobs:
         # version that has shipped is a mistake.
         run: |
           if git ls-remote --tags origin "refs/tags/${{ steps.v.outputs.tag }}" | grep -q .; then
-            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump both pyprojects before re-running."
+            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump pyproject.toml before re-running."
             exit 1
           fi
 
-      - name: Build all four distributions
-        # Before tagging, so a build failure leaves the repo clean. `--all-packages` builds
-        # every workspace member: a wheel and an sdist each for agent-instruction-protocol
-        # and aip-spec.
+      - name: Build the wheel and the sdist
+        # Before tagging, so a build failure leaves the repo clean.
         run: |
           rm -rf dist/
-          uv build --all-packages
+          uv build
           ls -1 dist/
           count=$(find dist/ -type f \( -name '*.whl' -o -name '*.tar.gz' \) | wc -l)   # uv also writes dist/.gitignore
-          if [ "$count" -ne 4 ]; then
-            echo "::error::expected 4 files in dist/, found $count"
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected 2 files in dist/, found $count"
             exit 1
           fi
-          for d in agent_instruction_protocol aip_spec; do
-            test -f dist/${d}-${{ steps.v.outputs.version }}-py3-none-any.whl
-            test -f dist/${d}-${{ steps.v.outputs.version }}.tar.gz
-          done
+          test -f dist/agent_instruction_protocol-${{ steps.v.outputs.version }}-py3-none-any.whl
+          test -f dist/agent_instruction_protocol-${{ steps.v.outputs.version }}.tar.gz
 
       - name: Extract release notes from CHANGELOG.md
         # Pulls the section under `## [<version>] ...` up to (but not including) the next
@@ -121,44 +106,17 @@ jobs:
 
       - name: Create and push the tag
         if: inputs.target == 'pypi'
-        # Before the first publish, as in the original single-package workflow: a publish
-        # failure leaves a tag with no release behind it, which is visible and recoverable.
+        # Before the publish: a publish failure leaves a tag with no release behind it, which is
+        # visible and recoverable.
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ steps.v.outputs.tag }}" -m "Release ${{ steps.v.outputs.tag }}"
           git push origin "${{ steps.v.outputs.tag }}"
 
-  publish-spec:
-    name: Publish aip-spec
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: release-spec
-      url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/p/aip-spec' || 'https://pypi.org/p/aip-spec' }}
-    permissions:
-      contents: read
-      id-token: write    # PyPI Trusted Publishing
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-${{ needs.build.outputs.version }}
-
-      - name: Keep only the aip-spec files
-        run: |
-          mkdir -p upload
-          mv dist/aip_spec-*.whl dist/aip_spec-*.tar.gz upload/
-          ls -1 upload/
-
-      - name: Publish aip-spec
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: upload/
-          repository-url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
-
-  publish-runtime:
+  publish:
     name: Publish agent-instruction-protocol
-    needs: [build, publish-spec]
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: release
@@ -171,21 +129,15 @@ jobs:
         with:
           name: release-${{ needs.build.outputs.version }}
 
-      - name: Keep only the agent-instruction-protocol files
-        run: |
-          mkdir -p upload
-          mv dist/agent_instruction_protocol-*.whl dist/agent_instruction_protocol-*.tar.gz upload/
-          ls -1 upload/
-
       - name: Publish agent-instruction-protocol
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: upload/
+          packages-dir: dist/
           repository-url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
 
       - name: How to verify the dry run
         if: inputs.target == 'testpypi'
-        # TestPyPI holds only these two packages; the dependencies come from PyPI.
+        # TestPyPI holds only this package; the dependencies come from PyPI.
         run: |
           {
             echo "## Dry run published to TestPyPI"
@@ -201,7 +153,7 @@ jobs:
   github-release:
     name: GitHub Release
     if: inputs.target == 'pypi'
-    needs: [build, publish-runtime]
+    needs: [build, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write    # create the GitHub Release
@@ -211,7 +163,7 @@ jobs:
           name: release-${{ needs.build.outputs.version }}
 
       - name: Create GitHub Release
-        # After both publishes, so a publish failure doesn't leave behind a GitHub Release
+        # After the publish, so a publish failure doesn't leave behind a GitHub Release
         # pointing at nothing on PyPI. The tag already exists; the action attaches to it.
         uses: softprops/action-gh-release@v2
         with:

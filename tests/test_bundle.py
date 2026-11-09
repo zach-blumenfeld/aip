@@ -14,13 +14,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aip_spec import (
+from aip.compiler import (
     LANGUAGE_VERSION, BundleError, FileEntry, bundle_id, compile_folder, compile_source, example_dir, example_names,
     export_bundle, read_bundle, write_bundle,
 )
-from aip_spec import relate
-from aip_spec.cli import main
-from aip_spec.graph import PROCEDURE_ID
+from aip.compiler import relate
+from aip.client.cli import main
+from aip.compiler.graph import PROCEDURE_ID
 
 needs_relate = unittest.skipUnless(relate.available(), relate.INSTALL_HINT)
 PREFIX = 'Procedure p "x"\n'

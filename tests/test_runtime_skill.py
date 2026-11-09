@@ -12,8 +12,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import yaml
-from aip_spec import FORMAT_VERSION, skill_dir
-from aip_spec.skill import check_frontmatter, parse_skill_md
+from aip.compiler import FORMAT_VERSION, skill_dir
+from aip.compiler.skill import check_frontmatter, parse_skill_md
 
 from aip.client import runtime_skill_text
 from aip.client.cli import COMMANDS, main
@@ -94,7 +94,7 @@ class TestRuntimeSkill(unittest.TestCase):
         """`aip skill install --path DIR` writes `aip-compile/` (from aip-spec) and `aip-runtime/` (from
         here), each a valid Agent Skill folder, and records them; `aip skill prune` removes the
         authoring skill's pre-0.7.0 folder `aip/`; `remove` takes the skills away."""
-        from aip_spec.agents import read_record
+        from aip.compiler.agents import read_record
 
         with tempfile.TemporaryDirectory() as tmp:
             legacy = Path(tmp) / "aip"

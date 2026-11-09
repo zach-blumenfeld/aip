@@ -1,12 +1,16 @@
 [project]
 name = "agent-instruction-protocol"
 version = "0.8.0"
-description = "Agent Instruction Protocol: runtime model, server, and client for graph-shaped agent skills"
+description = "Agent Instruction Protocol: the procedure language and its compiler, the runtime, the server and the client, as one `aip` command"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
+# Relate (`neo4j-cypherlite` 0.16.1 today, `relate-db` once renamed), the engine a bundle is
+# written in, is deliberately not listed: it is not on PyPI and its GitHub release is internal,
+# so `uv lock` could not fetch it and every `uv sync` would fail. `scripts/install-relate.sh`
+# installs the pinned wheel; `aip/compiler/relate.py` imports it lazily and prints the hint when
+# it is missing. When `relate-db` is on PyPI, pin it here and delete the script.
 dependencies = [
-    "aip-spec==0.8.0",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
     "pydantic>=2.11",
@@ -31,16 +35,16 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
 
-# `aip-spec` (the format: `packages/aip-spec/`) is a uv workspace member, so a checkout
-# resolves it from the tree and `uv tool install git+...aip` installs it from the repo's
-# subdirectory (spike F1, issue #17, uv 0.11.14). The pin is exact: both packages always
-# share a version. A `../aip-spec` path source is not an option: uv applies a git-fetched
-# project's sources when installing it, which broke `uv tool install`.
-[tool.uv.workspace]
-members = ["packages/*"]
-
-[tool.uv.sources]
-aip-spec = { workspace = true }
+# The example programs and the authoring skill live once, at the repository root (`examples/`
+# and `skills/aip-compile/`), where GitHub renders them. The wheel carries the same files under
+# `aip/compiler/examples/` and `aip/compiler/_skill/`, so an installed `aip` finds them
+# (`aip.compiler.resources` looks in the wheel first, then walks up to the checkout). The sdist
+# holds the whole tree, so a wheel built from it finds the same relative paths.
+[tool.hatch.build.targets.wheel.force-include]
+"examples" = "aip/compiler/examples"
+"skills/aip-compile/SKILL.md" = "aip/compiler/_skill/SKILL.md"
+"skills/aip-compile/references" = "aip/compiler/_skill/references"
+"skills/aip-compile/assets" = "aip/compiler/_skill/assets"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "packages/aip-spec/tests"]
+testpaths = ["tests"]

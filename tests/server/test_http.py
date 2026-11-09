@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from aip_spec import FORMAT_VERSION, example_dir
+from aip.compiler import FORMAT_VERSION, example_dir
 from fastapi.testclient import TestClient
 from typesafe_sdk import SystemOneResponse
 

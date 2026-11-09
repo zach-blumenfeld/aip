@@ -2,7 +2,7 @@
 one Cypher query per thing a step needs (spec 4; `docs/language/runtime.md`, Loading).
 
 `Procedure.load(bundle)` writes a verified bundle into an in-memory Relate store and answers
-from there; `Procedure(conn, bundle_id)` reads the same graph from any store `aip_spec.write_graph`
+from there; `Procedure(conn, bundle_id)` reads the same graph from any store `aip.compiler.write_graph`
 wrote it to, a server's catalog included, since every node is matched by `{bundle_id, id}`. The
 queries are the schema of `docs/language/bundle.md` read back; nothing here decides what a step
 means, only what the bundle says about it. A step is read once per run and kept; the graph never
@@ -15,8 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from aip_spec import Bundle, FileEntry, write_graph
-from aip_spec.graph import PROCEDURE_ID
+from aip.compiler import Bundle, FileEntry, write_graph
+from aip.compiler.graph import PROCEDURE_ID
 
 from aip.model.types import JSON
 
@@ -223,7 +223,7 @@ class Procedure:
     @classmethod
     def load(cls, bundle: Bundle) -> "Procedure":
         """A verified bundle loaded into an in-memory Relate store."""
-        from aip_spec import relate
+        from aip.compiler import relate
 
         conn = relate.connect(":memory:", read_only=False)
         write_graph(conn, bundle.graph, bundle.id)

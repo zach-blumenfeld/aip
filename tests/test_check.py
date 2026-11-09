@@ -8,10 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aip_spec import CODES, Diagnostic, check, check_path, check_source, example_dir, example_names, format_program, parse
-from aip_spec.cli import main
+from aip.compiler import CODES, Diagnostic, check, check_path, check_source, example_dir, example_names, format_program, parse
+from aip.client.cli import main
 
-EXAMPLES = Path(__file__).resolve().parents[3] / "examples" / "language"
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "language"
 
 PREFIX = 'Procedure p "x"\n'  # line 1 of every case
 # A complete three-step program: Start on line 2, a task on line 3, End on line 4.
@@ -401,7 +401,7 @@ class Examples(unittest.TestCase):
                 self.assertEqual(found, [], name)
 
     def test_the_spec_summary_example_is_the_ticket_triage_example(self):
-        spec = (Path(__file__).resolve().parents[3] / "docs" / "language" / "spec.md").read_text(encoding="utf-8")
+        spec = (Path(__file__).resolve().parents[1] / "docs" / "language" / "spec.md").read_text(encoding="utf-8")
         block = spec.split("```aip\n", 1)[1].split("```", 1)[0]
         code_lines = lambda text: [line for line in format_program(parse(text)).splitlines() if line.strip() and not line.lstrip().startswith("#")]
         self.assertEqual(code_lines(block), code_lines((EXAMPLES / "ticket-triage" / "procedure.aip").read_text(encoding="utf-8")),
@@ -409,7 +409,7 @@ class Examples(unittest.TestCase):
         self.assertEqual(check(parse(block)), [])
 
     def test_every_code_is_in_the_spec(self):
-        spec = (Path(__file__).resolve().parents[3] / "docs" / "language" / "spec.md").read_text(encoding="utf-8")
+        spec = (Path(__file__).resolve().parents[1] / "docs" / "language" / "spec.md").read_text(encoding="utf-8")
         for code in CODES:
             self.assertIn(f"`{code}`", spec, code)
 

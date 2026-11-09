@@ -1,13 +1,13 @@
-"""The `aip-spec` command: the language's own tooling, without the runtime.
+"""The language's commands under `aip` (`aip.client.cli` dispatches to them):
 
-    aip-spec compile <path> [-o FILE] [--check] [--json] [--stdin]   compile a program to a bundle, or just check it
-    aip-spec export <bundle.rl> --out DIR [--force]        write the program directory back from a bundle
-    aip-spec fmt <path>... [--check]                       rewrite procedure files in canonical form
-    aip-spec --version                                     the language version
+    aip compile <path> [-o FILE] [--check] [--json] [--stdin]   compile a program to a bundle, or just check it
+    aip export <bundle.rl> --out DIR [--force]        write the program directory back from a bundle
+    aip fmt <path>... [--check]                       rewrite procedure files in canonical form
 
-A path is a `procedure.aip` or a program directory holding one. `aip compile`, `aip export` and
-`aip fmt` are the same commands under the runtime's name. Writing or reading a bundle needs
-Relate installed (`aip_spec.relate`); `--check`, `--json` without a bundle, and `fmt` do not.
+A path is a `procedure.aip` or a program directory holding one. Writing or reading a bundle needs
+Relate installed (`aip.compiler.relate`); `--check`, `--json` without a bundle, and `fmt` do not.
+Until 0.9 these were the `aip-spec` command of the separate `aip-spec` package, which folded into
+this one (plan L5).
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ import json
 import sys
 from pathlib import Path
 
-from aip_spec import ParseError, format_source, has_errors
-from aip_spec.bundle import BUNDLE_SUFFIX, BundleError, compile_folder, export_bundle, read_bundle, write_bundle
-from aip_spec.language import LANGUAGE_VERSION
+from aip.compiler import ParseError, format_source, has_errors
+from aip.compiler.bundle import BUNDLE_SUFFIX, BundleError, compile_folder, export_bundle, read_bundle, write_bundle
+from aip.compiler.language import LANGUAGE_VERSION
 
 SOURCE_FILE = "procedure.aip"
 
@@ -36,7 +36,7 @@ def _source_paths(paths: list[Path], prog: str) -> list[Path] | None:
     return files
 
 
-def compile_command(argv: list[str], prog: str = "aip-spec compile") -> int:
+def compile_command(argv: list[str], prog: str = "aip compile") -> int:
     """Exit 0 when the program has no error (warnings and infos are printed and do not fail it),
     1 on any error, including a syntax error, 2 when the path is missing, 3 when the bundle could
     not be written (Relate missing). Without `--check` the bundle is written to `-o`, or to
@@ -77,7 +77,7 @@ def compile_command(argv: list[str], prog: str = "aip-spec compile") -> int:
         try:
             write_bundle(bundle, output)
         except Exception as exc:
-            from aip_spec.relate import RelateMissing
+            from aip.compiler.relate import RelateMissing
             written_error = str(exc) if isinstance(exc, RelateMissing) else f"could not write {output}: {exc}"
             output = None
             code = 3
@@ -108,7 +108,7 @@ def compile_command(argv: list[str], prog: str = "aip-spec compile") -> int:
     return code
 
 
-def export_command(argv: list[str], prog: str = "aip-spec export") -> int:
+def export_command(argv: list[str], prog: str = "aip export") -> int:
     """Exit 0 after writing the program directory, 1 when the bundle cannot be opened, is not a
     bundle, or does not verify (`bundle_tampered`), or the target is not empty; 2 when the file
     is missing; 3 when Relate is not installed."""
@@ -120,7 +120,7 @@ def export_command(argv: list[str], prog: str = "aip-spec export") -> int:
     if not args.bundle.exists():
         print(f"{prog}: {args.bundle} not found", file=sys.stderr)
         return 2
-    from aip_spec.relate import RelateMissing
+    from aip.compiler.relate import RelateMissing
     try:
         bundle = read_bundle(args.bundle)
         export_bundle(bundle, args.out, force=args.force)
@@ -134,7 +134,7 @@ def export_command(argv: list[str], prog: str = "aip-spec export") -> int:
     return 0
 
 
-def fmt_command(argv: list[str], prog: str = "aip-spec fmt") -> int:
+def fmt_command(argv: list[str], prog: str = "aip fmt") -> int:
     """Exit 0 when every file is (now) in canonical form, 1 when `--check` found one that is not
     or a file does not parse (the error names its line and column), 2 when a path is missing."""
     parser = argparse.ArgumentParser(prog=prog, description="Rewrite procedure.aip files in canonical form.")
@@ -166,26 +166,3 @@ def fmt_command(argv: list[str], prog: str = "aip-spec fmt") -> int:
         print(f"{prog}: {failed} file(s) did not parse", file=sys.stderr)
         return 1
     return 1 if args.check and changed else 0
-
-
-COMMANDS = {"compile": compile_command, "export": export_command, "fmt": fmt_command}
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    if not argv or argv[0] in ("-h", "--help"):
-        print(f"usage: aip-spec <command> [args]        (AIP language {LANGUAGE_VERSION})\n\ncommands:\n  "
-              + "\n  ".join(COMMANDS) + "\n  --version\n\nRunning a procedure is the `aip` package: https://github.com/zach-blumenfeld/aip")
-        return 0
-    if argv[0] in ("--version", "version"):
-        print(LANGUAGE_VERSION)
-        return 0
-    command, rest = argv[0], argv[1:]
-    if command in COMMANDS:
-        return COMMANDS[command](rest)
-    print(f"aip-spec: unknown command {command!r}", file=sys.stderr)
-    return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

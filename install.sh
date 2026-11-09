@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# One-command installer for AIP: the `aip` CLI (run, client, server) and `aip-spec` (the
-# format, its validator), both from PyPI, and both skills, `aip-compile` (authoring) and
-# `aip-runtime` (running published procedures), installed into every agent detected on
-# this machine.
+# One-command installer for AIP: the `aip` command (the language's compiler, the runtime, the
+# client and the server; one package, `agent-instruction-protocol`, from PyPI) and both skills,
+# `aip-compile` (authoring) and `aip-runtime` (running published procedures), installed into
+# every agent detected on this machine.
 #
 #   curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 #
-# Idempotent: safe to re-run; it upgrades both packages and refreshes both skills.
-# `AIP_REF=<version>` installs that release of both packages (they always share a version).
+# Idempotent: safe to re-run; it upgrades the package and refreshes both skills.
+# `AIP_REF=<version>` installs that release.
 set -euo pipefail
 
 AIP_REF="${AIP_REF:-0.8.0}"
@@ -20,7 +20,7 @@ warn() { printf '\033[33m!\033[0m %s\n'  "$*" >&2; }
 # Freshly installed tool shims land here; make them reachable now.
 export PATH="$HOME/.local/bin:$PATH"
 
-# 1. uv, the Python tool manager that installs the packages.
+# 1. uv, the Python tool manager that installs the package.
 if ! command -v uv >/dev/null 2>&1; then
   info "Installing uv…"
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -30,17 +30,16 @@ ok "uv"
 
 # 2. Before 0.7.0 the runtime was the uv tool `aip`, installed from git. The distribution is
 #    `agent-instruction-protocol` now (the command is still `aip`), so that tool goes first.
-if uv tool list 2>/dev/null | grep -q '^aip v'; then
-  info "Removing the pre-0.7.0 aip tool (the package is agent-instruction-protocol now)…"
-  uv tool uninstall aip
-fi
+#    Through 0.8 the language was a second tool, `aip-spec`; since 0.9 it is part of `aip`, so
+#    that one goes too.
+for old in aip aip-spec; do
+  if uv tool list 2>/dev/null | grep -q "^$old v"; then
+    info "Removing the $old tool (the package is agent-instruction-protocol now)…"
+    uv tool uninstall "$old"
+  fi
+done
 
-# 3. aip-spec, then agent-instruction-protocol (the `aip` command). `aip` depends on
-#    `aip-spec` and would pull it in alone, but a tool install links only its own package's
-#    commands, and the authoring skill calls `aip-spec validate`; installing both puts both
-#    on PATH.
-info "Installing aip-spec ${AIP_REF}…"
-uv tool install --force "aip-spec==$AIP_REF"
+# 3. agent-instruction-protocol, the `aip` command.
 info "Installing agent-instruction-protocol ${AIP_REF} (the aip command)…"
 uv tool install --force "agent-instruction-protocol[server]==$AIP_REF"
 hash -r 2>/dev/null || true
@@ -61,7 +60,6 @@ pruned="$(aip skill prune 2>&1 | grep '^removed ' || true)"
 echo
 tools="$(uv tool list 2>/dev/null)"
 ok "agent-instruction-protocol $(printf '%s\n' "$tools" | sed -n 's/^agent-instruction-protocol v//p')  ($(aip --version))"
-ok "aip-spec $(printf '%s\n' "$tools" | sed -n 's/^aip-spec v//p')"
 if [ -n "$skills" ]; then
   # `aip skill install` prints one `installed <skill> -> <folder>  (<agent>)` line per skill and
   # agent, and `removed <folder>  (...)` for a folder it installed earlier and no longer ships.
@@ -72,4 +70,4 @@ if [ -n "$skills" ]; then
 fi
 [ -n "$pruned" ] && printf '%s\n' "$pruned" | while IFS= read -r line; do ok "$line"; done
 echo
-ok "aip ready. 'aip --help' lists the commands, 'aip skill list' shows the skills per agent, 'aip-spec validate <folder>' checks a skill by hand."
+ok "aip ready. 'aip --help' lists the commands, 'aip skill list' shows the skills per agent, 'aip compile --check <folder>' checks a procedure by hand."

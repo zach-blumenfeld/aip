@@ -3,11 +3,11 @@
 import unittest
 from pathlib import Path
 
-from aip_spec import LANGUAGE_VERSION, example_dir, example_names, format_program, parse
-from aip_spec import syntax as s
-from aip_spec.keywords import ALIASES, keyword
+from aip.compiler import LANGUAGE_VERSION, example_dir, example_names, format_program, parse
+from aip.compiler import syntax as s
+from aip.compiler.keywords import ALIASES, keyword
 
-EXAMPLES = Path(__file__).resolve().parents[3] / "examples" / "language"
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "language"
 
 
 def source(name: str) -> str:

@@ -2,7 +2,7 @@
 
 import unittest
 
-from aip_spec import ParseError, parse
+from aip.compiler import ParseError, parse
 
 PREFIX = 'Procedure p "x"\n'  # line 1 of every case below
 

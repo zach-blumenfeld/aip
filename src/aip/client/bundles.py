@@ -21,8 +21,8 @@ import re
 import tempfile
 from pathlib import Path
 
-from aip_spec import Bundle, BundleError, read_bundle, write_bundle
-from aip_spec.bundle import BUNDLE_SUFFIX
+from aip.compiler import Bundle, BundleError, read_bundle, write_bundle
+from aip.compiler.bundle import BUNDLE_SUFFIX
 
 from aip.model.cache import aip_home
 

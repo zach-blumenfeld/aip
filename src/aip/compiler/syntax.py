@@ -1,4 +1,4 @@
-"""The syntax tree of a procedure, as `aip_spec.parse` builds it and `aip_spec.format_program`
+"""The syntax tree of a procedure, as `aip.compiler.parse` builds it and `aip.compiler.format_program`
 writes it back.
 
 Every node carries its source span (1-based `line` and `column`, and the end position after its

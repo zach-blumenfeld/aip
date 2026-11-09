@@ -189,7 +189,7 @@ The compiler checks everything before a bundle exists, and reports against sourc
 - **Loops.** The cap is present; a `For` body is independent; nothing outside a body points into it and nothing inside leaves it but through the loop's own lines; `End` is not reachable inside a body; `Until` watches an answer produced before the loop or by a step in its body; a `For` collects only what every pass produces.
 - **Resources.** Every script, asset and reference named exists on disk, under `assets/`, `references/` or `scripts/`, the directories the bundle carries; a procedure with `Execute` steps declares `Requires`.
 
-Severities are `error`, `warning`, `info`. Compilation fails on `error` and prints the rest. Every diagnostic has one shape, `{code, severity, message, file, line, column, end_line, end_column, step}`, and `aip compile --check --json <folder>` prints them. The codes, which `aip_spec.CODES` lists in the same order:
+Severities are `error`, `warning`, `info`. Compilation fails on `error` and prints the rest. Every diagnostic has one shape, `{code, severity, message, file, line, column, end_line, end_column, step}`, and `aip compile --check --json <folder>` prints them. The codes, which `aip.compiler.CODES` lists in the same order:
 
 | Code | Severity | When |
 |---|---|---|

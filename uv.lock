@@ -2,18 +2,11 @@ version = 1
 revision = 3
 requires-python = ">=3.14"
 
-[manifest]
-members = [
-    "agent-instruction-protocol",
-    "aip-spec",
-]
-
 [[package]]
 name = "agent-instruction-protocol"
 version = "0.8.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aip-spec" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "pydantic" },
@@ -42,7 +35,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aip-spec", editable = "packages/aip-spec" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.26.0" },
@@ -63,21 +55,6 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-
-[[package]]
-name = "aip-spec"
-version = "0.8.0"
-source = { editable = "packages/aip-spec" }
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "annotated-doc"

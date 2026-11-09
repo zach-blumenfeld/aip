@@ -4,9 +4,9 @@ The queries worth knowing over this schema, verified against the examples, are i
 
 What `aip compile` writes (spec section 3): one Relate file, extension `.rl`, holding the
 program's source byte for byte, its files, and the graph derived from them. This page is the
-schema of that graph. `aip_spec/graph.py` is its only implementation and `aip_spec/bundle.py`
-writes and reads the file; a label, property or edge added here is added there in the same
-commit, and the tests under `packages/aip-spec/tests/test_bundle.py` hold the two together.
+schema of that graph. `src/aip/compiler/graph.py` is its only implementation and
+`src/aip/compiler/bundle.py` writes and reads the file; a label, property or edge added here is
+added there in the same commit, and the tests in `tests/test_bundle.py` hold the two together.
 
 The same graph is what `aip compile --json` prints (without the source and file contents, with
 every span) and what a server projects into its store.

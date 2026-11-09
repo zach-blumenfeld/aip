@@ -27,8 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from aip_spec import Bundle, BundleError, Diagnostic, compile_folder, export_bundle, has_errors, read_bundle, write_bundle
-from aip_spec.bundle import BUNDLE_SUFFIX, SOURCE_FILE
+from aip.compiler import Bundle, BundleError, Diagnostic, compile_folder, export_bundle, has_errors, read_bundle, write_bundle
+from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 
 from aip.client import bundles, config
 from aip.client.config import CONFIGURE_HINT, Settings, configure, settings

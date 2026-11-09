@@ -24,8 +24,8 @@ import base64
 import hashlib
 from dataclasses import dataclass, field
 
-from aip_spec import syntax as s
-from aip_spec.language import LANGUAGE_VERSION
+from aip.compiler import syntax as s
+from aip.compiler.language import LANGUAGE_VERSION
 
 PROCEDURE_ID = "procedure"
 # The runtime's keys (spec 2.1, Loops): `index` inside a body, `iterations` after a loop.
@@ -434,7 +434,7 @@ class _Builder:
 def build_graph(program: s.Program, files: list[FileEntry], bundle_id: str, compiler_version: str,
                 sources: dict[str, str] | None = None) -> Graph:
     """The graph of a checked program. `files` are the program's resource files, `bundle_id` the
-    id the bundle computes from the source and those files (`aip_spec.bundle.bundle_id`), and
-    `sources` the checker's source class per route (`aip_spec.check(..., sources=)`), written on
+    id the bundle computes from the source and those files (`aip.compiler.bundle.bundle_id`), and
+    `sources` the checker's source class per route (`aip.compiler.check(..., sources=)`), written on
     each route's `READ_BY` edge."""
     return _Builder(program, files, bundle_id, compiler_version, sources).build()

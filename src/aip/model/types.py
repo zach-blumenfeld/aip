@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, TypeAlias
 
-from aip_spec.keywords import ANSWER_TYPES
+from aip.compiler.keywords import ANSWER_TYPES
 
 JSON: TypeAlias = dict[str, Any]
 

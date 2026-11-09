@@ -4,7 +4,7 @@ for an httpx session: `Server(url, session=FakeServer())`. S1's contract tests r
 the FastAPI app under `TestClient`; the shapes here are what the client expects of them.
 
 The catalog is `name -> [revisions]`, each revision a bundle id; the bundles themselves are kept
-as bytes and read back with `aip_spec.read_bundle` for their name and description, so this
+as bytes and read back with `aip.compiler.read_bundle` for their name and description, so this
 needs Relate like everything that touches a bundle."""
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from aip_spec import read_bundle
+from aip.compiler import read_bundle
 
 from aip.model import Procedure
 from aip.sdk import describe_procedure

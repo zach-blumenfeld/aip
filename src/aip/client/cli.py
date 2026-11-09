@@ -2,7 +2,7 @@
 
     aip run <target> --inputs JSON      run a program directory, an .rl bundle or a catalog name; pauses print as JSON
     aip resume <run_id> --answers JSON  answer a pause (or, with no answers, retry a failed run)
-    aip compile | export | fmt          the language's tooling (aip-spec), under this command's name
+    aip compile | export | fmt          the language's tooling (aip.compiler)
     aip info <target>                   what a procedure is and what to give it
     aip pull | publish | get            move bundles between the cache and the catalog
     aip search | list | pin | retire    the catalog
@@ -33,24 +33,24 @@ CLI_AGENT = "cli"
 
 
 def compile_command(argv: list[str]) -> int:
-    """`aip compile <path> [-o FILE] [--check] [--json] [--stdin]`: `aip-spec compile`, the language's compiler."""
-    from aip_spec.cli import compile_command as spec_compile
+    """`aip compile <path> [-o FILE] [--check] [--json] [--stdin]`: the language's compiler."""
+    from aip.compiler.cli import compile_command as compiler_compile
 
-    return spec_compile(argv, prog="aip compile")
+    return compiler_compile(argv, prog="aip compile")
 
 
 def export_command(argv: list[str]) -> int:
-    """`aip export <bundle.rl> --out DIR`: `aip-spec export`, the program directory back from a bundle."""
-    from aip_spec.cli import export_command as spec_export
+    """`aip export <bundle.rl> --out DIR`: the program directory back from a bundle."""
+    from aip.compiler.cli import export_command as compiler_export
 
-    return spec_export(argv, prog="aip export")
+    return compiler_export(argv, prog="aip export")
 
 
 def fmt_command(argv: list[str]) -> int:
-    """`aip fmt <path>...`: `aip-spec fmt`, the language's formatter."""
-    from aip_spec.cli import fmt_command as spec_fmt
+    """`aip fmt <path>...`: the language's formatter."""
+    from aip.compiler.cli import fmt_command as compiler_fmt
 
-    return spec_fmt(argv, prog="aip fmt")
+    return compiler_fmt(argv, prog="aip fmt")
 
 
 # ------------------------------------------------------------------ the client
@@ -623,7 +623,7 @@ def version_line() -> str:
     """`aip --version`: `aip <version> language <language version>` on one line, which the console checks at startup."""
     from importlib.metadata import version
 
-    from aip_spec import LANGUAGE_VERSION
+    from aip.compiler import LANGUAGE_VERSION
 
     return f"aip {version('agent-instruction-protocol')} language {LANGUAGE_VERSION}"
 

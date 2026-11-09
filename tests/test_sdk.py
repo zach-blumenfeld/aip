@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from aip_spec import example_dir, relate
+from aip.compiler import example_dir, relate
 
 import aip
 from aip import sdk

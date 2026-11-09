@@ -13,7 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from aip_spec import FORMAT_VERSION, example_dir
+from aip.compiler import FORMAT_VERSION, example_dir
 
 from aip.server.backend import (CatalogBackend, GovernanceBackend, InvalidQuery, NotFound, NotSupported, QueryFailed,
                                 RunBackend, StaleRun)

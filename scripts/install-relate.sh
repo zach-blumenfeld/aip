@@ -8,8 +8,8 @@
 # is internal, so `uv` cannot fetch it as a dependency and this script does: it asks the GitHub
 # API for the wheel of this platform with `gh` (logged in, or GH_TOKEN set), checks its sha256
 # against the list below, keeps it under ~/.cache/aip/relate/, and installs it with `uv pip`.
-# When `relate-db` lands on PyPI this script goes and `packages/aip-spec/pyproject.toml` pins it.
-# The pin, the import and the install hint live in `packages/aip-spec/src/aip_spec/relate.py`.
+# When `relate-db` lands on PyPI this script goes and `pyproject.toml` pins it.
+# The pin, the import and the install hint live in `src/aip/compiler/relate.py`.
 set -euo pipefail
 
 VERSION=0.16.1

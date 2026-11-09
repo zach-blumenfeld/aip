@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from aip_spec.errors import ParseError
+from aip.compiler.errors import ParseError
 
 WORD = "word"
 STRING = "string"

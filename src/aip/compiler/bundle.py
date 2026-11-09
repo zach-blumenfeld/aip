@@ -31,12 +31,12 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 
-from aip_spec import syntax as s
-from aip_spec.checker import Diagnostic, check, check_source, has_errors
-from aip_spec.errors import ParseError
-from aip_spec.graph import PROCEDURE_ID, FileEntry, Graph, GraphEdge, GraphNode, build_graph
-from aip_spec.language import LANGUAGE_VERSION
-from aip_spec.parser import parse
+from aip.compiler import syntax as s
+from aip.compiler.checker import Diagnostic, check, check_source, has_errors
+from aip.compiler.errors import ParseError
+from aip.compiler.graph import PROCEDURE_ID, FileEntry, Graph, GraphEdge, GraphNode, build_graph
+from aip.compiler.language import LANGUAGE_VERSION
+from aip.compiler.parser import parse
 
 SOURCE_FILE = "procedure.aip"
 RESOURCE_DIRS = ("assets", "references", "scripts")
@@ -76,7 +76,7 @@ class Bundle:
 
 def compiler_version() -> str:
     try:
-        return version("aip-spec")
+        return version("agent-instruction-protocol")
     except PackageNotFoundError:  # pragma: no cover
         return "0+unknown"
 
@@ -174,7 +174,7 @@ def write_graph(conn, graph: Graph, bundle: str) -> None:
 
 def write_bundle(bundle: Bundle, path: Path | str) -> Path:
     """Write the bundle as a new `.rl` at `path`, replacing a file already there."""
-    from aip_spec import relate
+    from aip.compiler import relate
 
     target = Path(path)
     with relate.create(target) as conn:
@@ -196,7 +196,7 @@ def read_graph(conn, bundle: str) -> Graph:
 def read_bundle(path: Path | str) -> Bundle:
     """Open a bundle read-only and verify it: the id against the stored source and files, and the
     stored graph against the one the stored source compiles to (`bundle_tampered` otherwise)."""
-    from aip_spec import relate
+    from aip.compiler import relate
 
     target = Path(path)
     try:

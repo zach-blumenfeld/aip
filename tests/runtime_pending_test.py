@@ -20,7 +20,7 @@ def test_server_and_skill_pending():
 
 class AipLanguageCommands(unittest.TestCase):
     def test_aip_compile_checks_every_example_clean(self):
-        from aip_spec import example_dir, example_names
+        from aip.compiler import example_dir, example_names
 
         for name in example_names():
             out, err = io.StringIO(), io.StringIO()
@@ -31,7 +31,7 @@ class AipLanguageCommands(unittest.TestCase):
             self.assertNotIn("error", err.getvalue())
 
     def test_aip_fmt_checks_the_examples(self):
-        from aip_spec import example_dir, example_names
+        from aip.compiler import example_dir, example_names
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
