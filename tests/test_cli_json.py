@@ -167,12 +167,14 @@ class CliJson(unittest.TestCase):
         self.assert_documented("error-invalid-output", error)
         self.assertEqual(RunFile.load(self.run_file).status, "paused", "a bad answer leaves the pause")
 
-        code, [done], _ = self.resume({"billing": True, "tone": "calm"})        # by hand: no confidence, the check fires
+        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})       # by hand: no confidence, the check lets it through
+        self.assertEqual((code, pause.get("paused"), pause.get("step")), (0, "task", "reply"))
+        code, [done], _ = self.resume({"reply": REPLY})
         self.assertEqual((code, done.get("done")), (0, True))
         history = RunFile.load(self.run_file).run["history"]
-        self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "escalate", "end"])
+        self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "reply", "end"])
         self.assertEqual(history[1]["answered_by"], "agent")
-        self.assertEqual(history[2]["check"], {"below": 0.6, "confidence": None, "fired": True, "reason": "absent"})
+        self.assertEqual(history[2]["check"], {"below": 0.6, "confidence": None, "fired": False, "reason": "hand"})
 
         with self.decision_model(0.9):                                           # a model sure of calm: the check passes
             code, [pause], _ = self.run_(EXAMPLE, {"message": CALM})

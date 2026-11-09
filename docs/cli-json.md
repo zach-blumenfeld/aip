@@ -118,9 +118,11 @@ Answer with one value per question: `{"billing": true, "tone": "calm"}`. A `true
 `true` or `false`, a `choice` one of its labels, a `score` the level's number (its position in
 the labels, from 0). A hand answer is stored as `{"value": ...}` with no confidence, and the
 record says `"answered_by": "agent"`. In `billing-support` the next step, the route `by_tone`,
-reads `triage_decision.tone` with `Confidence_Below 0.6 -> escalate`; an absent confidence
-counts as low, so a hand-answered `calm` is escalated just the same. The task below is where a
-model's confident `calm` sends the run.
+reads `triage_decision.tone` with `Confidence_Below 0.6 -> escalate`; a hand answer has no
+confidence and the check lets it through on its value (the record says `"reason": "hand"`), so a
+hand-answered `calm` reaches the task below, the same place a model's confident `calm` sends the
+run. An answer from a script or an input has no confidence either, and there the check fires
+(`"reason": "absent"`).
 
 ### `task`: do the step's work
 
@@ -247,7 +249,7 @@ below); a task left unanswered fails its pass and the run, and a retry asks for 
 the run's record: the run file's `run.history` (`aip runs <run_id>` prints the run), one entry
 per step run with `step`, `kind`, `pass`, `passes`, `at`, `input` and `result`; a decision's
 `answered_by` (`{"model": "jev-1"}` or `"agent"`) and the answer objects whole; a route's
-`read`, `check` (`below`, `confidence`, `fired`, `reason`: `below` or `absent`), `value` and `to`;
+`read`, `check` (`below`, `confidence`, `fired`, `reason`: `below`, `absent`, or `hand` when a hand answer was let through), `value` and `to`;
 an aggregation's `resolutions`; a script's `script`, `stdin` and `seconds`; a task's `prompt` and
 `references`; a loop's `iterations`, collected list and `exit`. `docs/language/runtime.md`, The
 record, is the definition.

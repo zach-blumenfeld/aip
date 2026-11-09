@@ -100,8 +100,9 @@ CASES = [
      'Route r "r" { Read agg.all  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read agg }\n', 5, 29, "r"),
     ("source_not_read", START + NOUL.replace("Next_Step r", "Next_Step a")
      + 'Aggregate a "a" { Read m  Aggregations { all: All dec }  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n', 4, 51, "a"),
-    ("confidence_on_unmeasured_source", START + NOUL.replace("Produce", "Agent_Fallback true  Produce")
-     + 'Route r "r" { Read dec.q  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read dec }\n', 4, 27, "r"),
+    ("confidence_on_unmeasured_source", 'Requires python 3.10\n' + START.replace("d }", "e }")
+     + 'Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Next_Step r }\n'
+     + 'Route r "r" { Read passed  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read passed }\n', 5, 28, "r"),
     ("unmeasured_route", START + NOUL.replace("Produce", "Agent_Fallback true  Produce")
      + 'Route r "r" { Read dec.q  true -> end  false -> end }\nEnd "e" { Read dec }\n', 4, 1, "r"),
     ("missing_file", 'Requires python 3.10\n' + START.replace("d }", "e }")
@@ -271,6 +272,14 @@ class Conditions(unittest.TestCase):
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.step), ("confidence_on_aggregate", "b"))
 
+    def test_a_check_on_a_hand_answer_is_not_a_warning(self):
+        body = (START + NOUL.replace("Produce", "Agent_Fallback true  Produce")
+                + 'Route r "r" { Read dec.q  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read dec }\n')
+        self.assertEqual(codes(body), [])
+        body = (START.replace("d }", "t }") + 'Task_Agent t "t" { Read m  Produce passed: true_or_false  Next_Step r }\n'
+                + 'Route r "r" { Read passed  Confidence_Below 0.5 -> end  true -> end  false -> end }\nEnd "e" { Read passed }\n')
+        self.assertEqual(codes(body), [])
+
     def test_aggregation_sources(self):
         loop = ('Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 5, Collect verdict Into verdicts {\n'
                 '  Decide d "d" { Read i  Answer_Questions { q: noul "?"  c: choice [a, b] "?" }  Produce verdict  Continue }\n  Next_Step agg\n}\n')
@@ -343,11 +352,7 @@ class Examples(unittest.TestCase):
                 program, found = check_path(example_dir(name))
                 self.assertIsNotNone(program)
                 self.assertEqual([d for d in found if d.severity == "error"], [], [str(d) for d in found])
-                if name == "billing-support":
-                    [d] = found
-                    self.assertEqual((d.code, d.line, d.step), ("confidence_on_unmeasured_source", 50, "by_tone"))
-                else:
-                    self.assertEqual(found, [], name)
+                self.assertEqual(found, [], name)
 
     def test_the_spec_summary_example_is_the_ticket_triage_example(self):
         spec = (Path(__file__).resolve().parents[3] / "docs" / "language" / "spec.md").read_text(encoding="utf-8")
@@ -376,15 +381,26 @@ class CompileCommand(unittest.TestCase):
                 code, out, err = self.run_cli("compile", "--check", str(example_dir(name)))
                 self.assertEqual(code, 0, err)
                 self.assertTrue(out.startswith(f"ok {name.replace('-', '_')}: "), out)
-                self.assertEqual("warning" in err, name == "billing-support")
+                self.assertNotIn("warning", err, name)
 
     def test_json_output(self):
         code, out, err = self.run_cli("compile", "--check", "--json", str(example_dir("billing-support")))
         self.assertEqual((code, err), (0, ""))
         report = json.loads(out)
-        self.assertEqual((report["procedure"], report["ok"], len(report["diagnostics"])), ("billing_support", True, 1))
-        self.assertEqual(set(report["diagnostics"][0]), {"code", "severity", "message", "file", "line", "column", "end_line", "end_column", "step"})
+        self.assertEqual((report["procedure"], report["ok"], report["diagnostics"]), ("billing_support", True, []))
         self.assertTrue(report["file"].endswith("procedure.aip"))
+        warned = next(body for code, body, *_ in CASES if code == "confidence_on_unmeasured_source")
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "scripted"
+            (folder / "scripts").mkdir(parents=True)
+            (folder / "scripts" / "x.py").write_text("print('{\"passed\": true}')\n", encoding="utf-8")
+            (folder / "procedure.aip").write_text(PREFIX + warned, encoding="utf-8")
+            code, out, err = self.run_cli("compile", "--check", "--json", str(folder))
+        self.assertEqual((code, err), (0, ""))
+        report = json.loads(out)
+        self.assertEqual((report["ok"], len(report["diagnostics"])), (True, 1))
+        self.assertEqual(set(report["diagnostics"][0]), {"code", "severity", "message", "file", "line", "column", "end_line", "end_column", "step"})
+        self.assertEqual(report["diagnostics"][0]["code"], "confidence_on_unmeasured_source")
 
     def test_errors_fail_the_command(self):
         with tempfile.TemporaryDirectory() as tmp:

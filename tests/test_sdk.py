@@ -112,13 +112,15 @@ def test_the_calm_arm_by_hand_from_a_folder(tmp_path):
     assert (handle.origin, handle.target, handle.name, handle.server, handle.recorded) == ("folder", str(EXAMPLE.resolve()), "billing_support", None, False)
     assert bundles.is_cached(handle.bundle_id), "the folder's bundle is in the cache, so resume reopens it by id"
 
-    # a hand answer carries no confidence, so by_tone's Confidence_Below fires and the calm message is escalated
-    done = client.resume(paused, {"billing": True, "tone": "calm"})
+    # a hand answer carries no confidence and by_tone's Confidence_Below lets it through: calm goes to the agent's reply
+    task = client.resume(paused, {"billing": True, "tone": "calm"})
+    assert isinstance(task, aip.Paused) and (task.kind, task.step) == ("task", "reply")
+    done = client.resume(task, {"reply": "Sorry about that; the duplicate charge is refunded."})
     assert isinstance(done, aip.Done) and done.recorded is None
     record = client.run_record(done.run_id)
-    assert steps(record) == ["start", "triage", "by_tone", "escalate", "end"]
+    assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
     assert record.history[1]["answered_by"] == "agent"
-    assert record.history[2]["check"] == {"below": 0.6, "confidence": None, "fired": True, "reason": "absent"}
+    assert record.history[2]["check"] == {"below": 0.6, "confidence": None, "fired": False, "reason": "hand"}
     assert record.status == "done" and record.result == {"message": CALM}
 
 
@@ -318,7 +320,9 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     assert isinstance(paused, aip.Paused) and paused.recorded is True
     assert ("POST", "/bundles") in fake.requests[len(before):], "the folder's bundle is uploaded as a draft before the run is recorded"
     assert fake.runs[paused.run_id]["draft"] is True and fake.runs[paused.run_id]["status"] == "paused"
-    done2 = served.resume(paused, {"billing": True, "tone": "calm"})
+    task = served.resume(paused, {"billing": True, "tone": "calm"})              # a hand calm: the check lets it through
+    assert isinstance(task, aip.Paused) and fake.runs[paused.run_id]["status"] == "paused"
+    done2 = served.resume(task, {"reply": "Sorry about that; refunded."})
     assert fake.runs[paused.run_id]["status"] == "done" and done2.recorded is True
     assert fake.requests.count(("POST", "/bundles")) == 1, "one upload per bundle id per client"
 

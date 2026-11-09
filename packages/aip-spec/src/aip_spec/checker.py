@@ -788,6 +788,12 @@ class Checker:
                 return c, _list(classes[c])
         return "deterministic", ""
 
+    def has_deterministic(self, sources: tuple[str, ...]) -> str:
+        """The deterministic steps among an answer's sources, for a route whose other sources are hands."""
+        found = [src for src in sources
+                 if not (isinstance(self.nodes.get(src), s.Step) and self.nodes[src].kind in ("Decide", "Task_Agent", "Aggregate"))]
+        return _list(found) if found else ""
+
     @staticmethod
     def not_an_answer(dotted: str, t: Type, where: str) -> str:
         if t.kind in ("decision", "aggregation"):
@@ -833,12 +839,12 @@ class Checker:
             if cls == "aggregated":
                 self.report("confidence_on_aggregate", st.check, f"{dotted} is an aggregation, which has no confidence by design (spec 2.5), "
                             "so Confidence_Below cannot check one; route on its value alone", name)
-            elif cls == "unmeasured":
-                self.report("confidence_on_unmeasured_source", st.check, f"{dotted} may be answered by hand ({culprits}); a hand answer "
-                            "carries no confidence, so this check fires on every one, and only the answers a model gave are measured", name)
             elif cls == "deterministic":
                 self.report("confidence_on_unmeasured_source", st.check, f"{dotted} comes from {culprits}, not a decision model, so it carries "
                             "no confidence and this check always fires; route on its value alone", name)
+            elif cls == "unmeasured" and self.has_deterministic(t.sources):
+                self.report("confidence_on_unmeasured_source", st.check, f"{dotted} comes from a script or an input on one path "
+                            f"({self.has_deterministic(t.sources)}), which carries no confidence, so this check fires on that path", name)
         elif cls == "unmeasured":
             self.report_head("unmeasured_route", st, f"Route {name} branches on {dotted}, which may be answered by hand ({culprits}), with "
                              "no Confidence_Below check; nothing records how sure the answer was")

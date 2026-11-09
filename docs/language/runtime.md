@@ -41,8 +41,10 @@ procedure means; this page says what running one entails.
   records the model's answers whole. An interpolated key is not sent as data unless `Read` names it. With no model configured, the step stops the run
   unless `Agent_Fallback true`, in which case the agent answers and the record says so.
 - `Route`: the runtime reads one answer. With a `Confidence_Below` check, it reads the answer's
-  `confidence` first and takes the check's branch when the confidence is below the bound or
-  absent; otherwise it takes the branch for `value`: `true` or `false` for a `true_or_false`,
+  `confidence` first and takes the check's branch when the confidence is below the bound. An
+  answer with no confidence is let through when it was given by hand, by the agent under
+  `Agent_Fallback` or in a `Task_Agent` (the record says `reason: hand`), and fires the check when
+  it came from a script or an input (`reason: absent`); otherwise it takes the branch for `value`: `true` or `false` for a `true_or_false`,
   the label for a `choice`, and for a `score` the label of the level the value names (the
   branch lines are written with the question's labels, the value is the level's number). A
   value with no branch fails the step.
@@ -160,7 +162,7 @@ operator setting, not something the procedure says:
   `AIP_SESSION`) and `user` (the server token's name). Claimed, not verified.
 - A decision's record says who answered (the model, by name, or the agent), whether the history
   was sent, and keeps the model's full answer objects. A route's record says what it read,
-  whether its confidence check fired and why (below the bound, absent), and where it went. An
+  whether its confidence check fired and why (below the bound, absent), or let a hand answer through (`hand`), and where it went. An
   aggregation's record keeps every answer's resolution (its value, the probability on the
   condition, whether it held, whether a bar turned it). A script's record keeps the script, what
   it was given on stdin and how long it took. An agent task's record keeps the prompt and

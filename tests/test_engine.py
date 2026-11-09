@@ -145,7 +145,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(route["check"], {"below": 0.6, "confidence": 0.55, "fired": True, "reason": "below"})
         self.assertEqual((route["value"], route["to"], route["result"]), (None, "escalate", {"to": "escalate"}))
 
-    def test_without_a_model_the_agent_answers_and_the_check_fires_on_the_absent_confidence(self):
+    def test_without_a_model_the_agent_answers_and_the_check_lets_the_hand_answer_through(self):
         engine = self.engine(None)
         run = engine.start(self.load(self.bundle), {"message": self.message})
         self.assertEqual((run.status, run.pause["kind"], run.pause["step"], run.pause["reason"]),
@@ -158,13 +158,15 @@ class BillingSupport(EngineCase):
         self.assertEqual(task["state"], {"message": self.message})
 
         run = engine.resume(run, {"billing": True, "tone": {"value": "calm", "confidence": 0.99}})
-        self.assertEqual(run.status, DONE)
+        self.assertEqual((run.status, run.pause["kind"], run.pause["step"]), (PAUSED, "task", "reply"),
+                         "the check lets a hand answer through on its value, so calm goes to the agent's reply")
         self.assertEqual(run.state["triage_decision"], {"billing": {"value": True}, "tone": {"value": "calm"}},
                          "a hand answer is its value and nothing else")
         triage = run.history[1]
         self.assertEqual((triage["answered_by"], triage["result"]), ("agent", run.state["triage_decision"]))
-        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": None, "fired": True, "reason": "absent"})
-        self.assertEqual(self.steps_of(run), ["start", "triage", "by_tone", "escalate", "end"])
+        self.assertEqual(run.history[2]["check"], {"below": 0.6, "confidence": None, "fired": False, "reason": "hand"})
+        run = engine.resume(run, {"reply": "Sorry about that. The policy allows a refund within 30 days."})
+        self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "triage", "by_tone", "reply", "end"]))
 
     def test_a_hand_answer_is_checked_against_the_questions(self):
         engine = self.engine(None)

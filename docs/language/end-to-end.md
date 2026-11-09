@@ -31,7 +31,7 @@ to a call, the review `Loop` goes round until the aggregation holds. The run end
 
 Then the same with no decision model configured: the run stops at the first `Decide` and says
 so, unless the step allows `Agent_Fallback`, in which case the agent answers and the record
-shows a hand answer with no confidence.
+shows a hand answer with no confidence, which the route's check lets through on its value.
 
 Needs: everything in `docs/language/runtime.md`: loading, the state rules, each step kind, batching,
 the record; the decision model client; the agent protocol for `Task_Agent` and fallback.

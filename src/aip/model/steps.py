@@ -271,9 +271,11 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
     """Where the route sends the run and what its record says: the flow taken (its `to` is the
     target's node id; `continues` marks a branch to `Continue`), and `{"read": dotted, "answer",
     "check": {"below", "confidence", "fired", "reason"} | None, "value": the branch word | None,
-    "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound
-    or absent; otherwise the branch for `value` is taken, and a value with no branch fails the
-    step (`no_branch`)."""
+    "to": name}`. The check reads the answer's `confidence` and fires when it is below the bound.
+    An answer with no confidence is let through on its value when it was given by hand (a
+    `Decide` answered by the agent, a `Task_Agent`), `reason: "hand"`; from a script or an input
+    the absent confidence fires the check, `reason: "absent"`. Otherwise the branch for `value`
+    is taken, and a value with no branch fails the step (`no_branch`)."""
     [read] = step.declared_reads
     answer = lookup(state, read.path)
     if not isinstance(answer, dict) or "value" not in answer:
@@ -282,9 +284,12 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
     check = step.check
     if check is not None:
         confidence = answer.get("confidence")
-        fired = confidence is None or confidence < check.below
-        record["check"] = {"below": check.below, "confidence": confidence, "fired": fired,
-                           "reason": None if not fired else "absent" if confidence is None else "below"}
+        if confidence is None:
+            by_hand = procedure.given_by_hand(read.path[0])
+            fired, reason = not by_hand, "hand" if by_hand else "absent"
+        else:
+            fired, reason = confidence < check.below, "below" if confidence < check.below else None
+        record["check"] = {"below": check.below, "confidence": confidence, "fired": fired, "reason": reason}
         if fired:
             record["to"] = _name(check)
             return check, record
