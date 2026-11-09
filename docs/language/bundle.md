@@ -9,7 +9,7 @@ schema of that graph. `src/aip/compiler/graph.py` is its only implementation and
 added there in the same commit, and the tests in `tests/test_bundle.py` hold the two together.
 
 The same graph is what `aip compile --json` prints (without the source and file contents, with
-every span) and what a server projects into its store.
+every span) and what a server keeps in its store, node for node.
 
 Data flows left to right, as the 0.8 graph read: `(Step)-[:PRODUCES]->(Data)-[:READ_BY]->(Step)`,
 so a key's lineage is one path from the step that wrote it to the steps that read it. (Renamed
@@ -18,7 +18,10 @@ so a key's lineage is one path from the step that wrote it to the steps that rea
 ## Identity
 
 Every node carries two properties: `id`, unique within the bundle, and `bundle_id`, so a store
-holding many bundles can match any node by the pair.
+holding many bundles can match any node by the pair. The prefix of an `id` names the label its
+node is found by (`step:` a `Step`, `data:` a `Data`, and so on), which is how an edge's ends are
+matched when the graph is written, and how a server's store, which keeps runs under the same
+`bundle_id`, tells a bundle's nodes from its own (`docs/server-design.md`, The store).
 
 | Node | `id` |
 |---|---|

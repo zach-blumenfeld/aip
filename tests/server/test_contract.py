@@ -1,861 +1,375 @@
-"""Backend contract tests (design §5.3), parametrised over every registered backend.
+"""The server's contract, the calls `aip.client.server` lists, through the client that makes
+them, over each backend: the same suite on Relate and, with `NEO4J_URI` set, on Neo4j.
 
-Each case gets a fresh backend. The filesystem backend runs against a temp dir; the
-Neo4j backend against NEO4J_URI (plus NEO4J_USERNAME / NEO4J_PASSWORD / NEO4J_DATABASE
-as needed), wiping every AIP node before each case, and is skipped without it.
-"""
+Publish merges a bundle by id and assigns the next revision under the procedure's name; an
+upload with no revision is a draft; a run is recorded only against a bundle the store holds,
+with the identity fields and the server's `user`; a reference hands its `.rl` back, the
+bundle's own subgraph, which verifies like any bundle."""
 
-import hashlib
-import os
-import re
+from __future__ import annotations
+
 import shutil
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from aip.compiler import FORMAT_VERSION, example_dir
 
-from aip.server.backend import (CatalogBackend, GovernanceBackend, InvalidQuery, NotFound, NotSupported, QueryFailed,
-                                RunBackend, StaleRun)
-from aip.server.governance import QUERIES
-from aip.server.backends.filesystem import FilesystemBackend
-from aip.server.records import materialize, snapshot
-from aip.spec import load_skill
+import aip
+from aip import sdk
+from aip.client import bundles
+from aip.client.runs import RunFile
+from aip.client.server import Server, ServerError
+from aip.compiler import compile_folder, example_dir, read_bundle, relate, write_bundle
+from scenes import CALM, POLICIES, client, record
+from served import BillingModel, Served
 
 EXAMPLE = example_dir("billing-support")
-
-needs_neo4j = pytest.mark.skipif(not os.environ.get("NEO4J_URI"), reason="NEO4J_URI not set")
-
-
-def neo4j_backend(tmp: Path):
-    from aip.server.backends.neo4j import Neo4jBackend
-
-    backend = Neo4jBackend(cache_dir=tmp / "cache")
-    backend.clear()
-    return backend
-
-
-BACKENDS = {
-    "filesystem": lambda tmp: FilesystemBackend(tmp / "root"),
-    "neo4j": neo4j_backend,
-}
-
-
-@pytest.fixture(params=["filesystem", pytest.param("neo4j", marks=needs_neo4j)])
-def backend(request, tmp_path):
-    backend = BACKENDS[request.param](tmp_path)
-    yield backend
-    if hasattr(backend, "close"):
-        backend.close()
-
-
-@pytest.fixture
-def catalog(backend) -> CatalogBackend:
-    return backend.catalog
-
-
-@pytest.fixture
-def runs(backend) -> RunBackend:
-    return backend.runs
-
-
-@pytest.fixture(scope="module")
-def example():
-    return snapshot(EXAMPLE)
-
-
-def variant(tmp_path: Path, name: str, description: str | None = None, **edits: str):
-    """A copy of the example under another name, optionally re-described or with files rewritten."""
-    copy = tmp_path / name
-    shutil.copytree(EXAMPLE, copy)
-    md = copy / "SKILL.md"
-    text = md.read_text().replace("name: billing-support", f"name: {name}")
-    if description is not None:
-        head, _, tail = text.partition("\ndescription: ")
-        text = head + "\ndescription: " + description + tail[tail.index("\n"):]
-    md.write_text(text)
-    for rel, text in edits.items():
-        (copy / rel).write_text(text)
-    return snapshot(copy)
-
-
-def tree(root: Path) -> dict:
-    out = {}
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root).as_posix()
-        if path.name == ".DS_Store" or "__pycache__" in path.parts:
-            continue
-        out[rel] = None if path.is_dir() else (hashlib.sha256(path.read_bytes()).hexdigest(),
-                                                path.stat().st_mode & 0o777)
-    return out
-
-
-# ---------------------------------------------------------------------- protocols
-
-
-def test_backend_satisfies_protocols(catalog, runs):
-    assert isinstance(catalog, CatalogBackend)
-    assert isinstance(runs, RunBackend)
-
-
-# ------------------------------------------------------------------------ publish
-
-
-def test_publish_and_resolve_every_ref_form(catalog, example):
-    rev = catalog.publish(example)
-    assert rev == example.revision
-    assert catalog.resolve("billing-support") == ("billing-support", rev)
-    assert catalog.resolve(f"billing-support@{rev}") == ("billing-support", rev)
-    assert catalog.resolve("billing-support@latest") == ("billing-support", rev)
-    with pytest.raises(NotFound):
-        catalog.resolve("nope")
-    with pytest.raises(NotFound):
-        catalog.resolve("billing-support@0000000000000000")
-
-
-def test_publish_is_idempotent_and_get_returns_the_record(catalog, example):
-    rev = catalog.publish(example)
-    assert catalog.publish(example) == rev
-    assert [n.revisions for n in catalog.list()] == [1]
-
-    got = catalog.get("billing-support")
-    assert (got.name, got.revision, got.id) == ("billing-support", rev, f"billing-support@{rev}")
-    assert got.description == example.description
-    assert got.aip_version == FORMAT_VERSION
-    assert got.frontmatter == example.frontmatter
-    assert got.procedure == example.procedure
-    assert got.steps == example.steps and got.resources == example.resources
-    assert got.published_at and not got.retired
-    assert catalog.get("billing-support", rev).revision == rev
-
-
-def test_list_summarises_names(catalog, example, tmp_path):
-    catalog.publish(example)
-    catalog.publish(variant(tmp_path, "aaa-first"))
-    names = catalog.list()
-    assert [n.name for n in names] == ["aaa-first", "billing-support"]
-    bs = names[1]
-    assert bs.latest == example.revision and bs.pinned is None and bs.revisions == 1
-    assert bs.description == example.description
-
-
-def test_revisions_lists_every_revision_newest_first(catalog, example, tmp_path):
-    v1 = catalog.publish(example)
-    v2 = catalog.publish(variant(tmp_path, "billing-support", **{"assets/policy.md": "revised policy\n"}))
-    rows = catalog.revisions("billing-support")
-    assert [r["revision"] for r in rows] == [v2, v1]
-    assert all(r["published_at"] and r["retired"] is False and r["pinned"] is False for r in rows)
-    catalog.pin("billing-support", v1)
-    catalog.retire("billing-support", v2)
-    rows = {r["revision"]: r for r in catalog.revisions("billing-support")}
-    assert rows[v1]["pinned"] is True and rows[v2]["retired"] is True
-    with pytest.raises(NotFound):
-        catalog.revisions("nope")
-
-
-# -------------------------------------------------------------------------- files
-
-
-def test_files_round_trip_byte_for_byte(catalog, example, tmp_path):
-    rev = catalog.publish(example)
-    files = catalog.files("billing-support", rev)
-    assert sorted(f.path for f in files) == sorted(f.path for f in example.files)
-    assert all(f.data == o.data for f, o in zip(sorted(files, key=lambda f: f.path),
-                                                 sorted(example.files, key=lambda f: f.path)))
-
-    out = materialize(replace(example, files=files), tmp_path / "out" / "billing-support")
-    assert tree(out) == tree(EXAMPLE)
-    # publishing the materialised copy is the same revision
-    assert catalog.publish(snapshot(out)) == rev
-
-
-def test_single_file_and_missing_file(catalog, example):
-    rev = catalog.publish(example)
-    assert catalog.file("billing-support", rev, "SKILL.md") == (EXAMPLE / "SKILL.md").read_bytes()
-    assert catalog.file("billing-support", rev, "scripts/escalate.py") == (EXAMPLE / "scripts/escalate.py").read_bytes()
-    with pytest.raises(NotFound):
-        catalog.file("billing-support", rev, "nope.md")
-    with pytest.raises(NotFound):
-        catalog.files("billing-support", "0000000000000000")
-
-
-def test_binary_files_survive(catalog, tmp_path):
-    copy = tmp_path / "bin-skill"
-    shutil.copytree(EXAMPLE, copy)
-    md = copy / "SKILL.md"
-    md.write_text(md.read_text().replace("name: billing-support", "name: bin-skill"))
-    blob = bytes(range(256)) * 4
-    (copy / "assets" / "logo.bin").write_bytes(blob)
-    rev = catalog.publish(snapshot(copy))
-    assert catalog.file("bin-skill", rev, "assets/logo.bin") == blob
-
-
-def test_folder_is_a_loadable_copy(catalog, example, tmp_path):
-    """Both backends hand the server an on-disk folder to execute from (the filesystem copy in
-    place, the Neo4j cache); it is the published tree byte for byte, named after the skill
-    so the loader accepts it, and holds nothing else."""
-    rev = catalog.publish(example)
-    folder = catalog.folder("billing-support", rev)
-    assert folder.name == "billing-support"
-    assert tree(folder) == tree(EXAMPLE)
-    assert load_skill(folder).frontmatter["name"] == "billing-support"
-    assert catalog.folder("billing-support", rev) == folder            # stable across calls
-    with pytest.raises(NotFound):
-        catalog.folder("billing-support", "0000000000000000")
-
-
-# ------------------------------------------------------------------------- search
-
-
-def test_search_ranks_the_described_skill_first(catalog, example, tmp_path):
-    catalog.publish(example)
-    # the twin mentions refunds only in its triggers, never in its description
-    catalog.publish(variant(tmp_path, "aaa-other", description="Route an invoice question to the right team."))
-    hits = catalog.search("refund")
-    assert [h.name for h in hits] == ["billing-support", "aaa-other"]
-    assert hits[0].revision == example.revision
-    assert hits[0].score > hits[1].score > 0
-    assert [h.name for h in catalog.search("invoice")] == ["aaa-other", "billing-support"]
-    assert [h.name for h in catalog.search("other")] == ["aaa-other"]
-    assert catalog.search("qqqqqq") == []
-    assert catalog.search("") == []
-    assert len(catalog.search("refund", limit=1)) == 1
-
-
-def test_search_stems_the_query_and_the_text(catalog, example, tmp_path):
-    """Both backends stem: BM25 over Porter stems on the filesystem, Lucene's `english` analyzer in Neo4j."""
-    catalog.publish(example)
-    catalog.publish(variant(tmp_path, "aaa-other", description="Route an invoice question to the right team."))
-    for query in ("charged twice", "refunds", "duplicate charges", "angry customers"):
-        hits = catalog.search(query)
-        assert hits and hits[0].name == "billing-support", query
-    assert [h.name for h in catalog.search("invoices")] == ["aaa-other", "billing-support"]
-
-
-def test_search_by_exact_name_wins(catalog, example, tmp_path):
-    catalog.publish(example)
-    catalog.publish(variant(tmp_path, "billing-support-v2", description="billing support, billing support, billing."))
-    assert catalog.search("billing-support")[0].name == "billing-support"
-
-
-# ---------------------------------------------------------------- pin and retire
-
-
-def test_pin_and_retire_change_resolve(catalog, example, tmp_path):
-    v1 = catalog.publish(example)
-    second = variant(tmp_path, "billing-support", **{"assets/policy.md": "revised policy\n"})
-    v2 = catalog.publish(second)
-    assert v1 != v2
-
-    # newest live revision wins by default; "@latest" says the same
-    assert catalog.resolve("billing-support")[1] == v2
-    assert catalog.resolve("billing-support@latest")[1] == v2
-    assert catalog.list()[0].revisions == 2
-
-    catalog.pin("billing-support", v1)
-    assert catalog.resolve("billing-support")[1] == v1
-    assert catalog.resolve("billing-support@latest")[1] == v2     # the pin does not hide newer work
-    assert catalog.get("billing-support").revision == v1
-    assert catalog.list()[0].pinned == v1
-    assert catalog.search("refund")[0].revision == v1             # search follows what resolves
-
-    catalog.pin("billing-support", None)
-    assert catalog.resolve("billing-support")[1] == v2
-
-    catalog.retire("billing-support", v2)
-    assert catalog.resolve("billing-support")[1] == v1
-    assert catalog.resolve("billing-support@latest")[1] == v1
-    assert catalog.resolve(f"billing-support@{v2}")[1] == v2       # explicit refs still work
-    assert catalog.get("billing-support", v2).retired
-
-    catalog.retire("billing-support", v1)
-    with pytest.raises(NotFound):
-        catalog.resolve("billing-support")
-    assert catalog.list()[0].latest is None
-    assert catalog.search("refund") == []
-
-    catalog.publish(example)                                       # republishing brings v1 back
-    assert catalog.resolve("billing-support")[1] == v1
-
-
-def test_retiring_the_pinned_revision_clears_the_pin(catalog, example, tmp_path):
-    v1 = catalog.publish(example)
-    v2 = catalog.publish(variant(tmp_path, "billing-support", **{"assets/policy.md": "revised\n"}))
-    catalog.pin("billing-support", v1)
-    catalog.retire("billing-support", v1)
-    assert catalog.resolve("billing-support")[1] == v2
-    assert catalog.list()[0].pinned is None
-
-
-def test_pin_and_retire_reject_unknown(catalog, example):
-    catalog.publish(example)
-    with pytest.raises(NotFound):
-        catalog.pin("billing-support", "0000000000000000")
-    with pytest.raises(NotFound):
-        catalog.retire("nope", "0000000000000000")
+AGENT = example_dir("billing-support-agent")
+
+
+def rl(folder: Path, tmp: Path) -> tuple[str, bytes]:
+    """A folder compiled: its bundle id and the bytes of its `.rl`."""
+    bundle, diagnostics = compile_folder(folder)
+    assert bundle is not None, [str(d) for d in diagnostics]
+    path = write_bundle(bundle, tmp / f"{bundle.id[:8]}.rl")
+    return bundle.id, path.read_bytes()
+
+
+def reworded(tmp: Path, name: str = "billing-support") -> Path:
+    """The example with one description changed: the same procedure name, another bundle id."""
+    folder = tmp / "reworded" / name
+    shutil.copytree(example_dir(name), folder)
+    source = folder / "procedure.aip"
+    text = source.read_text()
+    assert "Turn an inbound billing message" in text
+    source.write_text(text.replace("Turn an inbound billing message", "Turn an incoming billing message", 1))
+    return folder
+
+
+def server(served, token: str | None = "secret") -> Server:
+    return Server("http://testserver", token=token, session=served)
+
+
+# --------------------------------------------------------------------- the catalog
+
+
+def test_publish_merges_by_id_and_numbers_the_revisions(served, tmp_path):
+    api = server(served)
+    first_id, first = rl(EXAMPLE, tmp_path)
+    assert api.publish(first) == {"name": "billing_support", "revision": "1", "bundle_id": first_id, "existed": False}
+    assert api.publish(first) == {"name": "billing_support", "revision": "1", "bundle_id": first_id, "existed": True}, \
+        "the same bundle is the same revision: a no-op"
+    second_id, second = rl(reworded(tmp_path), tmp_path)
+    assert second_id != first_id
+    assert api.publish(second) == {"name": "billing_support", "revision": "2", "bundle_id": second_id, "existed": False}
+
+    [entry] = api.list()
+    assert (entry["name"], entry["pinned"], entry["latest"], entry["resolves"]) == ("billing_support", None, "2", "2")
+    assert [(r["revision"], r["bundle_id"], r["retired"]) for r in entry["revisions"]] == [("2", second_id, False), ("1", first_id, False)]
+    assert all(r["published_at"] for r in entry["revisions"])
+    assert entry["description"].startswith("Turn an incoming billing message"), "the description of what the name resolves to"
+
+    described = api.describe("billing_support")
+    assert (described["name"], described["revision"], described["bundle_id"], described["draft"]) == ("billing_support", "2", second_id, False)
+    assert described["inputs"] == {"message": "string"} and [s["name"] for s in described["steps"]][:2] == ["start", "triage"]
+    assert api.describe("billing_support@1")["bundle_id"] == first_id
+    assert api.describe("billing_support@latest")["revision"] == "2"
+
+
+def test_pin_retire_and_what_a_name_resolves_to(served, tmp_path):
+    api = server(served)
+    first_id, first = rl(EXAMPLE, tmp_path)
+    second_id, second = rl(reworded(tmp_path), tmp_path)
+    api.publish(first)
+    api.publish(second)
+
+    assert api.pin("billing_support", "1") == {"name": "billing_support", "pinned": "1"}
+    assert api.describe("billing_support")["revision"] == "1", "the pin wins"
+    assert api.describe("billing_support@latest")["revision"] == "2", "@latest ignores it"
+    assert (api.list()[0]["pinned"], api.list()[0]["resolves"]) == ("1", "1")
+    assert api.pin("billing_support", None) == {"name": "billing_support", "pinned": None}
+    assert api.describe("billing_support")["revision"] == "2"
+
+    assert api.retire("billing_support", "2") == {"name": "billing_support", "revision": "2", "retired": True}
+    entry = api.list()[0]
+    assert (entry["latest"], entry["resolves"]) == ("1", "1") and entry["revisions"][0]["retired"] is True
+    assert api.describe("billing_support")["bundle_id"] == first_id
+    assert api.describe("billing_support@2")["retired"] is True, "a retired revision still answers by its number"
+    api.retire("billing_support", "1")
+    with pytest.raises(ServerError) as none_live:
+        api.describe("billing_support")
+    assert (none_live.value.status, none_live.value.kind) == (404, "not_found") and "no live revision" in str(none_live.value)
+    assert api.search("billing") == [], "search covers what each name resolves to"
+    assert api.publish(second)["revision"] == "2" and api.describe("billing_support")["revision"] == "2", \
+        "publishing a retired revision's bundle again brings it back"
+
+    for call in (lambda: api.describe("nothing_here"), lambda: api.describe("billing_support@9"),
+                 lambda: api.pin("billing_support", "9"), lambda: api.retire("billing_support", "9"),
+                 lambda: api.pin("nothing_here", "1"), lambda: api.bundle("nothing_here")):
+        with pytest.raises(ServerError) as missing:
+            call()
+        assert (missing.value.status, missing.value.kind) == (404, "not_found")
+
+
+def test_search_ranks_what_each_name_resolves_to(served, tmp_path):
+    api = server(served)
+    for name in ("billing-support", "dynamic-policy", "ticket-triage"):
+        api.publish(rl(example_dir(name), tmp_path)[1])
+    hits = api.search("charged twice refunds")
+    assert hits and hits[0]["name"] == "billing_support" and hits[0]["revision"] == "1" and hits[0]["score"] > 0
+    assert set(hits[0]) == {"name", "revision", "bundle_id", "score", "description"}
+    assert api.search("policies")[0]["name"] == "dynamic_policy", "stemmed: policies finds policy"
+    assert api.search("dynamic_policy")[0]["name"] == "dynamic_policy", "an exact name wins"
+    assert api.search("zebra") == [] and api.search("") == []
+    assert len(api.search("the task a ticket", limit=1)) == 1
+
+
+def test_a_reference_hands_its_bundle_back(served, tmp_path):
+    """`GET /catalog/{ref}` with `Accept: application/octet-stream`: the bundle's own subgraph as
+    a new `.rl`, which verifies, has the id it was published under, and exports the same folder;
+    the runs recorded against it stay in the store."""
+    ids = record(served, tmp_path)
+    api = server(served)
+    compiled, _ = compile_folder(EXAMPLE)
+    back = tmp_path / "back.rl"
+    back.write_bytes(api.bundle("billing_support"))
+    bundle = read_bundle(back)                                       # verifies: tampering would raise
+    assert bundle.id == compiled.id and bundle.source == compiled.source
+    assert bundle.graph.canonical() == compiled.graph.canonical()
+    assert [(f.path, f.data, f.mode) for f in bundle.files] == [(f.path, f.data, f.mode) for f in compiled.files]
+    with relate.open(back) as conn:
+        labels = {label for row in conn.execute("MATCH (n) RETURN labels(n) AS labels") for label in row["labels"]}
+    assert not labels & {"Run", "Entry", "Answer", "Bundle", "Revision", "Name"}, "nothing of the server's travels in the bundle"
+    assert served.store.run(ids["fired"])["bundle_id"] == compiled.id
+
+    # the client's pull and get go through it
+    c = client(served)
+    shutil.rmtree(bundles.bundles_dir())
+    pulled = c.pull("billing_support@1")
+    assert pulled.fetched and pulled.bundle_id == compiled.id
+    fetched = c.get("dynamic_policy", tmp_path / "out")
+    assert (fetched.path / "procedure.aip").read_bytes() == (example_dir("dynamic-policy") / "procedure.aip").read_bytes()
+    assert c.compile(fetched.path).bundle_id == fetched.bundle_id, "what comes back compiles to the id it was published under"
+
+
+# ------------------------------------------------------------------------- drafts
+
+
+def test_an_upload_with_no_revision_is_a_draft(served, tmp_path):
+    api = server(served)
+    bundle_id, data = rl(AGENT, tmp_path)
+    assert api.draft(data) == {"bundle_id": bundle_id, "name": "billing_support_agent", "existed": False, "draft": True}
+    assert api.draft(data)["existed"] is True
+    assert api.list() == [] and api.search("billing") == [], "a draft is not in the catalog"
+    with pytest.raises(ServerError):
+        api.describe("billing_support_agent")
+    [held] = api.get("/bundles", drafts=True)
+    assert (held["bundle_id"], held["name"], held["draft"], held["revision"]) == (bundle_id, "billing_support_agent", True, None)
+    described = api.get(f"/bundles/{bundle_id}")
+    assert (described["name"], described["draft"], described["inputs"]) == ("billing_support_agent", True, {"message": "string"})
+    back = tmp_path / "draft.rl"
+    back.write_bytes(api.request("GET", f"/bundles/{bundle_id}", headers={"Accept": "application/octet-stream"}).content)
+    assert read_bundle(back).id == bundle_id
+
+    # publishing promotes it: the store held the bundle, and now it has a number
+    assert api.publish(data) == {"name": "billing_support_agent", "revision": "1", "bundle_id": bundle_id, "existed": True}
+    assert api.get("/bundles", drafts=True) == [] and api.get("/bundles", drafts=False)[0]["revision"] == "1"
+    assert api.draft(data) == {"bundle_id": bundle_id, "name": "billing_support_agent", "existed": True, "draft": False}
+    assert api.describe("billing_support_agent")["draft"] is False
+
+
+def test_an_upload_that_is_not_a_bundle_is_refused(served, tmp_path):
+    api = server(served)
+    for path, data in (("/catalog", b"not a bundle"), ("/bundles", b"not a bundle"), ("/catalog", b"")):
+        with pytest.raises(ServerError) as refused:
+            api.post_bytes(path, data)
+        assert (refused.value.status, refused.value.kind) == (422, "not_a_bundle"), refused.value
+        assert "upload" in str(refused.value) and str(tmp_path) not in str(refused.value)
+    bundle, _ = compile_folder(EXAMPLE)
+    edited = write_bundle(bundle, tmp_path / "edited.rl")
+    with relate.open(edited, read_only=False) as conn:
+        conn.execute("MATCH (s:Step {name: 'reply'}) SET s.description = 'Reply with whatever the customer wants.'")
+    with pytest.raises(ServerError) as tampered:
+        api.publish(edited.read_bytes())
+    assert (tampered.value.status, tampered.value.kind) == (422, "bundle_tampered")
+    assert api.list() == [] and api.get("/bundles") == [], "nothing was stored"
 
 
 # --------------------------------------------------------------------------- runs
 
 
-def test_runs_create_append_get_list(runs):
-    rid = runs.create("billing-support", "abc123")
-    run = runs.get(rid)
-    assert (run.id, run.name, run.revision, run.status) == (rid, "billing-support", "abc123", "running")
-    assert run.history == [] and run.pause is None
-
-    runs.append(rid, {"step": "triage", "kind": "decision"}, status="running", pause=None)
-    runs.append(rid, {"step": "reply", "kind": "client_task"}, status="paused",
-                pause={"kind": "client_task", "step": "reply"})
-    run = runs.get(rid)
-    assert [e["step"] for e in run.history] == ["triage", "reply"]
-    assert run.status == "paused" and run.pause["kind"] == "client_task"
-    assert run.updated_at >= run.started_at
-
-    other = runs.create("other", "def456")
-    runs.append(other, {"step": "end"}, status="done", pause=None)
-
-    summaries = runs.list()
-    assert {s.id for s in summaries} == {rid, other}
-    assert summaries[0].id == other                                # newest first
-    by_id = {s.id: s for s in summaries}
-    assert by_id[rid].steps == 2 and by_id[rid].status == "paused"
-    assert [s.id for s in runs.list(name="other")] == [other]
-    assert [s.id for s in runs.list(status="paused")] == [rid]
-    assert runs.list(name="other", status="paused") == []
-    assert len(runs.list(limit=1)) == 1
-
-    with pytest.raises(NotFound):
-        runs.get("nope")
-    with pytest.raises(NotFound):
-        runs.append("nope", {}, status="done", pause=None)
-
-
-def test_runs_hold_state_and_refuse_a_stale_append(runs):
-    rid = runs.create("billing-support", "abc123")
-    assert runs.get(rid).version == 0 and runs.get(rid).state == {}
-    assert runs.append(rid, None, "paused", {"kind": "decision", "step": "triage"}, expected=0,
-                       state={"message": "hi"}, after=None) == 1
-    run = runs.get(rid)
-    assert (run.version, run.status, run.history, run.state, run.after) == (1, "paused", [], {"message": "hi"}, None)
-
-    assert runs.append(rid, {"step": "triage", "kind": "decision"}, "running", None, expected=1) == 2
-    with pytest.raises(StaleRun):                                  # another write got there first
-        runs.append(rid, {"step": "triage", "kind": "decision"}, "running", None, expected=1)
-    assert runs.append(rid, {"step": "by-tone", "kind": "router"}, "paused", {"kind": "client_task"},
-                       expected=2, state={"message": "hi", "tone": "calm"}, after="triage") == 3
-    run = runs.get(rid)
-    assert [e["step"] for e in run.history] == ["triage", "by-tone"]
-    assert (run.version, run.state, run.after) == (3, {"message": "hi", "tone": "calm"}, "triage")
-    assert runs.append(rid, None, "paused", {"kind": "client_task"}) == 4    # no `expected`: unchecked
-    assert runs.get(rid).state == {"message": "hi", "tone": "calm"}         # no `state`: kept
-
-
-# -------------------------------------------------------------------- governance
-
-
-@pytest.fixture
-def governance(backend) -> GovernanceBackend:
-    return backend.governance
-
-
-MANUAL = {"resolver": "manual", "model": None, "confidence": None}
-
-
-def decision(billing: bool = True, tone: str = "angry", tone_p: float = 0.9, manual: bool = False,
-             message: str = "I was charged twice!") -> dict:
-    """A triage history entry as the server records it: the answers the client posted and their
-    attribution, model-resolved (with the model's confidence per question) or manual."""
-    answers = {"billing": billing, "tone": tone}
-    attribution = MANUAL if manual else {"resolver": "typesafe", "model": "jev-1",
-                                         "confidence": {"billing": 0.97, "tone": tone_p}}
-    return {"step": "triage", "kind": "decision", "input": {"message": message}, "result": {"answers": answers},
-            "attribution": attribution}
-
-
-def route(tone: str, fired: str | None = None) -> dict:
-    """The router's entry; with `fired`, the reason its confidence check fired (`low`, `absent`), and
-    the run went where the check points (escalate)."""
-    entry = {"step": "by-tone", "kind": "router", "input": {"tone": tone},
-             "result": {"to": "escalate" if tone == "angry" else "reply"}}
-    if fired is not None:
-        entry["input"] = {"tone_confidence": None if fired == "absent" else 0.4}
-        entry["result"] = {"to": "escalate", "confidence": {"fired": True, "reason": fired}}
-    return entry
-
-
-def escalate(message="I was charged twice!", billing=True, failed: str | None = None, **detail) -> dict:
-    state = {"message": message, "billing": billing, "tone": "angry"}
-    if failed is not None:
-        return {"step": "escalate", "kind": "error", "step_kind": "execution", "input": state,
-                "result": {"error": failed, **detail}}
-    return {"step": "escalate", "kind": "execution", "input": state, "result": {"ticket_id": "T-1"}}
-
-
-def reply(message="I was charged twice!", billing=True) -> dict:
-    return {"step": "reply", "kind": "client_task", "input": {"message": message, "billing": billing, "tone": "calm"},
-            "result": {"task": "...", "references": []}}
-
-
-def end(**state) -> dict:
-    return {"step": "end", "kind": "end", "input": {"message": "I was charged twice!", **state}, "result": state}
-
-
-LOOP_NAME = "billing-support-loop"
-
-
-def loop_example(tmp_path: Path):
-    """The example with a loop: `reply` hands its draft to a `check` decision whose router sends a bad
-    draft back to `reply`. Valid 0.6a0: the loop re-produces `reply` and `ok` each time round."""
-    folder = tmp_path / LOOP_NAME
-    shutil.copytree(EXAMPLE, folder)
-    text = (folder / "SKILL.md").read_text().replace("name: billing-support\n", f"name: {LOOP_NAME}\n", 1)
-    m = re.search(r"(  - name: reply\n(?:.*\n)*?    inputs_to: )end\n", text)
-    text = text[:m.start()] + m.group(1) + "check\n" + text[m.end():]
-    check = (
-        "\n  - name: check\n    kind: decision\n    description: Is the drafted reply acceptable?\n"
-        "    inputs:\n      - name: reply\n        type: string\n"
-        "    questions:\n      ok:\n        type: noul\n        instructions: Is the reply polite and consistent with the policy?\n"
-        "    inputs_to: ok-route\n\n"
-        "  - name: ok-route\n    kind: router\n    description: Send the reply, or draft it again.\n"
-        "    branch_on: ok\n    branches:\n      \"true\": end\n      \"false\": reply\n")
-    m = re.search(r"\n  - name: end\n", text)
-    (folder / "SKILL.md").write_text(text[:m.start()] + check + text[m.start():])
-    return snapshot(folder)
-
-
-def loop_run(runs, revision: str, drafts: int) -> str:
-    """A calm run of the loop example that redrafts `drafts - 1` times before the check passes."""
-    msg, manual = "Was my March invoice a duplicate?", MANUAL
-    entries = [{"step": "triage", "kind": "decision", "input": {"message": msg}, "result": {"answers": {"billing": True, "tone": "calm"}},
-                "attribution": manual},
-               {"step": "by-tone", "kind": "router", "input": {"tone": "calm"}, "result": {"to": "reply"}}]
-    for i in range(drafts):
-        ok = i == drafts - 1
-        entries += [{"step": "reply", "kind": "client_task", "input": {"message": msg, "tone": "calm"},
-                     "result": {"task": "...", "references": [], "answer": {"reply": f"draft {i}"}}},
-                    {"step": "check", "kind": "decision", "input": {"reply": f"draft {i}"}, "result": {"answers": {"ok": ok}},
-                     "attribution": manual},
-                    {"step": "ok-route", "kind": "router", "input": {"ok": ok}, "result": {"to": "end" if ok else "reply"}}]
-    entries.append({"step": "end", "kind": "end", "input": {"message": msg}, "result": {"message": msg}})
-    return seed(runs, revision, *entries, name=LOOP_NAME)
-
-
-def seed(runs, revision: str, *entries: dict, status: str = "done", name: str = "billing-support") -> str:
-    rid = runs.create(name, revision)
-    for i, entry in enumerate(entries):
-        last = i == len(entries) - 1
-        runs.append(rid, entry, status=status if last else "running", pause=None)
-    return rid
-
-
-def test_governance_backend_satisfies_protocol(governance):
-    assert isinstance(governance, GovernanceBackend)
-    with pytest.raises(NotFound):
-        governance.query("nope")
-
-
-def test_governance_confidence_fired_and_manual_decisions(catalog, runs, governance, example):
-    rev = catalog.publish(example)
-    assert governance.query("confidence-fired") == []
-    # the model was sure: angry -> escalate, the check held
-    seed(runs, rev, decision(), route("angry"), escalate(), end())
-    # the model said calm at 0.4: the check fired and sent the run to escalate
-    low = seed(runs, rev, decision(tone="calm", tone_p=0.4), route("calm", fired="low"), escalate(), end())
-    # a key that arrived with no confidence: the check fired on absence (seeded; a live run skips the check for a hand answer)
-    absent = seed(runs, rev, decision(tone="calm", manual=True), route("calm", fired="absent"), escalate())
-    # another low one, still running
-    low2 = seed(runs, rev, decision(tone="calm", tone_p=0.3), route("calm", fired="low"), status="running")
-
-    rows = governance.query("confidence-fired")
-    assert rows == [
-        {"name": "billing-support", "router": "by-tone", "reason": "low", "fired": 2, "run_ids": [low2, low]},
-        {"name": "billing-support", "router": "by-tone", "reason": "absent", "fired": 1, "run_ids": [absent]},
-    ]
-    assert governance.query("confidence-fired", name="other") == []
-    assert governance.query("confidence-fired", window=1) == [
-        {"name": "billing-support", "router": "by-tone", "reason": "low", "fired": 1, "run_ids": [low2]}]
-    assert [r["reason"] for r in governance.query("confidence-fired", limit=1)] == ["low"]
-
-    assert governance.query("manual-decisions") == [
-        {"name": "billing-support", "step": "triage", "decided": 4, "manual": 1, "rate": 0.25}]
-    assert governance.query("manual-decisions", window=1) == []               # the newest run used the model
-    assert governance.query("manual-decisions", name="other") == []
-
-
-def test_governance_unmeasured_routes(catalog, runs, governance, example, tmp_path):
-    """The example's `triage` allows a manual answer, so the confidence its router checks is unmeasured,
-    which the validator flagged at publish; the query names the router with the windowed runs that
-    went through it."""
-    rev = catalog.publish(example)
-    assert governance.query("unmeasured-routes") == [
-        {"name": "billing-support", "revision": rev, "router": "by-tone", "code": "confidence_on_unmeasured_source",
-         "source_class": "unmeasured", "runs": 0, "run_ids": []}]
-    first = seed(runs, rev, decision(), route("angry"), escalate(), end())
-    second = seed(runs, rev, decision(tone="calm", manual=True), route("calm"), reply())
-    seed(runs, rev, decision(), status="running")                            # never reached the router
-    rows = governance.query("unmeasured-routes")
-    assert rows == [{"name": "billing-support", "revision": rev, "router": "by-tone", "code": "confidence_on_unmeasured_source",
-                     "source_class": "unmeasured", "runs": 2, "run_ids": [second, first]}]
-    assert governance.query("unmeasured-routes", window=1) == [{**rows[0], "runs": 0, "run_ids": []}]
-    assert governance.query("unmeasured-routes", name="other") == []
-    # a decision model with no fallback, its confidence checked on the router: measured, nothing to report
-    md = tmp_path / "measured-support" / "SKILL.md"
-    variant(tmp_path, "measured-support")
-    text = md.read_text().replace("    fallback: true\n", "    fallback: false\n    confidence: [tone]\n")
-    text = text.replace("    branch_on: tone\n", "    branch_on: tone\n"
-                        "    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n")
-    md.write_text(text)
-    measured = snapshot(tmp_path / "measured-support")
-    assert measured.issues == [] and {s["name"]: s.get("source_class") for s in measured.steps}["by-tone"] == "measured"
-    catalog.publish(measured)
-    assert [r["name"] for r in governance.query("unmeasured-routes")] == ["billing-support"]
-    catalog.retire("billing-support", rev)                                     # nothing live, nothing to report
-    assert governance.query("unmeasured-routes") == []
-
-
-def test_governance_failing_scripts(catalog, runs, governance, example):
-    rev = catalog.publish(example)
-    assert governance.query("failing-scripts") == []
-    seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 1"),
-         status="error")
-    seed(runs, rev, decision(), route("angry"), escalate(failed="RuntimeError: Script scripts/escalate.py exited with 2",
-                                                         exit_code=2, stderr="queue down"),
-         status="error")
-    seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
-
-    rows = governance.query("failing-scripts")
-    assert rows == [{"name": "billing-support", "step": "escalate", "script": "scripts/escalate.py",
-                     "ran": 3, "failed": 2, "rate": 2 / 3,
-                     "last_error": "RuntimeError: Script scripts/escalate.py exited with 2",
-                     "exit_code": 2, "stderr": "queue down"}]
-    assert governance.query("failing-scripts", window=1) == []                # the newest run took the calm branch
-    assert governance.query("failing-scripts", window=2)[0]["ran"] == 1
-    assert governance.query("failing-scripts", name="other") == []
-
-
-def test_governance_missing_fields(catalog, governance, example, tmp_path):
-    catalog.publish(example)
-    assert governance.query("missing-fields") == []
-    bare = variant(tmp_path, "bare-support")
-    md = tmp_path / "bare-support" / "SKILL.md"
-    text = md.read_text()
-    head, _, tail = text.partition("do_not_use_when:\n")
-    text = head + tail[tail.index("\nrequires:") + 1:]
-    text = text[:text.index("anti_patterns:")].rstrip() + "\n```\n"
-    md.write_text(text)
-    bare = snapshot(tmp_path / "bare-support")
-    assert bare.procedure["do_not_use_when"] == [] and bare.procedure["anti_patterns"] == []
-    rev = catalog.publish(bare)
-    assert governance.query("missing-fields") == [
-        {"name": "bare-support", "revision": rev, "missing": ["do_not_use_when", "anti_patterns"]}]
-    assert governance.query("missing-fields", name="billing-support") == []
-    catalog.retire("bare-support", rev)                                       # nothing live, nothing to report
-    assert governance.query("missing-fields") == []
-
-
-def test_governance_structure(backend, catalog, governance, example, tmp_path):
-    """The three structural queries read the projection alone: the example's result is only its start input,
-    three of its keys are never read, and only the loop variant has a cycle."""
-    rev = catalog.publish(example)
-    loop = loop_example(tmp_path)
-    loop_rev = catalog.publish(loop)
-    if isinstance(backend, FilesystemBackend):
-        for query in ("empty-results", "unused-data", "cycles"):
-            with pytest.raises(NotSupported):
-                governance.query(query)
-        return
-    assert governance.query("empty-results") == [
-        {"name": "billing-support", "revision": rev, "step": "end", "result": ["message"]},
-        {"name": LOOP_NAME, "revision": loop_rev, "step": "end", "result": ["message"]}]
-    assert governance.query("unused-data", name="billing-support") == [
-        {"name": "billing-support", "revision": rev, "step": "escalate", "kind": "output", "key": "queue", "type": "string"},
-        {"name": "billing-support", "revision": rev, "step": "escalate", "kind": "output", "key": "ticket_id", "type": "integer"},
-        {"name": "billing-support", "revision": rev, "step": "reply", "kind": "output", "key": "reply", "type": "string"},
-        {"name": "billing-support", "revision": rev, "step": "triage", "kind": "answer", "key": "billing", "type": "boolean"}]
-    # in the loop variant the check reads `reply`, so only three keys are unread
-    assert [r["key"] for r in governance.query("unused-data", name=LOOP_NAME)] == ["queue", "ticket_id", "billing"]
-    assert governance.query("cycles") == [
-        {"name": LOOP_NAME, "revision": loop_rev, "steps": ["reply", "check", "ok-route"], "taken_when": ["false"],
-         "reproduces": ["reply", "ok"]}]
-    assert governance.query("cycles", name="billing-support") == []
-    # retired revisions drop out of the structural queries: they cover what each name resolves to
-    catalog.retire(LOOP_NAME, loop_rev)
-    assert governance.query("cycles") == []
-
-
-def test_governance_repeated_cycles(backend, catalog, runs, governance, tmp_path):
-    loop = loop_example(tmp_path)
-    rev = catalog.publish(loop)
-    once = loop_run(runs, rev, drafts=1)          # straight through: no repeat
-    twice = loop_run(runs, rev, drafts=3)         # two redrafts
-    if isinstance(backend, FilesystemBackend):
-        with pytest.raises(NotSupported):
-            governance.query("repeated-cycles")
-        return
-    assert governance.query("repeated-cycles") == [
-        {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
-    assert governance.query("repeated-cycles", repeats=2) == []
-    assert governance.query("repeated-cycles", window=1) == [
-        {"name": LOOP_NAME, "revision": rev, "run_id": twice, "status": "done", "router": "ok-route", "repeats": 2}]
-    assert once != twice
-
-
-def test_governance_stored_queries(backend, catalog, runs, governance, example):
-    """A query of your own: listed after the built-ins, run read-only with the same parameters, replaced
-    by name, refused when malformed, and never able to write."""
-    rev = catalog.publish(example)
-    rid = seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    builtins = [{"query": q, "description": d, "builtin": True} for q, d in QUERIES.items()]
-    if isinstance(backend, FilesystemBackend):
-        assert governance.queries() == builtins
-        with pytest.raises(NotSupported):
-            governance.store("steps-by-kind", "", "MATCH (n) RETURN count(n)")
-        with pytest.raises(NotSupported):
-            governance.remove("steps-by-kind")
-        return
-    assert governance.queries() == builtins
-    cypher = ("MATCH (s:Skill)-[:HAS_PROCEDURE]->()-[:HAS_STEP]->(st) WHERE s.id IN $ids "
-              "RETURN st.kind AS kind, count(*) AS steps ORDER BY kind LIMIT $limit")
-    row = governance.store("steps-by-kind", "How many steps of each kind the resolved revisions have.", cypher)
-    assert row == {"query": "steps-by-kind", "description": "How many steps of each kind the resolved revisions have.",
-                   "builtin": False}
-    assert governance.queries() == builtins + [row]
-    assert governance.query("steps-by-kind") == [{"kind": k, "steps": 1}
-                                                 for k in ("client_task", "decision", "end", "execution", "router", "start")]
-    assert governance.query("steps-by-kind", name="nope") == []          # $ids follows the name filter
-    assert governance.query("steps-by-kind", limit=2) == [{"kind": "client_task", "steps": 1}, {"kind": "decision", "steps": 1}]
-    # run data is reachable and temporal values come back as ISO strings
-    governance.store("recent-runs", "", "MATCH (r:Run) RETURN r.id AS run_id, r.started_at AS started ORDER BY started DESC LIMIT $limit")
-    rows = governance.query("recent-runs")
-    assert rows[0]["run_id"] == rid and isinstance(rows[0]["started"], str) and "T" in rows[0]["started"]
-    # storing under the same name replaces the Cypher
-    governance.store("recent-runs", "count", "MATCH (r:Run) RETURN count(r) AS runs")
-    assert governance.query("recent-runs") == [{"runs": 1}]
-    assert [q["query"] for q in governance.queries()][-2:] == ["recent-runs", "steps-by-kind"]
-    # refusals: a bad name, a built-in name, Cypher the database rejects
-    with pytest.raises(InvalidQuery):
-        governance.store("Steps By Kind", "", cypher)
-    with pytest.raises(InvalidQuery):
-        governance.store("cycles", "", cypher)
-    with pytest.raises(InvalidQuery, match="rejects the Cypher"):
-        governance.store("broken", "", "MATCH (n RETURN n")
-    assert [q["query"] for q in governance.queries() if not q["builtin"]] == ["recent-runs", "steps-by-kind"]
-    # a write never happens: refused when stored or, if EXPLAIN lets it through, when run in read mode
-    try:
-        governance.store("wipe", "", "MATCH (r:Run) DETACH DELETE r RETURN count(r) AS gone")
-    except InvalidQuery:
-        pass
-    else:
-        with pytest.raises(QueryFailed):
-            governance.query("wipe")
-    assert runs.get(rid).id == rid
-    with pytest.raises(NotFound):
-        governance.query("no-such-query")
-    with pytest.raises(InvalidQuery):
-        governance.remove("cycles")
-    governance.remove("steps-by-kind")
-    with pytest.raises(NotFound):
-        governance.remove("steps-by-kind")
-    with pytest.raises(NotFound):
-        governance.query("steps-by-kind")
-
-
-def test_governance_untaken_branches(backend, catalog, runs, governance, example):
-    rev = catalog.publish(example)
-    seed(runs, rev, decision(), route("angry"), escalate(), end(billing=True, tone="angry", ticket_id="T-1"))
-    if isinstance(backend, FilesystemBackend):
-        with pytest.raises(NotSupported):
-            governance.query("untaken-branches")
-        return
-    assert governance.query("untaken-branches") == [
-        {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "calm", "to": "reply",
-         "runs": 1, "router_runs": 1}]
-    seed(runs, rev, decision(tone="calm"), route("calm"), reply(), end(billing=True, tone="calm", reply="..."))
-    assert governance.query("untaken-branches") == []
-    assert governance.query("untaken-branches", window=1) == [
-        {"name": "billing-support", "revision": rev, "router": "by-tone", "value": "angry", "to": "escalate",
-         "runs": 1, "router_runs": 1}]
-
-
-# -------------------------------------------------------------------- neo4j only
-
-
-@needs_neo4j
-class TestNeo4j:
-    """What the graph adds beyond the contract: the 0.4 `aip db` shim, the projection, the cache."""
-
-    @pytest.fixture
-    def neo4j(self, tmp_path):
-        backend = neo4j_backend(tmp_path)
-        yield backend
-        backend.close()
-
-    def test_fulltext_index_is_recreated_with_the_english_analyzer(self, neo4j, example):
-        from aip.server.backends.neo4j import (DROP_FULLTEXT, FULLTEXT_ANALYZER, FULLTEXT_INDEX, ensure_schema,
-                                               fulltext_analyzer)
-
-        driver, database = neo4j.driver, neo4j.conn.database
-        assert fulltext_analyzer(driver, database) == FULLTEXT_ANALYZER
-        # an index from before the analyzer was set (the default, which does not stem)
-        driver.execute_query(DROP_FULLTEXT, database_=database)
-        driver.execute_query(f"CREATE FULLTEXT INDEX {FULLTEXT_INDEX} FOR (n:Skill|Procedure) "
-                             "ON EACH [n.name, n.description, n.purpose, n.triggers]", database_=database)
-        driver.execute_query("CALL db.awaitIndexes(60)", database_=database)
-        assert fulltext_analyzer(driver, database) != FULLTEXT_ANALYZER
-        ensure_schema(driver, database)
-        assert fulltext_analyzer(driver, database) == FULLTEXT_ANALYZER
-        neo4j.catalog.publish(example)
-        assert neo4j.catalog.search("charged twice")[0].name == "billing-support"
-
-    def test_db_shim_round_trips(self, neo4j, example, tmp_path):
-        from aip.db.neo4j import export, fetch, list_skills, load
-
-        skill_id = load(EXAMPLE)
-        assert skill_id == example.id
-        assert load(EXAMPLE) == skill_id                                # idempotent
-        other = variant(tmp_path, "billing-other")
-        assert load(tmp_path / "billing-other") != skill_id
-
-        names = {(r["name"], r["revision"]) for r in list_skills()}
-        assert names == {("billing-support", example.revision), ("billing-other", other.revision)}
-
-        out = export("billing-support", tmp_path / "export")
-        assert out == tmp_path / "export" / "billing-support"
-        assert tree(out) == tree(EXAMPLE)
-        assert snapshot(out).id == skill_id
-
-        assert fetch("billing-support")["id"] == skill_id
-        assert fetch("nope") is None
-        with pytest.raises(KeyError):
-            export("nope", tmp_path / "x")
-
-    def test_projection_has_steps_files_and_names(self, neo4j, example):
-        neo4j.catalog.publish(example)
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (n:Name {name: $name})-[:HAS_REVISION]->(s:Skill {id: $id})"
-            "-[:HAS_PROCEDURE]->(p)-[:HAS_STEP]->(st) "
-            "OPTIONAL MATCH (st)-[:USES]->(f:File) "
-            "WITH st, collect(f.path) AS files ORDER BY st.order "
-            "RETURN st.name AS step, st.kind AS kind, labels(st) AS labels, files",
-            name="billing-support", id=example.id, database_=neo4j.conn.database)
-        steps = {r["step"]: (r["kind"], sorted(r["files"]), set(r["labels"])) for r in rows}
-        assert [r["step"] for r in rows] == ["start", "triage", "by-tone", "escalate", "reply", "end"]
-        assert steps["start"] == ("start", [], {"Step", "Start"})
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (:Procedure {key: $id})-[:STARTS_AT]->(a:Step:Start)-[e:NEXT|THEN|BELOW*]->(z:Step:End) "
-            "RETURN [x IN e | type(x) + coalesce(':' + x.value, '')] AS edges ORDER BY edges",
-            id=example.id, database_=neo4j.conn.database)
-        assert [r["edges"] for r in rows] == [["NEXT", "NEXT", "THEN:angry", "NEXT"], ["NEXT", "NEXT", "THEN:calm", "NEXT"]]
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (p:Procedure {key: $id})-[:HAS_ISSUE]->(i:Issue)-[:AT]->(st:Step) "
-            "MATCH (p)-[:HAS_STEP]->(d:Step:Decision {name: 'triage'}) "
-            "RETURN i.code AS code, i.severity AS severity, st.name AS step, st.source_class AS source_class, "
-            "       d.fallback AS fallback, d.confidence AS confidence",
-            id=example.id, database_=neo4j.conn.database)
-        assert [r.data() for r in rows] == [{"code": "confidence_on_unmeasured_source", "severity": "warning", "step": "by-tone",
-                                             "source_class": "unmeasured", "fallback": True, "confidence": ["tone"]}]
-        assert steps["escalate"] == ("execution", ["assets/config.json", "scripts/escalate.py"],
-                                     {"Step", "Execution"})
-        assert steps["by-tone"][0] == "router" and "Router" in steps["by-tone"][2]
-        assert steps["reply"][1] == ["assets/policy.md", "assets/reply.md", "references/help.md"]
-
-    def test_projection_carries_the_data_flow(self, neo4j, example):
-        neo4j.catalog.publish(example)
-        db = neo4j.conn.database
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (d:Data {skill_id: $id}) "
-            "OPTIONAL MATCH (p:Step)-[:PRODUCES]->(d) "
-            "OPTIONAL MATCH (d)-[:FEEDS]->(c:Step) "
-            "OPTIONAL MATCH (proc:Procedure)-[:SUPPLIES]->(d) "
-            "RETURN d.name AS name, d.type AS type, p.name AS producer, collect(DISTINCT c.name) AS consumers, "
-            "       proc IS NOT NULL AS start ORDER BY name",
-            id=example.id, database_=db)
-        flow = {r["name"]: r.data() for r in rows}
-        assert set(flow) == {"message", "billing", "tone", "ticket_id", "queue", "reply"}
-        # a start input: supplied by the procedure, produced by no step, read by triage and the end (not the start step)
-        assert flow["message"]["start"] and flow["message"]["producer"] is None
-        assert {"triage", "end"} <= set(flow["message"]["consumers"]) and "start" not in flow["message"]["consumers"]
-        # a decision's answer: produced by the decision, typed as the question collapses, fed to the router
-        assert (flow["tone"]["producer"], flow["tone"]["type"], flow["tone"]["start"]) == ("triage", "string", False)
-        assert "by-tone" in flow["tone"]["consumers"] and flow["billing"]["type"] == "boolean"
-        # an output nothing reads: produced, never fed
-        assert flow["ticket_id"]["producer"] == "escalate" and flow["ticket_id"]["type"] == "integer"
-        assert flow["ticket_id"]["consumers"] == [] and flow["reply"]["producer"] == "reply"
-        # lineage is one direction: start input -> decision -> answer -> router
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH path = (:Procedure {key: $id})-[:SUPPLIES]->(:Data {name: 'message'})-[:FEEDS]->(:Step {name: 'triage'})"
-            "-[:PRODUCES]->(:Data {name: 'tone'})-[:FEEDS]->(:Step {name: 'by-tone'}) RETURN count(path) AS n",
-            id=example.id, database_=db)
-        assert rows[0]["n"] == 1
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (q:Question {skill_id: $id, name: 'tone'})-[:YIELDS]->(d:Data) RETURN d.name AS name",
-            id=example.id, database_=db)
-        assert [r["name"] for r in rows] == ["tone"]
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (p:Procedure {key: $id}) RETURN p.interpreter AS interpreter, p.interpreter_version AS version, "
-            "p.packages AS packages, p.tools AS tools", id=example.id, database_=db)
-        assert rows[0].data() == {"interpreter": "python", "version": "3.10", "packages": [], "tools": []}
-        rows, _, _ = neo4j.driver.execute_query("MATCH (i:Input {skill_id: $id}) RETURN count(i) AS n",
-                                                id=example.id, database_=db)
-        assert rows[0]["n"] == 0
-
-    def test_projection_carries_the_confidence_check(self, neo4j, tmp_path):
-        """A decision emitting `tone_confidence` and a router checking it: the key is a `Data` node the decision
-        produces and the router reads, the check is a `BELOW` edge beside the branches, and the question says
-        it is scored."""
-        variant(tmp_path, "checked-support")
-        md = tmp_path / "checked-support" / "SKILL.md"
-        text = md.read_text().replace("    fallback: true\n", "    fallback: false\n    confidence: [tone]\n")
-        text = text.replace("    branch_on: tone\n", "    branch_on: tone\n"
-                            "    confidence: {key: tone_confidence, below: 0.6, to: escalate}\n")
-        md.write_text(text)
-        checked = snapshot(tmp_path / "checked-support")
-        neo4j.catalog.publish(checked)
-        db = neo4j.conn.database
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (p:Step {skill_id: $id})-[:PRODUCES]->(d:Data {name: 'tone_confidence'})-[:FEEDS]->(c:Step) "
-            "MATCH (q:Question {skill_id: $id, name: 'tone'}) "
-            "RETURN p.name AS producer, d.type AS type, c.name AS consumer, q.confidence AS scored",
-            id=checked.id, database_=db)
-        assert [r.data() for r in rows] == [{"producer": "triage", "type": "float", "consumer": "by-tone", "scored": True}]
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (r:Step:Router {skill_id: $id})-[b:BELOW]->(t:Step) "
-            "RETURN r.name AS router, r.check_key AS key, r.check_below AS below, r.check_to AS to, r.source_class AS cls, "
-            "       b.key AS edge_key, b.below AS edge_below, t.name AS target",
-            id=checked.id, database_=db)
-        assert [r.data() for r in rows] == [{"router": "by-tone", "key": "tone_confidence", "below": 0.6, "to": "escalate",
-                                             "cls": "measured", "edge_key": "tone_confidence", "edge_below": 0.6,
-                                             "target": "escalate"}]
-        rows, _, _ = neo4j.driver.execute_query("MATCH (:Procedure {key: $id})-[:HAS_ISSUE]->(i) RETURN count(i) AS n",
-                                                id=checked.id, database_=db)
-        assert rows[0]["n"] == 0
-
-    def test_runs_link_to_the_steps_they_executed(self, neo4j, example):
-        rev = neo4j.catalog.publish(example)
-        rid = neo4j.runs.create("billing-support", rev)
-        neo4j.runs.append(rid, {"step": "triage", "kind": "decision", "input": {"message": "hi"},
-                                "result": {"answers": {}}}, status="running", pause=None)
-        neo4j.runs.append(rid, route("calm", fired="absent"), status="done", pause=None)
-        rows, _, _ = neo4j.driver.execute_query(
-            "MATCH (r:Run {id: $id})-[:OF_SKILL]->(s:Skill) "
-            "MATCH (r)-[:STEP_RUN]->(a:StepRun)-[:FOLLOWED_BY]->(b:StepRun) "
-            "MATCH (a)-[:OF_STEP]->(sa:Step), (b)-[:OF_STEP]->(sb:Step) "
-            "RETURN s.id AS skill, a.step AS first, sa.key AS first_key, b.step AS second, a.input AS input, "
-            "       a.confidence_fired AS a_fired, b.confidence_fired AS fired, b.confidence_reason AS reason",
-            id=rid, database_=neo4j.conn.database)
-        row = rows[0].data()
-        assert row["skill"] == example.id and row["first"] == "triage" and row["second"] == "by-tone"
-        assert row["first_key"] == f"{example.id}:triage"
-        assert row["input"] == '{"message": "hi"}'
-        assert (row["a_fired"], row["fired"], row["reason"]) == (None, True, "absent")
-
-    def test_cache_is_rebuilt_when_a_file_is_tampered(self, neo4j, example):
-        rev = neo4j.catalog.publish(example)
-        folder = neo4j.catalog.folder("billing-support", rev)
-        assert folder == neo4j.catalog.cache_dir / example.id / "billing-support"
-        assert (neo4j.catalog.cache_dir / example.id / ".aip-manifest.json").exists()
-        (folder / "assets" / "policy.md").write_text("tampered\n")
-        assert neo4j.catalog.folder("billing-support", rev) == folder
-        assert tree(folder) == tree(EXAMPLE)
+def run_of(bundle_id: str, **over) -> dict:
+    return {"run_id": "run-0001", "bundle_id": bundle_id, "name": "billing_support", "revision": "1", "draft": False, "status": "paused",
+            "started": "2026-11-09T12:00:00.000+00:00", "finished": None, "created": "2026-11-09T12:00:00.000+00:00",
+            "updated": "2026-11-09T12:00:01.000+00:00", "identity": {"agent": "claude", "session": "s1", "user": "mallory"},
+            "position": "step:reply", "state": {"message": CALM}, "loops": {}, "pause": {"kind": "task", "step": "reply", "tasks": [{}]},
+            "error": None, "result": None, "batch": 10,
+            "history": [{"step": "start", "kind": "Start", "pass": None, "passes": [], "at": "2026-11-09T12:00:00.000+00:00",
+                         "seconds": 0.001, "input": {"message": CALM}, "result": {}}], **over}
+
+
+def test_a_run_needs_a_bundle_the_store_holds(served, tmp_path):
+    api = server(served)
+    bundle_id, data = rl(EXAMPLE, tmp_path)
+    with pytest.raises(ServerError) as unknown:
+        api.record(run_of(bundle_id))
+    assert (unknown.value.status, unknown.value.kind) == (404, "unknown_bundle") and bundle_id in str(unknown.value)
+    with pytest.raises(ServerError) as missing:
+        api.get("/runs/run-0001")
+    assert missing.value.status == 404
+    api.draft(data)
+    assert api.record(run_of(bundle_id)) == {"run_id": "run-0001", "user": "zach"}
+    for bad in ({"run_id": "x"}, {"bundle_id": None}, {"history": "nope"}):
+        with pytest.raises(ServerError) as invalid:
+            api.record({**run_of(bundle_id), **bad})
+        assert (invalid.value.status, invalid.value.kind) == (422, "invalid_request")
+
+
+def test_a_run_is_upserted_whole_at_every_stop(served, tmp_path):
+    api = server(served)
+    bundle_id, data = rl(EXAMPLE, tmp_path)
+    api.publish(data)
+    posted = run_of(bundle_id)
+    api.record(posted)
+    stored = api.run("run-0001")
+    assert stored == {**posted, "identity": {"agent": "claude", "session": "s1", "user": "zach"}}, \
+        "the record comes back as posted, with the user the token stands for, whatever the client claimed"
+
+    more = [*posted["history"],
+            {"step": "triage", "kind": "Decide", "pass": None, "passes": [], "at": "2026-11-09T12:00:00.500+00:00", "seconds": 0.4,
+             "model_seconds": 0.39, "history_sent": False, "answered_by": {"model": "jev-1", "endpoint": "https://api.typesafe.ai"},
+             "input": {"message": CALM}, "result": {"billing": {"value": True, "confidence": 0.94, "noul": 0.97}}},
+            {"step": "end", "kind": "End", "pass": None, "passes": [], "at": "2026-11-09T12:00:02.000+00:00", "seconds": 0.0,
+             "input": {}, "result": {"message": CALM}}]
+    done = run_of(bundle_id, status="done", finished="2026-11-09T12:00:02.000+00:00", updated="2026-11-09T12:00:02.000+00:00",
+                  pause=None, position=None, result={"message": CALM}, history=more)
+    api.record(done)
+    api.record(done)                                                                 # a stop posted twice changes nothing
+    stored = api.run("run-0001")
+    assert stored["status"] == "done" and stored["history"] == more and stored["pause"] is None
+    count = served.store.rows("MATCH (r:Run {run_id: 'run-0001'})-[:HAS_ENTRY]->(e:Entry) RETURN count(e) AS entries")
+    assert count == [{"entries": 3}] and len(api.runs()) == 1
+
+    rewritten = [more[0], {**more[1], "seconds": 0.5}]                                # not what a client does; the store still follows
+    api.record(run_of(bundle_id, history=rewritten))
+    assert api.run("run-0001")["history"] == rewritten
+    path = served.store.rows("MATCH (a:Entry {run_id: 'run-0001'})-[:THEN]->(b:Entry) RETURN a.seq AS a, b.seq AS b, b.seconds AS seconds")
+    assert path == [{"a": 0, "b": 1, "seconds": 0.5}]
+
+
+def test_runs_through_the_client_carry_identity_and_drafts(served, tmp_path):
+    ids = record(served, tmp_path)
+    api = server(served)
+    fired = api.run(ids["fired"])
+    assert (fired["name"], fired["revision"], fired["draft"], fired["status"]) == ("billing_support", "1", False, "done")
+    assert fired["identity"] == {"agent": "claude", "session": "s1", "user": "zach"}
+    assert [e["step"] for e in fired["history"]] == ["start", "triage", "by_tone", "escalate", "end"]
+    local = RunFile.load(aip.Client().run_file(ids["fired"])).recording()
+    assert {**fired, "updated": None} == {**local, "updated": None}, "the server's record is the run file's"
+    assert api.run(ids["batched"])["identity"] == {"agent": "tests", "session": None, "user": "ci"}, "each token has its own name"
+
+    policy = api.run(ids["policy"])
+    assert (policy["name"], policy["revision"], policy["draft"]) == ("fixed_policy", None, True), "a folder's run is a draft's"
+    [draft] = api.get("/bundles", drafts=True)
+    assert (draft["name"], draft["bundle_id"]) == ("fixed_policy", policy["bundle_id"])
+    assert [e["name"] for e in api.list()] == ["billing_support", "billing_support_agent", "dynamic_policy"]
+
+    rows = api.runs()
+    assert [r["run_id"] for r in rows] == [ids[k] for k in ("batched", "capped", "policy", "agent", "calm", "fired")], "newest first"
+    assert set(rows[0]) >= {"run_id", "name", "revision", "status", "draft", "identity", "started", "finished", "created", "updated"}
+    assert all(r["started"] for r in rows), "`aip runs` prints when each started"
+
+    def listed(**filters):
+        return {r["run_id"] for r in api.get("/runs", **filters)}
+
+    assert listed(name="billing_support") == {ids["fired"], ids["calm"]}
+    assert listed(status="failed") == {ids["capped"]}
+    assert listed(agent="codex") == {ids["agent"], ids["policy"], ids["capped"]}
+    assert listed(session="s2") == {ids["agent"], ids["policy"]}
+    assert listed(user="ci") == {ids["batched"]}
+    assert listed(draft=True) == {ids["policy"], ids["capped"]} and len(listed(draft=False)) == 4
+    assert listed(agent="codex", session="s2", name="fixed_policy") == {ids["policy"]}
+    assert [r["run_id"] for r in api.get("/runs", limit=2)] == [ids["batched"], ids["capped"]]
+    assert listed(agent="nobody") == set()
+
+    summaries = client(served).runs(agent="claude")
+    assert all(isinstance(r, sdk.RunSummary) for r in summaries) and {r.run_id for r in summaries} == {ids["fired"], ids["calm"]}
+
+
+# --------------------------------------------------------------------------- auth
+
+
+def test_tokens_have_scopes_and_names(served, tmp_path):
+    bundle_id, data = rl(EXAMPLE, tmp_path)
+    with pytest.raises(ServerError) as none:
+        server(served, token=None).list()
+    assert (none.value.status, none.value.kind) == (401, "missing_token")
+    with pytest.raises(ServerError) as wrong:
+        server(served, token="guess").list()
+    assert (wrong.value.status, wrong.value.kind) == (401, "invalid_token")
+
+    reader, runner = server(served, "reader"), server(served, "runner")
+    assert reader.list() == []
+    for call in (lambda: reader.publish(data), lambda: reader.draft(data), lambda: reader.record(run_of(bundle_id)),
+                 lambda: runner.publish(data), lambda: runner.pin("billing_support", "1")):
+        with pytest.raises(ServerError) as forbidden:
+            call()
+        assert (forbidden.value.status, forbidden.value.kind) == (403, "forbidden")
+    assert runner.draft(data)["draft"] is True
+    assert runner.record(run_of(bundle_id)) == {"run_id": "run-0001", "user": "ci"}
+    assert reader.run("run-0001")["identity"]["user"] == "ci"
+
+
+def test_an_open_server_records_no_user(backend, tmp_path):
+    served = Served(backend)
+    done = client(served, BillingModel(0.6), token=None).run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
+    assert done.recorded is True and served.runs[done.run_id]["identity"] == {"agent": "tests", "session": None, "user": None}
+
+
+# ------------------------------------------------------------------ built-in bundles
+
+
+def test_built_in_bundles_are_published_once_per_store(backend, tmp_path):
+    from aip.server.builtins import builtin_files, publish_builtins
+
+    shipped = tmp_path / "bundles"
+    shipped.mkdir()
+    bundle, _ = compile_folder(example_dir("dynamic-policy"))
+    write_bundle(bundle, shipped / "dynamic_policy.rl")
+    store = backend.store
+    assert builtin_files() == [], "none ships yet (make_procedure is K1's)"
+    assert publish_builtins(store) == [] and store.offered() == []
+
+    assert publish_builtins(store, shipped) == [{"name": "dynamic_policy", "revision": "1", "bundle_id": bundle.id, "existed": False}]
+    assert [e["name"] for e in store.catalog()] == ["dynamic_policy"] and store.offered() == [bundle.id]
+    store.retire("dynamic_policy", "1")
+    assert publish_builtins(store, shipped) == [], "offered once: a start does not undo what was done by hand"
+    assert store.catalog()[0]["latest"] is None
+
+    newer, _ = compile_folder(reworded(tmp_path, "billing-support"))
+    write_bundle(newer, shipped / "billing_support.rl")
+    assert [p["name"] for p in publish_builtins(store, shipped)] == ["billing_support"], "an upgrade that carries a new one publishes it"
+    assert sorted(store.offered()) == sorted([bundle.id, newer.id])
+
+
+# ------------------------------------------------------------- the Relate store file
+
+
+@pytest.mark.skipif(not relate.available(), reason=relate.INSTALL_HINT)
+def test_the_relate_store_is_one_file_that_outlives_the_server(tmp_path):
+    from aip.server.backends.relate import RelateBackend
+
+    path = tmp_path / "data" / "store.rl"
+    first = Served(RelateBackend(path))
+    ids = record(first, tmp_path)
+    kept = first.store.run(ids["batched"])
+    first.close()
+    assert [p.name for p in (tmp_path / "data").iterdir()] == [relate.store_file(path).name], "one file under the data directory"
+
+    again = Served(RelateBackend(path))
+    assert [e["name"] for e in again.store.catalog()] == ["billing_support", "billing_support_agent", "dynamic_policy"]
+    assert again.store.run(ids["batched"]) == kept and len(again.store.runs()) == 6
+    assert kept["state"]["policies"] == POLICIES
+    back = tmp_path / "back.rl"
+    back.write_bytes(server(again, None).bundle("dynamic_policy"))
+    assert read_bundle(back).name == "dynamic_policy"
+    again.close()

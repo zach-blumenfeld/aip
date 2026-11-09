@@ -1,5 +1,4 @@
-"""The 0.8 server tests and the runtime-skill test wait for the milestones that rewrite those
-layers (S1, K1); see `conftest.py`. The engine's tests are `test_engine.py`, the CLI's and the
+"""The runtime-skill test waits for the milestone that rewrites the skill (K1); see `conftest.py`. The engine's tests are `test_engine.py`, the CLI's and the
 SDK's `test_cli_json.py` and `test_sdk.py`. The language's commands under `aip` are checked
 here so the command stays importable even where Relate is missing."""
 
@@ -12,9 +11,8 @@ import pytest
 from aip.client.cli import main
 
 
-@pytest.mark.skip(reason="the 0.8 server tests (tests/server) and the runtime-skill test are not collected: they drive the 0.8 "
-                         "server and skill, which S1 and K1 replace (plan aip-dev#1)")
-def test_server_and_skill_pending():
+@pytest.mark.skip(reason="the runtime-skill test is not collected: it checks the 0.8 skill, which K1 replaces (plan aip-dev#1)")
+def test_skill_pending():
     pass
 
 

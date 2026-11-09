@@ -3,13 +3,13 @@ so neither the client's `config.json` nor the server's `server.toml` in the deve
 `~/.config/aip/` can leak in, and no `AIP_SERVER*` variable from the shell does either.
 `AIP_HOME` points there too, so no run file, bundle or cache lands in the real `~/.aip/`.
 
-The 0.9 engine's, CLI's and SDK's tests run. The 0.8 server tests under `tests/server/` and the
-runtime-skill test are not collected until the milestones that rewrite those layers (S1 and K1
-on aip-dev#1). `runtime_pending_test.py` is the one visible skip that says so."""
+The runtime-skill test is not collected until the milestone that rewrites the skill (K1 on
+aip-dev#1); `runtime_pending_test.py` is the one visible skip that says so. `served.py` is the
+real server in process, which the client's tests run against."""
 
 import pytest
 
-collect_ignore = ["test_runtime_skill.py", "server", "fake_server.py"]
+collect_ignore = ["test_runtime_skill.py", "served.py"]
 
 
 @pytest.fixture(autouse=True)

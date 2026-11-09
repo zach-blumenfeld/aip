@@ -154,21 +154,35 @@ def compile_folder(folder: Path | str, source: str | None = None) -> tuple[Bundl
 
 # ---------------------------------------------------------------- the file
 
+# The label a node id's prefix says its node carries (`docs/language/bundle.md`, Identity), so an
+# edge's ends are matched by label and a store's index on `(bundle_id, id)` serves the match.
+ID_LABELS = {"procedure": "Procedure", "step": "Step", "loop": "Loop", "data": "Data", "question": "Question",
+             "aggregation": "Aggregation", "file": "File"}
+# Every label a bundle's node can be found by: what tells a bundle's nodes from the others in a
+# store that also holds revisions and runs.
+BUNDLE_LABELS = tuple(ID_LABELS.values())
+
+
+def _label_of(id: str) -> str:
+    return ID_LABELS[id.split(":", 1)[0]]
+
+
 def write_graph(conn, graph: Graph, bundle: str) -> None:
     """Write a graph into an open Relate or Neo4j connection: the one body of Cypher that puts a
     bundle's nodes and edges in a store, whether the store is a new `.rl`, the runtime's in-memory
     copy of a bundle, or a server's catalog (where many bundles share one store and every node
-    is matched by `{bundle_id, id}`)."""
+    is matched by its label and `{bundle_id, id}`)."""
     by_labels: dict[tuple[str, ...], list[dict]] = {}
     for n in graph.nodes:
         by_labels.setdefault(n.labels, []).append(n.properties)
     for labels, rows in by_labels.items():
         conn.execute(f"UNWIND $rows AS r CREATE (n:{':'.join(labels)}) SET n = r", {"rows": rows})
-    by_type: dict[str, list[dict]] = {}
+    by_type: dict[tuple[str, str, str], list[dict]] = {}
     for e in graph.edges:
-        by_type.setdefault(e.type, []).append({"start": e.start, "end": e.end, "properties": e.properties})
-    for type, rows in by_type.items():
-        conn.execute(f"UNWIND $rows AS r MATCH (a {{bundle_id: $bundle, id: r.start}}), (b {{bundle_id: $bundle, id: r.end}}) "
+        by_type.setdefault((e.type, _label_of(e.start), _label_of(e.end)), []).append(
+            {"start": e.start, "end": e.end, "properties": e.properties})
+    for (type, start, end), rows in by_type.items():
+        conn.execute(f"UNWIND $rows AS r MATCH (a:{start} {{bundle_id: $bundle, id: r.start}}), (b:{end} {{bundle_id: $bundle, id: r.end}}) "
                      f"CREATE (a)-[e:{type}]->(b) SET e = r.properties", {"rows": rows, "bundle": bundle})
 
 
@@ -182,14 +196,20 @@ def write_bundle(bundle: Bundle, path: Path | str) -> Path:
     return target
 
 
-def read_graph(conn, bundle: str) -> Graph:
-    """The graph of one bundle, read back from a store `write_graph` wrote it to."""
+def read_graph(conn, bundle: str, labels: tuple[str, ...] | None = None) -> Graph:
+    """The graph of one bundle, read back from a store `write_graph` wrote it to. In a bundle
+    file every node carrying the bundle id is the bundle's; a server's store also keeps nodes of
+    its own under that id (the runs of the bundle), so it passes `labels=BUNDLE_LABELS` and gets
+    the nodes with one of those labels and the edges between them."""
+    only = " AND any(l IN labels(n) WHERE l IN $labels)" if labels else ""
+    both = " AND any(l IN labels(a) WHERE l IN $labels) AND any(l IN labels(b) WHERE l IN $labels)" if labels else ""
+    params = {"b": bundle, **({"labels": list(labels)} if labels else {})}
     nodes = [GraphNode(r["id"], tuple(r["labels"]), dict(r["props"]))
-             for r in conn.execute("MATCH (n) WHERE n.bundle_id = $b RETURN n.id AS id, labels(n) AS labels, properties(n) AS props",
-                                   {"b": bundle})]
+             for r in conn.execute(f"MATCH (n) WHERE n.bundle_id = $b{only} RETURN n.id AS id, labels(n) AS labels, properties(n) AS props",
+                                   params)]
     edges = [GraphEdge(r["type"], r["start"], r["end"], dict(r["props"]))
-             for r in conn.execute("MATCH (a)-[e]->(b) WHERE a.bundle_id = $b AND b.bundle_id = $b "
-                                   "RETURN a.id AS start, type(e) AS type, b.id AS end, properties(e) AS props", {"b": bundle})]
+             for r in conn.execute(f"MATCH (a)-[e]->(b) WHERE a.bundle_id = $b AND b.bundle_id = $b{both} "
+                                   "RETURN a.id AS start, type(e) AS type, b.id AS end, properties(e) AS props", params)]
     return Graph(nodes, edges)
 
 

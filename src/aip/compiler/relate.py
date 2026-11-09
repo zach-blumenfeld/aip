@@ -125,6 +125,27 @@ def open(path: str | Path, *, read_only: bool = True):  # noqa: A001  (the verb 
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def store_file(path: str | Path) -> Path:
+    """Where a long-lived store asked for at `path` really sits. A server's store is one file it
+    keeps open and writes for as long as it runs, so the link `open()` makes for a bundle will
+    not do; until the rename ships, the file carries the pinned release's suffix instead
+    (`store.rl` is kept as `store.cl`), and moving to the renamed engine is renaming the file."""
+    target = Path(path)
+    if str(path) == ":memory:" or not _needs_legacy_suffix(target):
+        return target
+    return target.with_suffix(_LEGACY_SUFFIX)
+
+
+def store(path: str | Path):
+    """A read-write connection to the store at `path` (`:memory:` for one that lives with the
+    process), created when missing. The caller closes it, on the thread that opened it."""
+    if str(path) == ":memory:":
+        return connect(path, read_only=False)
+    target = store_file(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return connect(target, read_only=False)
+
+
 @contextmanager
 def create(path: str | Path):
     """A connection to a new, empty bundle at `path`, replacing any file there once the block

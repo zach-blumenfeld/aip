@@ -30,7 +30,7 @@ from aip.client import bundles
 from aip.client.cli import ALIASES, COMMANDS, main
 from aip.client.runs import RunFile, run_path
 from aip.client.server import Server
-from fake_server import DownSession, FakeServer
+from served import DownSession, Served
 
 pytestmark = pytest.mark.skipif(not relate.available(), reason=relate.INSTALL_HINT)
 
@@ -73,13 +73,16 @@ def no_key(monkeypatch):
 
 
 @pytest.fixture
-def fake() -> FakeServer:
-    return FakeServer(token_names={"secret": "zach"})
+def fake():
+    """The real server in process, over an in-memory store (the name is from when it was a fake)."""
+    server = Served(token_names={"secret": "zach"})
+    yield server
+    server.close()
 
 
 @pytest.fixture
 def served(fake) -> aip.Client:
-    """A client on the fake server, with a fake model, with `billing-support` published through the SDK."""
+    """A client on the server, with a fake model, with `billing-support` published through the SDK."""
     client = aip.Client(Server("http://testserver", token="secret", session=fake), decision_client=FakeTypeSafe(0.9), agent="tests")
     published = client.publish(EXAMPLE)
     assert published == sdk.Published("billing_support", "1", published.bundle_id, False)
@@ -423,8 +426,10 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     remote = served.run_record(done.run_id)                                      # no run file here: the server's record
     assert isinstance(remote, sdk.RunRecord) and remote.identity["user"] == "zach" and remote.status == "done"
     queries = served.governance()
-    assert [q.query for q in queries] == ["hand-answers"]
-    assert served.governance("hand-answers", name="billing_support")[0]["params"] == {"name": "billing_support"}
+    assert [q.query for q in queries] == ["confidence-fired", "failing-aggregations", "model-answers", "agent-routes"]
+    asked = served.governance("model-answers", name="billing_support", agent="tests")
+    assert [(r["step"], r["question"], r["model"], r["answers"]) for r in asked] == [("triage", "tone", "jev-1", 2), ("triage", "billing", "jev-1", 2)]
+    assert served.governance("model-answers", name="billing_support", agent="someone-else") == []
 
 
 def test_a_server_that_is_down_does_not_stop_the_run(tmp_path):
@@ -460,7 +465,7 @@ def _call(*argv: str) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
-NOT_CLIENT = {"compile", "export", "fmt", "config", "server", "db"}   # the language's tooling, the config, the server, Neo4j
+NOT_CLIENT = {"compile", "export", "fmt", "config", "server"}   # the language's tooling, the config, the server
 
 
 def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
@@ -482,7 +487,7 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
         ("pin", "pin", ["billing_support", "1"]),
         ("runs", "runs", []),
         ("runs", "run_record", [first.run_id]),
-        ("governance", "governance", ["hand-answers"]),
+        ("governance", "governance", ["confidence-fired"]),
         ("retire", "retire", ["billing_support@1"]),
     ]
     assert {c for c, _, _ in cases} | NOT_CLIENT == set(COMMANDS)

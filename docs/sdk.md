@@ -108,8 +108,10 @@ catalog reference still runs from the bundle cache.
 | `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server`, `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under
-`--json`. `aip export` and `aip fmt` are the language's tooling, and `aip server` and `aip db`
-serve: none of them is a client call, so none is on `Client`.
+`--json`. `aip export` and `aip fmt` are the language's tooling, and `aip server` serves: none
+of them is a client call, so none is on `Client`. (`aip db`, which wrote Neo4j with no server, is
+gone: the server is the store's only writer, so loading is `publish`, listing is `list`, and
+getting a revision's folder back is `get`.)
 
 ## As an agent tool
 

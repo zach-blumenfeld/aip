@@ -1,17 +1,9 @@
 """Tests for `aip.server.search`: the Porter stemmer, the tokenizer, and the weighted BM25
-index the filesystem backend searches with, plus the stemming the backend gains from it."""
-
-import shutil
-from pathlib import Path
+index the store searches the catalog with (`Store.search`; the contract tests search through it)."""
 
 import pytest
-from aip.compiler import example_dir
 
-from aip.server.backends.filesystem import FilesystemBackend
-from aip.server.records import snapshot
 from aip.server.search import BM25Index, stem, tokenize
-
-EXAMPLE = example_dir("billing-support")
 
 # Reference outputs of Porter's 1980 algorithm (the paper's own examples and a few from
 # the procedure vocabulary); a stemmer that deviates breaks "charged" finding "charge".
@@ -93,25 +85,3 @@ def test_limit_and_tie_break():
     idx2.add("b", {"description": "same words"})
     idx2.add("a", {"description": "same words"})
     assert [k for k, _, _ in idx2.search("same")] == ["a", "b"]
-
-
-# ------------------------------------------------------- through the filesystem backend
-
-
-def variant(tmp: Path, name: str, description: str):
-    folder = tmp / name
-    shutil.copytree(EXAMPLE, folder)
-    md = folder / "SKILL.md"
-    text = md.read_text().replace("name: billing-support", f"name: {name}", 1)
-    start = text.index("description: ")
-    end = text.index("\n", start)
-    md.write_text(text[:start] + f"description: {description}" + text[end:])
-    return snapshot(folder)
-
-
-def test_filesystem_search_follows_retire(tmp_path):
-    catalog = FilesystemBackend(tmp_path / "root").catalog
-    revision = catalog.publish(snapshot(EXAMPLE))
-    assert catalog.search("charged twice")[0].revision == revision
-    catalog.retire("billing-support", revision)
-    assert catalog.search("charged twice") == []

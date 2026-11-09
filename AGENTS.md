@@ -49,9 +49,9 @@ Python build); until then it is the separate `aip-console-dev` mirror named in `
 | `pyproject.toml` | the one package, `agent-instruction-protocol`; its `[tool.hatch.build.targets.wheel.force-include]` puts `examples/` and `skills/aip-compile/` into the wheel under `aip/compiler/`; `testpaths` is `tests` |
 | `src/aip/client/` | the `aip` command (`cli.py`, a thin wrapper over the SDK), `config.py` (the per-user config: server, token, decision-model key, batch; the identity from `AIP_AGENT`/`AIP_SESSION`), `bundles.py` (the bundle cache every run runs from, `~/.aip/bundles/<id>.rl`, and the refs a catalog name resolved to), `runs.py` (run files and their listing, the outcome objects of `docs/cli-json.md`, the `--progress` lines, the step table `aip runs <id>` prints), `server.py` (the HTTP client; its docstring lists every call the server must answer, the contract S1 implements); `aip-runtime/SKILL.md` is the 0.8 skill's bundled copy until K1 |
 | `src/aip/model/` | the execution engine: `procedure.py` reads a bundle's graph behind a Relate connection (one Cypher query per thing a step or loop needs; `Procedure.load(bundle)` puts a verified bundle in an in-memory store), `steps.py` is what each step kind does (and the loop head, the batched request), `engine.py` the run loop (`Engine`, `Run`, loop frames, `For` passes as cursors run in batches, pauses, the record), `types.py` the type checks and the error kinds, `answers.py` the answer objects of spec 2.4, `resolver.py` the decision-model interface and the scripted test resolver, `typesafe.py` the TypeSafe resolver, `cache.py` the files unpacked once per bundle id, `environment.py` the `Requires` check |
-| `src/aip/server/` | `aip server`: the FastAPI app, catalog search, run records, governance, and `backends/` (Neo4j, filesystem) |
+| `src/aip/server/` | `aip server` (`docs/server-design.md`): `store.py` is the store, bundles, revisions, drafts and runs in one graph and the one body of Cypher over it; `backends/` the two adapters it runs through (`relate.py`, one file, the default; `neo4j.py`); `app.py` the FastAPI app, which never runs a procedure; `governance.py` the named queries; `builtins.py` the hook that publishes the bundles shipped in the package; `search.py` BM25; `config.py` the TOML and `.env` |
 | `src/aip/sdk.py` | `aip.Client`, the runtime as a library (`docs/sdk.md`): resolves a target (folder, `.rl`, catalog name) into the bundle cache, runs it through the engine, writes the run file at every stop and records the stop on the configured server; the typed results (`Paused` with its `Task`s, `Done`, `RunError`, `Description`, ...) |
-| `tests/` | the runtime's tests: `test_engine.py` is the engine's, `test_cli_json.py` checks every example in `docs/cli-json.md` against the CLI's real output, `test_sdk.py` the SDK and that every `aip` command calls it (all three skip without Relate); `fake_server.py` is an in-memory server speaking the client's contract, which S1's contract tests replace with the real app; the 0.8 server tests under `tests/server/` and `test_runtime_skill.py` are listed in `conftest.py` and not collected until S1 and K1 rewrite them |
+| `tests/` | the runtime's tests: `test_engine.py` is the engine's, `test_cli_json.py` checks every example in `docs/cli-json.md` against the CLI's real output, `test_sdk.py` the SDK and that every `aip` command calls it (all three skip without Relate); `served.py` is the real server in process over an in-memory store, which the client's tests run against; `tests/server/` is the server's own suite, run over both backends (Neo4j when `NEO4J_URI` is set): `test_contract.py` the HTTP contract through the client, `test_queries.py` every query in `docs/language/queries.md` and what the store keeps of a run, `scenes.py` the store they read; `test_runtime_skill.py` is listed in `conftest.py` and not collected until K1 rewrites the skill |
 | `src/aip/compiler/` | **where the language lives**: `keywords.py` (every keyword with its aliases, the executable copy of the spec's glossary; the type vocabulary), `lexer.py`, `parser.py` (recursive descent; `ParseError` in `errors.py`), `syntax.py` (the tree every later pass reads), `checker.py` (every check of spec 2.2 to 2.5 as diagnostics; `CODES` is the spec's code table), `graph.py` (the bundle's graph, spec 3; the schema is `docs/language/bundle.md`), `bundle.py` (compile a folder, the bundle id, write, read with verification, export), `relate.py` (the one module that imports the engine, `relate` or `cypherlite`, and knows the `.rl` suffix), `formatter.py` (canonical form), `cli.py` (`aip compile`, `export`, `fmt`, dispatched from `aip.client.cli`), `resources.py` (finds the example programs and, for now, the `aip-compile` skill in a checkout or a wheel), `agents.py` (the agent skills directories). `LANGUAGE_VERSION` is in `language.py`. The language's tests are `tests/test_parse.py`, `test_errors.py`, `test_format.py`, `test_check.py`, `test_bundle.py` |
 | `editors/vscode/` | the VS Code extension: the grammar (`syntaxes/`), `src/compiler.js` (runs `aip compile --check --json --stdin`, no `vscode` import) and `src/extension.js` (squiggles, status bar); `npm install && npm run build && npm test` (esbuild; node's test runner over the tokenizer harness and a one-error fixture, against `uv run aip`); `dist/` and `node_modules/` are not committed |
 | `scripts/` | `install-relate.sh` installs the pinned Relate wheel (not on PyPI; see `docs/language/sources.md`); `fresh-venv.sh` is L3's proof, a fresh venv installing this package and compiling an example, run by CI when it has the release token |
@@ -95,7 +95,7 @@ places below and change them in the same commit; the drift tests catch some, not
 | Where | What to change |
 |---|---|
 | `src/aip/model/steps.py` | the step's behaviour; `engine.py` drives the loop, writes the pause and the record; `procedure.py` reads the graph and changes only when `docs/language/bundle.md` does |
-| `src/aip/server/app.py` | the server's own `resolve` call sites (`execute`, `peek`) mirror the engine |
+| `src/aip/server/store.py` | what the store keeps of the record: `run_properties`, `entry_properties` and `answer_rows` turn a posted run into nodes, so a field added to a history entry is added there, to the tables in `docs/server-design.md`, and to the queries in `docs/language/queries.md` that should see it |
 | `docs/language/spec.md` and `docs/language/runtime.md` | the language and what running it requires: the same rule in words. This is the language: it moves `LANGUAGE_VERSION` unless the release is still unreleased |
 | `skills/aip-runtime/SKILL.md` and `src/aip/client/aip-runtime/SKILL.md` | the runtime skill, both copies, including the worked example at the end (replaced by one `aip` skill at K1) |
 | `examples/billing-support/SKILL.md` | the runtime block copy and the comments that explain the run |
@@ -103,8 +103,8 @@ places below and change them in the same commit; the drift tests catch some, not
 | `tests/` | the assertions on history entries, `--progress` lines, and the checker's diagnostics |
 | `CHANGELOG.md` | under `## [Unreleased]`, in the user's terms |
 
-Governance queries (`src/aip/server/`) read history entries, so a new `reason` or attribution
-value needs a look there too.
+Governance queries (`src/aip/server/governance.py`) read the `Entry` and `Answer` nodes, so a new
+`reason` or `answered_by` value needs a look there too.
 
 ## Versioning
 
@@ -158,7 +158,8 @@ Never move or force-push a published tag.
 
 - For what a procedure may contain, `docs/language/spec.md` is the law and `aip/compiler/syntax.py`
   is the tree it parses to.
-- For how a run moves, `docs/running.md`, `docs/state.md` and `docs/run-modes.md`; for the
-  server, `docs/server-design.md` with `docs/client-execution.md` on top.
+- For how a run moves, `docs/language/runtime.md` and `docs/cli-json.md` (`docs/running.md`,
+  `docs/state.md`, `docs/run-modes.md` and `docs/client-execution.md` still describe 0.8, until
+  D4); for the server and its store, `docs/server-design.md`.
 - For what agents see, the two `SKILL.md` files are the contract; a change to the runtime's
   behaviour that they describe changes them in the same commit.

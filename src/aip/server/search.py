@@ -1,11 +1,10 @@
-"""Lexical search for the filesystem backend: a Porter stemmer and a small BM25 index,
-with no dependencies. The catalog is tens of procedures, so the index lives in memory and
-is rebuilt whenever what a name resolves to changes.
+"""Lexical search over the catalog: a Porter stemmer and a small BM25 index, with no
+dependencies. The catalog is tens of procedures, so `Store.search` builds the index in memory
+from one query, the same on either backend.
 
-Scoring is BM25 per field (name, description, purpose, triggers), each field weighted and
-length-normalised on its own, summed per document. Stemming makes "charged" find
-"charge" and "refunds" find "refund"; the Neo4j backend's Lucene index does the same job
-with its own analyzer.
+Scoring is BM25 per field (name, description, `Use_When` lines, step descriptions), each field
+weighted and length-normalised on its own, summed per document. Stemming makes "charged" find
+"charge" and "refunds" find "refund".
 """
 
 from __future__ import annotations

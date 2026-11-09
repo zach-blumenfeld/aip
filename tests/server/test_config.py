@@ -38,7 +38,7 @@ def test_example_config_is_valid_and_complete(tmp_path: Path):
     assert set(config) == {"server", "backend"}
     env: dict = {}
     defaults = apply_config(config, env)
-    assert defaults["backend"] == "filesystem" and defaults["root"] == Path("~/.local/share/aip/server").expanduser()
+    assert defaults["backend"] == "relate" and defaults["path"] == Path("~/.local/share/aip/server/store.rl").expanduser()
     assert defaults["no_localhost"] is False
     assert env == {}                      # every secret in the example is commented out
 
@@ -59,18 +59,38 @@ def test_config_rejects_unknown_keys(tmp_path: Path):
 def test_config_fills_env_only_where_unset(tmp_path: Path):
     f = tmp_path / "c.toml"
     f.write_text(
-        '[backend]\nkind = "neo4j"\nuri = "neo4j://file"\npassword = "file-pw"\ncache_dir = "~/c"\n'
+        '[backend]\nkind = "neo4j"\nuri = "neo4j://file"\npassword = "file-pw"\n'
         '[server]\nport = 9000\nlocalhost_open = false\n'
     )
     env = {"NEO4J_URI": "neo4j://env"}
     defaults = apply_config(read_config(f), env)
     assert env == {"NEO4J_URI": "neo4j://env", "NEO4J_PASSWORD": "file-pw"}
-    assert defaults == {"backend": "neo4j", "cache_dir": Path("~/c").expanduser(), "port": 9000,
-                        "no_localhost": True}
+    assert defaults == {"backend": "neo4j", "port": 9000, "no_localhost": True}
+
+
+def test_the_filesystem_backend_is_gone_and_says_where_the_store_is(tmp_path: Path):
+    f = tmp_path / "c.toml"
+    f.write_text('[backend]\nkind = "filesystem"\n')
+    with pytest.raises(ConfigError, match="one Relate file"):
+        read_config(f)
+    f.write_text('[backend]\nroot = "~/x"\n')
+    with pytest.raises(ConfigError, match="backend.root is not a setting since 0.9"):
+        read_config(f)
+    f.write_text('[backend]\nkind = "relate"\npath = "~/s/store.rl"\n')
+    assert apply_config(read_config(f), {}) == {"backend": "relate", "path": Path("~/s/store.rl").expanduser()}
+
+
+def test_named_tokens_are_a_table_of_names(tmp_path: Path):
+    f = tmp_path / "c.toml"
+    f.write_text('[tokens]\nzach = "s3cret"\nci = "other"\n')
+    assert apply_config(read_config(f), {}) == {"named_tokens": {"zach": "s3cret", "ci": "other"}}
+    f.write_text('[tokens]\nzach = 3\n')
+    with pytest.raises(ConfigError, match="one `name = \"token\"` line per person"):
+        read_config(f)
 
 
 def test_the_server_takes_no_decision_model_key(tmp_path: Path):
-    """Decisions are resolved by clients: a `[decision_model]` table says where the key goes now."""
+    """Every run is local to its client: a `[decision_model]` table says where the key goes now."""
     f = tmp_path / "c.toml"
     f.write_text('[decision_model]\napi_key = "file-key"\n')
     with pytest.raises(ConfigError, match="aip config --decision-model"):

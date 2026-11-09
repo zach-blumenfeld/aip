@@ -257,6 +257,24 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     fallback; `unmeasured-routes` becomes `agent-routes`, read off the source class on the route's
     edge. Milestone S2.
 
+43. **Decided in S1 (2026-11-09), where the plan left a choice.** (a) The server's facts about a
+    bundle live on nodes of its own (`Name`, `Revision`, `Bundle`), never on the bundle's nodes, so
+    the subgraph handed back for `pull` is the graph `aip compile` wrote and verifies untouched.
+    A draft is a `Bundle` with no `Revision`; publishing one promotes it. (b) Publishing a bundle
+    whose revision was retired brings that revision back rather than numbering a second one for
+    the same content. (c) A run is stored twice over on purpose: the record as posted (JSON on the
+    `Run` and on each `Entry`), so `GET /runs/{id}` is lossless, and its single-valued fields as
+    properties, so Cypher can ask about them. (d) Search is BM25 in the server's memory on both
+    backends; Neo4j's full-text index is not used, so ranking does not depend on the database.
+    (e) Tokens gained a third scope, `run` (upload a draft, record a run), between `read` and
+    `publish`, and a `[tokens]` table of `name = "token"` gives the `user` of a run; S2 owns the
+    client's side. (f) `GET /governance` serves the four queries the new store settles
+    (`confidence-fired`, `failing-aggregations`, `model-answers`, `agent-routes`); the 0.8 set's
+    other queries and stored queries are not served until S2 rewrites them as `aip audit`.
+    (g) The Relate store is asked for as `store.rl` and kept as `store.cl` while the pinned
+    release needs that suffix. (h) `write_graph` matches an edge's ends by label, read off the
+    node id's prefix, so Neo4j can use an index; `.rl` files are unchanged by it.
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show

@@ -1,8 +1,9 @@
 """The client's side of the HTTP API: one session against an AIP server, the bearer token
 attached and the error envelope turned into `ServerError`.
 
-This module is the contract the server milestone (aip-dev#1, S1) implements; every call the
-runtime makes is listed here and nowhere else:
+This module is the contract `aip.server.app` implements (`docs/server-design.md`, The HTTP API;
+`tests/server/test_contract.py` holds the two together); every call the runtime makes is listed
+here and nowhere else:
 
     GET  /catalog                         every published name with its revisions
     GET  /catalog/search?q=&limit=        published procedures by what they do
@@ -11,7 +12,7 @@ runtime makes is listed here and nowhere else:
     POST /catalog        (the `.rl` bytes)   publish: merge the bundle by id, assign the next revision under its name
     POST /bundles        (the `.rl` bytes)   upload a bundle with no revision, a draft, so runs of it can be recorded
     POST /runs           (the run as JSON)   record a run at every stop: the whole run each time, upserted by `run_id`
-    GET  /runs?name=&status=&agent=&session=&limit=      runs, newest first
+    GET  /runs?name=&status=&agent=&session=&limit=      runs, newest first (the server also filters by `user` and `draft`)
     GET  /runs/{run_id}                   one run's record
     POST /catalog/{name}/pin  {"revision"}   make a name resolve to a revision (null clears)
     POST /catalog/{name}/retire {"revision"}  stop a revision resolving
@@ -110,7 +111,8 @@ class Server:
         return self.post_bytes("/catalog", data)
 
     def draft(self, data: bytes) -> JSON:
-        """`{"bundle_id", "existed"}`: the bundle is in the store, with no revision."""
+        """`{"bundle_id", "name", "existed", "draft"}`: the bundle is in the store; `draft` is False when it
+        already is a published revision."""
         return self.post_bytes("/bundles", data)
 
     def pin(self, name: str, revision: str | None) -> JSON:

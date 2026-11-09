@@ -1,9 +1,9 @@
 # Runs the tests on every push and pull request, on Linux and on native Windows.
 #
-# The Windows job exists because the server must start there (#24: the filesystem backend
-# imported the Unix-only `fcntl`); `tests/server/test_filelock.py` exercises the `msvcrt`
-# lock for real only on this runner. A test that needs something Windows lacks (POSIX mode
-# bits, a POSIX bash) skips there and says why. The Neo4j backend tests skip (no `NEO4J_URI`).
+# The Windows job exists because the client and the server must start there (#24). A test that
+# needs something Windows lacks (POSIX mode bits, a POSIX bash) skips there and says why. The
+# server's suite (`tests/server`) runs over the Relate backend where Relate is installed; its
+# Neo4j half skips (no `NEO4J_URI`).
 #
 # Relate, the engine a bundle is written in, is released on an internal GitHub repository, so it
 # is installed by `scripts/install-relate.sh` with a token that can read it (the repository

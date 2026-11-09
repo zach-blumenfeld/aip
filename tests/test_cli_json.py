@@ -412,7 +412,8 @@ class CliJson(unittest.TestCase):
             self.assertEqual(main(["--help"]), 0)
         for command in COMMANDS:
             self.assertRegex(out.getvalue(), rf"(?m)^  {command}\s+\S.+$")
-        for command, marker in (("server", "usage: aip server"), ("db", "Not on 0.9 yet"), ("runs", "this machine's run files")):
+        self.assertNotIn("db", COMMANDS, "the server is the store's only writer: publish, list and get do what `aip db` did")
+        for command, marker in (("server", "usage: aip server"), ("server", "one Relate file"), ("runs", "this machine's run files")):
             out = io.StringIO()
             with mock.patch("sys.stdout", new=out), self.assertRaises(SystemExit) as stop:
                 main([command, "--help"])

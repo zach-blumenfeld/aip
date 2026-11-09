@@ -15,10 +15,12 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
   is `docs/specification-0.8.md`).
   AGENTS.md's repo map describes it. Read the piece you replace before replacing it; the records,
   the governance queries and the HTTP contract carry over in shape.
-- **A Relate backend already exists as a reference**: branch `cypherlite-backend` on the mirror
-  (`git show cypherlite-backend:src/aip/server/backends/cypherlite.py`), written against
-  CypherLite 0.13 and sharing the Neo4j backend's Cypher. The Python API has moved since (typed
-  ABI v2 in 0.16); use it for shape, not for calls.
+- **The server is on the new store since S1** (2026-11-09): `src/aip/server/store.py` and the two
+  backends, described in `docs/server-design.md`. The branch `cypherlite-backend` on the mirror was
+  the 0.8 attempt at a Relate backend and is only history now. The server's tests want a Neo4j to run their
+  second half: on this machine the container `aip-test-neo4j` (bolt `localhost:17687`, user
+  `neo4j`; the password is in its `NEO4J_AUTH`) is kept for that, and the suite deletes every node
+  the store writes there, so never point `NEO4J_URI` at a database that matters.
 - **The language**: `docs/language/spec.md` (and `docs/language/queries.md`, the Cypher queries over a bundle) (the law), `docs/language/runtime.md`,
   `docs/language/limitations.md`, `docs/language/no-expressions.md`, `docs/language/end-to-end.md`,
   `docs/language/plan-questions.md` (the 26 decisions and why). Programs under
@@ -54,7 +56,8 @@ nothing mentioning it leaves the mirrors.**
 | Repo docs not snapshotted | `docs/adr/`, `docs/api/python/`, `docs/guides/backup-restore.md`, `docs/engine-architecture.md` | via `gh api repos/neo4j-labs/cypherlite/contents/<path>?ref=v0.16.1`, base64 in `.content`. |
 | Local wheel cache | `~/.cache/uv/archive-v0/rTrDDOAv8O-PEvqN/` | **CypherLite 0.13.0, stale.** Do not use it as the reference. The 0.16.1 wheels `install-relate.sh` fetched are under `~/.cache/aip/relate/`. |
 | Python API, verified at v0.16.1 | `python-library.md` | `cypherlite.connect(path, read_only=False)`; a `.cl` path is one file, any other path a directory; `read_only=True` refuses writes (`WriteOnReadOnlyAccessDatabase`); `properties(n)`, `labels(n)`, `type(e)`, `UNWIND $rows ... SET n = r` with map parameters, list and string properties (tabs, newlines and NUL included) all work; no map-valued properties, no binary scalar (bytes are stored base64). |
-| Concurrency rule | `python-library.md`, "read_only" | one writer per store; `connect(path, read_only=True)` opens a frozen view beside a writer; `relate serve --read-only` likewise. The server is the only writer of its store (plan question 5). |
+| Concurrency rule | `python-library.md`, "read_only" | one writer per store; `connect(path, read_only=True)` opens a frozen view beside a writer; `relate serve --read-only` likewise. The server is the only writer of its store (plan question 5). A connection may only be used on the thread that opened it (`ProgrammingError` otherwise), so the server's backend gives it one worker thread. |
+| The server's store file | `aip.compiler.relate.store`, `store_file` | asked for as `store.rl`, kept as `store.cl` while the pinned release names its single-file form by that suffix: the link `open()` makes for a bundle would not survive a long-lived writer. When the rename ships, rename the file. Verified at v0.16.1 for the store's Cypher: `MERGE`, `SET n = $map`, `UNWIND` of maps, `OPTIONAL MATCH`, `collect(DISTINCT ...)`, `CASE`, label predicates, composite indexes, uniqueness constraints with `IF NOT EXISTS`, explicit transactions. |
 
 ## The decision model
 

@@ -9,7 +9,7 @@
     aip runs                            this machine's runs, or the server's; one run step by step
     aip governance                      the server's governance queries
     aip config                          where the client points: the server, the token, the decision model's endpoint and key, the batch size
-    aip server | db                     serve, or load Neo4j directly
+    aip server                          serve the catalog and the record of runs
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
@@ -442,68 +442,12 @@ def config_command(argv: list[str]) -> int:
     return 0
 
 
-# ------------------------------------------------------------------ the server and Neo4j
-
-
-def db_command(argv: list[str]) -> int:
-    """`aip db load|list|export`: Neo4j directly. Not on 0.9 yet: the server milestone (plan S1) moves it to bundles."""
-    from aip.db.neo4j import Connection, export, list_skills, load
-
-    connection = argparse.ArgumentParser(add_help=False)
-    connection.add_argument("--uri", default=None, help="Neo4j URI; default $NEO4J_URI or neo4j://localhost:7687")
-    connection.add_argument("--user", default=None, help="default $NEO4J_USERNAME or neo4j")
-    connection.add_argument("--password", default=None, help="default $NEO4J_PASSWORD")
-    connection.add_argument("--database", default=None, help="default $NEO4J_DATABASE or neo4j")
-
-    parser = argparse.ArgumentParser(prog="aip db", description="The Neo4j store, directly, without a server. Not on 0.9 yet: "
-                                     "these subcommands read and write the format before the language and do not take a "
-                                     "procedure.aip or an .rl bundle. To store a 0.9 procedure, `aip publish` it to a server.")
-    sub = parser.add_subparsers(dest="op", required=True)
-    p_load = sub.add_parser("load", parents=[connection], help="write a folder to the database")
-    p_load.add_argument("skill_dir", type=Path, metavar="folder")
-    sub.add_parser("list", parents=[connection], help="what the database holds, newest revision first")
-    p_export = sub.add_parser("export", parents=[connection], help="rebuild a folder from the database, byte for byte")
-    p_export.add_argument("name")
-    p_export.add_argument("--revision", default=None, help="a specific revision; default is the latest")
-    p_export.add_argument("--out", type=Path, default=Path("."), help="parent folder; the skill lands at <out>/<name>")
-    args = parser.parse_args(argv)
-
-    conn = Connection()
-    for attr, value in (("uri", args.uri), ("user", args.user), ("password", args.password), ("database", args.database)):
-        if value is not None:
-            setattr(conn, attr, value)
-
-    if args.op == "load":
-        try:
-            skill_id = load(args.skill_dir, conn)
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 1
-        print(f"loaded {skill_id}")
-        return 0
-    if args.op == "list":
-        rows = list_skills(conn)
-        if not rows:
-            print("no skills loaded")
-            return 0
-        width = max(len(r["name"]) for r in rows)
-        for r in rows:
-            flags = "".join(f"  {flag}" for flag, on in (("pinned", r.get("pinned")), ("retired", r.get("retired"))) if on)
-            print(f"{r['name'].ljust(width)}  {r['revision']}  aip {r['aip_version']}  {r['steps']} steps  "
-                  f"{r['files']} files  {r['published_at']}{flags}")
-        return 0
-    try:
-        target = export(args.name, args.out, revision=args.revision, conn=conn)
-    except KeyError as exc:
-        print(f"aip: {exc}", file=sys.stderr)
-        return 1
-    print(f"exported {target}")
-    return 0
+# ------------------------------------------------------------------ the server
 
 
 def server_command(argv: list[str]) -> int:
-    """`aip server`: the HTTP API. The 0.8 server until S1 (plan aip-dev#1) rewrites it over the new store."""
-    from aip.server.config import (CONFIG_ENV, CONFIG_FILE, DEFAULT_ROOT, ENV_FILE, EXAMPLE, ConfigError, apply_config,
+    """`aip server`: the HTTP API over the store, a Relate file by default or a Neo4j database."""
+    from aip.server.config import (CONFIG_ENV, CONFIG_FILE, DEFAULT_STORE, ENV_FILE, EXAMPLE, ConfigError, apply_config,
                                    find_config, load_env_file, read_config, user_config_path, write_example)
 
     parser = argparse.ArgumentParser(prog="aip server", description="Serve the AIP catalog and the record of runs.",
@@ -519,16 +463,17 @@ def server_command(argv: list[str]) -> int:
     parser.add_argument("--env-file", type=Path, default=None, metavar="FILE",
                         help=f"KEY=value file loaded into the environment without overriding it (default ./{ENV_FILE} if present)")
     parser.add_argument("--example-config", action="store_true", help=f"print a complete {CONFIG_FILE} and exit")
-    parser.add_argument("--backend", choices=["filesystem", "neo4j"], default="filesystem")
-    parser.add_argument("--root", type=Path, default=None, help=f"filesystem backend: the root directory (default {DEFAULT_ROOT})")
+    parser.add_argument("--backend", choices=["relate", "neo4j"], default="relate",
+                        help="where the store is: one Relate file this server alone writes (the default), or a Neo4j database")
+    parser.add_argument("--path", type=Path, default=None, help=f"relate backend: the store file (default {DEFAULT_STORE})")
     parser.add_argument("--uri", default=None, help="neo4j backend: bolt URI; default $NEO4J_URI or neo4j://localhost:7687")
     parser.add_argument("--user", default=None, help="neo4j: default $NEO4J_USERNAME or neo4j")
     parser.add_argument("--password", default=None, help="neo4j: default $NEO4J_PASSWORD")
     parser.add_argument("--database", default=None, help="neo4j: default $NEO4J_DATABASE or neo4j")
-    parser.add_argument("--cache-dir", type=Path, default=None, help="neo4j: where revisions are materialised (default ~/.cache/aip)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--token", default=None, help="bearer token granting the read and publish scopes")
+    parser.add_argument("--token", default=None, help="bearer token granting every scope (read, record runs, publish); the "
+                        "config file's [tokens] table names one per person")
     parser.add_argument("--read-token", default=None, help="bearer token granting the read scope only")
     parser.add_argument("--no-localhost", action="store_true", help="require a token from loopback clients too")
     parser.add_argument("--allow-origin", action="append", default=None, metavar="ORIGIN",
@@ -573,11 +518,18 @@ def server_command(argv: list[str]) -> int:
               file=sys.stderr)
         return 1
 
-    if args.backend == "filesystem":
-        from aip.server.backends.filesystem import FilesystemBackend
-        root = args.root or DEFAULT_ROOT.expanduser()
-        backend = FilesystemBackend(root)
-        where = f"filesystem backend at {root.resolve()}"
+    if args.backend == "relate":
+        from aip.compiler.relate import RelateMissing
+        from aip.server.backends.relate import RelateBackend
+        try:
+            backend = RelateBackend(args.path or DEFAULT_STORE.expanduser())
+        except RelateMissing as exc:
+            print(f"aip server: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:                      # another server holds the file, or it is not a store
+            print(f"aip server: cannot open the store at {args.path or DEFAULT_STORE.expanduser()}: {exc}", file=sys.stderr)
+            return 1
+        where = f"relate store at {backend.path}"
     else:
         from aip.server.backends.neo4j import Connection, Neo4jBackend
         conn = Connection()
@@ -585,17 +537,21 @@ def server_command(argv: list[str]) -> int:
             if value is not None:
                 setattr(conn, attr, value)
         try:
-            backend = Neo4jBackend(conn, cache_dir=args.cache_dir)
+            backend = Neo4jBackend(conn)
         except Exception as exc:                      # driver missing, unreachable, bad credentials
             print(f"aip server: cannot open the neo4j backend at {conn.uri}: {exc}", file=sys.stderr)
             return 1
         where = f"neo4j backend at {conn.uri}"
 
+    from aip.server.app import ALL_SCOPES, READ, Token
+
     tokens = {}
     if args.token:
-        tokens[args.token] = {"read", "publish"}
+        tokens[args.token] = Token(ALL_SCOPES)
     if args.read_token:
-        tokens[args.read_token] = {"read"}
+        tokens[args.read_token] = Token(frozenset({READ}))
+    for name, token in (getattr(args, "named_tokens", None) or {}).items():
+        tokens[token] = Token(ALL_SCOPES, name)
     if not tokens and args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"aip server: warning: listening on {args.host} with no --token; anyone who can reach it can publish "
               "and record here", file=sys.stderr)
@@ -632,7 +588,6 @@ COMMANDS = {
     "governance": governance_command,
     "config": config_command,
     "server": server_command,
-    "db": db_command,
 }
 ALIASES = {"describe": "info"}
 
@@ -655,7 +610,6 @@ SUMMARIES = {
     "governance": "the server's governance queries over the runs",
     "config": "where this client points: the server, the decision model, the batch size",
     "server": "serve the catalog and the record of runs over HTTP",
-    "db": "the Neo4j store directly (not on 0.9 yet)",
 }
 
 
