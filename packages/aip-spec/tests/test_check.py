@@ -4,7 +4,6 @@ and routes, the examples compiling clean, and the `compile` command."""
 import contextlib
 import io
 import json
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -404,13 +403,6 @@ class CompileCommand(unittest.TestCase):
             code, out, err = self.run_cli("compile", "--check", "--json", str(folder))
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(out)["diagnostics"][0]["code"], "syntax_error")
-
-    def test_without_check_it_says_no_bundle_is_written_yet(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            shutil.copytree(example_dir("fixed-policy"), Path(tmp) / "fixed-policy")
-            code, out, err = self.run_cli("compile", str(Path(tmp) / "fixed-policy"))
-            self.assertEqual(code, 0)
-            self.assertIn("no bundle written", err)
 
     def test_missing_path(self):
         code, _, err = self.run_cli("compile", "/nonexistent/folder")

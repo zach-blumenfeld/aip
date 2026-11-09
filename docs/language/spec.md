@@ -316,7 +316,7 @@ The compiler takes a program directory and produces one file, the bundle:
 1. Parse `procedure.aip`; syntax errors name line and column.
 2. Build the graph and run every check in 2.2.
 3. Collect the files under `references/`, `assets/`, `scripts/` with size, mode and sha256.
-4. Write the bundle. Its id is the sha256 over the source text and every file's hash, so an unchanged program compiles to the same id on any machine, whatever wrote the file.
+4. Write the bundle. Its id is the sha256 over the source text and every file's hash (the manifest in `docs/language/bundle.md`), so an unchanged program compiles to the same id on any machine, whatever wrote the file; a file's mode and the compiler's version do not enter it.
 
 The bundle is a [Relate](https://relatedb.ai/) graph database in its single-file form, extension `.rl`. Relate is an embedded property-graph engine with Cypher; the file opens with its CLI, its Python package, its browser build, over Bolt, and loads from a path or a URL. The graph inside holds:
 
@@ -327,9 +327,9 @@ The bundle is a [Relate](https://relatedb.ai/) graph database in its single-file
 | the state's keys, the questions, the aggregations | with their types |
 | the files | path, size, mode, sha256 and the bytes, for every file under `references/`, `assets/`, `scripts/` |
 
-and edges for: which step starts and ends the procedure, each step's next step, each route's branches by value and its confidence check, which step produces and which steps read each key, which questions a decision asks, which files a step uses, and the loop structure. The step graph is derived from the source; the source is the program. The schema is written once, with the compiler, in this repository.
+and edges for: which step starts and ends the procedure, each step's next step, each route's branches by value and its confidence check, which step produces and which steps read each key, which questions a decision asks, which files a step uses, and the loop structure. The step graph is derived from the source; the source is the program. The schema is written once, with the compiler, in this repository: `docs/language/bundle.md` lists every label, property and edge, and `aip compile --json` prints the same graph with source spans for an editor.
 
-The bundle is lossless: exporting it writes the program directory back, byte for byte, and recompiling that yields the same id. A runtime checks that the stored source compiles to the stored graph, so a bundle edited by hand in Cypher does not run. Compilation is fast enough to run on every invocation of a folder: validating and loading a procedure of this size is a few milliseconds.
+The bundle is lossless: `aip export <bundle.rl> --out DIR` writes the program directory back, byte for byte, and recompiling that yields the same id. Before a bundle is exported or run it is verified: the files hash to their recorded hashes, the source and files hash to the bundle id, and the stored source compiles to the stored graph; any difference is `bundle_tampered`, so a bundle edited by hand in Cypher does not run. Compilation is fast enough to run on every invocation of a folder: validating and loading a procedure of this size is a few milliseconds.
 
 ## 4. Running
 
@@ -350,7 +350,7 @@ What a server does with bundles and runs, how they are projected into a graph da
 | 3 | `score.value` | The most probable level, an integer, so a route can branch on it; the model's expected value stays beside it as `score`. |
 | 4 | `Loop <name> <n> Times` and `For ... At_Most` sugar | Shipped with the language; `Times` is a counted `Loop`. |
 | 5 | Qualified reads (`Read triage.tone` meaning "the key `tone`, and assert `triage` produced it") | Not in the language. The one-producer rule already makes the producer knowable; a console can show it. |
-| 6 | Graph schema inside the bundle | Written with the compiler; this document describes it in prose only. |
+| 6 | Graph schema inside the bundle | Settled 2026-11-09: written with the compiler and listed in `docs/language/bundle.md`; this document keeps the prose. |
 | 7 | `Until All <source> ...` as sugar for an `Aggregate` step | Not now. The explicit step keeps the aggregate in the state and the record, with a description, and keeps `All`/`Any`/`None` out of conditions. Reconsider if loops that wait on an aggregate nobody else reads become common; the sugar would compile to a generated `Aggregate` step. |
 
 ## 6. Glossary of keywords

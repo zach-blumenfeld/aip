@@ -44,11 +44,18 @@ def validate_command(argv: list[str]) -> int:
 
 
 def compile_command(argv: list[str]) -> int:
-    """`aip compile <path> [--check] [--json]`: `aip-spec compile`, the language's checker (and, with the
-    next milestone, its bundle writer), under this command's name."""
+    """`aip compile <path> [-o FILE] [--check] [--json]`: `aip-spec compile`, the language's compiler, under
+    this command's name."""
     from aip_spec.cli import compile_command as spec_compile
 
     return spec_compile(argv, prog="aip compile")
+
+
+def export_command(argv: list[str]) -> int:
+    """`aip export <bundle.rl> --out DIR`: `aip-spec export`, the program directory back from a bundle."""
+    from aip_spec.cli import export_command as spec_export
+
+    return spec_export(argv, prog="aip export")
 
 
 def fmt_command(argv: list[str]) -> int:
@@ -676,6 +683,7 @@ def server_command(argv: list[str]) -> int:
 
 COMMANDS = {
     "compile": compile_command,
+    "export": export_command,
     "fmt": fmt_command,
     "validate": validate_command,
     "upgrade": upgrade_command,

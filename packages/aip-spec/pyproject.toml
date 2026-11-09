@@ -5,6 +5,11 @@ description = "Agent Instruction Protocol: the procedure language, its parser an
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
+# Relate (`neo4j-cypherlite` 0.16.1 today, `relate-db` once renamed), the engine a bundle is
+# written in, is deliberately not listed: it is not on PyPI and its GitHub release is internal,
+# so `uv lock` could not fetch it and every `uv sync` would fail. `scripts/install-relate.sh`
+# installs the pinned wheel; `aip_spec/relate.py` imports it lazily and prints the hint when it
+# is missing. When `relate-db` is on PyPI, pin it here and delete the script.
 dependencies = []
 
 [project.urls]

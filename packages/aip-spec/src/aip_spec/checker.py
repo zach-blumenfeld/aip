@@ -301,9 +301,10 @@ def _list(words) -> str:
 # ---------------------------------------------------------------- the checker
 
 class Checker:
-    def __init__(self, program: s.Program, folder: Path | None, file: str | None):
+    def __init__(self, program: s.Program, folder: Path | None, file: str | None, files: set[str] | None = None):
         self.p = program
         self.folder = folder
+        self.files = files  # the program's files by POSIX path, when they are in hand rather than on disk
         self.file = file
         self.out: list[Diagnostic] = []
         self.seen: set[tuple] = set()
@@ -481,6 +482,9 @@ class Checker:
         if pp.is_absolute() or ".." in pp.parts or len(pp.parts) < 2 or pp.parts[0] not in RESOURCE_DIRS:
             self.report("missing_file", node, f"{clause} {path}: a file of the program lives under {_list(d + '/' for d in RESOURCE_DIRS)}, "
                         "and only those directories are bundled", step)
+        elif self.files is not None:
+            if str(pp) not in self.files:
+                self.report("missing_file", node, f"{clause} {path}: the file does not exist", step)
         elif self.folder is not None and not (self.folder / Path(*pp.parts)).is_file():
             self.report("missing_file", node, f"{clause} {path}: the file does not exist", step)
 
@@ -1023,10 +1027,12 @@ class Checker:
 
 # ---------------------------------------------------------------- entry points
 
-def check(program: s.Program, folder: Path | str | None = None, file: str | None = None) -> list[Diagnostic]:
+def check(program: s.Program, folder: Path | str | None = None, file: str | None = None, *,
+          files: set[str] | None = None) -> list[Diagnostic]:
     """Every diagnostic for a parsed program, sorted by position. `folder` is the program
-    directory, for the checks on files; without it those are skipped."""
-    return Checker(program, Path(folder) if folder is not None else None, file).run()
+    directory, for the checks on files; `files` are the program's file paths when they are in
+    hand instead (a bundle's); without either those checks are skipped."""
+    return Checker(program, Path(folder) if folder is not None else None, file, files).run()
 
 
 def check_source(source: str, file: str | None = None, folder: Path | str | None = None) -> tuple[s.Program | None, list[Diagnostic]]:

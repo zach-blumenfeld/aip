@@ -4,6 +4,11 @@
 # imported the Unix-only `fcntl`); `tests/server/test_filelock.py` exercises the `msvcrt`
 # lock for real only on this runner. A test that needs something Windows lacks (POSIX mode
 # bits, a POSIX bash) skips there and says why. The Neo4j backend tests skip (no `NEO4J_URI`).
+#
+# Relate, the engine a bundle is written in, is released on an internal GitHub repository, so it
+# is installed by `scripts/install-relate.sh` with a token that can read it (the repository
+# secret `RELATE_GH_TOKEN`). Without the secret the bundle tests skip and say so, and the
+# fresh-venv proof (`scripts/fresh-venv.sh`) does not run.
 name: Tests
 
 on:
@@ -19,6 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    env:
+      RELATE_GH_TOKEN: ${{ secrets.RELATE_GH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +40,12 @@ jobs:
       - name: Install the workspace
         run: uv sync --group dev
 
+      - name: Install Relate
+        if: runner.os == 'Linux' && env.RELATE_GH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
+        run: scripts/install-relate.sh .venv
+
       - name: Run the tests
         # The code under test names utf-8 on every text file it reads or writes; the tests' own
         # fixtures use the platform default, which on Windows is the ANSI code page. UTF-8 mode
@@ -40,3 +53,9 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: uv run pytest -q
+
+      - name: A fresh venv compiles an example (L3's proof)
+        if: runner.os == 'Linux' && env.RELATE_GH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
+        run: scripts/fresh-venv.sh
