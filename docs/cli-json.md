@@ -1,7 +1,7 @@
 # The CLI's JSON output
 
 `aip run` and `aip resume` print exactly one JSON object on stdout when they stop, and nothing
-else unless asked: no prose, no traceback. A run stops one of three ways:
+else there unless asked: no prose, no traceback. A run stops one of three ways:
 
 | outcome | first key | exit code |
 |---|---|---|
@@ -9,111 +9,225 @@ else unless asked: no prose, no traceback. A run stops one of three ways:
 | done | `"done": true` | 0 |
 | error | `"error": <kind>` | 1 |
 
-This is a contract: agents, the aip-runtime skill, and the console parse it. Every example on
-this page is checked against the CLI's real output by `tests/test_cli_json.py` (a local run of
-the `billing-support` example from aip-spec; the test reads `4f1c9a2e7b3d5068` as whatever id the run
-was given).
+This is a contract: agents, the `aip` skill, `aip mcp` and the console parse it. Every example
+on this page is checked against the CLI's real output by `tests/test_cli_json.py` (the
+`billing-support` and `ticket-triage` examples under `examples/language/`, run with no server
+configured; the test reads `4f1c9a2e7b3d5068` as whatever id the run was given and shows
+`run_file` as its file name).
 
-Flags:
+```
+aip run <folder | bundle.rl | name[@rev]> --inputs '{"message": "..."}' [--batch N] [--agent A] [--session S] [--workdir DIR]
+aip resume <run_id | run_file> --answers '{...}'
+aip resume <run_id>                                     retry the step a failed run stopped at
+```
 
-- `--progress`: before the final object, one line per completed step (below). The final object
-  is then printed on one line too, so the whole output is JSON lines.
-- `--debug`: on an error, the traceback goes to stderr. Stdout is unchanged.
+`--inputs` and `--answers` take JSON inline, `@path` for a file, or `-` for stdin. Flags on both:
 
-Every outcome except an error before anything ran writes the run file named by `run_file`, by
-default `~/.aip/runs/<run_id>.json` (`AIP_HOME` moves `~/.aip`; `aip run --run-file <path>`
-picks an explicit path). `run_id` is the server's run id on a served run and a generated one on
-a local run. `aip resume <run_id> --input <answer.json>` answers a pause, from any directory;
-`aip resume <run_id>` with no input retries a failed step. A run file's path works in place of
-the id. An answer is merged over the state the run holds (the run file of a local run; the
-server, for a served run, whose run file holds only the run id, server, revision, working
-directory and pause), so
-it carries only the keys the pause asks for.
+- `--progress`: before the final object, one line per record entry (below). The final object is
+  then printed on one line too, so the whole output is JSON lines.
+- `--debug`: when the command itself fails, the traceback goes to stderr. Stdout is unchanged.
+
+Every run runs on this machine, from the bundle cache (`~/.aip/bundles/<bundle id>.rl`): a
+folder is compiled and cached, an `.rl` verified and cached, a published name fetched (or
+`aip pull` did it earlier). Every stop writes the run file named by `run_file`, by default
+`~/.aip/runs/<run_id>.json` (`AIP_HOME` moves `~/.aip`), holding the whole run: the state, the
+record, the loop frames, the pending pause or the error. `aip resume <run_id>` works from any
+directory, and a run file's path works in place of the id. A resumed run is of the exact
+bundle it started on, whatever happened to the folder since.
+
+**Recording.** When a server is configured (`aip config --server URL`, or `AIP_SERVER`) the run
+is posted there at every stop, a folder or file run as a run of a *draft* bundle, and the object
+carries `"recorded": true` (or `false` when the server did not take it, with the reason on
+stderr; the next stop tries again). With no server the object has no `recorded` key, the run
+works, and the command ends with one line on stderr:
+
+```text
+aip: not recorded: no server is configured; run `aip config --server URL` to record runs on a server
+```
 
 ## Paused
 
-Every pause has `paused` (the kind), `step`, `state`, `run_id` and `run_file`. `state` is the
-paused step's declared inputs only, never the whole run's state.
+Every pause has `paused` (the kind), `step`, `tasks`, `run_id` and `run_file`. `tasks` is a list
+with one entry per `For` pass waiting at the step, and one entry outside a loop. Each task
+carries `index` (its position in the list, what the answer is keyed by), `pass` (the innermost
+loop's pass number, `null` outside loops), `passes` (every enclosing loop's name and pass number,
+outermost first), `state` (the keys the step `Read`s, as it sees them) and `answer_with` (what
+to answer: the keys and their types). The rest depends on the kind.
 
 ### `decision`: answer the questions
 
 No decision model is configured on this client (`TYPESAFE_API_KEY`, or `aip config
---decision-model KEY`), and the step allows a manual answer (`fallback: true` in SKILL.md), so
-the agent answers in its place. It gets what the model would have: `questions` and `state`.
-`confidence` names the questions whose confidence the step would write to the state as
-`<question>_confidence` had a model answered; a manual answer writes none, and the run's
-history records it with `"resolver": "manual"` and no confidence. A decision with `fallback:
-false` never pauses this way: with no model it is the `no_decision_model` error below.
+--decision-model KEY`), or the model failed (`reason` says which), and the step allows
+`Agent_Fallback`, so the agent answers in its place. Each task carries the step's `questions`
+with their rendered instruction, type, labels and criteria.
 
 <!-- cli-json: paused-decision -->
 ```json
 {
   "paused": "decision",
   "step": "triage",
-  "questions": {
-    "billing": {
-      "type": "noul",
-      "instructions": "Is this message about a charge, invoice, refund, or subscription payment?"
-    },
-    "tone": {
-      "type": "choice",
-      "instructions": "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands.",
-      "criteria": {
-        "angry": "Frustrated, demanding, or threatening to leave.",
-        "calm": "Neutral or polite, asking a question."
+  "reason": "no_decision_model",
+  "tasks": [
+    {
+      "index": 0,
+      "pass": null,
+      "passes": [],
+      "questions": [
+        {
+          "name": "billing",
+          "type": "true_or_false",
+          "labels": null,
+          "instruction": "Is this message about a charge, invoice, refund, or subscription payment?",
+          "criteria": []
+        },
+        {
+          "name": "tone",
+          "type": "choice",
+          "labels": [
+            "angry",
+            "calm"
+          ],
+          "instruction": "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands.",
+          "criteria": [
+            {
+              "label": "angry",
+              "text": "Frustrated, demanding, or threatening to leave."
+            },
+            {
+              "label": "calm",
+              "text": "Neutral or polite, asking a question."
+            }
+          ]
+        }
+      ],
+      "state": {
+        "message": "I was charged twice for March. Could you check?"
+      },
+      "answer_with": {
+        "billing": "true_or_false",
+        "tone": "choice"
       }
     }
-  },
-  "state": {
-    "message": "I was charged twice for March. Could you check?"
-  },
-  "confidence": [
-    "tone"
   ],
-  "fallback": true,
   "run_id": "4f1c9a2e7b3d5068",
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
-Answer: one key per question, `{"billing": true, "tone": "calm"}`. A `noul` is `true`/`false`, a
-`choice` one of its `criteria` labels, a `score` the level number (its position in `criteria`,
-from 0). The questions define the answer's shape, so there is no `answer_with`.
+Answer with one value per question: `{"billing": true, "tone": "calm"}`. A `true_or_false` is
+`true` or `false`, a `choice` one of its labels, a `score` the level's number (its position in
+the labels, from 0). A hand answer is stored as `{"value": ...}` with no confidence, and the
+record says `"answered_by": "agent"`. In `billing-support` the next step, the route `by_tone`,
+reads `triage_decision.tone` with `Confidence_Below 0.6 -> escalate`; an absent confidence
+counts as low, so a hand-answered `calm` is escalated just the same. The task below is where a
+model's confident `calm` sends the run.
 
-In `billing-support` the next step, the router `by-tone`, checks `tone_confidence` before it
-branches when a model answered; a manual answer never writes it and is not checked, so the tone
-you give picks the branch. The client task below is where `calm` sends the run, by hand or from
-a confident model.
+### `task`: do the step's work
 
-### `client_task`: do the step's work
-
-<!-- cli-json: paused-client-task -->
+<!-- cli-json: paused-task -->
 ```json
 {
-  "paused": "client_task",
+  "paused": "task",
   "step": "reply",
-  "task": "# Draft a reply\n\nWrite a short, calm reply to the customer below. Apply the policy exactly; do not\npromise anything the policy does not cover.\n\nCustomer message:\nI was charged twice for March. Could you check?\n\nPolicy:\n# Refund policy\n\n- Duplicate charges are refunded in full within 5 business days.\n- Refunds for other reasons are honored within 30 days of purchase.\n\n\nReturn JSON with `reply` (your reply text).\n",
-  "state": {
-    "message": "I was charged twice for March. Could you check?",
-    "tone": "calm"
-  },
-  "references": [
+  "tasks": [
     {
-      "uri": "billing-support/references/help.md",
-      "description": "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days."
+      "index": 0,
+      "pass": null,
+      "passes": [],
+      "prompt": "# Draft a reply\n\nWrite a short, calm reply to the customer below. Apply the policy exactly; do not\npromise anything the policy does not cover.\n\nCustomer message:\nI was charged twice for March. Could you check?\n\nPolicy:\n# Refund policy\n\n- Duplicate charges are refunded in full within 5 business days.\n- Refunds for other reasons are honored within 30 days of purchase.\n\n\nReturn JSON with `reply` (your reply text).\n",
+      "state": {
+        "message": "I was charged twice for March. Could you check?",
+        "tone": {
+          "value": "calm",
+          "confidence": 0.9,
+          "probabilities": {
+            "angry": 0.1,
+            "calm": 0.9
+          }
+        }
+      },
+      "references": [
+        {
+          "path": "references/help.md",
+          "description": "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days."
+        }
+      ],
+      "answer_with": {
+        "reply": "string"
+      }
     }
   ],
-  "answer_with": {
-    "reply": "string"
-  },
   "run_id": "4f1c9a2e7b3d5068",
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
-`task` is the step's template rendered from its declared inputs, with nothing prepended.
-`references` are named, not loaded. `answer_with` is the step's declared `outputs` with their
-types; the answer must hold every one of them: `{"reply": "..."}`.
+`prompt` is the step's `Prompt` file (or its description) with `{key}` and `{assets[stem]}`
+filled in, nothing prepended. `state` holds the `Read` keys: `triage_decision.tone` arrives as
+`tone`, the model's whole answer object. `references` are named, not loaded; read them when the
+prompt calls for it. Answer with every key of `answer_with`: `{"reply": "..."}`.
+
+### Several tasks at once
+
+Inside a `For` loop the passes run in batches, and every pass waiting at the same step goes
+out as one pause. Here `ticket-triage` was run on three tickets with a model: the angry one was
+escalated by a script and finished its pass; the two calm ones wait at `draft`, so the pause
+carries two tasks, for passes 0 and 2.
+
+<!-- cli-json: paused-tasks -->
+```json
+{
+  "paused": "task",
+  "step": "draft",
+  "tasks": [
+    {
+      "index": 0,
+      "pass": 0,
+      "passes": [
+        {
+          "loop": "each_ticket",
+          "pass": 0
+        }
+      ],
+      "prompt": "Write a reply that follows the policy.",
+      "state": {
+        "ticket": "Can I get a copy of my March invoice?",
+        "policy": "Duplicate charges are refunded in full within 5 business days. Plan changes take effect next cycle."
+      },
+      "references": [],
+      "answer_with": {
+        "reply": "string"
+      }
+    },
+    {
+      "index": 1,
+      "pass": 2,
+      "passes": [
+        {
+          "loop": "each_ticket",
+          "pass": 2
+        }
+      ],
+      "prompt": "Write a reply that follows the policy.",
+      "state": {
+        "ticket": "How do I move to the annual plan?",
+        "policy": "Duplicate charges are refunded in full within 5 business days. Plan changes take effect next cycle."
+      },
+      "references": [],
+      "answer_with": {
+        "reply": "string"
+      }
+    }
+  ],
+  "run_id": "4f1c9a2e7b3d5068",
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
+}
+```
+
+Answer every task, keyed by its index: `{"0": {"reply": "..."}, "1": {"reply": "..."}}`. A list
+in task order works too, and for a single task the one answer object on its own. An answer that
+does not fit the step's keys is refused and nothing is applied (the `invalid_output` error
+below); a task left unanswered fails its pass and the run, and a retry asks for it again.
 
 ## Done
 
@@ -121,55 +235,59 @@ types; the answer must hold every one of them: `{"reply": "..."}`.
 ```json
 {
   "done": true,
-  "run_id": "4f1c9a2e7b3d5068",
-  "state": {
+  "result": {
     "message": "I was charged twice for March. Could you check?"
   },
+  "run_id": "4f1c9a2e7b3d5068",
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
-`state` is the procedure's result: the state projected to the end step's `inputs`. What each
-step produced along the way is in the run's history: the run file's `history` for a local run,
-`GET /runs/{run_id}` for a served one. The first entry is the start step's (`"kind": "start"`,
-its `input` the start input). A decision's entry carries the answer's `attribution`
-(`resolver`, `model`, `confidence` per question; `null` for a manual answer). A router's entry
-records the key it read and `"result": {"to": <step>}`; a router with a confidence check also
-records the key it checked under `input` and, beside `to`, `"confidence": {"fired": true|false,
-"reason": "low"|"absent"|"null"|"manual"|null}`: the check fires when the key is below the bound, and
-just the same when it is absent or null; it is skipped, not fired, with `reason: manual` when the
-branch key was answered by hand, and then `input` holds the branch key instead.
+`result` is the `End` step's `Read` keys. What every step read and produced along the way is
+the run's record: the run file's `run.history` (`aip runs <run_id>` prints the run), one entry
+per step run with `step`, `kind`, `pass`, `passes`, `at`, `input` and `result`; a decision's
+`answered_by` (`{"model": "jev-1"}` or `"agent"`) and the answer objects whole; a route's
+`read`, `check` (`below`, `confidence`, `fired`, `reason`: `below` or `absent`), `value` and `to`;
+an aggregation's `resolutions`; a script's `script`, `stdin` and `seconds`; a task's `prompt` and
+`references`; a loop's `iterations`, collected list and `exit`. `docs/language/runtime.md`, The
+record, is the definition.
 
 ## Error
 
 Every error has `error` (the kind), `step` (the failing step; `null` when no step is to blame),
-`message` (for a human), `run_id`, `resumable`, and `run_file` when `resumable` is true.
+`message`, `pass` and `passes` (which loop pass failed), `run_id`, `resumable`, and `run_file`
+when `resumable` is true.
 
 | kind | when | extra keys |
 |---|---|---|
+| `invalid_input` | the inputs do not fit `Start`; a step's `Read` key is missing or mistyped; a target, run id or JSON argument cannot be used (then `kind` says which: `not_found`, `no_server`, `compile_error`, `not_a_bundle`, `bundle_tampered`, …) | `missing`, `invalid` |
+| `invalid_output` | a result does not match the step's `Produce` keys: a script's (then `script` is set), or an answer to a pause | `missing`, `invalid` |
+| `no_branch` | a route read a value none of its branch lines names | `key`, `value`, `branches` |
 | `script_failed` | a script exited non-zero, or did not print one JSON object (then `exit_code` is 0) | `script`, `exit_code`, `stderr` |
-| `timeout` | a script ran past the step's timeout | `script`, `seconds` |
-| `invalid_input` | the state lacks a key the step declares, or holds it with the wrong type, or a router's key has no branch | `missing`, `invalid` |
-| `invalid_output` | a result does not match the step's outputs: a script's (then `script` is set), or an answer to a pause | `missing`, `invalid` |
-| `requires_unmet` | the machine lacks what the skill's `requires` block names, checked before the first script runs | `missing` |
-| `no_decision_model` | the run reached a decision with `fallback: false` and this client has no decision model; the run waits at the decision | `fallback` |
-| `server` | anything else: an unknown skill or folder, an unreachable server, a bug | `status` on a served run (the HTTP status) |
+| `timeout` | a script ran past the timeout | `script`, `seconds` |
+| `requires_unmet` | the machine lacks what the procedure's `Requires` names, checked before the first script runs | `missing` |
+| `no_decision_model` | a `Decide` step without `Agent_Fallback` and this client has no decision model | |
+| `decision_model_failed` | the model failed on a `Decide` step without `Agent_Fallback` | `model`, `cause` |
+| `loop_cap` | a `For` (or fold) given more items than `At_Most`, or an `Until` loop at its cap with `Else_Fail` | `loop`, `cap`, `count` |
+| `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done | |
+| `server` | anything else: a bug, an unreachable server | |
 
-`missing` names keys that are absent; `invalid` names keys that are mistyped, undeclared, or
-have no branch.
-
-A step that failed while running leaves the run file at the state before it, so
-`aip resume <run_id>` with no input retries it once the cause is fixed:
+A step that failed while running leaves the run at the state before it, so
+`aip resume <run_id>` with no answers retries it once the cause is fixed. The retry runs the
+same bundle: what changes between two tries is the world the script sees, not the procedure.
+Here the ticket service was unreachable:
 
 <!-- cli-json: error-script-failed -->
 ```json
 {
   "error": "script_failed",
   "step": "escalate",
-  "message": "Script scripts/escalate.py exited with 1:\nticket service unreachable",
+  "message": "the script scripts/escalate.py exited with 1:\nticket service unreachable",
   "script": "scripts/escalate.py",
   "exit_code": 1,
   "stderr": "ticket service unreachable",
+  "pass": null,
+  "passes": [],
   "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
@@ -184,84 +302,87 @@ decision pause above was answered with `{"billing": true}` only:
 {
   "error": "invalid_output",
   "step": "triage",
-  "message": "Output of step 'triage' is invalid: missing answers for ['tone']",
+  "message": "the output of 'triage': no answer to tone",
   "missing": [
     "tone"
   ],
   "invalid": [],
+  "pass": null,
+  "passes": [],
   "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
-A skill with scripts declares the environment they need in `requires`. Before the first script
-runs, the machine is checked against it and every missing item is named at once, so nothing is
-half done; the run waits before that step, and `aip resume <run_id>` retries once the items are
-installed. Here the skill also asked for package `nosuchpkg` and tool `nosuchtool`:
-
-<!-- cli-json: error-requires-unmet -->
-```json
-{
-  "error": "requires_unmet",
-  "step": "escalate",
-  "message": "this machine lacks what the skill requires: package nosuchpkg; tool nosuchtool (not on PATH)",
-  "missing": [
-    "package nosuchpkg",
-    "tool nosuchtool (not on PATH)"
-  ],
-  "run_id": "4f1c9a2e7b3d5068",
-  "resumable": true,
-  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
-}
-```
-
-A decision whose author did not allow a manual answer needs a decision model on this client.
-With none configured the run stops before the decision, resumable: set `TYPESAFE_API_KEY` or
-run `aip config --decision-model KEY`, then `aip resume <run_id>` with no input asks the model.
-Here `billing-support` was run with `fallback: false` on `triage`:
+A decision whose author did not write `Agent_Fallback true` needs a decision model. With none
+configured the run fails at the decision, resumable: set `TYPESAFE_API_KEY` or run `aip config
+--decision-model KEY`, then `aip resume <run_id>` with no answers asks the model. Here
+`billing-support` was run with the `Agent_Fallback` line removed from `triage`:
 
 <!-- cli-json: error-no-decision-model -->
 ```json
 {
   "error": "no_decision_model",
   "step": "triage",
-  "message": "step 'triage' is a decision with `fallback: false` and this client has no decision model: set TYPESAFE_API_KEY or run `aip config --decision-model KEY`, then resume the run",
-  "fallback": false,
+  "message": "triage is a decision, no decision model is configured, and the step does not allow Agent_Fallback; configure a model and retry the run",
+  "pass": null,
+  "passes": [],
   "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
   "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
 }
 ```
 
-An error before any step ran (a start input missing a key, an unknown skill) is not resumable
-and writes no run file; its `run_id` is `null` on a local run: fix the input and `aip run` again.
+An error before any step ran is not resumable and writes no run file: fix the inputs (or the
+target) and `aip run` again. Here the inputs named `msg` instead of `message`:
+
+<!-- cli-json: error-invalid-input -->
+```json
+{
+  "error": "invalid_input",
+  "step": "start",
+  "message": "the input to 'start': message is missing; msg is not an input of this procedure; the inputs are ['message']",
+  "missing": [
+    "message"
+  ],
+  "invalid": [
+    "msg"
+  ],
+  "pass": null,
+  "passes": [],
+  "run_id": null,
+  "resumable": false
+}
+```
 
 ## `--progress`
 
-One line per completed step, in order: `{"event": "step", "step", "kind"}` plus `to` for a
-router (the branch taken), `resolver` for a decision (`typesafe` or `manual`), `seconds` for an
-execution step (wall time; `<seconds>` below stands for a number). A client task's line is
-printed when its answer is accepted, by the `resume` that carries it. The start and end steps
-have no line: the start input is what was given, and the final object follows the end.
+One line per record entry, in order, as the run writes them: `{"event": "step", "step",
+"kind", "pass", "passes"}` plus `to` for a route, `answered_by` for a decision, `seconds` for a
+script (wall time; `<seconds>` below stands for a number), and `exit` and `iterations` for a
+loop. A `For` pass's entries appear when its batch completes, pass by pass in input order,
+which is the order the record has them in at every batch size.
 
-The angry branch, resumed after the decision pause with `{"billing": true, "tone": "angry"}`:
+The angry branch, resumed after the decision pause with `{"billing": true, "tone": "angry"}`
+(the `run` itself printed the `start` entry's line before the pause):
 
 <!-- cli-json: progress -->
 ```jsonl
-{"event": "step", "step": "triage", "kind": "decision", "resolver": "manual"}
-{"event": "step", "step": "by-tone", "kind": "router", "to": "escalate"}
-{"event": "step", "step": "escalate", "kind": "execution", "seconds": "<seconds>"}
-{"done": true, "run_id": "4f1c9a2e7b3d5068", "state": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel."}, "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
+{"event": "step", "step": "triage", "kind": "Decide", "pass": null, "passes": [], "answered_by": "agent"}
+{"event": "step", "step": "by_tone", "kind": "Route", "pass": null, "passes": [], "to": "escalate"}
+{"event": "step", "step": "escalate", "kind": "Execute", "pass": null, "passes": [], "seconds": "<seconds>"}
+{"event": "step", "step": "end", "kind": "End", "pass": null, "passes": []}
+{"done": true, "result": {"message": "This is the THIRD time you have double charged me. Fix it today or I cancel."}, "run_id": "4f1c9a2e7b3d5068", "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"}
 ```
 
 ## `--version`
 
-`aip --version` prints one line of plain text, `aip <version> format <format>`: the package
-version (PEP 440) and the skill format the runtime accepts. The console (formerly inspector)
-reads it at startup and refuses an `aip` below its minimum.
+`aip --version` prints one line of plain text, `aip <version> language <language>`: the package
+version (PEP 440) and the language version the compiler and runtime speak. The console reads
+it at startup and refuses an `aip` below its minimum.
 
 <!-- cli-version -->
 ```text
-aip 0.8.0 format 0.8
+aip 0.8.0 language 0.9
 ```

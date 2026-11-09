@@ -1,6 +1,7 @@
-"""The 0.8 CLI, SDK and server tests wait for the milestones that rewrite those layers; see
-`conftest.py`. The engine's tests are `test_engine.py`. What already works under the `aip`
-command is the language's `compile` and `fmt`, tested here so the command stays importable."""
+"""The 0.8 server tests and the runtime-skill test wait for the milestones that rewrite those
+layers (S1, K1); see `conftest.py`. The engine's tests are `test_engine.py`, the CLI's and the
+SDK's `test_cli_json.py` and `test_sdk.py`. The language's commands under `aip` are checked
+here so the command stays importable even where Relate is missing."""
 
 import contextlib
 import io
@@ -11,9 +12,9 @@ import pytest
 from aip.client.cli import main
 
 
-@pytest.mark.skip(reason="the 0.8 CLI, SDK, runner and server tests are not collected: they drive the 0.8 commands over the "
-                         "0.8 model, which R1 replaced; R3 and S1 rewrite them (plan aip-dev#1)")
-def test_cli_and_server_pending():
+@pytest.mark.skip(reason="the 0.8 server tests (tests/server) and the runtime-skill test are not collected: they drive the 0.8 "
+                         "server and skill, which S1 and K1 replace (plan aip-dev#1)")
+def test_server_and_skill_pending():
     pass
 
 
@@ -43,3 +44,13 @@ class AipLanguageCommands(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(main(["--version"]), 0)
         self.assertRegex(out.getvalue(), r"^aip \d+\.\d+\.\d+ language 0\.9\n$")
+
+    def test_help_and_unknown_command(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main([]), 0)
+        self.assertIn("run", out.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(main(["validate", "x"]), 2)
+        self.assertIn("unknown command", err.getvalue())

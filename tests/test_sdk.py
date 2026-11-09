@@ -1,11 +1,18 @@
-"""The SDK (`aip.Client`, `docs/sdk.md`): `billing-support` end to end against a folder and a
-served catalog, both branches, with typed results and typed errors; and every `aip` command is
-a wrapper over it (each client command calls its SDK method; the rest are named as not client
-calls). The doc's LangGraph-style tools run against the same skill."""
+"""The SDK (`aip.Client`, `docs/sdk.md`) and the `aip` command over it (plan aip-dev#1, R3).
+
+`billing-support` runs end to end from a folder, from an `.rl` and by catalog name, with the
+agent answering, with a fake decision model, and with `on_pause`; a failed script is a resumable
+`RunError`; every target that cannot run is a typed error. The catalog side runs against
+`tests/fake_server.py`, the in-memory server speaking the client's contract: publish, list,
+search, describe, pull, get, pin, retire, runs recorded with their identity and draft flag, and a
+server that is down. Every `aip` command is shown to call its SDK method, and the doc's tool
+example runs. Everything opens a Relate store, so it skips with the install hint where Relate is
+missing."""
+
+from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import shutil
 import sys
@@ -15,267 +22,402 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from aip_spec import example_dir
-from fastapi.testclient import TestClient
+from aip_spec import example_dir, relate
 
 import aip
 from aip import sdk
-from aip.client.cli import COMMANDS, main
-from aip.server.app import create_app
-from aip.server.backends.filesystem import FilesystemBackend
+from aip.client import bundles
+from aip.client.cli import ALIASES, COMMANDS, main
+from aip.client.runs import RunFile, run_path
+from aip.client.server import Server
+from fake_server import DownSession, FakeServer
+
+pytestmark = pytest.mark.skipif(not relate.available(), reason=relate.INSTALL_HINT)
 
 EXAMPLE = example_dir("billing-support")
 REPO = Path(__file__).parent.parent
 CALM = "I was charged twice for March. Could you check?"
 ANGRY = "This is the THIRD time you have double charged me. Fix it today or I cancel."
 REPLY = "Thanks for flagging this; duplicate charges are refunded in full within 5 business days."
-BROKEN = 'import sys\nprint("ticket service unreachable", file=sys.stderr)\nsys.exit(1)\n'
+# A script that fails until the "ticket service" is up: a marker file in the run's working directory.
+FLAKY = ('import json, os, sys\n'
+         'if not os.path.exists(os.path.join(os.environ["AIP_WORKDIR"], "ticket-service-up")):\n'
+         '    print("ticket service unreachable", file=sys.stderr)\n    sys.exit(1)\n'
+         'json.dump({"ticket_id": 7, "queue": "tier2"}, sys.stdout)\n')
 
 
-class CalmModel:
-    """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97), the tone is calm at 0.9."""
+class FakeTypeSafe:
+    """Stands in for `TypeSafeClient`: billing is clear (noul 0.97); `tone` is `calm` at `calm_p`."""
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        return False
+    def __init__(self, calm_p: float = 0.9):
+        self.calm_p = calm_p
+        self.calls: list = []
 
     def system_one(self, state, questions, **_):
-        from typesafe_sdk import SystemOneResponse
-        return SystemOneResponse.model_validate({
-            "model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
-            "answers": {"billing": {"type": "noul", "noul": 0.97},
-                        "tone": {"type": "choice", "choice": "calm", "confidence": 0.9,
-                                 "probabilities": {"angry": 0.1, "calm": 0.9}}}})
+        self.calls.append((state, questions))
+        angry_p = round(1 - self.calm_p, 6)
+        tone = "calm" if self.calm_p >= 0.5 else "angry"
+        return {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
+                "answers": {"billing": {"type": "noul", "noul": 0.97},
+                            "tone": {"type": "choice", "choice": tone, "confidence": max(self.calm_p, angry_p),
+                                     "probabilities": {"angry": angry_p, "calm": self.calm_p}}}}
 
 
 @pytest.fixture(autouse=True)
 def no_key(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("AIP_AGENT", raising=False)
+    monkeypatch.delenv("AIP_SESSION", raising=False)
 
 
 @pytest.fixture
-def api(tmp_path) -> TestClient:
-    return TestClient(create_app(FilesystemBackend(tmp_path / "server")), raise_server_exceptions=False)
+def fake() -> FakeServer:
+    return FakeServer(token_names={"secret": "zach"})
 
 
 @pytest.fixture
-def served(api) -> aip.Client:
-    """A client on an in-process server with `billing-support` published through the SDK."""
-    client = aip.Client("http://testserver", session=api)
+def served(fake) -> aip.Client:
+    """A client on the fake server with `billing-support` published through the SDK."""
+    client = aip.Client(Server("http://testserver", token="secret", session=fake), agent="tests")
     published = client.publish(EXAMPLE)
-    assert isinstance(published, sdk.Published) and published.name == "billing-support"
+    assert published == sdk.Published("billing_support", "1", published.bundle_id, False)
     return client
 
 
-@pytest.fixture(params=["folder", "served"])
-def home(request, tmp_path, api):
-    """`(client, skill)`: a folder client running the skill by name, or a served one."""
-    if request.param == "folder":
-        shutil.copytree(EXAMPLE, tmp_path / "skills" / "billing-support")
-        return aip.Client(tmp_path / "skills"), "billing-support"
-    return request.getfixturevalue("served"), "billing-support"
+def local() -> aip.Client:
+    return aip.Client(agent="tests")
 
 
-def history(client: aip.Client, run_id: str) -> list:
-    return client.run_record(run_id).history
+def steps(record) -> list[str]:
+    return [e["step"] for e in record.history]
 
 
-# ------------------------------------------------------------------------ end to end
+# ------------------------------------------------------------------------ running locally
 
 
-def test_calm_branch_end_to_end(home, tmp_path, monkeypatch):
-    """No model: the agent answers calm, no confidence is written, and `by-tone`'s check sends the
-    run to `escalate`. A model confident the tone is calm clears the check: the client task,
-    answered by id."""
-    client, skill = home
-    paused = client.run(skill, {"message": CALM}, workdir=tmp_path)
+def test_the_calm_arm_by_hand_from_a_folder(tmp_path):
+    client = local()
+    paused = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
     assert isinstance(paused, aip.Paused)
-    assert (paused.kind, paused.step, paused.state) == ("decision", "triage", {"message": CALM})
-    assert set(paused.questions) == {"billing", "tone"}
-    assert (paused.confidence, paused.fallback) == (["tone"], True)
-    assert paused.run_file == aip.Client.run_file(paused.run_id)          # under AIP_HOME, by id
+    assert (paused.kind, paused.step, paused.reason, paused.recorded) == ("decision", "triage", "no_decision_model", None)
+    [task] = paused.tasks
+    assert isinstance(task, aip.Task) and (task.index, task.pass_, task.passes) == (0, None, [])
+    assert [q["name"] for q in task.questions] == ["billing", "tone"]
+    assert task.answer_with == {"billing": "true_or_false", "tone": "choice"}
+    assert task.state == {"message": CALM}
+    assert paused.task is task
+    assert paused.run_file == run_path(paused.run_id)
+    assert paused.to_json()["paused"] == "decision" and paused.to_json()["run_id"] == paused.run_id
+    handle = RunFile.load(paused.run_file)
+    assert (handle.origin, handle.target, handle.name, handle.server, handle.recorded) == ("folder", str(EXAMPLE.resolve()), "billing_support", None, False)
+    assert bundles.is_cached(handle.bundle_id), "the folder's bundle is in the cache, so resume reopens it by id"
 
-    task = client.resume(paused, {"billing": True, "tone": "calm"})      # by hand: no confidence, no check
-    assert isinstance(task, aip.Paused) and (task.kind, task.step) == ("client_task", "reply")
-    done = client.resume(task, {"reply": REPLY})
-    assert isinstance(done, aip.Done) and done.state == {"message": CALM}
+    # a hand answer carries no confidence, so by_tone's Confidence_Below fires and the calm message is escalated
+    done = client.resume(paused, {"billing": True, "tone": "calm"})
+    assert isinstance(done, aip.Done) and done.recorded is None
     record = client.run_record(done.run_id)
-    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "reply", "end"]
-    assert record.history[1]["attribution"]["resolver"] == "manual"
-    assert record.history[2]["result"] == {"to": "reply", "confidence": {"fired": False, "reason": "manual"}}
+    assert steps(record) == ["start", "triage", "by_tone", "escalate", "end"]
+    assert record.history[1]["answered_by"] == "agent"
+    assert record.history[2]["check"] == {"below": 0.6, "confidence": None, "fired": True, "reason": "absent"}
+    assert record.status == "done" and record.result == {"message": CALM}
 
-    monkeypatch.setenv("TYPESAFE_API_KEY", "stub")
-    with mock.patch("aip.client.resolver.TypeSafeClient", return_value=CalmModel()):
-        task = client.run(skill, {"message": CALM}, workdir=tmp_path)
-    assert isinstance(task, aip.Paused)
-    assert (task.kind, task.step, task.answer_with) == ("client_task", "reply", {"reply": "string"})
-    assert CALM in task.task
 
-    done = client.resume(task.run_id, {"reply": REPLY})                   # by id, as `aip resume` does
-    assert isinstance(done, aip.Done)
-    assert done.state == {"message": CALM}
-    assert done.to_json() == {"done": True, "run_id": task.run_id, "state": {"message": CALM},
-                              "run_file": str(task.run_file)}
+def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
+    client = aip.Client(decision_client=FakeTypeSafe(0.9), agent="tests")
+    task = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
+    assert isinstance(task, aip.Paused) and (task.kind, task.step) == ("task", "reply")
+    assert "Customer message:\n" + CALM in task.task.prompt
+    assert task.task.answer_with == {"reply": "string"}
+    assert task.task.references == [{"path": "references/help.md", "description": mock.ANY}]
+    done = client.resume(task.run_id, {"reply": REPLY})                       # by id, as `aip resume` does
+    assert isinstance(done, aip.Done) and done.result == {"message": CALM}
+    assert done.to_json() == {"done": True, "result": {"message": CALM}, "run_id": task.run_id, "run_file": str(task.run_file)}
     record = client.run_record(done.run_id)
-    assert record.status == "done"
-    assert [e["step"] for e in record.history] == ["start", "triage", "by-tone", "reply", "end"]
-    assert record.history[1]["attribution"]["confidence"] == {"billing": 0.94, "tone": 0.9}
-    assert record.history[2]["result"] == {"to": "reply", "confidence": {"fired": False, "reason": None}}
-    assert record.history[3]["kind"] == "client_task"
+    assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
+    assert record.history[1]["answered_by"] == {"model": "jev-1"}
+    assert record.history[2]["check"] == {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None}
+    assert record.history[3]["result"] == {"reply": REPLY}
 
 
-def test_angry_branch_end_to_end_with_on_pause_and_progress(home, tmp_path):
-    client, skill = home
-    lines, seen = [], []
+def test_the_angry_arm_runs_the_script_with_on_step_and_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIP_SESSION", "s-1")
+    lines = []
+    client = aip.Client(decision_client=FakeTypeSafe(0.1), agent="tests")
+    done = client.run(EXAMPLE, {"message": ANGRY}, workdir=tmp_path, on_step=lines.append, agent="my-agent 1.0")
+    assert isinstance(done, aip.Done) and done.result == {"message": ANGRY}
+    assert [(l["step"], l["kind"]) for l in lines] == [("start", "Start"), ("triage", "Decide"), ("by_tone", "Route"),
+                                                       ("escalate", "Execute"), ("end", "End")]
+    assert lines[2]["to"] == "escalate" and lines[1]["answered_by"] == {"model": "jev-1"} and isinstance(lines[3]["seconds"], float)
+    record = client.run_record(done.run_id)
+    assert record.identity == {"agent": "my-agent 1.0", "session": "s-1", "user": None}
+    assert record.history[3]["result"]["queue"] == "tier2"
+
+
+def test_on_pause_answers_in_process_or_stops(tmp_path):
+    client = local()
+    seen = []
 
     def answer(paused):
-        seen.append(paused.kind)
-        return {"billing": True, "tone": "angry"}
+        seen.append((paused.kind, paused.step))
+        return {"billing": True, "tone": "angry"} if paused.kind == "decision" else {"reply": REPLY}
 
-    done = client.run(skill, {"message": ANGRY}, workdir=tmp_path, on_step=lines.append, on_pause=answer)
-    assert isinstance(done, aip.Done) and done.state == {"message": ANGRY}
-    assert seen == ["decision"]
-    assert [(line["step"], line["kind"]) for line in lines] == [("triage", "decision"), ("by-tone", "router"),
-                                                                ("escalate", "execution")]
-    escalate = next(e for e in history(client, done.run_id) if e["step"] == "escalate")
-    assert set(escalate["result"]) == {"ticket_id", "queue"}
-
-
-def test_on_pause_returning_none_stops_at_the_pause(home, tmp_path):
-    client, skill = home
-    paused = client.run(skill, {"message": CALM}, workdir=tmp_path, on_pause=lambda _p: None)
+    done = client.run(EXAMPLE, {"message": ANGRY}, workdir=tmp_path, on_pause=answer)
+    assert isinstance(done, aip.Done) and seen == [("decision", "triage")]
+    paused = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path, on_pause=lambda _p: None)
     assert isinstance(paused, aip.Paused) and paused.kind == "decision"
 
 
-def test_a_failed_step_raises_and_resume_retries_it(tmp_path):
-    skill = tmp_path / "billing-support"
-    shutil.copytree(EXAMPLE, skill)
-    script = skill / "scripts" / "escalate.py"
-    good = script.read_text()
-    script.write_text(BROKEN)
-    client = aip.Client.over(None)
-    paused = client.run(skill, {"message": ANGRY}, workdir=tmp_path)
-    with pytest.raises(aip.RunError) as exc:
+def test_a_bad_answer_leaves_the_pause_and_a_failed_step_is_retried(tmp_path):
+    folder = tmp_path / "billing-support"
+    shutil.copytree(EXAMPLE, folder)
+    (folder / "scripts" / "escalate.py").write_text(FLAKY)
+    client = local()
+    paused = client.run(folder, {"message": ANGRY}, workdir=tmp_path)
+    with pytest.raises(aip.RunError) as bad:
+        client.resume(paused, {"billing": True})
+    assert (bad.value.kind, bad.value.step, bad.value.resumable, bad.value.error["missing"]) == ("invalid_output", "triage", True, ["tone"])
+    assert RunFile.load(paused.run_file).status == "paused", "the pause stands"
+    with pytest.raises(aip.RunError) as failed:
         client.resume(paused, {"billing": True, "tone": "angry"})
-    error = exc.value
+    error = failed.value
     assert isinstance(error, aip.AipError)
-    assert (error.kind, error.step, error.resumable) == ("script_failed", "escalate", True)
+    assert (error.kind, error.step, error.resumable, error.run_file) == ("script_failed", "escalate", True, paused.run_file)
     assert error.error["exit_code"] == 1 and error.error["stderr"] == "ticket service unreachable"
-    assert error.run_file == paused.run_file
-    script.write_text(good)
-    done = client.resume(error)                                       # retry, from the error itself
+    assert RunFile.load(paused.run_file).status == "failed"
+    with pytest.raises(aip.RunError) as refused:
+        client.resume(error, {"reply": "x"})                               # a failed run takes no answer
+    assert (refused.value.kind, refused.value.step, refused.value.resumable, refused.value.run_id) == ("not_paused", "escalate", True, paused.run_id)
+    with pytest.raises(aip.RunError) as again:
+        client.resume(error)                                               # still down: the same error
+    assert again.value.kind == "script_failed"
+    (tmp_path / "ticket-service-up").touch()                               # the run is of the same bundle; the world changed
+    done = client.resume(error)                                            # a retry, from the error itself
     assert isinstance(done, aip.Done) and done.run_id == paused.run_id
+    assert steps(client.run_record(done.run_id)) == ["start", "triage", "by_tone", "escalate", "end"]
+    with pytest.raises(aip.RunError) as nothing:
+        client.resume(done)                                                # nothing left to resume
+    assert (nothing.value.kind, nothing.value.resumable) == ("not_paused", False)
+    with pytest.raises(aip.RunError) as paused_again:
+        client.resume(client.run(folder, {"message": ANGRY}, workdir=tmp_path))  # a paused run is not retried
+    assert (paused_again.value.kind, paused_again.value.step, paused_again.value.resumable) == ("invalid_input", "triage", True)
 
 
-def test_typed_errors(tmp_path, api):
-    nowhere = aip.Client.over(None)
-    with pytest.raises(aip.NoServer):
-        nowhere.search("refund")
-    with pytest.raises(aip.NoServer):
-        nowhere.run("billing-support", {"message": CALM})
+def test_an_rl_file_runs_as_the_same_bundle(tmp_path):
+    client = local()
+    compiled = client.compile(EXAMPLE, tmp_path / "billing.rl")
+    assert compiled.ok and compiled.output == tmp_path / "billing.rl" and compiled.name == "billing_support"
+    paused = client.run(tmp_path / "billing.rl", {"message": CALM}, workdir=tmp_path)
+    handle = RunFile.load(paused.run_file)
+    assert (handle.origin, handle.bundle_id) == ("file", compiled.bundle_id)
+    assert client.describe(tmp_path / "billing.rl").bundle_id == compiled.bundle_id
+    bad = client.compile(_broken_folder(tmp_path))
+    assert not bad.ok and bad.errors and bad.bundle_id is None
+
+
+def _broken_folder(tmp_path: Path) -> Path:
+    folder = tmp_path / "broken"
+    if not folder.exists():
+        shutil.copytree(EXAMPLE, folder)
+        source = folder / "procedure.aip"
+        source.write_text(source.read_text().replace("Next_Step by_tone", "Next_Step by_tonne"))
+    return folder
+
+
+def test_typed_errors(tmp_path):
+    client = local()
     with pytest.raises(aip.NotFound):
-        aip.Client(tmp_path / "missing")
+        client.run(tmp_path / "missing", {"message": CALM})
+    with pytest.raises(aip.NoServer):
+        client.run("billing_support", {"message": CALM})                   # a name, no server, nothing cached
+    with pytest.raises(aip.NoServer):
+        client.search("refund")
     with pytest.raises(aip.InvalidInput):
-        nowhere.resume("0123456789abcdef")
-    with pytest.raises(aip.RunError) as exc:                              # the start input lacks `message`
-        nowhere.run(EXAMPLE, {"msg": "wrong key"})
-    assert (exc.value.kind, exc.value.resumable, exc.value.error["missing"]) == ("invalid_input", False, ["message"])
+        client.run(EXAMPLE, ["not", "an", "object"])
     with pytest.raises(aip.InvalidInput):
-        nowhere.run(EXAMPLE, ["not", "an", "object"])
+        client.resume("0123456789abcdef")
+    with pytest.raises(aip.RunError) as exc:                               # the inputs lack `message`: nothing ran
+        client.run(EXAMPLE, {"msg": "wrong key"})
+    assert (exc.value.kind, exc.value.resumable, exc.value.run_id, exc.value.error["missing"]) == ("invalid_input", False, None, ["message"])
+    with pytest.raises(aip.CompileError) as compile_error:
+        client.run(_broken_folder(tmp_path), {"message": CALM})
+    assert [d.code for d in compile_error.value.diagnostics if d.severity == "error"][0] == "unknown_step"
+    garbage = tmp_path / "garbage.rl"
+    garbage.write_bytes(b"not a bundle")
+    with pytest.raises(aip.InvalidBundle) as invalid:
+        client.run(garbage, {"message": CALM})
+    assert invalid.value.kind == "not_a_bundle"
 
-    client = aip.Client("http://testserver", session=api)
-    with pytest.raises(aip.ServerError) as exc:
-        client.info("nope")
-    assert (exc.value.status, exc.value.kind) == (404, "not_found")
-    broken = tmp_path / "broken"
-    shutil.copytree(EXAMPLE, broken)
-    (broken / "SKILL.md").write_text((broken / "SKILL.md").read_text().replace("outputs:", "outputz:", 1))
-    with pytest.raises(aip.InvalidSkill) as exc:
-        client.publish(broken)
-    assert exc.value.validation.errors
-    assert client.list() == []                                            # nothing was uploaded
+
+def test_describe_a_folder():
+    d = local().describe(EXAMPLE)
+    assert isinstance(d, aip.Description)
+    assert (d.name, d.inputs, d.result, d.revision) == ("billing_support", {"message": "string"}, {"message": "string"}, None)
+    assert [(s["name"], s["kind"]) for s in d.steps] == [("start", "Start"), ("triage", "Decide"), ("by_tone", "Route"),
+                                                         ("escalate", "Execute"), ("reply", "Task_Agent"), ("end", "End")]
+    assert d.example_inputs == {"message": "<string>"}
+    assert d.data["requires"] == {"interpreter": "python", "version": "3.10"}
+    text = d.summary()
+    assert "USE WHEN" in text and "aip run" in text and "The customer's message, verbatim." in text
 
 
-def test_catalog_runs_and_governance_are_typed(served, tmp_path):
-    [hit] = served.search("refund")
-    assert isinstance(hit, sdk.Hit) and hit.name == "billing-support" and hit.score > 0
+# ------------------------------------------------------------------------ the catalog
+
+
+def test_publish_list_search_describe_pull_get(served, fake, tmp_path):
     [entry] = served.list()
-    assert entry.resolves == hit.revision
-    info = served.info("billing-support")
-    assert (info.name, info.revision, info.start_step, info.inputs) == ("billing-support", hit.revision, "start",
-                                                                       {"message": "string"})
-    assert info.example_input == {"message": "<string>"} and "START INPUT" in info.summary()
-    local = aip.Client.over(None).info(EXAMPLE)
-    assert (local.revision, local.inputs, local.result) == (None, info.inputs, info.result)
+    assert isinstance(entry, sdk.Entry) and (entry.name, entry.resolves, entry.latest) == ("billing_support", "1", "1")
+    again = served.publish(EXAMPLE)
+    assert again.existed and again.revision == "1", "the same bundle is the same revision"
+    [hit] = served.search("billing refund")
+    assert isinstance(hit, sdk.Hit) and (hit.name, hit.revision) == ("billing_support", "1") and hit.score > 0
+    d = served.describe("billing_support")
+    assert (d.name, d.revision, d.bundle_id, d.inputs) == ("billing_support", "1", hit.bundle_id, {"message": "string"})
 
-    fetched = served.get("billing-support", tmp_path / "out")
-    assert fetched.path == tmp_path / "out" / "billing-support" and fetched.validation.valid
-    assert served.pin("billing-support", hit.revision) == sdk.Pinned("billing-support", hit.revision)
-    assert served.list()[0].pinned == hit.revision
-    assert served.pin("billing-support", None).revision is None
+    pulled = served.pull("billing_support")
+    assert isinstance(pulled, sdk.Pulled) and (pulled.revision, pulled.bundle_id) == ("1", hit.bundle_id)
+    assert not pulled.fetched, "publish put the bundle in the cache already"
+    shutil.rmtree(bundles.bundles_dir())
+    pulled = served.pull("billing_support@1")
+    assert pulled.fetched and pulled.path.is_file()
+    assert bundles.resolve_ref("billing_support") == (hit.bundle_id, "1")
+    assert served.pull_all() == [sdk.Pulled("billing_support@1", "billing_support", "1", hit.bundle_id, pulled.path, False)]
 
-    done = served.run("billing-support", {"message": ANGRY}, workdir=tmp_path,
+    fetched = served.get("billing_support", tmp_path / "out")
+    assert fetched == sdk.Fetched(tmp_path / "out", "billing_support", hit.bundle_id, "1")
+    assert (tmp_path / "out" / "procedure.aip").read_text() == (EXAMPLE / "procedure.aip").read_text()
+    assert local().compile(tmp_path / "out").bundle_id == hit.bundle_id
+
+    assert served.pin("billing_support", "1") == sdk.Pinned("billing_support", "1")
+    assert served.list()[0].pinned == "1"
+    assert served.pin("billing_support", None).revision is None
+    assert served.retire("billing_support@1") == sdk.Retired("billing_support", "1")
+    assert served.search("billing") == []
+    with pytest.raises(aip.InvalidInput):
+        served.retire("billing_support")
+    with pytest.raises(aip.NotFound):
+        served.run("nothing_here", {"message": CALM})
+    with pytest.raises(aip.ServerError) as exc:
+        served.describe("nothing_here")
+    assert (exc.value.status, exc.value.kind) == (404, "not_found")
+
+
+def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
+    done = served.run("billing_support", {"message": ANGRY}, workdir=tmp_path, session="demo",
                       on_pause=lambda _p: {"billing": True, "tone": "angry"})
-    [summary] = served.runs()
-    assert isinstance(summary, sdk.RunSummary) and (summary.run_id, summary.status) == (done.run_id, "done")
-    queries = served.governance()
-    assert "manual-decisions" in {q.query for q in queries}
-    rows = served.governance("manual-decisions")
-    assert rows and rows[0]["name"] == "billing-support"
+    assert isinstance(done, aip.Done) and done.recorded is True
+    stored = fake.runs[done.run_id]
+    assert (stored["name"], stored["revision"], stored["draft"], stored["status"]) == ("billing_support", "1", False, "done")
+    assert stored["identity"] == {"agent": "tests", "session": "demo", "user": "zach"}, "the server names the user from the token"
+    assert [e["step"] for e in stored["history"]] == ["start", "triage", "by_tone", "escalate", "end"]
+    handle = RunFile.load(done.run_file)
+    assert (handle.origin, handle.revision, handle.server, handle.recorded) == ("name", "1", "http://testserver", True)
+    assert handle.run["identity"]["user"] == "zach"
 
-    assert served.retire(f"billing-support@{hit.revision}") == sdk.Retired("billing-support", hit.revision)
-    assert served.search("refund") == []
+    before = list(fake.requests)
+    paused = served.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)           # a folder: a draft
+    assert isinstance(paused, aip.Paused) and paused.recorded is True
+    assert ("POST", "/bundles") in fake.requests[len(before):], "the folder's bundle is uploaded as a draft before the run is recorded"
+    assert fake.runs[paused.run_id]["draft"] is True and fake.runs[paused.run_id]["status"] == "paused"
+    done2 = served.resume(paused, {"billing": True, "tone": "calm"})
+    assert fake.runs[paused.run_id]["status"] == "done" and done2.recorded is True
+    assert fake.requests.count(("POST", "/bundles")) == 1, "one upload per bundle id per client"
+
+    rows = served.runs(agent="tests")
+    assert [r.run_id for r in rows] == [paused.run_id, done.run_id] and all(isinstance(r, sdk.RunSummary) for r in rows)
+    assert [r.run_id for r in served.runs(session="demo")] == [done.run_id]
+    assert served.runs(status="paused") == []
+    run_path(done.run_id).unlink()
+    remote = served.run_record(done.run_id)                                      # no run file here: the server's record
+    assert isinstance(remote, sdk.RunRecord) and remote.identity["user"] == "zach" and remote.status == "done"
+    queries = served.governance()
+    assert [q.query for q in queries] == ["hand-answers"]
+    assert served.governance("hand-answers", name="billing_support")[0]["params"] == {"name": "billing_support"}
+
+
+def test_a_server_that_is_down_does_not_stop_the_run(tmp_path):
+    client = aip.Client(Server("http://nowhere:1", session=DownSession()), agent="tests")
+    paused = client.run(EXAMPLE, {"message": CALM}, workdir=tmp_path)
+    assert isinstance(paused, aip.Paused) and paused.recorded is False
+    assert client.recording_error.startswith("unreachable")
+    assert RunFile.load(paused.run_file).recorded is False
+    with pytest.raises(aip.ServerError):
+        client.run("billing_support", {"message": CALM})                        # a name needs the server, or the cache
+    with pytest.raises(aip.ServerError):
+        client.list()
+
+
+def test_a_cached_name_runs_without_the_server(served, tmp_path):
+    served.pull("billing_support")
+    offline = aip.Client(Server("http://nowhere:1", session=DownSession()), agent="tests")
+    paused = offline.run("billing_support", {"message": CALM}, workdir=tmp_path)
+    assert isinstance(paused, aip.Paused) and paused.recorded is False
+    assert RunFile.load(paused.run_file).revision == "1"
+    nowhere = local()
+    paused = nowhere.run("billing_support@1", {"message": CALM}, workdir=tmp_path)
+    assert paused.recorded is None
 
 
 # ------------------------------------------------------------------ the CLI wraps it
 
 
-def _call(*argv: str) -> int:
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        return main(list(argv))
+def _call(*argv: str) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = main(list(argv))
+    return code, out.getvalue(), err.getvalue()
 
 
-NOT_CLIENT = {"upgrade", "schema", "runtime", "skill", "db", "server"}   # format tooling, Neo4j loader, the server
+NOT_CLIENT = {"compile", "export", "fmt", "config", "server", "db"}   # the language's tooling, the config, the server, Neo4j
 
 
-def test_every_cli_command_calls_the_sdk(served, api, tmp_path, monkeypatch):
-    """Each client command calls its `Client` method (or `aip.configure`); the commands that are
-    not client calls are listed, so a new command must be one or the other."""
+def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
+    """Each client command calls its `Client` method; the commands that are not client calls are
+    listed, so a new command must be one or the other."""
     monkeypatch.chdir(tmp_path)
-    revision = served.list()[0].resolves
-    start = tmp_path / "start.json"
-    start.write_text(json.dumps({"message": CALM}))
-    answer = tmp_path / "answer.json"
-    answer.write_text(json.dumps({"billing": True, "tone": "calm"}))
     first = served.run(EXAMPLE, {"message": CALM})
-
     cases = [
-        ("validate", "validate", [str(EXAMPLE)]),
-        ("info", "info", ["billing-support"]),
-        ("run", "run", ["billing-support", "--input", str(start)]),
-        ("resume", "resume", [first.run_id, "--input", str(answer)]),
+        ("info", "describe", ["billing_support"]),
+        ("run", "run", ["billing_support", "--inputs", json.dumps({"message": CALM})]),
+        ("resume", "resume", [first.run_id, "--answers", json.dumps({"billing": True, "tone": "calm"})]),
         ("search", "search", ["refund"]),
         ("list", "list", []),
+        ("pull", "pull", ["billing_support"]),
+        ("pull", "pull_all", ["--all"]),
         ("publish", "publish", [str(EXAMPLE)]),
-        ("get", "get", ["billing-support", "--out", str(tmp_path / "got")]),
-        ("pin", "pin", ["billing-support", revision]),
+        ("get", "get", ["billing_support", "--out", str(tmp_path / "got")]),
+        ("pin", "pin", ["billing_support", "1"]),
         ("runs", "runs", []),
         ("runs", "run_record", [first.run_id]),
-        ("governance", "governance", ["manual-decisions"]),
-        ("retire", "retire", [f"billing-support@{revision}"]),
+        ("governance", "governance", ["hand-answers"]),
+        ("retire", "retire", ["billing_support@1"]),
     ]
-    assert {c for c, _, _ in cases} | {"config"} | NOT_CLIENT == set(COMMANDS)
+    assert {c for c, _, _ in cases} | NOT_CLIENT == set(COMMANDS)
+    assert ALIASES == {"describe": "info"}
     with mock.patch("aip.client.cli._server", return_value=served.server):
         for command, method, argv in cases:
             real = getattr(aip.Client, method)
             with mock.patch.object(aip.Client, method, autospec=True, side_effect=real) as spy:
-                assert _call(command, *argv) == 0, (command, argv)
+                code, out, err = _call(command, *argv)
+            assert code == 0, (command, argv, out, err)
             assert spy.called, f"`aip {command}` does not call Client.{method}"
-    with mock.patch("aip.sdk.configure", wraps=sdk.configure) as spy:
-        assert _call("config") == 0
-    spy.assert_called_once()
+    code, out, _ = _call("describe", "billing_support", "--example-inputs")
+    assert code == 0 and json.loads(out) == {"message": "<string>"}
+    code, out, _ = _call("config")
+    assert code == 0 and "server: none" in out and "decision model: none" in out and "batch: 10" in out
+
+
+def test_config_writes_and_reads_the_file():
+    code, out, _ = _call("config", "--server", "http://example.test/", "--token", "t", "--decision-model", "k", "--batch", "3")
+    assert code == 0 and "wrote" in out
+    s = aip.settings()
+    assert (s.server, s.token, s.decision_model_key, s.batch) == ("http://example.test", "t", "k", 3)
+    code, out, _ = _call("config", "--decision-model", "")
+    assert aip.settings().decision_model_key is None and "decision model: none" in out
+    code, out, _ = _call("config", "--clear")
+    assert code == 0 and aip.settings().server is None and "cleared" in out
+    with pytest.raises(SystemExit) as exit:
+        _call("config", "--batch", "0")
+    assert exit.value.code == 2
 
 
 # ----------------------------------------------------------------- the doc's example
@@ -292,13 +434,10 @@ def test_the_docs_tool_example_runs(served, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     namespace: dict = {}
     exec(code, namespace)
-    namespace["client"] = aip.Client.over(served.server)        # the configured server, here in-process
-    paused = json.loads(namespace["run_procedure"]("billing-support", {"message": CALM}))
+    namespace["client"] = served                                      # the configured server, here in-process
+    paused = json.loads(namespace["run_procedure"]("billing_support", {"message": CALM}))
     assert (paused["paused"], paused["step"]) == ("decision", "triage")
-    # by hand, so no confidence and no check: the calm branch asks for the reply
-    task = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "calm"}))
-    assert (task["paused"], task["step"]) == ("client_task", "reply")
-    done = json.loads(namespace["answer_procedure"](paused["run_id"], {"reply": REPLY}))
-    assert done == {"done": True, "run_id": paused["run_id"], "state": {"message": CALM}, "run_file": paused["run_file"]}
-    error = json.loads(namespace["run_procedure"]("billing-support", {"msg": "wrong"}))
+    done = json.loads(namespace["answer_procedure"](paused["run_id"], {"billing": True, "tone": "angry"}))
+    assert done["done"] is True and done["run_id"] == paused["run_id"] and done["result"] == {"message": CALM}
+    error = json.loads(namespace["run_procedure"]("billing_support", {"msg": "wrong"}))
     assert (error["error"], error["resumable"]) == ("invalid_input", False)

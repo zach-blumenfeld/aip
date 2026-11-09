@@ -372,10 +372,17 @@ class Procedure:
         return None
 
     def describe(self) -> JSON:
-        """The header and every step's kind, for `info`."""
-        rows = self._rows("MATCH (s:Step {bundle_id: $b}) RETURN s.name AS name, s.kind AS kind ORDER BY s.line")
-        return {"name": self.name, "bundle_id": self.bundle_id, "description": self.header.get("description", ""),
-                "steps": {r["name"]: r["kind"] for r in rows}}
+        """The header, every step with its kind and description in source order, and every loop."""
+        steps = self._rows("MATCH (s:Step {bundle_id: $b}) RETURN s.name AS name, s.kind AS kind, s.description AS description, "
+                           "s.line AS line ORDER BY s.line")
+        loops = self._rows("MATCH (l:Loop {bundle_id: $b}) RETURN l.name AS name, l.kind AS kind, l.mode AS mode, l.line AS line "
+                           "ORDER BY l.line")
+        return {"name": self.name, "bundle_id": self.bundle_id, "description": self.header.get("description") or "",
+                "use_when": list(self.header.get("use_when") or []), "do_not_use_when": list(self.header.get("do_not_use_when") or []),
+                "avoid": list(self.header.get("avoid") or []),
+                "requires": ({"interpreter": self.requires[0], "version": self.requires[1]} if self.requires else None),
+                "steps": [{"name": r["name"], "kind": r["kind"], "description": r.get("description") or ""} for r in steps],
+                "loops": [{"name": r["name"], "kind": r["kind"], "mode": r["mode"]} for r in loops]}
 
 
 __all__ = ["Procedure", "Step", "Loop", "Until", "Read", "Produce", "Flow", "Question", "Aggregation", "FileUse", "STEP_KINDS",
