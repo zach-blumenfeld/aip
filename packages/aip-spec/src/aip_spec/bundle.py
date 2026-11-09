@@ -129,18 +129,21 @@ def compile_source(source: str, files: list[FileEntry], file: str | None = None,
     return _assemble(program, source, files, compiler_version() if compiler is None else compiler), diagnostics
 
 
-def compile_folder(folder: Path | str) -> tuple[Bundle | None, list[Diagnostic]]:
+def compile_folder(folder: Path | str, source: str | None = None) -> tuple[Bundle | None, list[Diagnostic]]:
     """Compile a program directory (or its `procedure.aip`): the bundle when the program has no
-    error, else None, and every diagnostic either way."""
+    error, else None, and every diagnostic either way. `source` stands in for the file's text
+    when given (an editor's unsaved buffer); the folder's other files are read from disk either
+    way, and the diagnostics still name the file."""
     path = Path(folder)
     file = path / SOURCE_FILE if path.is_dir() else path
     folder = file.parent
-    data = file.read_bytes()
-    try:
-        source = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        return None, [Diagnostic("syntax_error", "error", f"{SOURCE_FILE} is not UTF-8: {exc.reason} at byte {exc.start}",
-                                 str(file), 1, 1, 1, 1, None)]
+    if source is None:
+        data = file.read_bytes()
+        try:
+            source = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return None, [Diagnostic("syntax_error", "error", f"{SOURCE_FILE} is not UTF-8: {exc.reason} at byte {exc.start}",
+                                     str(file), 1, 1, 1, 1, None)]
     program, diagnostics = check_source(source, str(file), folder)
     if program is None or has_errors(diagnostics):
         return None, diagnostics

@@ -26,6 +26,15 @@ needs_relate = unittest.skipUnless(relate.available(), relate.INSTALL_HINT)
 PREFIX = 'Procedure p "x"\n'
 
 
+@contextlib.contextmanager
+def redirect_stdin(stream):
+    saved, sys.stdin = sys.stdin, stream
+    try:
+        yield
+    finally:
+        sys.stdin = saved
+
+
 def compiled(name: str):
     bundle, diagnostics = compile_folder(example_dir(name))
     assert bundle is not None, [str(d) for d in diagnostics]
@@ -369,6 +378,33 @@ class CompileAndExportCommands(unittest.TestCase):
         report = json.loads(out)
         self.assertEqual((report["ok"], report["graph"], report["bundle_id"]), (False, None, None))
         self.assertEqual([d["code"] for d in report["diagnostics"]], ["unknown_step", "unreachable_step"][:len(report["diagnostics"])])
+
+    def test_stdin_stands_in_for_the_file(self):
+        """An editor checks its unsaved buffer: the text comes from stdin, the folder's files from
+        disk, and the diagnostics name the file, which need not exist yet."""
+        example = example_dir("billing-support")
+        source = (example / "procedure.aip").read_text(encoding="utf-8").replace("Next_Step by_tone", "Next_Step by_tonne")
+        with redirect_stdin(io.StringIO(source)):
+            code, out, _ = self.run_cli("compile", "--check", "--json", "--stdin", str(example / "procedure.aip"))
+        self.assertEqual(code, 1)
+        report = json.loads(out)
+        self.assertEqual(report["file"], str(example / "procedure.aip"))
+        self.assertEqual([(d["code"], d["line"]) for d in report["diagnostics"] if d["severity"] == "error"][:2],
+                         [("unknown_step", 45), ("unreachable_step", 48)])
+        with redirect_stdin(io.StringIO(source.replace("by_tonne", "by_tone"))):
+            code, out, _ = self.run_cli("compile", "--check", "--json", "--stdin", str(example))
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["bundle_id"], compiled("billing-support").id, "the folder's files enter the id")
+        fresh = self.tmp / "fresh"
+        fresh.mkdir()
+        with redirect_stdin(io.StringIO(PREFIX + 'Start "s" { m: string  Next_Step end }\nEnd "e" { Read m }\n')):
+            code, out, _ = self.run_cli("compile", "--check", "--json", "--stdin", str(fresh / "procedure.aip"))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(list(fresh.iterdir()), [], "nothing is written")
+        with redirect_stdin(io.StringIO(PREFIX)):
+            code, _, err = self.run_cli("compile", "--check", "--stdin", str(self.tmp / "nowhere" / "procedure.aip"))
+        self.assertEqual(code, 2)
+        self.assertIn("not found", err)
 
     @needs_relate
     def test_compile_writes_and_export_restores(self):

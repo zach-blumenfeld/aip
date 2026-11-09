@@ -8,4 +8,5 @@ __pycache__/
 .obsidian/
 .env
 dist/
+node_modules/
 *.egg-info/

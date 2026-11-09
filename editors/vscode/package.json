@@ -1,17 +1,34 @@
 {
   "name": "aip-lang",
   "displayName": "AIP procedure language",
-  "description": "Syntax highlighting for .aip procedure files and ```aip fences in Markdown.",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and compiler diagnostics for .aip procedure files, and ```aip fences in Markdown.",
+  "version": "0.2.0",
   "publisher": "zach-blumenfeld",
   "license": "UNLICENSED",
   "private": true,
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.80.0",
+    "node": ">=20"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Linters"
   ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:aip"
+  ],
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "test": "node --test test/compiler.test.js test/grammar.test.js",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.2.0"
+  },
   "contributes": {
     "languages": [
       {
@@ -43,6 +60,32 @@
         }
       }
     ],
+    "commands": [
+      {
+        "command": "aip.check",
+        "title": "AIP: Check the procedure"
+      },
+      {
+        "command": "aip.showVersion",
+        "title": "AIP: Show the compiler's version"
+      }
+    ],
+    "configuration": {
+      "title": "AIP",
+      "properties": {
+        "aip.command": {
+          "type": "string",
+          "default": "aip",
+          "description": "The aip command the extension runs as `aip compile --check --json --stdin`: a name on PATH, a path, or several words such as `uv run aip`."
+        },
+        "aip.debounceMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "How long after the last edit the procedure is checked, in milliseconds."
+        }
+      }
+    },
     "configurationDefaults": {
       "editor.tokenColorCustomizations": {
         "textMateRules": [

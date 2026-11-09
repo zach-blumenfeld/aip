@@ -1,0 +1,7 @@
+.vscode/**
+node_modules/**
+src/**
+test/**
+esbuild.mjs
+.DS_Store
+**/*.map

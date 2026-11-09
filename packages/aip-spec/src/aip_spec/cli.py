@@ -1,6 +1,6 @@
 """The `aip-spec` command: the language's own tooling, without the runtime.
 
-    aip-spec compile <path> [-o FILE] [--check] [--json]   compile a program to a bundle, or just check it
+    aip-spec compile <path> [-o FILE] [--check] [--json] [--stdin]   compile a program to a bundle, or just check it
     aip-spec export <bundle.rl> --out DIR [--force]        write the program directory back from a bundle
     aip-spec fmt <path>... [--check]                       rewrite procedure files in canonical form
     aip-spec --version                                     the language version
@@ -44,18 +44,30 @@ def compile_command(argv: list[str], prog: str = "aip-spec compile") -> int:
     `file`, `ok`, `bundle_id`, `language_version`, `compiler_version`, `output`, `diagnostics`
     (each in the shape every compiler diagnostic has: `code, severity, message, file, line,
     column, end_line, end_column, step`) and, when `ok`, `graph`, the bundle's nodes and edges
-    with their source spans and without the file contents (`docs/language/bundle.md`)."""
+    with their source spans and without the file contents (`docs/language/bundle.md`).
+    `--stdin` takes the source text from standard input in place of PATH's `procedure.aip`, for
+    an editor checking a buffer it has not saved: the folder's other files are still read from
+    disk, the diagnostics still name the file, and the file itself need not exist yet."""
     parser = argparse.ArgumentParser(prog=prog, description="Compile a program to a bundle, reporting every diagnostic against its source lines.")
     parser.add_argument("path", type=Path, metavar="PATH", help="a program directory, or its procedure.aip")
     parser.add_argument("-o", "--output", type=Path, metavar="FILE", help=f"where to write the bundle (default: <name>{BUNDLE_SUFFIX} here)")
     parser.add_argument("--check", action="store_true", help="check only; write nothing")
     parser.add_argument("--json", action="store_true", help="print the report as JSON on stdout")
+    parser.add_argument("--stdin", action="store_true", help="read the source from stdin in place of PATH's procedure.aip (the folder's files still come from disk)")
     args = parser.parse_args(argv)
-    files = _source_paths([args.path], prog)
-    if files is None:
-        return 2
-    [file] = files
-    bundle, diagnostics = compile_folder(file)
+    source = None
+    if args.stdin:
+        file = args.path / SOURCE_FILE if args.path.is_dir() else args.path
+        if not file.parent.is_dir():
+            print(f"{prog}: {file.parent} not found", file=sys.stderr)
+            return 2
+        source = sys.stdin.read()
+    else:
+        files = _source_paths([args.path], prog)
+        if files is None:
+            return 2
+        [file] = files
+    bundle, diagnostics = compile_folder(file, source)
     ok = not has_errors(diagnostics)
     output = None
     code = 0 if ok else 1

@@ -59,3 +59,36 @@ jobs:
         env:
           GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
         run: scripts/fresh-venv.sh
+
+  # The VS Code extension (E1's proof): esbuild bundles it, node's test runner tokenizes the
+  # examples with vscode-textmate and checks a one-error fixture through `uv run aip`, which the
+  # tests default to from a checkout. There is no lockfile, so `npm install` resolves the three
+  # dev dependencies from their ranges.
+  extension:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Install the workspace
+        run: uv sync --group dev
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build and test the extension
+        working-directory: editors/vscode
+        run: |
+          npm install
+          npm run build
+          npm test
