@@ -171,6 +171,30 @@ Settled items are marked.
     release workflow (the PyPI wheel carries no npm content). Zach is weighing it; the plan's open
     item 13 has the default if he says yes (at C1, by subtree, history kept).
 
+## Decided after the first-use reports (2026-11-09)
+
+Three fresh agents ran every example through every branch (`reviews/2026-11-09-first-use-*.md`).
+Zach decided the product questions they raised; milestones L6 and R5 carry them.
+
+32. **Settled 2026-11-09.** A rejected answer leaves the pause in place. The run stays paused with
+    the same tasks, the error names what was wrong, the agent answers again. (The runtime had
+    marked the run failed and required a bare resume first; the docs had always promised this.)
+33. **Settled 2026-11-09.** A task on a loop's last allowed pass says so (`last_pass: true`,
+    `pass_of`), so an agent asked to fix knows no check follows; the cap stays tested at the head.
+    `loop_cap` is not resumable, since a retry fails the same way.
+34. **Settled 2026-11-09.** `index` and `iterations` are scoped by loop name: `revise.index`,
+    `revise.iterations`; the bare keys are shorthands for the innermost active loop and the last
+    loop that exited; none survives into a final state. A loop's name is a reserved key.
+35. **Settled 2026-11-09.** `With Confidence_Above p` holds strictly above `p`. The model's
+    probabilities arrive in hundredths (577 of 577 observed values), so a bar on that grid ties
+    about one answer in a hundred; "above" means above.
+36. **Settled 2026-11-09.** A `score` answer's `value` is the label, not the level's number;
+    routes, conditions, agents and scripts all speak labels; the expected value stays as `score`.
+37. **Settled 2026-11-09.** fixed-policy carries its approved claims in the `policy_claims`
+    string and an `assets/claims.md` for the agent, so the question is answerable; billing-support
+    checks `Confidence_Below 0.9`, which the model's calibration makes reachable (clear messages at
+    1.0, mixed ones near 0.82). The sentence "the first pass always runs" leaves the spec.
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show
