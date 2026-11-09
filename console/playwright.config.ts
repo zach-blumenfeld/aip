@@ -30,7 +30,8 @@ export default defineConfig({
     { name: "console", testIgnore: /folder\.spec\.ts/, use: { baseURL: `http://localhost:${CONSOLE_PORT}/` } },
     { name: "folder", testMatch: /folder\.spec\.ts/, use: { baseURL: `http://localhost:${FOLDER_PORT}/` } },
   ],
-  reporter: process.env.CI ? "github" : "list",
+  // In CI the list is the log a reader opens, and the annotations mark the failures on the commit.
+  reporter: process.env.CI ? [["list"], ["github"]] : "list",
   webServer: [
     {
       command: `node e2e/model.mjs ${MODEL_PORT}`,

@@ -109,7 +109,8 @@ export function Canvas({ graph, source, renderCode, visited, height = "70vh", on
 
   const frames = Object.values(model.frames).sort((a, b) => depthOf(model, a.id) - depthOf(model, b.id));
   const cards = Object.values(model.cards);
-  const opened: Card | Frame | null = open === null ? null : model.cards[open] ?? model.frames[open] ?? null;
+  const opened: Card | Frame | null = open === null ? null
+    : (model.cards[open] as Card | undefined) ?? (model.frames[open] as Frame | undefined) ?? null;
   const targetName = (id: string) => (model.cards[id] ?? model.frames[id])?.name ?? id;
 
   const portRow = (owner: string, port: Port, i: number) => (
