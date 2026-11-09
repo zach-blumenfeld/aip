@@ -2,7 +2,7 @@
 
     <root>/
     ├── catalog.json                 names -> {pinned, revisions: [{revision, published_at, retired}]}
-    ├── catalog.lock                 flock target; catalog.json is the only file ever rewritten
+    ├── catalog.lock                 lock target; catalog.json is the only file ever rewritten
     ├── skills/<name>/<revision>/    one revision
     │   ├── .aip-manifest.json       the record minus file bytes: manifest (path, size, sha256, mode)
     │   │                            plus the projection rows, so `get` never re-parses the skill
@@ -22,7 +22,6 @@ on publish, pin, and retire. Governance queries scan the run files with the help
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -37,6 +36,7 @@ from typing import Any, Dict, Iterator, List
 
 from aip.server import governance
 from aip.server.backend import NotFound, NotSupported, StaleRun, split_ref
+from aip.server.backends.filelock import lock_exclusive, unlock
 from aip.server.search import BM25Index
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, materialize)
@@ -86,11 +86,11 @@ class FilesystemCatalog:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         with open(self.lock_path, "a+") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            lock_exclusive(fh)
             try:
                 yield
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                unlock(fh)
 
     def _read_catalog(self) -> Dict[str, JSON]:
         if not self.catalog_path.exists():
@@ -307,7 +307,7 @@ class FilesystemRuns:
         if state is not None:
             row.update(state=state, after=after)
         with open(path, "r+") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            lock_exclusive(fh)
             try:
                 version = sum(1 for line in fh.read().splitlines() if line.strip()) - 1
                 if expected is not None and expected != version:
@@ -317,7 +317,7 @@ class FilesystemRuns:
                 fh.flush()
                 os.fsync(fh.fileno())
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                unlock(fh)
         return version + 1
 
     def get(self, run_id: str) -> RunRecord:
@@ -368,7 +368,8 @@ class FilesystemGovernance:
             return None
         return next((s.get("script") for s in steps if s.get("name") == step), None)
 
-    def _resolved_procedures(self, name: str | None):
+    def _resolved_manifests(self, name: str | None):
+        """(name, revision, manifest) for what every name (or one) resolves to; nothing live, nothing yielded."""
         catalog = self.catalog._read_catalog()
         for entry_name in sorted(catalog):
             if name is not None and entry_name != name:
@@ -377,7 +378,11 @@ class FilesystemGovernance:
                 _, revision = self.catalog._resolve_in(catalog, entry_name)
             except NotFound:
                 continue
-            yield entry_name, revision, self.catalog._manifest(entry_name, revision).get("procedure", {})
+            yield entry_name, revision, self.catalog._manifest(entry_name, revision)
+
+    def _resolved_procedures(self, name: str | None):
+        for entry_name, revision, manifest in self._resolved_manifests(name):
+            yield entry_name, revision, manifest.get("procedure", {})
 
     def queries(self) -> List[JSON]:
         return governance.listing()
@@ -392,8 +397,10 @@ class FilesystemGovernance:
               limit: int = governance.DEFAULT_LIMIT, repeats: int = governance.DEFAULT_REPEATS) -> List[JSON]:
         if query not in governance.QUERIES:
             raise NotFound(governance.NOT_FOUND.format(name=query))
-        if query == "overridden-decisions":
-            return governance.overridden_decisions(self._window(name, window), limit)
+        if query == "confidence-fired":
+            return governance.confidence_fired(self._window(name, window), limit)
+        if query == "unmeasured-routes":
+            return governance.unmeasured_routes(self._resolved_manifests(name), self._window(name, window), limit)
         if query == "manual-decisions":
             return governance.manual_decisions(self._window(name, window), limit)
         if query == "failing-scripts":

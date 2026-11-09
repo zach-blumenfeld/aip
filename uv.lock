@@ -10,7 +10,7 @@ members = [
 
 [[package]]
 name = "agent-instruction-protocol"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "aip-spec" },
@@ -66,7 +66,7 @@ dev = [
 
 [[package]]
 name = "aip-spec"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "packages/aip-spec" }
 dependencies = [
     { name = "pydantic" },

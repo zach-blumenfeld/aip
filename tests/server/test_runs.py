@@ -29,6 +29,8 @@ EXAMPLE = example_dir("billing-support")
 ANGRY = "This is the THIRD time you have double charged me. Fix it today or I cancel."
 CALM = "I was charged twice for March. Could you check?"
 REPLY = "Thanks for flagging this; duplicate charges are refunded in full within 5 business days."
+# a model confident the tone is calm: answered by hand, `by-tone`'s check on `tone_confidence` would fire
+CALM_MODEL = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.9}}
 
 
 @pytest.fixture(autouse=True)
@@ -67,11 +69,11 @@ def test_open_answer_and_finish(api):
     pause = r.json()
     run_id, version = pause["run_id"], pause["version"]
     assert (pause["paused"], pause["step"], pause["state"]) == ("decision", "triage", {"message": CALM})
-    assert pause["thresholds"] == {"billing": 0.15, "tone": 0.6}            # the author's, sent with the questions
+    assert (pause["confidence"], pause["fallback"]) == (["tone"], True)    # what the decision emits and allows
     assert pause["steps"] == []
 
     r = api.post(f"/runs/{run_id}/result", json={"step": "triage", "version": version,
-                                                   "answer": {"billing": True, "tone": "calm"}})
+                                                   "answer": {"billing": True, "tone": "calm"}, "attribution": CALM_MODEL})
     assert r.status_code == 200, r.text
     task = r.json()
     assert (task["paused"], task["step"], task["answer_with"]) == ("client_task", "reply", {"reply": "string"})
@@ -79,7 +81,7 @@ def test_open_answer_and_finish(api):
     assert [line["step"] for line in task["steps"]] == ["triage", "by-tone"]
     assert task["version"] > version
     held = api.get(f"/runs/{run_id}").json()
-    assert [e["step"] for e in held["history"]] == ["triage", "by-tone"]   # the task's entry waits for its answer
+    assert [e["step"] for e in held["history"]] == ["start", "triage", "by-tone"]   # the task's entry waits for its answer
 
     r = api.post(f"/runs/{run_id}/result", json={"step": "reply", "version": task["version"],
                                                    "answer": {"reply": REPLY}})
@@ -88,8 +90,8 @@ def test_open_answer_and_finish(api):
     assert (done["done"], done["state"]) == (True, {"message": CALM})
     run = api.get(f"/runs/{run_id}").json()
     assert (run["status"], run["state"], run["version"]) == ("done", {"message": CALM}, done["version"])
-    assert [e["step"] for e in run["history"]] == ["triage", "by-tone", "reply", "end"]
-    assert run["history"][2] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
+    assert [e["step"] for e in run["history"]] == ["start", "triage", "by-tone", "reply", "end"]
+    assert run["history"][3] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
                                  "input": {"message": CALM, "tone": "calm"},
                                  "result": {"task": task["task"], "references": task["references"],
                                             "answer": {"reply": REPLY}}}
@@ -161,15 +163,15 @@ def test_two_servers_over_one_root_serve_one_run_alternately(root, api):
     a, b = api, app_over(root)
     pause = a.post("/runs", json={"name": "billing-support", "input": {"message": CALM}}).json()
     task = b.post(f"/runs/{pause['run_id']}/result",
-                  json={"version": pause["version"], "answer": {"billing": True, "tone": "calm"}}).json()
+                  json={"version": pause["version"], "answer": {"billing": True, "tone": "calm"}, "attribution": CALM_MODEL}).json()
     assert task["paused"] == "client_task", task
     done = a.post(f"/runs/{pause['run_id']}/result", json={"version": task["version"], "answer": {"reply": REPLY}}).json()
     assert done["done"] is True, done
     for server in (a, b):
         run = server.get(f"/runs/{pause['run_id']}").json()
         assert run["status"] == "done"
-        assert [e["step"] for e in run["history"]] == ["triage", "by-tone", "reply", "end"]
-    assert run["history"][2] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
+        assert [e["step"] for e in run["history"]] == ["start", "triage", "by-tone", "reply", "end"]
+    assert run["history"][3] == {"step": "reply", "kind": "client_task",          # the answer is in the ledger
                                  "input": {"message": CALM, "tone": "calm"},
                                  "result": {"task": task["task"], "references": task["references"],
                                             "answer": {"reply": REPLY}}}
@@ -228,7 +230,7 @@ def drive(backend, start: dict, answers: list, tmp: Path) -> RunFile:
 
 @pytest.mark.parametrize("start, answers", [
     ({"message": ANGRY}, [{"billing": True, "tone": "angry"}]),
-    ({"message": CALM}, [{"billing": True, "tone": "calm"}, {"reply": REPLY}]),
+    ({"message": CALM}, [{"billing": True, "tone": "calm"}, {"reply": "Refund issued."}]),   # by hand: no check, reply
 ], ids=["angry", "calm"])
 def test_the_servers_record_is_what_a_local_run_writes(api, tmp_path, monkeypatch, start, answers):
     monkeypatch.setenv("PYTHONHASHSEED", "0")         # the escalate script's ticket id hashes the message
@@ -250,9 +252,12 @@ def test_a_served_run_file_is_a_handle(api, tmp_path):
     run = RunFile.load(outcome.run_file)
     outcome = Runner(backend, run_file=outcome.run_file, out=out, run_id=run.run_id).resume(
         run, {"billing": True, "tone": "calm"})
-    assert outcome.payload["paused"] == "client_task"
+    assert outcome.code == 0 and RunFile.load(outcome.run_file).pause["step"] == "reply"   # by hand: no check, calm
+    run = RunFile.load(outcome.run_file)
+    outcome = Runner(backend, run_file=outcome.run_file, out=out, run_id=run.run_id).resume(run, {"reply": "Done."})
+    assert (outcome.code, outcome.payload) == (0, {"message": CALM})
     data = json.loads(Path(outcome.run_file).read_text())
     assert "history" not in data and "state" not in data and "after" not in data
     assert set(data) == {"pause", "run_id", "server", "name", "revision", "version", "workdir", "created"}
-    assert data["pause"]["kind"] == "client_task" and data["pause"]["state"] == {"message": CALM, "tone": "calm"}
+    assert data["pause"]["kind"] == "done" and data["pause"]["state"] == {"message": CALM}
     assert data["version"] == api.get(f"/runs/{data['run_id']}").json()["version"]

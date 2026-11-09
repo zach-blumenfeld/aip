@@ -126,7 +126,7 @@ def write_example(path: Path) -> Path:
     if path.exists():
         raise ConfigError(f"{path} already exists; edit it, or remove it to start over")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(EXAMPLE)
+    path.write_text(EXAMPLE, encoding="utf-8")
     try:
         path.chmod(0o600)
     except OSError:
@@ -164,7 +164,7 @@ def load_env_file(path: Path, environ: Dict[str, str] | None = None) -> Dict[str
     """Set each variable in the file that is not already set. Returns what was applied."""
     environ = os.environ if environ is None else environ
     try:
-        values = parse_env_file(path.read_text())
+        values = parse_env_file(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise ConfigError(f"{path}: {exc.strerror}") from exc
     except ConfigError as exc:
@@ -180,7 +180,7 @@ def load_env_file(path: Path, environ: Dict[str, str] | None = None) -> Dict[str
 def read_config(path: Path) -> JSON:
     """Parse and check the TOML: only the two known tables and their keys."""
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise ConfigError(f"{path}: {exc.strerror}") from exc
     except tomllib.TOMLDecodeError as exc:

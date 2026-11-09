@@ -31,7 +31,7 @@ look-alike of an existing project); its module and command are `aip`. The runtim
 | `src/aip/spec/` | loads a skill folder through `aip_spec` into the runtime's model |
 | `src/aip/sdk.py` | `aip.Client`, the runtime as a library; the CLI is a thin wrapper over it (`docs/sdk.md`) |
 | `tests/` | the runtime's tests; `tests/server/` drives the HTTP API; the Neo4j backend tests skip unless `NEO4J_URI` is set |
-| `packages/aip-spec/src/aip_spec/` | **where the format lives**: `models.py` (the pydantic models, `FORMAT_VERSION`, `SCHEMA_ID`, `SPEC_URL`), `runtime.md` (the runtime block; `runtime-0.5a1.md` and `runtime-0.6a0.md` are the earlier ones the validator still recognises), `cli.py` (`aip-spec validate`, `schema`, `runtime`, `skill`, `example`), `resources.py` (finds the skill and the example in a checkout or a wheel, `SKILL_NAME`, `LEGACY_SKILL_NAMES`), `agents.py` (the agent skills directories), `skill.py` |
+| `packages/aip-spec/src/aip_spec/` | **where the format lives**: `models.py` (the pydantic models, `FORMAT_VERSION`, `SCHEMA_ID`, `SPEC_URL`), `runtime.md` (the runtime block; `runtime-0.5a1.md`, `runtime-0.6a0.md` and `runtime-0.6a1.md` are the earlier ones the validator still recognises), `cli.py` (`aip-spec validate`, `schema`, `runtime`, `skill`, `example`), `resources.py` (finds the skill and the example in a checkout or a wheel, `SKILL_NAME`, `LEGACY_SKILL_NAMES`), `agents.py` (the agent skills directories), `skill.py` |
 | `packages/aip-spec/docs/specification.md` | the format specification as prose; the models are the source of truth |
 | `packages/aip-spec/tests/` | the format's tests, including the schema-sync and runtime-block drift checks |
 | `packages/aip-spec/hatch_build.py` | bundles `skills/aip-compile/` and `examples/` into the `aip_spec` wheel from the checkout or from the sdist |
@@ -63,6 +63,28 @@ look-alike of an existing project); its module and command are `aip`. The runtim
   milestone per session: read the plan's "Context" and "Rules", then only the first unchecked
   milestone; run its proof, tick it, comment `Done <date>, commit <sha>: <one sentence>`, commit.
   Product-visible questions sit under "Open items" with a default; take the default and say so.
+
+## Changing what a run does
+
+A change to run semantics (how a step kind behaves, what a router reads, what a decision
+writes, what the history records) is never one file. Before touching the code, list the
+places below and change them in the same commit; the drift tests catch some, not all.
+
+| Where | What to change |
+|---|---|
+| `src/aip/model/steps.py` | the step's behaviour; `procedure.py` (`resolve`) walks routers, `engine.py` drives the loop |
+| `src/aip/server/app.py` | the server's own `resolve` call sites (`execute`, `peek`) mirror the engine |
+| `packages/aip-spec/src/aip_spec/runtime.md` | the runtime block: the same rule in words an agent executes by hand. This is the format: it moves the format version unless the release is still unreleased |
+| `skills/aip-runtime/SKILL.md` and `src/aip/client/aip-runtime/SKILL.md` | the runtime skill, both copies, including the worked example at the end |
+| `packages/aip-spec/docs/specification.md` | the prose for the step kind, and the route-class table if what counts as measured changes |
+| `packages/aip-spec/src/aip_spec/skill.py` | `classify_sources` and the issue texts, when the change alters what a router can trust |
+| `examples/billing-support/SKILL.md` | the runtime block copy and the comments that explain the run |
+| `docs/running.md`, `docs/state.md`, `docs/cli-json.md`, `docs/client-execution.md`, `README.md` | every walkthrough that narrates the old behaviour; grep for the old history `reason` values and the old wording |
+| `tests/` and `packages/aip-spec/tests/` | the assertions on history entries, `--progress` lines, and validator issues |
+| `CHANGELOG.md` | under `## [Unreleased]`, in the user's terms |
+
+Governance queries (`src/aip/server/`) read history entries, so a new `reason` or attribution
+value needs a look there too.
 
 ## Versioning
 

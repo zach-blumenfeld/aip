@@ -1,7 +1,8 @@
 """End-to-end tests for the AIP runtime model.
 
-Builds a four-node graph on a temp package directory and drives it through
-Procedure.run with a stub TypeSafe client, so no API key or network is needed.
+Builds a six-node graph (start, decision, router with a confidence check, execution, client
+task, end) on a temp package directory and drives it through Procedure.run with a stub
+TypeSafe client, so no API key or network is needed.
 """
 
 import json
@@ -12,8 +13,9 @@ from pathlib import Path
 from typesafe_sdk import Choice, Noul, SystemOneResponse
 
 from aip.model import (
-    Asset, ClientTask, DataType, Decision, EndStep, Execution, InputValidationError,
-    OutputValidationError, Meta, Procedure, Reference, ResourceLoader, Router, Script, to_json_schema,
+    Asset, ClientTask, ConfidenceCheck, DataType, Decision, EndStep, Execution, InputValidationError,
+    OutputValidationError, Meta, Procedure, Reference, ResourceLoader, Router, Script, Start, confidence,
+    to_json_schema,
 )
 
 
@@ -81,7 +83,9 @@ def make_procedure(root: Path, jev: FakeJev) -> Procedure:
         outputs={"reply": DataType.STRING},
         inputsTo=end,
     )
-    router = Router(name="by_tone", branch_on="tone", branches={"angry": escalate, "calm": reply})
+    # an uncertain tone is handled by hand: the check fires before the branches are read
+    router = Router(name="by_tone", branch_on="tone", branches={"angry": escalate, "calm": reply},
+                    confidence=ConfidenceCheck(key="tone_confidence", below=0.6, to=reply))
     triage = Decision(
         name="triage",
         inputs={"message": DataType.STRING},
@@ -90,11 +94,13 @@ def make_procedure(root: Path, jev: FakeJev) -> Procedure:
             "billing": Noul(instructions="Is this about billing?"),
             "tone": Choice(instructions="Tone?", criteria={"angry": None, "calm": None}),
         },
+        confidence=["tone"],
+        fallback=True,
         inputsTo=router,
     )
     return Procedure(
         meta=Meta(name="billing-support", description="billing triage"),
-        start=triage,
+        start=Start(name="start", inputs={"message": DataType.STRING}, inputsTo=triage),
         loader=ResourceLoader(root),
     )
 
@@ -110,47 +116,146 @@ class ProcedureRunTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def begin(self, payload):
+        """Run the start step, then the first runnable step on what it handed on."""
+        r0 = self.proc.run(None, payload)
+        return self.proc.run(r0.ran, r0.suggested, r0.history)
+
     def test_graph_walk_binds_meta_and_loader(self):
-        self.assertEqual(
-            self.proc.describe()["steps"],
-            {"triage": "decision", "by_tone": "router", "escalate": "execution", "end": "end", "reply": "client_task"},
-        )
+        described = self.proc.describe()
+        self.assertEqual(described["steps"], {
+            "start": "start", "triage": "decision", "by_tone": "router", "escalate": "execution", "end": "end",
+            "reply": "client_task"})
+        self.assertEqual(described["start"], {"step": "start", "kind": "start", "inputs": {"message": "string"}})
+        self.assertEqual(described["decisions"], {"triage": {"fallback": True, "confidence": ["tone"]}})
+        self.assertEqual(described["routers"], {
+            "by_tone": {"branch_on": "tone", "confidence": {"key": "tone_confidence", "below": 0.6, "to": "reply"}}})
         self.assertIs(self.proc.nodes["reply"].meta, self.proc.meta)
         self.assertIs(self.proc.nodes["escalate"].loader, self.proc.loader)
+        with self.assertRaises(ValueError):                   # the start of a procedure is a Start node
+            Procedure(meta=self.proc.meta, start=self.proc.nodes["triage"])
+        with self.assertRaises(ValueError):                   # a confidence list names the step's questions
+            Decision(name="d", questions={"q": Noul(instructions="?")}, confidence=["mood"])
 
-    def test_decision_collapses_and_reviews(self):
-        r = self.proc.run(None, {"message": "I was charged twice"})
+    def test_start_step_checks_the_input_and_hands_it_on(self):
+        r0 = self.proc.run(None, {"message": "I was charged twice", "customer": "acme"})
+        self.assertEqual((r0.ran, r0.kind, r0.result), ("start", "start", {}))
+        self.assertEqual(r0.suggested, {"message": "I was charged twice", "customer": "acme"})
+        self.assertEqual(r0.history, [{"step": "start", "kind": "start", "input": {"message": "I was charged twice"},
+                                       "result": {}}])
+        self.assertEqual(r0.next["step"], "triage")
+        self.assertEqual(r0.next["kind"], "decision")
+        for payload in ({}, {"message": 7}):
+            with self.subTest(payload), self.assertRaises(InputValidationError):
+                self.proc.run(None, payload)
+
+    def test_decision_collapses_and_emits_confidence(self):
+        r = self.begin({"message": "I was charged twice"})
         self.assertEqual(r.ran, "triage")
         self.assertEqual(self.jev.seen, {"state": {"message": "I was charged twice"}})
-        self.assertEqual(r.suggested, {"message": "I was charged twice", "billing": True, "tone": "angry"})
-        self.assertEqual([x["question"] for x in r.review], ["billing"])  # 0.55 is within 0.15 of 0.5
+        # one answer per question, and the model's confidence for the question the step names
+        self.assertEqual(r.suggested, {"message": "I was charged twice", "billing": True, "tone": "angry",
+                                       "tone_confidence": 0.9})
         self.assertEqual(r.next["kind"], "router")
         self.assertEqual(set(r.next["branches"]), {"angry", "calm"})
+        self.assertEqual(r.next["confidence"]["key"], "tone_confidence")
+        self.assertEqual(r.next["confidence"]["to"]["step"], "reply")
         self.assertEqual(r.history[-1]["step"], "triage")
         self.assertNotIn("assets", r.history[-1]["input"])
+        self.assertEqual(self.proc.nodes["triage"].output_types(),
+                         {"billing": DataType.BOOLEAN, "tone": DataType.STRING, "tone_confidence": DataType.FLOAT})
 
-    def test_the_authors_threshold_silences_review(self):
-        self.proc.nodes["triage"].thresholds = {"billing": 0.01}
-        r = self.proc.run(None, {"message": "hi"})
-        self.assertEqual(r.review, [])
+    def test_confidence_is_the_probability_of_the_answer_given(self):
+        # a noul's is |2p - 1| (https://docs.typesafe.ai/confidence#noul); choice and score carry their own
+        self.assertEqual(confidence({"type": "noul", "noul": 0.55}), 0.1)
+        self.assertEqual(confidence({"type": "noul", "noul": 0.03}), 0.94)
+        self.assertEqual(confidence({"type": "noul", "noul": 0.5}), 0.0)
+        self.assertEqual(confidence({"type": "choice", "choice": "a", "confidence": 0.58, "probabilities": {}}), 0.58)
+        self.assertEqual(confidence({"type": "score", "confidence": 0.7, "probabilities": {"0": 0.3, "1": 0.7}}), 0.7)
+        # the state key and the attribution are one number
+        self.proc.nodes["triage"].confidence = ["billing", "tone"]
+        r = self.begin({"message": "hi"})
+        self.assertEqual((r.suggested["billing_confidence"], r.suggested["tone_confidence"]), (0.1, 0.9))
+
+    def test_router_check_fires_below_the_bound(self):
+        self.jev.tone_p = 0.55                                  # angry, but barely
+        r1 = self.begin({"message": "I was charged twice"})
+        self.assertEqual((r1.suggested["tone"], r1.suggested["tone_confidence"]), ("angry", 0.55))
+        r2 = self.proc.run(r1.ran, r1.suggested, r1.history)
+        self.assertEqual((r2.ran, r2.kind), ("reply", "client_task"))     # not escalate
+        routed = r2.history[-2]
+        self.assertEqual(routed["step"], "by_tone")
+        self.assertEqual(routed["result"], {"to": "reply", "confidence": {"fired": True, "reason": "low"}})
+        self.assertEqual(routed["input"], {"tone_confidence": 0.55})   # the branch key was not read
+
+    def test_router_check_passes_at_the_bound_and_records_it(self):
+        r1 = self.begin({"message": "I was charged twice"})
+        r2 = self.proc.run(r1.ran, r1.suggested, r1.history)
+        self.assertEqual(r2.ran, "escalate")
+        self.assertEqual(r2.history[-2]["result"], {"to": "escalate", "confidence": {"fired": False, "reason": None}})
+        self.assertEqual(r2.history[-2]["input"], {"tone_confidence": 0.9, "tone": "angry"})
+        router = self.proc.nodes["by_tone"]
+        self.assertEqual(router.check({"tone_confidence": 0.6}), {"fired": False, "reason": None})
+        with self.assertRaises(InputValidationError):
+            router.check({"tone_confidence": "high"})
+
+    def test_a_hand_answer_skips_the_check_and_takes_its_branch(self):
+        """A manual answer writes no confidence (nobody invents a number), and the router does not
+        check one for it: the client's own call takes the branch, recorded as `reason: manual`."""
+        triage = self.proc.nodes["triage"]
+        r0 = self.proc.run(None, {"message": "x"})
+        manual = triage.accept_answers(r0.suggested, r0.history, {"billing": True, "tone": "angry"})
+        self.assertNotIn("tone_confidence", manual.suggested)
+        r = self.proc.run(manual.ran, manual.suggested, manual.history)
+        self.assertEqual(r.ran, "escalate")
+        self.assertEqual(r.history[-2]["result"], {"to": "escalate", "confidence": {"fired": False, "reason": "manual"}})
+        self.assertEqual(r.history[-2]["input"], {"tone": "angry"})
+
+    def test_router_check_fires_on_an_absent_or_null_confidence(self):
+        """Without a hand answer behind the key, no confidence is low confidence: the check fires."""
+        router = self.proc.nodes["by_tone"]
+        self.assertEqual(router.check({"tone_confidence": None}), {"fired": True, "reason": "null"})
+        self.assertEqual(router.check({"tone": "angry"}), {"fired": True, "reason": "absent"})
+        self.assertIs(router.route({"tone": "angry", "tone_confidence": None}), self.proc.nodes["reply"])
+        self.assertIs(router.route({"tone": "angry"}, by_hand=True), self.proc.nodes["escalate"])
+        # a script that rewrote the key after the hand answer owns it: the check applies again
+        r0 = self.proc.run(None, {"message": "x"})
+        manual = self.proc.nodes["triage"].accept_answers(r0.suggested, r0.history, {"billing": True, "tone": "angry"})
+        rewritten = [*manual.history, {"step": "s", "kind": "execution", "input": {}, "result": {"tone": "angry"}}]
+        node, entries = self.proc.resolve(manual.ran, manual.suggested, rewritten)
+        self.assertIs(node, self.proc.nodes["reply"])
+        self.assertEqual(entries[0]["result"]["confidence"], {"fired": True, "reason": "absent"})
+
+    def test_fallback_off_refuses_a_manual_answer(self):
+        triage = self.proc.nodes["triage"]
+        triage.fallback = False
+        answers = {"billing": True, "tone": "calm"}
+        for attribution in (None, {"resolver": "manual", "model": None, "confidence": None}):
+            with self.subTest(attribution), self.assertRaises(OutputValidationError) as ctx:
+                triage.accept_answers({"message": "x"}, [], answers, attribution)
+            self.assertIn("fallback_not_allowed", str(ctx.exception))
+            self.assertEqual(ctx.exception.invalid, ["attribution"])
+        by_model = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.9, "tone": 0.7}}
+        r = triage.accept_answers({"message": "x"}, [], answers, by_model)    # a model's answer still lands
+        self.assertEqual(r.suggested["tone_confidence"], 0.7)
 
     def test_server_routes_to_execution_then_end(self):
-        r1 = self.proc.run(None, {"message": "I was charged twice"})
+        r1 = self.begin({"message": "I was charged twice"})
         r2 = self.proc.run(r1.ran, r1.suggested, r1.history)
         self.assertEqual((r2.ran, r2.kind), ("escalate", "execution"))
         self.assertEqual(r2.result, {"ticket_id": 42, "queue": "tier2"})
-        self.assertEqual([h["step"] for h in r2.history], ["triage", "by_tone", "escalate"])
-        self.assertEqual(r2.history[1]["result"], {"to": "escalate"})
+        self.assertEqual([h["step"] for h in r2.history], ["start", "triage", "by_tone", "escalate"])
+        self.assertEqual(r2.history[2]["result"]["to"], "escalate")
         self.assertEqual(r2.next, {"step": "end", "kind": "end", "inputs": {"message": "string"}})
 
         r3 = self.proc.run(r2.ran, r2.suggested, r2.history)
         self.assertEqual((r3.ran, r3.next), ("end", None))
         self.assertEqual(r3.result, {"message": "I was charged twice"})  # the end step's inputs, nothing else
-        self.assertEqual([h["step"] for h in r3.history], ["triage", "by_tone", "escalate", "end"])
+        self.assertEqual([h["step"] for h in r3.history], ["start", "triage", "by_tone", "escalate", "end"])
         json.dumps(r3.to_dict())  # response is JSON serializable
 
     def test_client_override_routes_to_client_task(self):
-        r1 = self.proc.run(None, {"message": "I was charged twice"})
+        r1 = self.begin({"message": "I was charged twice"})
         r4 = self.proc.run(r1.ran, {**r1.suggested, "tone": "calm"}, r1.history)
         self.assertEqual(r4.kind, "client_task")
         task = r4.result["task"]
@@ -171,7 +276,7 @@ class ProcedureRunTest(unittest.TestCase):
         self.assertEqual((r5.ran, r5.result), ("end", {"message": "I was charged twice"}))
 
     def test_script_stdin_holds_only_declared_inputs(self):
-        r1 = self.proc.run(None, {"message": "I was charged twice", "customer": "acme"})
+        r1 = self.begin({"message": "I was charged twice", "customer": "acme"})
         r2 = self.proc.run(r1.ran, r1.suggested, r1.history)
         self.assertEqual(r2.ran, "escalate")
         stdin = json.loads((self.root / "billing/scripts/stdin.json").read_text())
@@ -180,7 +285,7 @@ class ProcedureRunTest(unittest.TestCase):
         self.assertEqual(r2.history[-1]["input"], stdin["state"])
         # the full state is kept and grows by exactly the declared outputs
         self.assertEqual(r2.suggested, {"message": "I was charged twice", "customer": "acme", "billing": True,
-                                        "tone": "angry", "ticket_id": 42, "queue": "tier2"})
+                                        "tone": "angry", "tone_confidence": 0.9, "ticket_id": 42, "queue": "tier2"})
 
     def test_script_output_is_checked_against_declared_outputs(self):
         cases = {"extra.py": "'note'", "mistyped.py": "ticket_id"}
@@ -192,7 +297,7 @@ class ProcedureRunTest(unittest.TestCase):
             self.assertIn(named, str(ctx.exception))
 
     def test_decision_sends_history_only_when_declared(self):
-        r1 = self.proc.run(None, {"message": "I was charged twice"})
+        r1 = self.begin({"message": "I was charged twice"})
         triage = self.proc.nodes["triage"]
         triage.accept({"message": "again"}, r1.history)
         self.assertEqual(self.jev.seen, {"state": {"message": "again"}})
@@ -211,20 +316,19 @@ class ProcedureRunTest(unittest.TestCase):
         triage = self.proc.nodes["triage"]
         answers = {"billing": True, "tone": "calm"}
         manual = triage.accept_answers({"message": "x"}, [], answers)
-        self.assertEqual(manual.history[-1]["attribution"],
-                         {"resolver": "manual", "model": None, "confidence": None, "reviewed": False})
+        self.assertEqual(manual.history[-1]["attribution"], {"resolver": "manual", "model": None, "confidence": None})
         self.assertEqual(manual.history[-1]["result"], {"answers": answers})
-        self.assertEqual(manual.suggested, {"message": "x", **answers})
+        self.assertEqual(manual.suggested, {"message": "x", **answers})        # no confidence key
 
-        reviewed = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.58},
-                    "reviewed": True, "proposed": {"billing": True, "tone": "angry"}}
-        r = triage.accept_answers({"message": "x"}, [], answers, reviewed)
-        self.assertEqual(r.history[-1]["attribution"], reviewed)
+        by_model = {"resolver": "typesafe", "model": "jev-1", "confidence": {"billing": 0.97, "tone": 0.58}}
+        r = triage.accept_answers({"message": "x"}, [], answers, by_model)
+        self.assertEqual(r.history[-1]["attribution"], by_model)
+        self.assertEqual(r.suggested, {"message": "x", **answers, "tone_confidence": 0.58})   # the same number
 
-        bad = [{"resolver": "oracle"}, {**reviewed, "confidence": {"tone": 1.5}},
-               {**reviewed, "confidence": {"mood": 0.5}}, {**reviewed, "proposed": {"tone": "angry"}},
-               {**reviewed, "proposed": {"billing": True, "tone": "furious"}}, {**reviewed, "reviewed": "yes"},
-               {"resolver": "manual", "model": "jev-1", "confidence": None, "reviewed": False}]
+        bad = [{"resolver": "oracle"}, {**by_model, "confidence": {"tone": 1.5}},
+               {**by_model, "confidence": {"mood": 0.5}}, {**by_model, "confidence": {"billing": 0.9}},
+               {**by_model, "confidence": None}, {**by_model, "model": 7},
+               {"resolver": "manual", "model": "jev-1", "confidence": None}]
         for attribution in bad:
             with self.subTest(attribution), self.assertRaises(OutputValidationError) as ctx:
                 triage.accept_answers({"message": "x"}, [], answers, attribution)
@@ -234,7 +338,7 @@ class ProcedureRunTest(unittest.TestCase):
         cases = {
             "missing key": (None, {}),
             "wrong type": (None, {"message": 7}),
-            "bad branch": ("triage", {"message": "x", "billing": True, "tone": "meh"}),
+            "bad branch": ("triage", {"message": "x", "billing": True, "tone": "meh", "tone_confidence": 0.9}),
         }
         for label, (after, payload) in cases.items():
             with self.subTest(label), self.assertRaises(InputValidationError):

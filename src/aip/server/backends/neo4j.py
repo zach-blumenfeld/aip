@@ -11,40 +11,58 @@ Graph per skill revision, as the 0.4 `aip db` projection wrote it:
     (:Procedure)-[:HAS_STEP {order}]->(:Step:<Kind> {key, name, kind, order, ...})
     (:Procedure)-[:STARTS_AT|ENDS_AT]->(:Step)
     (:Step)-[:NEXT]->(:Step)             (:Step:Router)-[:THEN {value}]->(:Step)     control flow
+    (:Step:Router)-[:BELOW {key, below}]->(:Step)                                     the confidence check
     (:Step)-[:PRODUCES {order}]->(:Data {key, name, type, description})              data flow
     (:Data)-[:FEEDS {order, description}]->(:Step)
     (:Procedure)-[:SUPPLIES]->(:Data)    (:Step)-[:ASKS]->(:Question)-[:YIELDS]->(:Data)
     (:Step)-[:USES {role, description}]->(:File)
+    (:Procedure)-[:HAS_ISSUE]->(:Issue {code, severity, step, location, message})-[:AT]->(:Step)
 
-Control flow is `NEXT` from a decision, execution, or client_task step to the one that follows it, and
-`THEN {value}` from a router, one edge per branch, so `-[:NEXT|THEN*]->` from `STARTS_AT` walks the whole
-procedure. A run's `StepRun` chain is `FOLLOWED_BY`, one path through those edges, joined to them by `OF_STEP`.
+The step kinds are `Start`, `Decision`, `Execution`, `ClientTask`, `Router` and `End`. A `Decision`
+carries `fallback` and its `confidence` list (the questions whose confidence it emits); a `Router`
+carries `source_class` (deterministic, measured or unmeasured, the validator's class of what feeds
+its branch key, fixed at publish) and, when it has a confidence check, `check_key`, `check_below`
+and `check_to`. `Issue` nodes are the validator's warnings and infos at publish, each `AT` the step
+its location names, so the routes the validator flagged are one hop from the procedure.
+
+Control flow is `NEXT` from the start step and from a decision, execution, or client_task step to
+the one that follows it, `THEN {value}` from a router, one edge per branch, and `BELOW {key, below}`
+from a router with a confidence check to where the check sends the run, so `-[:NEXT|THEN|BELOW*]->`
+from `STARTS_AT` walks the whole procedure. A run's `StepRun` chain is `FOLLOWED_BY`, one path through
+those edges, joined to them by `OF_STEP`.
 Control flow and data flow are separate edge sets over the same `Step` nodes. The data flow is
-the 0.6a0 state contract as a graph: one `Data` node per key per revision, since every key has
-exactly one producer and is never overwritten. `PRODUCES` comes from the execution or
-client_task step that declares the key in `outputs`, or from the decision whose question it
-answers (that question also `YIELDS` it); a start input, which the client supplies, is
-`SUPPLIES`d by the procedure and has no producer. `FEEDS` goes to every step that declares the
-key in `inputs`, to the router that branches on it, and to the end step, whose inputs are the
-result. The node carries the producer's type and description; a `FEEDS` edge carries the
+the state contract as a graph: one `Data` node per key per revision, with a `PRODUCES` edge from
+every step that writes it (a later producer overwrites the value; the node carries the first
+producer's type, which every declaration of the key agrees on). `PRODUCES` comes from the execution
+or client_task step that declares the key in `outputs`, from the decision whose question it answers
+(that question also `YIELDS` it), or from the decision that emits it as a `<question>_confidence`
+number; a start input, which the client supplies, is `SUPPLIES`d by the procedure and declared on
+the `Start` step's `inputs` rows, with no producer. `FEEDS` goes to every step that declares the
+key in `inputs`, to the router that branches on it or checks it, and to the end step, whose inputs
+are the result. The node carries the producer's type and description; a `FEEDS` edge carries the
 consumer's own description when it gives one. So `(a)-[:PRODUCES]->(:Data)-[:FEEDS]->(b)` is
 one hop of lineage, and a variable-length `PRODUCES|FEEDS` path follows a value end to end.
 (Revisions written before 0.6a1 have `Input` nodes on `DECLARES_INPUT` edges, `INPUTS_TO` and `BRANCH`
-for the control flow, and `NEXT` between their step runs.)
+for the control flow, and `NEXT` between their step runs; revisions written before 0.8 start at a
+runnable step, have `Question.threshold`, and have no `Start`, `Issue` or `BELOW`.)
 
 and per run:
 
     (:Run {id, name, revision, status, started_at, updated_at, pause, state, after, version})-[:OF_SKILL]->(:Skill)
-    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, resolver, review, entry, at})
+    (:Run)-[:STEP_RUN]->(:StepRun {order, step, kind, step_kind, input, result, resolver,
+                                   confidence_fired, confidence_reason, entry, at})
     (:StepRun)-[:FOLLOWED_BY]->(:StepRun)   (:StepRun)-[:OF_STEP]->(:Step)
-    (:StepRun)-[:ANSWERED]->(:Answer {question, resolver, model, value, accepted, reviewed, overridden})
-              -[:OF_QUESTION]->(:Question)
+    (:StepRun)-[:ANSWERED]->(:Answer {question, resolver, model, value, confidence})-[:OF_QUESTION]->(:Question)
 
 A decision step run's `resolver` is its attribution's (`typesafe` or `manual`). `Answer` nodes
-are the governance projection of a model-answered decision, one per question: `value` is what
-the model proposed and `accepted` what the run recorded (both JSON-encoded), `overridden`
-when the agent changed it at review; this is what `aip.server.governance.model_answers`
-computes from a history entry, written at append time so the decision queries are plain Cypher. An error entry's `step` is the step that failed and
+are the governance projection of a model-answered decision, one per question: `value` is the
+answer the run recorded (JSON-encoded) and `confidence` the probability the model put on it;
+this is what `aip.server.governance.model_answers` computes from a history entry, written at
+append time so the decision queries are plain Cypher. A router's step run is the run's passage
+through the router, and when the router has a confidence check it carries what the check made of
+the state: `confidence_fired` and `confidence_reason` (`low`, `absent`, `null`, or `manual` for a
+check skipped on a hand answer), from the entry's
+`result.confidence`. An error entry's `step` is the step that failed and
 `step_kind` its kind, so `OF_STEP` links failures to the script that raised. `Run.state` is the
 run's full state (JSON) and `Run.version` its number of appends: an append takes the run's
 write lock, checks the version it was given, and bumps it, in one transaction.
@@ -59,8 +77,10 @@ filtered to what each name resolves to, and an exact name match is boosted on to
 
 Governance (`queries`, one Cypher statement per name in `aip.server.governance.QUERIES`)
 runs over the last `window` runs; `missing-fields` and the structural queries (`empty-results`,
-`unused-data`, `cycles`) are given the resolved revision ids and read the projection alone, and
-`repeated-cycles` matches each run's `FOLLOWED_BY` chain against the procedure's cycles. Stored
+`unused-data`, `cycles`) are given the resolved revision ids and read the projection alone,
+`unmeasured-routes` joins the resolved revisions' `Issue` nodes to the windowed runs through
+`OF_STEP`, and `repeated-cycles` matches each run's `FOLLOWED_BY` chain against the procedure's
+cycles. Stored
 queries live in the same database as `(:GovernanceQuery {name, description, cypher, created_at,
 updated_at})`; `store` checks the name and EXPLAINs the Cypher before keeping it, and `query` runs
 a stored one in a read-only transaction with a timeout, so it can read anything and write nothing,
@@ -88,18 +108,19 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from aip.server.backend import InvalidQuery, NotFound, QueryFailed, StaleRun, split_ref
-from aip.server.governance import (DEFAULT_REPEATS, MISSING_FIELDS, NOT_FOUND, QUERIES, STORED_NAME_PATTERN,
-                                   STORED_QUERY_TIMEOUT, STRUCTURAL, attribution, listing, model_answers)
+from aip.server.governance import (DEFAULT_REPEATS, MISSING_FIELDS, NOT_FOUND, QUERIES, RESOLVED, STORED_NAME_PATTERN,
+                                   STORED_QUERY_TIMEOUT, UNMEASURED_CODES, attribution, listing, model_answers, routing)
 from aip.server.records import (MANIFEST, FileRecord, NameSummary, RunRecord, RunSummary, SearchHit,
                                 SkillRecord, write_files)
 
 JSON = Dict[str, Any]
 
-STEP_LABELS = {"decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
+STEP_LABELS = {"start": "Start", "decision": "Decision", "execution": "Execution", "client_task": "ClientTask",
                "router": "Router", "end": "End"}
-AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Data", "Question", "Run", "StepRun", "Answer",
+AIP_LABELS = ("Name", "Skill", "File", "Procedure", "Step", "Data", "Question", "Issue", "Run", "StepRun", "Answer",
               "GovernanceQuery", "Input")   # Input: the pre-0.6a1 data node, kept so `clear` empties older databases too
 QUESTION_TYPES = {"noul": "boolean", "choice": "string", "score": "integer"}   # the state type an answer lands as
+CONFIDENCE_TYPE = "float"                                                      # and a `<question>_confidence` key
 
 FULLTEXT_INDEX = "aip_skill_text"
 NAME_BOOST = 1000.0
@@ -226,6 +247,23 @@ MATCH (r:Step {key: $id + ':' + b.router}), (t:Step {key: $id + ':' + b.to})
 CREATE (r)-[:THEN {value: b.value}]->(t)
 """
 
+CREATE_BELOW = """
+UNWIND $checks AS c
+MATCH (r:Step {key: $id + ':' + c.router}), (t:Step {key: $id + ':' + c.to})
+CREATE (r)-[:BELOW {key: c.key, below: c.below}]->(t)
+"""
+
+CREATE_ISSUES = """
+MATCH (p:Procedure {key: $id})
+UNWIND $issues AS i
+CREATE (n:Issue {skill_id: $id, code: i.code, severity: i.severity, step: i.step, location: i.location,
+                 message: i.message})
+CREATE (p)-[:HAS_ISSUE]->(n)
+WITH n, i
+OPTIONAL MATCH (st:Step {key: $id + ':' + i.step})
+FOREACH (_ IN CASE WHEN st IS NULL THEN [] ELSE [1] END | CREATE (n)-[:AT]->(st))
+"""
+
 CREATE_DATA = """
 MATCH (p:Procedure {key: $id})
 UNWIND $data AS d
@@ -255,7 +293,7 @@ CREATE_QUESTIONS = """
 UNWIND $questions AS q
 MATCH (st:Step {key: $id + ':' + q.step})
 CREATE (n:Question {key: $id + ':' + q.step + ':' + q.name, skill_id: $id, name: q.name, type: q.type,
-                    instructions: q.instructions, criteria: q.criteria, threshold: q.threshold, order: q.order})
+                    instructions: q.instructions, criteria: q.criteria, confidence: q.confidence, order: q.order})
 CREATE (st)-[:ASKS]->(n)
 """
 
@@ -346,8 +384,8 @@ MATCH (r:Run {id: $id})
 OPTIONAL MATCH (r)-[:STEP_RUN]->(prev:StepRun)
 WITH r, prev ORDER BY prev.order DESC LIMIT 1
 CREATE (sr:StepRun {order: coalesce(prev.order, -1) + 1, step: $step, kind: $kind, step_kind: $step_kind,
-                    input: $input, result: $result, resolver: $resolver, review: $review, entry: $entry,
-                    at: datetime($now)})
+                    input: $input, result: $result, resolver: $resolver, confidence_fired: $confidence_fired,
+                    confidence_reason: $confidence_reason, entry: $entry, at: datetime($now)})
 CREATE (r)-[:STEP_RUN]->(sr)
 FOREACH (_ IN CASE WHEN prev IS NULL THEN [] ELSE [1] END | CREATE (prev)-[:FOLLOWED_BY]->(sr))
 WITH r, sr
@@ -361,7 +399,7 @@ MATCH (r:Run {id: $id})-[:STEP_RUN]->(sr:StepRun {order: $order})
 OPTIONAL MATCH (sr)-[:OF_STEP]->(st:Step)
 UNWIND $answers AS a
 CREATE (sr)-[:ANSWERED]->(x:Answer {question: a.question, resolver: a.resolver, model: a.model, value: a.value,
-                                    accepted: a.accepted, reviewed: a.reviewed, overridden: a.overridden})
+                                    confidence: a.confidence})
 WITH x, st, a
 OPTIONAL MATCH (st)-[:ASKS]->(q:Question {name: a.question})
 FOREACH (_ IN CASE WHEN q IS NULL THEN [] ELSE [1] END | CREATE (x)-[:OF_QUESTION]->(q))
@@ -396,13 +434,25 @@ WITH r ORDER BY r.started_at DESC, r.id DESC LIMIT $window
 """
 
 queries: Dict[str, str] = {
-    "overridden-decisions": _WINDOW + """
-MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:ANSWERED]->(a:Answer)
-WITH r.name AS name, sr.step AS step, a.question AS question, a.resolver AS resolver, count(a) AS decided,
-     sum(CASE WHEN a.overridden THEN 1 ELSE 0 END) AS overridden
-WHERE overridden > 0
-RETURN name, step, question, resolver, decided, overridden, toFloat(overridden) / decided AS rate
-ORDER BY overridden DESC, rate DESC, name, step, question
+    "confidence-fired": _WINDOW + """
+MATCH (r)-[:STEP_RUN]->(sr:StepRun {kind: 'router', confidence_fired: true})
+WITH r.name AS name, sr.step AS router, sr.confidence_reason AS reason, r, count(sr) AS fired_in_run
+ORDER BY r.started_at DESC, r.id DESC
+WITH name, router, reason, sum(fired_in_run) AS fired, collect(r.id) AS run_ids
+RETURN name, router, reason, fired, run_ids
+ORDER BY fired DESC, name, router, reason
+LIMIT $limit
+""",
+    "unmeasured-routes": _WINDOW + """
+WITH collect(r) AS runs
+MATCH (s:Skill)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_ISSUE]->(i:Issue)-[:AT]->(router:Step:Router)
+WHERE s.id IN $ids AND i.code IN $codes
+OPTIONAL MATCH (run:Run)-[:STEP_RUN]->(:StepRun)-[:OF_STEP]->(router) WHERE run IN runs
+WITH s, i, router, run ORDER BY run.started_at DESC, run.id DESC
+WITH s, i, router, [x IN collect(DISTINCT run.id) WHERE x IS NOT NULL] AS run_ids
+RETURN s.name AS name, s.revision AS revision, router.name AS router, i.code AS code,
+       router.source_class AS source_class, size(run_ids) AS runs, run_ids
+ORDER BY runs DESC, name, router
 LIMIT $limit
 """,
     "manual-decisions": _WINDOW + """
@@ -458,10 +508,12 @@ LIMIT $limit
     "cycles": """
 MATCH (s:Skill)-[:HAS_PROCEDURE]->(:Procedure)-[:HAS_STEP]->(first:Step)
 WHERE s.id IN $ids
-MATCH cycle = (first)-[:NEXT|THEN*]->(first)
+MATCH cycle = (first)-[:NEXT|THEN|BELOW*]->(first)
 WHERE all(n IN nodes(cycle) WHERE n.order >= first.order)
 WITH DISTINCT s, [n IN nodes(cycle)[..-1] | n.name] AS steps,
-     [r IN relationships(cycle) WHERE type(r) = 'THEN' | r.value] AS taken_when, nodes(cycle)[..-1] AS members
+     [r IN relationships(cycle) WHERE type(r) IN ['THEN', 'BELOW'] |
+      CASE type(r) WHEN 'THEN' THEN r.value ELSE r.key + ' < ' + toString(r.below) END] AS taken_when,
+     nodes(cycle)[..-1] AS members
 UNWIND members AS m
 OPTIONAL MATCH (m)-[:PRODUCES]->(d:Data)
 WITH s, steps, taken_when, [k IN collect(DISTINCT d.name) WHERE k IS NOT NULL] AS reproduces
@@ -471,7 +523,7 @@ LIMIT $limit
 """,
     "repeated-cycles": _WINDOW + """
 MATCH (r)-[:STEP_RUN]->(sr:StepRun)-[:OF_STEP]->(router:Step:Router)
-WHERE (router)-[:NEXT|THEN*]->(router)
+WHERE (router)-[:NEXT|THEN|BELOW*]->(router)
 WITH r, router, count(sr) AS visits
 WHERE visits - 1 > $repeats
 RETURN r.name AS name, r.revision AS revision, r.id AS run_id, r.status AS status, router.name AS router,
@@ -532,9 +584,18 @@ def fulltext_analyzer(driver, database: str) -> str | None:
 
 
 def _step_props(step: JSON) -> JSON:
-    """Kind-specific scalar properties, everything except the shared columns."""
+    """Kind-specific properties, everything except the shared columns; a nested object (a router's
+    `check`) is flattened to `<key>_<field>` since a property cannot hold a map."""
     shared = {"name", "kind", "order", "description"}
-    return {k: v for k, v in step.items() if k not in shared and v is not None}
+    props: JSON = {}
+    for k, v in step.items():
+        if k in shared or v is None:
+            continue
+        if isinstance(v, dict):
+            props.update({f"{k}_{f}": x for f, x in v.items() if x is not None})
+        else:
+            props[k] = v
+    return props
 
 
 def _dump(value: Any) -> str | None:
@@ -570,10 +631,12 @@ def _jsonable(value: Any) -> Any:
 def data_flow(skill: SkillRecord) -> tuple[List[JSON], List[JSON], List[JSON]]:
     """The `Data` rows and the `PRODUCES` and `FEEDS` edges of a revision, from the record's rows.
 
-    A key is declared once, by its producer (an output, or a question's collapsed answer) or,
-    for a start input, by the start step; every consumer adds a `FEEDS` edge. A key nothing
-    produces (the validator rejects it, so only in older records) still gets a node from its
-    first consumer, so the graph never has a dangling edge."""
+    One node per key, declared by its first producer in step order (an output, a question's
+    collapsed answer, or a decision's `<question>_confidence`) or, for a start input, by the
+    start step; every producer adds a `PRODUCES` edge and every consumer a `FEEDS` edge (the
+    start step declares its inputs and reads none). A key nothing produces (the validator rejects
+    it, so only in older records) still gets a node from its first consumer, so the graph never
+    has a dangling edge."""
     start = skill.procedure["start"]
     data: Dict[str, JSON] = {}
     produces: List[JSON] = []
@@ -586,19 +649,33 @@ def data_flow(skill: SkillRecord) -> tuple[List[JSON], List[JSON], List[JSON]]:
     for i in skill.inputs:
         if i["step"] == start:
             declare(i["name"], i["type"], i["description"], start_input=True)
-    for o in skill.outputs:
-        declare(o["name"], o["type"], o["description"])
-        produces.append({"step": o["step"], "name": o["name"], "order": o["order"]})
-    for q in skill.questions:
-        declare(q["name"], QUESTION_TYPES.get(q["type"], "string"), q["instructions"])
-        produces.append({"step": q["step"], "name": q["name"], "order": q["order"]})
+    for st in skill.steps:                        # producers in step order, so the first declaration wins
+        if st["kind"] in ("execution", "client_task"):
+            for o in sorted((o for o in skill.outputs if o["step"] == st["name"]), key=lambda o: o["order"]):
+                declare(o["name"], o["type"], o["description"])
+                produces.append({"step": o["step"], "name": o["name"], "order": o["order"]})
+        if st["kind"] == "decision":
+            asked = sorted((q for q in skill.questions if q["step"] == st["name"]), key=lambda q: q["order"])
+            for q in asked:
+                declare(q["name"], QUESTION_TYPES.get(q["type"], "string"), q["instructions"])
+                produces.append({"step": q["step"], "name": q["name"], "order": q["order"]})
+            for q in asked:
+                if q.get("confidence"):
+                    key = f"{q['name']}_confidence"
+                    declare(key, CONFIDENCE_TYPE, f"The model's confidence in its answer to `{q['name']}`.")
+                    produces.append({"step": q["step"], "name": key, "order": len(asked) + q["order"]})
     for i in skill.inputs:
         declare(i["name"], i["type"], i["description"])
-        feeds.append({"step": i["step"], "name": i["name"], "order": i["order"], "description": i["description"]})
+        if i["step"] != start:
+            feeds.append({"step": i["step"], "name": i["name"], "order": i["order"], "description": i["description"]})
     for st in skill.steps:
         if st["kind"] == "router":
             declare(st["branch_on"], None, None)
             feeds.append({"step": st["name"], "name": st["branch_on"], "order": 0, "description": None})
+            check = st.get("check")
+            if check is not None:
+                declare(check["key"], CONFIDENCE_TYPE, None)
+                feeds.append({"step": st["name"], "name": check["key"], "order": 1, "description": None})
     return list(data.values()), produces, feeds
 
 
@@ -626,6 +703,8 @@ def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
     tx.run(MARK_ENDPOINTS, id=sid, start=skill.procedure["start"], end=skill.procedure["end"])
     tx.run(CREATE_EDGES, id=sid, edges=skill.edges)
     tx.run(CREATE_BRANCHES, id=sid, branches=skill.branches)
+    tx.run(CREATE_BELOW, id=sid, checks=[{"router": s["name"], **s["check"]} for s in skill.steps
+                                         if s["kind"] == "router" and s.get("check")])
     tx.run(CREATE_QUESTIONS, id=sid, questions=skill.questions)
     data, produces, feeds = data_flow(skill)
     tx.run(CREATE_DATA, id=sid, data=data)
@@ -633,6 +712,7 @@ def write_skill(tx, skill: SkillRecord, published_at: str) -> None:
     tx.run(CREATE_FEEDS, id=sid, feeds=feeds)
     tx.run(CREATE_YIELDS, id=sid, questions=skill.questions)
     tx.run(CREATE_RESOURCES, id=sid, resources=skill.resources)
+    tx.run(CREATE_ISSUES, id=sid, issues=skill.issues)
 
 
 def _publish_tx(tx, skill: SkillRecord) -> None:
@@ -867,12 +947,14 @@ class Neo4jRuns:
                expected: int | None = None, state: JSON | None = None, after: str | None = None) -> int:
         now = _now()
         if entry is not None:
+            check = routing(entry) or {}
             params = {"id": run_id, "step": entry.get("step"), "kind": entry.get("kind"),
                       "step_kind": entry.get("step_kind"),
                       "input": _dump(entry.get("input")), "result": _dump(entry.get("result")),
-                      "resolver": (attribution(entry) or {}).get("resolver"), "review": _dump(entry.get("review")),
+                      "resolver": (attribution(entry) or {}).get("resolver"),
+                      "confidence_fired": check.get("fired"), "confidence_reason": check.get("reason"),
                       "entry": json.dumps(entry, sort_keys=True), "now": now}
-            answers = [{**a, "value": _dump(a["value"]), "accepted": _dump(a["accepted"])} for a in model_answers(entry)]
+            answers = [{**a, "value": _dump(a["value"])} for a in model_answers(entry)]
 
         def tx_fn(tx):
             row = tx.run(LOCK_RUN, id=run_id).single()
@@ -959,16 +1041,17 @@ class Neo4jGovernance:
     def _params(name: str | None = None, window: int = 100, limit: int = 50, repeats: int = DEFAULT_REPEATS,
                 ids: List[str] | None = None) -> JSON:
         return {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats),
-                "ids": ids or [], "fields": list(MISSING_FIELDS)}
+                "ids": ids or [], "fields": list(MISSING_FIELDS), "codes": list(UNMEASURED_CODES)}
 
     def query(self, query: str, name: str | None = None, window: int = 100, limit: int = 50,
               repeats: int = DEFAULT_REPEATS) -> List[JSON]:
         if query not in queries:
             return self._run_stored(query, name, window, limit, repeats)
         params: JSON = {"name": name, "window": int(window), "limit": int(limit), "repeats": int(repeats)}
-        if query == "missing-fields" or query in STRUCTURAL:
+        if query in RESOLVED:
             params["ids"] = self.catalog.resolved_ids(name)
             params["fields"] = list(MISSING_FIELDS)
+            params["codes"] = list(UNMEASURED_CODES)
         records, _, _ = self.driver.execute_query(queries[query], database_=self.database, **params)
         rows = [r.data() for r in records]
         if query == "failing-scripts":

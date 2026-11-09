@@ -58,6 +58,8 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
     nodes: dict[str, Any] = {}
     for step in loaded.spec.steps:
         match step:
+            case spec.StartStep():
+                nodes[step.name] = model.Start(name=step.name, inputs=inputs(step.inputs))
             case spec.DecisionStep():
                 from typesafe_sdk import Choice, Noul, Score
                 sdk = {"noul": Noul, "choice": Choice, "score": Score}
@@ -65,7 +67,8 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
                     name=step.name,
                     inputs=inputs(step.inputs),
                     questions={name: sdk[q.type](**q.model_dump(exclude={"type"}, exclude_none=True)) for name, q in step.questions.items()},
-                    thresholds=dict(step.thresholds),
+                    confidence=list(step.confidence),
+                    fallback=step.fallback,
                     history=step.history,
                     client=client,
                 )
@@ -90,6 +93,7 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
                 )
             case spec.RouterStep():
                 nodes[step.name] = model.Router(name=step.name, branch_on=step.branch_on, branches={})
+                # the confidence check's target is wired with the branches, once every node exists
             case spec.EndStep():
                 nodes[step.name] = model.EndStep(name=step.name, inputs=inputs(step.inputs))
 
@@ -98,6 +102,9 @@ def build_procedure(loaded: LoadedSkill, client: Any = None, python: Path | None
         node = nodes[step.name]
         if isinstance(step, spec.RouterStep):
             node.branches = {value: nodes[target] for value, target in step.branches.items()}
+            if step.confidence is not None:
+                node.confidence = model.ConfidenceCheck(
+                    key=step.confidence.key, below=step.confidence.below, to=nodes[step.confidence.to])
         elif not isinstance(step, spec.EndStep):
             node.inputsTo = nodes[step.inputs_to]
 

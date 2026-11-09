@@ -11,7 +11,7 @@
 # `AIP_REF=<version>` installs that release of both packages (they always share a version).
 set -euo pipefail
 
-AIP_REF="${AIP_REF:-0.7.0}"
+AIP_REF="${AIP_REF:-0.8.0}"
 
 info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[32m✓\033[0m %s\n'  "$*"; }

@@ -5,8 +5,9 @@
 and Neo4j backends both qualify. Every endpoint is one of three kinds:
 
 - **catalog**: `/catalog`, `/catalog/search`, `/catalog/{ref}`, `/catalog/{ref}/files`,
-  `/catalog/{ref}/files/{path}`, `POST /catalog`, `POST /catalog/{name}/pin|retire`.
-  Decision thresholds are the author's, from SKILL.md, and nothing else.
+  `/catalog/{ref}/files/{path}`, `POST /catalog`, `POST /catalog/{name}/pin|retire`. A publish
+  validates the upload and stores the validator's warnings and infos, and its class per router
+  (deterministic, measured, unmeasured), with the revision; `info` returns them.
 - **runs**: `POST /runs` opens a run on a start input and replies with where it stopped;
   `POST /runs/{id}/result` carries one thing to it (the answer to its pause, or nothing to
   retry a failed step); `GET /runs`, `GET /runs/{id}`. Each call loads the run from the
@@ -14,10 +15,11 @@ and Neo4j backends both qualify. Every endpoint is one of three kinds:
   check, so nothing per run stays in this process and any replica can answer any call; a
   write that lost a race answers 409. Without a `RunBackend` these answer 501.
   The server never runs a script and never calls a decision model. At a decision the run stops
-  and the reply is the decision pause with the author's `thresholds`; the client resolves it
-  and posts the answers with their `attribution` (`{"resolver": "typesafe"|"manual", "model",
-  "confidence", "reviewed"}`, plus `proposed` when reviewed; omitted means manual), which is
-  checked against the questions and recorded in the history. At an execution step the run
+  and the reply is the decision pause, saying which questions' `confidence` the step emits and
+  whether the client may answer by hand (`fallback`); the client resolves it and posts the
+  answers with their `attribution` (`{"resolver": "typesafe"|"manual", "model", "confidence"}`;
+  omitted means manual, which a decision with `fallback: false` refuses), which is checked
+  against the questions and recorded in the history. At an execution step the run
   stops and the reply is the step to perform (`{"paused": "execute", "step", "script", "command", "stdin", "timeout",
   "requires"}`); the client runs it next to its data and posts the report as the `answer`
   (`{"output": {...}, "seconds"}`, or a failure with exit code and stderr, a timeout, or the
@@ -107,15 +109,14 @@ class ApiError(Exception):
 class PeekBody(BaseModel):
     after: str | None = None
     payload: JSON = Field(default_factory=dict)
+    history: List[JSON] = Field(default_factory=list)
 
 
 class StepBody(PeekBody):
-    history: List[JSON] = Field(default_factory=list)
     run_id: str | None = None
 
 
 class AnswerBody(PeekBody):
-    history: List[JSON] = Field(default_factory=list)
     answers: JSON
     attribution: JSON | None = None
     run_id: str | None = None
@@ -310,7 +311,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
         node = None
         try:
             if answers is None:
-                node, _ = proc.resolve(body.after, body.payload)
+                node, _ = proc.resolve(body.after, body.payload, body.history)
                 if isinstance(node, Execution):
                     raise ApiError(409, "runs_on_client",
                                    f"step {node.name!r} is an execution step and scripts run on the client; "
@@ -321,7 +322,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
                                    "answer its questions through /answer", location=node.name)
                 response = proc.run(body.after, body.payload, body.history).to_dict()
             else:
-                node, entries = proc.resolve(body.after, body.payload)
+                node, entries = proc.resolve(body.after, body.payload, body.history)
                 if not isinstance(node, Decision):
                     raise ApiError(422, "not_a_decision", f"the step after {body.after!r} is not a decision",
                                    location=getattr(node, "name", None))
@@ -352,8 +353,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
 
     def reply(run_id: str, name: str, revision: str, version: int, advance: Advance) -> JSON:
         """Where the run stopped: the paused, done, or error object the CLI prints (a decision pause
-        also carries its `thresholds`), the run's id and version, and the `--progress` lines of
-        the steps this call completed."""
+        also carries its `confidence` list and `fallback`), the run's id and version, and the
+        `--progress` lines of the steps this call completed."""
         out = {**advance.outcome(), "run_id": run_id, "name": name, "revision": revision, "version": version,
                "steps": advance.lines}
         if advance.error is not None:
@@ -418,7 +419,8 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
             with lock:
                 procedures.pop((record.name, revision), None)
             return {"name": record.name, "revision": revision, "id": f"{record.name}@{revision}",
-                    "warnings": [_relative_issue(i.to_record(), tmp) for i in issues if i.severity == "warning"]}
+                    "warnings": [_relative_issue(i.to_record(), tmp) for i in issues if i.severity == "warning"],
+                    "infos": [_relative_issue(i.to_record(), tmp) for i in issues if i.severity == "info"]}
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -435,7 +437,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
             "example_input": example_input(described["start"]["inputs"]),
             "step_details": record.steps, "edges": record.edges, "branches": record.branches,
             "inputs": record.inputs, "outputs": record.outputs, "requires": record.procedure.get("requires"),
-            "questions": record.questions, "resources": record.resources,
+            "questions": record.questions, "resources": record.resources, "issues": record.issues,
             "files": [f.manifest_entry() for f in record.files],
         }
 
@@ -480,7 +482,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
     def peek(ref: str, body: PeekBody) -> JSON | None:
         name, revision = resolve(ref)
         try:
-            node, _ = procedure(name, revision).resolve(body.after, body.payload)
+            node, _ = procedure(name, revision).resolve(body.after, body.payload, body.history)
         except KeyError as exc:
             raise ApiError(422, "invalid_request", str(exc)) from exc
         return describe_next(node)
@@ -585,7 +587,7 @@ def create_app(backend: Any, tokens: Dict[str, set[str]] | None = None,
 
 def run_status(response: JSON) -> tuple[str, JSON | None]:
     """The run status and pause block a step response implies: done at the end, paused when the
-    client must act (a client task, or answers to review), running otherwise. The pause block
+    client must act (a client task), running otherwise. The pause block
     is the client's (`aip.model.engine.pause_of`)."""
     from aip.model.engine import pause_of
 

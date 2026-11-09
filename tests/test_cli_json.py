@@ -1,6 +1,6 @@
 """The CLI's JSON contract (`docs/cli-json.md`): every example in the doc is what `aip run` /
-`aip resume` actually print for `billing-support`, run locally with no decision model (and, for
-the review pause, a stub one). Run files go to the default place, `$AIP_HOME/runs/<run-id>.json`,
+`aip resume` actually print for `billing-support`, run locally with no decision model (and a
+stub one where a run needs a confidence: the calm branch, and a decision that allows no manual answer). Run files go to the default place, `$AIP_HOME/runs/<run-id>.json`,
 and `resume` is given the run id. Before comparing, the run's generated id becomes the doc's
 `SAMPLE_ID`, `run_file` is reduced to its file name, and an execution step's `seconds` to
 `<seconds>`, so nothing else varies.
@@ -70,7 +70,8 @@ def normalise(obj, run_id: str | None = None):
 
 
 class FakeTypeSafe:
-    """Stands in for `TypeSafeClient()`: billing is clear, tone is a coin flip under its 0.6 threshold."""
+    """Stands in for `TypeSafeClient()`: billing is clear (noul 0.97, confidence 0.94); `TONE` is the
+    probability of angry, so the tone is angry at 0.58 by default and calm at `1 - TONE` when patched low."""
     TONE = 0.58
 
     def __enter__(self):
@@ -84,7 +85,8 @@ class FakeTypeSafe:
         return SystemOneResponse.model_validate({
             "model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
             "answers": {"billing": {"type": "noul", "noul": 0.97},
-                        "tone": {"type": "choice", "choice": "angry", "confidence": self.TONE,
+                        "tone": {"type": "choice", "choice": "angry" if self.TONE >= 0.5 else "calm",
+                                 "confidence": self.TONE if self.TONE >= 0.5 else round(1 - self.TONE, 6),
                                  "probabilities": {"angry": self.TONE, "calm": round(1 - self.TONE, 6)}}}})
 
 
@@ -158,6 +160,16 @@ class CliJson(unittest.TestCase):
         (skill / "scripts" / "escalate.py").write_text(BROKEN)
         return skill
 
+    def fallback_off(self) -> Path:
+        """billing-support whose `triage` decision does not allow a manual answer."""
+        skill = self.tmp / "billing-support"
+        shutil.copytree(EXAMPLE, skill)
+        md = skill / "SKILL.md"
+        text = md.read_text()
+        self.assertIn("    fallback: true\n", text)
+        md.write_text(text.replace("    fallback: true\n", "    fallback: false\n"))
+        return skill
+
     def variant(self, requires: str, script: str | None = None, name: str = "escalate.py",
                 command: list | None = None) -> Path:
         """billing-support with another `requires` block and, optionally, another escalate script."""
@@ -168,7 +180,7 @@ class CliJson(unittest.TestCase):
         self.assertIn(REQUIRES, text)
         text = text.replace(REQUIRES, requires)
         if script is not None:
-            (skill / "scripts" / name).write_text(script)
+            (skill / "scripts" / name).write_text(script, newline="\n")   # a bash script needs LF on Windows too
             launch = f"    command: {json.dumps(command)}\n" if command else ""
             text = text.replace("    script: scripts/escalate.py\n", f"    script: scripts/{name}\n{launch}")
         md.write_text(text)
@@ -186,7 +198,18 @@ class CliJson(unittest.TestCase):
         self.assert_documented("error-invalid-output", error)
         self.assertEqual(RunFile.load(self.run_file).pause["kind"], "decision", "a bad answer leaves the pause")
 
-        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})
+        code, [pause], _ = self.resume({"billing": True, "tone": "calm"})  # by hand: no confidence, no check
+        self.assertEqual((code, pause.get("paused")), (0, "client_task"))
+        history = RunFile.load(self.run_file).history
+        self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone"])
+        self.assertEqual(history[1]["attribution"],                     # no key: answered by the agent
+                         {"resolver": "manual", "model": None, "confidence": None})
+        self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": "manual"}})
+        code, [done], _ = self.resume({"reply": REPLY})
+        self.assertEqual((code, done.get("done")), (0, True))
+
+        with self.decision_model(), mock.patch.object(FakeTypeSafe, "TONE", 0.1):   # calm at 0.9: the check passes
+            code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
         self.assertEqual(code, 0)
         self.assert_documented("paused-client-task", pause)
 
@@ -194,23 +217,26 @@ class CliJson(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assert_documented("done", done)
         history = RunFile.load(self.run_file).history
-        self.assertEqual([e["step"] for e in history], ["triage", "by-tone", "reply", "end"])
-        self.assertEqual(history[0]["attribution"],                     # no key: answered by the agent
-                         {"resolver": "manual", "model": None, "confidence": None, "reviewed": False})
+        self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone", "reply", "end"])
+        self.assertEqual(history[1]["attribution"]["confidence"], {"billing": 0.94, "tone": 0.9})
+        self.assertEqual(history[2]["result"], {"to": "reply", "confidence": {"fired": False, "reason": None}})
 
-    def test_review_pause(self):
-        with self.decision_model():
-            code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
-            self.assertEqual(code, 0)
-            self.assert_documented("paused-review", pause)
-            self.assertEqual(RunFile.load(self.run_file).history, [], "nothing is recorded until the review is answered")
-            code, [pause], _ = self.resume({"tone": "calm"})            # override: the calm branch
-            self.assertEqual((code, pause["paused"]), (0, "client_task"))
-        triage = RunFile.load(self.run_file).history[0]
-        self.assertEqual(triage["result"], {"answers": {"billing": True, "tone": "calm"}})
+    def test_no_decision_model_and_no_fallback_is_an_error_until_a_model_answers(self):
+        code, [error], err = self.run_(self.fallback_off(), MESSAGE)
+        self.assertEqual((code, err), (1, ""))
+        self.assert_documented("error-no-decision-model", error)
+        held = RunFile.load(self.run_file)
+        self.assertEqual((held.pause["kind"], held.pause["step"]), ("decision", "triage"), "the run waits at the decision")
+        self.assertEqual([e["step"] for e in held.history], ["start"])
+        code, [again], _ = self.resume({"billing": True, "tone": "calm"})   # by hand: refused the same way
+        self.assertEqual((code, again["error"]), (1, "no_decision_model"))
+        with self.decision_model():                                       # a model: resume asks it
+            code, [done], _ = self.resume(None)
+        self.assertEqual((code, done.get("done")), (0, True))
+        triage = RunFile.load(self.run_file).history[1]
+        self.assertEqual(triage["result"], {"answers": {"billing": True, "tone": "angry"}})
         self.assertEqual(triage["attribution"], {"resolver": "typesafe", "model": "jev-1",
-                                                 "confidence": {"billing": 0.97, "tone": 0.58}, "reviewed": True,
-                                                 "proposed": {"billing": True, "tone": "angry"}})
+                                                 "confidence": {"billing": 0.94, "tone": 0.58}})
 
     def test_the_decision_model_key_is_the_clients(self):
         """`aip config --decision-model KEY` is what this client resolves decisions with; an empty
@@ -218,8 +244,8 @@ class CliJson(unittest.TestCase):
         code, _, _ = self.aip_text("config", "--decision-model", "from-config")
         self.assertEqual(code, 0)
         with mock.patch("aip.client.resolver.TypeSafeClient", return_value=FakeTypeSafe()) as typesafe:
-            code, [pause], _ = self.run_(EXAMPLE, MESSAGE)
-        self.assertEqual((code, pause["paused"]), (0, "review"))
+            code, [done], _ = self.run_(EXAMPLE, MESSAGE)
+        self.assertEqual((code, done.get("done")), (0, True))                # angry: straight through
         typesafe.assert_called_once_with(api_key="from-config")
         _, text, _ = self.aip_text("config")
         self.assertIn("decision model: TypeSafe", text)
@@ -268,8 +294,8 @@ class CliJson(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(done["state"], {"message": ANGRY})
         history = RunFile.load(self.run_file).history
-        self.assertEqual([e["step"] for e in history], ["triage", "by-tone", "escalate", "end"])
-        self.assertEqual(history[2]["result"]["queue"], "tier2")
+        self.assertEqual([e["step"] for e in history], ["start", "triage", "by-tone", "escalate", "end"])
+        self.assertEqual(history[3]["result"]["queue"], "tier2")
 
     def test_requires_unmet_stops_before_any_script(self):
         ran = self.tmp / "escalate-ran"
@@ -300,13 +326,14 @@ class CliJson(unittest.TestCase):
         self.assertEqual(len(error["missing"]), 1)
         self.assertTrue(error["missing"][0].startswith("interpreter python>=99.0 (found 3."), error["missing"])
 
+    @unittest.skipIf(os.name == "nt", "needs a POSIX bash; on Windows the first `bash` on PATH is the WSL launcher")
     def test_command_launches_the_script(self):
         script = 'cat > /dev/null\necho \'{"ticket_id": 7, "queue": "from-bash"}\'\n'
         skill = self.variant(REQUIRES + "  tools:\n    - bash\n", script, "x.sh", ["bash", "x.sh"])
         self.run_(skill, ANGRY)
         code, [done], _ = self.resume({"billing": True, "tone": "angry"})
         self.assertEqual((code, done.get("done")), (0, True), done)
-        escalate = RunFile.load(self.run_file).history[2]
+        escalate = RunFile.load(self.run_file).history[3]
         self.assertEqual((escalate["step"], escalate["result"]), ("escalate", {"ticket_id": 7, "queue": "from-bash"}))
 
     def test_debug_prints_the_traceback(self):
@@ -317,8 +344,8 @@ class CliJson(unittest.TestCase):
         self.assertIn("Traceback", err)
 
     def test_every_documented_example_is_exercised(self):
-        names = {"paused-decision", "paused-client-task", "paused-review", "done", "error-invalid-output",
-                 "error-script-failed", "error-requires-unmet", "progress"}
+        names = {"paused-decision", "paused-client-task", "done", "error-invalid-output", "error-script-failed",
+                 "error-requires-unmet", "error-no-decision-model", "progress"}
         self.assertEqual(set(self.docs), names)
 
 
@@ -338,8 +365,9 @@ class Validation(unittest.TestCase):
             with mock.patch("sys.stdout", new=out), mock.patch("sys.stderr", new=err):
                 code = aip_spec(["validate", str(skill)])
             self.assertEqual(code, 1)
-            kinds = [json.loads(line)["kind"] for line in err.getvalue().splitlines() if line.startswith("{")]
-            self.assertEqual(kinds, ["runtime_block_outdated"])
+            records = [json.loads(line) for line in err.getvalue().splitlines() if line.startswith("{")]
+            errors = [r["kind"] for r in records if "severity" not in r]        # `to_record` drops `error`
+            self.assertEqual(errors, ["runtime_block_outdated"])
 
 
 if __name__ == "__main__":

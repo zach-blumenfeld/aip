@@ -117,19 +117,30 @@ nothing else could answer.
 
 - **Before 0.6a0 (B4):** the server answered a decision with the decision model (TypeSafe) when
   the key was in the server's environment, otherwise paused; the client only ever answered a pause.
-- **Now:** the client answers the decision with the decision model when its key is configured
-  on the client (`aip config`), applies the author's confidence thresholds (sent with the step), and pauses for the agent
-  only when no resolver is configured or confidence is below threshold (a review pause, accepted
-  with an empty answer or overridden). It posts the answer to the server with attribution.
-- **Server:** validates the answer against the declared question type, routes on it, and records
-  in the run history: resolver kind (`typesafe` or `manual`), model name, confidence if any,
-  whether it was reviewed, and the final answer. That record is the provenance, regardless of
-  which resolver ran.
+- **0.6a0 to 0.6a1:** the client answered with the decision model when its key was configured
+  on the client, applied the author's thresholds, and paused for the agent when no key was
+  configured or an answer fell under its threshold (a review pause).
+- **Now (format 0.8):** the client answers the decision with the decision model when its key is
+  configured on the client (`aip config`) and posts the answers with attribution; nothing pauses
+  for a second look. The model's confidence per question is the number the step writes into the
+  state as `<question>_confidence` for the questions its `confidence` list names, and a router
+  downstream can check it (`confidence: {key, below, to}`): below the bound, or absent, the run
+  goes where the author said. With no key, the agent answers only where the author allowed it
+  (`fallback: true`), with a manual attribution and no confidence key; a router's check skips a
+  hand answer and takes its branch (`reason: manual`); otherwise the run stops with
+  `no_decision_model` until a key is configured.
+- **Server:** validates the answer against the declared question type, writes the confidence
+  keys from the attribution, routes on the state, and records in the run history: resolver kind
+  (`typesafe` or `manual`), model name, confidence per question if any, and the final answer;
+  a router's entry records whether its check fired and why. That record is the provenance,
+  regardless of which resolver ran.
 
 Deliberately not included: a general-model resolver (a plain chat call or a harness sub-agent).
-Its self-reported confidence is not calibrated, so the threshold and review pause would be
-meaningless for it. An agent that wants to delegate a pause to a sub-agent can do so in its own
-harness and answer with `resume`; that needs no protocol support.
+Its self-reported confidence is not calibrated, so a router's check on it would compare against a
+number nothing calibrated, which is what the validator's `confidence_on_unmeasured_source` and
+`declared_confidence` findings warn about for a client task's own confidence. An agent that wants
+to delegate a pause to a sub-agent can do so in its own harness and answer with `resume`; that
+needs no protocol support, and the route it feeds is unmeasured, which the server records.
 
 Consequence: the server needs no model-vendor key at all, which fits self-hosted deployments.
 In the benchmark harness, the key passed by `--decision-model` moves from the in-container

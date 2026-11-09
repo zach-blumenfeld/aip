@@ -14,12 +14,11 @@ Pause kinds, as `cursor.pause["kind"]`:
 - `client_task`: the client must answer. The block is what the CLI prints, minus `run_id` and
   `run_file`.
 - `decision`: every decision stops here; the loop never calls a decision model. The client
-  resolves it (`aip.client.resolver`) with its own model when one is configured, else prints
-  it for the agent to answer; the next `submit` carries the answers and their attribution
-  (`Decision.accept_answers`). The block also carries the author's `thresholds` and, when the
-  step sets `history: true`, the run's `history`: what a resolver needs, never printed (`PRIVATE`).
-  A `review` (the model answered a question under its threshold) is the client's pause, not
-  the loop's: the loop still waits at the decision.
+  resolves it (`aip.client.resolver`) with its own model when one is configured, else, when the
+  block's `fallback` is true, prints it for the agent to answer (a manual answer to a decision
+  with `fallback` false is refused: `Decision.accept_answers`); the next `submit` carries the
+  answers and their attribution. The block also carries, when the step sets `history: true`,
+  the run's `history`: what a resolver needs, never printed (`PRIVATE`).
 - `execute`: an execution step, in a run whose loop does not run scripts (`scripts=False`: the
   server's, and the local client's, which runs them itself between calls). The block is
   `Execution.request`; the next `submit` carries the client's report of running it (`{"output":
@@ -35,18 +34,19 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from aip.model.procedure import Procedure
-from aip.model.steps import Decision, Execution, describe_next, threshold
+from aip.model.steps import Decision, Execution, describe_next
 from aip.model.types import (
     JSON, InputValidationError, OutputValidationError, StepError, project, validate_input, validate_output,
 )
 
 # The error kinds of the error object (`docs/cli-json.md`); anything else is reported as `server`.
-ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "server")
+ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "no_decision_model",
+               "server")
 
 PAUSED = ("client_task", "decision")
 
 # Keys of a pause block that are for the client program, not the agent: the CLI never prints them.
-PRIVATE = ("thresholds", "history", "resolution")
+PRIVATE = ("history", "resolution")
 
 
 @dataclass
@@ -149,16 +149,12 @@ def pause_of(response: JSON) -> JSON | None:
             "references": result["references"], "answer_with": result["expects"]}
 
 
-def thresholds_of(step: Decision) -> Dict[str, float]:
-    """Every question's threshold as the author set it in SKILL.md, the type's default otherwise."""
-    return {name: threshold(q.type, step.thresholds, name) for name, q in step.questions.items()}
-
-
 def decision_pause(step: Decision, state: JSON, history: List[JSON]) -> JSON:
     """The pause at a decision: what the decision model is given (`questions`, `state`, and `history`
-    when the step asks for it), and the thresholds the client's resolver applies."""
+    when the step asks for it), the questions whose `confidence` the step emits, and whether the
+    client may answer by hand (`fallback`)."""
     pause = {"kind": "decision", "step": step.name, "questions": describe_next(step)["questions"],
-             "state": project(state, step.inputs), "thresholds": thresholds_of(step)}
+             "state": project(state, step.inputs), "confidence": list(step.confidence), "fallback": step.fallback}
     if step.history:
         pause["history"] = history
     return pause
@@ -252,7 +248,7 @@ def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON
     while True:
         node = None
         try:
-            node, routed = procedure.resolve(after, payload)
+            node, routed = procedure.resolve(after, payload, history)
             if answers is not None:
                 if not isinstance(node, Decision):
                     raise KeyError(f"the step after {after!r} is not a decision")
@@ -280,7 +276,7 @@ def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON
         if pause is not None:                        # its entry is written when it is answered
             response["history"] = response["history"][:-1]
         for entry in response["history"][len(history):]:
-            if entry["kind"] != "end":
+            if entry["kind"] not in ("start", "end"):
                 lines.append(step_line(entry))
         after, payload, history = response["ran"], response["suggested"], response["history"]
         if response["next"] is None:
@@ -311,4 +307,4 @@ def _failed(exc: BaseException, node: Any, after: str | None, state: JSON, histo
 
 
 __all__ = ["Advance", "Cursor", "ERROR_KINDS", "PAUSED", "PRIVATE", "decision_pause", "error_object", "pause_of",
-           "settled_line", "start", "step_line", "submit", "thresholds_of"]
+           "settled_line", "start", "step_line", "submit"]
