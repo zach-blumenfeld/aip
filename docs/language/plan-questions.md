@@ -219,6 +219,17 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     decisions) are handed to the step under one name, and one is lost without a word. Default,
     proposed for R5: a compile error naming both reads and the fix (read the keys whole).
 
+## Revised after public feedback (2026-11-09)
+
+40. **Settled 2026-11-09, revising item 22.** The Studio comes back, as a card canvas (public
+    aip#25, a user's screenshot: description as the card's title, inputs and outputs on the card,
+    exits as ports quoting the next step, a route's branches as ports). C1 draws it read-only from
+    the compiler's graph; E2 shows the same component in VS Code; C2 makes it an editor in a Studio
+    tab where every operation is a text edit at a span in `procedure.aip`, compiled and redrawn,
+    saved as a draft revision through the server. What item 22 rejected was a second model of a
+    procedure with its own serializer and linter; this has neither, the compiler is the only rule
+    book. Authoring with an agent stays in the IDE; the Studio is for reading and adjusting.
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show

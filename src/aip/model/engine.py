@@ -52,6 +52,7 @@ run keeps everything up to the failure and `error`. The run carries `identity`: 
 from __future__ import annotations
 
 import copy
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +63,7 @@ from aip.model.environment import Requires, default_step_timeout
 from aip.model.procedure import Loop, Procedure, Step
 from aip.model.resolver import Resolver
 from aip.model.types import (
-    JSON, ERROR_KINDS, DecisionModelFailed, InvalidOutput, LoopCap, NoDecisionModel, NotPaused, StepError,
+    JSON, ERROR_KINDS, DecisionModelFailed, InvalidOutput, LoopCap, NoDecisionModel, NotPaused, StepError, resumable,
 )
 
 RUNNING, PAUSED, DONE, FAILED = "running", "paused", "done", "failed"
@@ -86,29 +87,36 @@ def new_identity(agent: str | None = None, session: str | None = None, user: str
 
 @dataclass
 class Cursor:
-    """One thread of execution: the state, the node about to run (`at`, None once done), the
-    loop frames from the outermost in, the entries written so far, the status, and the pause or
-    error when stopped. The run is a cursor; each pass of a `For` is one too, over its own copy
-    of the state, with `passes` naming the enclosing `For` passes (`[{"loop", "pass"}]`)."""
+    """One thread of execution: the state, the node about to run (`position`, None once done),
+    the loop frames from the outermost in, the entries written so far, the status, and the pause
+    or error when stopped. The run is a cursor; each pass of a `For` is one too, over its own
+    copy of the state, with `passes` naming the enclosing passes (`[{"loop", "pass"}]`). `loops`
+    holds the runtime's keys (spec 2.6: `index`, `iterations`, and each loop's own key), which a
+    step reads beside the state and which are never part of it."""
     state: JSON = field(default_factory=dict)
     history: list[JSON] = field(default_factory=list)
-    at: str | None = None
+    position: str | None = None
     status: str = RUNNING
     pause: JSON | None = None
     error: JSON | None = None
     frames: list[JSON] = field(default_factory=list)
     passes: list[JSON] = field(default_factory=list)
+    loops: JSON = field(default_factory=dict)
     before: list[JSON] = field(default_factory=list, repr=False)  # the history visible from before this cursor began
 
+    def view(self) -> JSON:
+        """What a step reads from: the state and the runtime's loop keys."""
+        return {**self.state, **self.loops}
+
     def to_dict(self) -> JSON:
-        return {"state": self.state, "history": self.history, "at": self.at, "status": self.status, "pause": self.pause,
-                "error": self.error, "frames": [_frame_to_dict(f) for f in self.frames], "passes": self.passes}
+        return {"status": self.status, "position": self.position, "state": self.state, "loops": self.loops, "history": self.history,
+                "pause": self.pause, "error": self.error, "frames": [_frame_to_dict(f) for f in self.frames], "passes": self.passes}
 
     @classmethod
     def from_dict(cls, data: JSON) -> "Cursor":
-        return cls(dict(data.get("state") or {}), list(data.get("history") or []), data.get("at"), data.get("status", RUNNING),
+        return cls(dict(data.get("state") or {}), list(data.get("history") or []), data.get("position"), data.get("status", RUNNING),
                    data.get("pause"), data.get("error"), [_frame_from_dict(f) for f in data.get("frames") or []],
-                   list(data.get("passes") or []))
+                   list(data.get("passes") or []), dict(data.get("loops") or {}))
 
 
 def _frame_to_dict(frame: JSON) -> JSON:
@@ -127,29 +135,33 @@ def _frame_from_dict(frame: JSON) -> JSON:
 class Run(Cursor):
     """One run of a procedure: the cursor at the top level, plus what belongs to the run as a
     whole. `result` is the End's keys when done; `error` the error object when `failed` (the
-    cursor stays at the step, and `Engine.retry` runs it again); `identity` who ran it."""
+    cursor stays at the step, and `Engine.retry` runs it again); `identity` who ran it;
+    `started` and `finished` when it began and when it last reached done or failed."""
     procedure: Procedure = None  # type: ignore[assignment]
     result: JSON | None = None
     requires_checked: bool = False
     batch: int = DEFAULT_BATCH
     identity: JSON = field(default_factory=new_identity)
+    started: str | None = None
+    finished: str | None = None
 
     @property
     def bundle_id(self) -> str:
         return self.procedure.bundle_id
 
     def to_dict(self) -> JSON:
-        return {"bundle_id": self.bundle_id, **super().to_dict(), "result": self.result, "requires_checked": self.requires_checked,
-                "batch": self.batch, "identity": self.identity}
+        return {"bundle_id": self.bundle_id, "started": self.started, "finished": self.finished, "identity": self.identity,
+                **super().to_dict(), "result": self.result, "requires_checked": self.requires_checked, "batch": self.batch}
 
     @classmethod
     def from_dict(cls, procedure: Procedure, data: JSON) -> "Run":  # type: ignore[override]
         if data.get("bundle_id") != procedure.bundle_id:
             raise ValueError(f"the run is of bundle {data.get('bundle_id')}, not {procedure.bundle_id}")
         cursor = Cursor.from_dict(data)
-        return cls(cursor.state, cursor.history, cursor.at, cursor.status, cursor.pause, cursor.error, cursor.frames, cursor.passes,
-                   procedure=procedure, result=data.get("result"), requires_checked=bool(data.get("requires_checked")),
-                   batch=int(data.get("batch") or DEFAULT_BATCH), identity={**new_identity(), **(data.get("identity") or {})})
+        return cls(cursor.state, cursor.history, cursor.position, cursor.status, cursor.pause, cursor.error, cursor.frames, cursor.passes,
+                   cursor.loops, procedure=procedure, result=data.get("result"), requires_checked=bool(data.get("requires_checked")),
+                   batch=int(data.get("batch") or DEFAULT_BATCH), identity={**new_identity(), **(data.get("identity") or {})},
+                   started=data.get("started"), finished=data.get("finished"))
 
 
 class Engine:
@@ -235,13 +247,13 @@ class Engine:
         """Step the cursor until it stops. For the run itself that is a pause, the end or a
         failure; for a `For` pass also the end of the pass."""
         while cursor.status == RUNNING:
-            if cursor.at is None:
+            if cursor.position is None:
                 raise RuntimeError("a running cursor has no step to run")
             try:
-                if run.procedure.is_loop(cursor.at):
-                    self._loop(run, cursor, run.procedure.loop(cursor.at))
+                if run.procedure.is_loop(cursor.position):
+                    self._loop(run, cursor, run.procedure.loop(cursor.position))
                 else:
-                    self._step(run, cursor, run.procedure.step(cursor.at))
+                    self._step(run, cursor, run.procedure.step(cursor.position))
             except StepError as err:
                 cursor.status, cursor.error = FAILED, {**err.to_dict(), **_where(cursor)}
         return run
@@ -255,7 +267,7 @@ class Engine:
             case "End":
                 result = steps.end(step, state)
                 self._record(run, cursor, step, result, result)
-                run.result, cursor.status, cursor.at = result, DONE, None
+                run.result, cursor.status, cursor.position = result, DONE, None
             case "Route":
                 flow, record = steps.route(procedure, step, state)
                 self._record(run, cursor, step, {record["read"]: record["answer"]}, {"to": record["to"]},
@@ -263,7 +275,7 @@ class Engine:
                 if flow.continues:
                     self._pass_over(run, cursor, flow.to)
                 else:
-                    cursor.at = flow.to
+                    cursor.position = flow.to
             case "Aggregate":
                 produced, resolutions = steps.aggregate(procedure, step, state)
                 key = step.produced_key()
@@ -346,7 +358,7 @@ class Engine:
         if flow.type == "CONTINUES":
             self._pass_over(run, cursor, flow.to)
         else:  # NEXT, or AGAIN: re-enter at a step at the loop's level; the pass ends when the loop is reached
-            cursor.at = flow.to
+            cursor.position = flow.to
 
     def _pass_over(self, run: Run, cursor: Cursor, loop_id: str) -> None:
         """`Continue`, or a loop's exit line reaching the enclosing loop: the pass is over. For a
@@ -354,10 +366,10 @@ class Engine:
         if cursor.frames and cursor.frames[-1]["loop"] == loop_id:
             frame = cursor.frames[-1]
             frame["count"] += 1
-            cursor.at = loop_id
+            cursor.position = loop_id
             self._head(run, cursor, run.procedure.loop(loop_id), frame)
         else:
-            cursor.status, cursor.at = DONE, loop_id
+            cursor.status, cursor.position = DONE, loop_id
 
     # ------------------------------------------------------------ loops
 
@@ -404,7 +416,7 @@ class Engine:
         cursor.state[loop.name] = {steps.INDEX: count}  # the loop's own key (spec 2.6): `revise.index`
         if loop.mode == "Over":
             cursor.state[loop.item] = copy.deepcopy(frame["items"][count])
-        cursor.at = loop.enters
+        cursor.position = loop.enters
 
     def _exit_loop(self, run: Run, cursor: Cursor, loop: Loop, frame: JSON, exit: JSON, result: JSON | None = None) -> None:
         """A loop is over: its frame goes, `iterations` (and a `For`'s list) are written, its
@@ -431,7 +443,7 @@ class Engine:
         if flow.type == "CONTINUES":
             self._pass_over(run, cursor, flow.to)
         else:
-            cursor.at = flow.to
+            cursor.position = flow.to
 
     def _for(self, run: Run, cursor: Cursor, loop: Loop, frame: JSON | None) -> None:
         """A `For`: independent passes over a list, `batch` at a time, each a cursor of its own
@@ -452,7 +464,7 @@ class Engine:
             for p in frame["cursors"]:  # a pass sees the record as it was before the loop, whatever batch it is in
                 p.before = [*cursor.before, *cursor.history[:frame["before"]]]
             ready = [p for p in frame["cursors"] if p.status == RUNNING]
-            if batched is not None and self.resolver is not None and ready and all(p.at == batched.id and not p.history for p in ready):
+            if batched is not None and self.resolver is not None and ready and all(p.position == batched.id and not p.history for p in ready):
                 self._decide_batch(run, cursor, batched, ready)
             for p in frame["cursors"]:
                 if p.status == RUNNING:
@@ -526,21 +538,21 @@ class Engine:
         """The cursor a task belongs to (the run, or a `For` pass, following the task's `passes`)
         and the step it waits at."""
         cursor: Cursor = run
-        while cursor.at is not None and run.procedure.is_loop(cursor.at) and cursor.frames and cursor.frames[-1]["kind"] == "For" \
-                and cursor.frames[-1]["loop"] == cursor.at:
+        while cursor.position is not None and run.procedure.is_loop(cursor.position) and cursor.frames and cursor.frames[-1]["kind"] == "For" \
+                and cursor.frames[-1]["loop"] == cursor.position:
             frame = cursor.frames[-1]
             wanted = next((e["pass"] for e in task.get("passes") or [] if e["loop"] == frame["name"]), None)
             found = next((p for p in frame["cursors"] if p.passes[-1]["pass"] == wanted), None)
             if found is None:
                 raise InvalidOutput(frame["name"], [f"task {task['index']} names no pass of {frame['name']}"])
             cursor = found
-        if cursor.at is None or run.procedure.is_loop(cursor.at):
+        if cursor.position is None or run.procedure.is_loop(cursor.position):
             raise NotPaused(None, f"task {task['index']} is not waiting at a step")
-        return cursor, run.procedure.step(cursor.at)
+        return cursor, run.procedure.step(cursor.position)
 
     def _clear_failure(self, run: Run, cursor: Cursor) -> None:
         cursor.error, cursor.status = None, RUNNING
-        if cursor.at is not None and run.procedure.is_loop(cursor.at) and cursor.frames and cursor.frames[-1]["kind"] == "For":
+        if cursor.position is not None and run.procedure.is_loop(cursor.position) and cursor.frames and cursor.frames[-1]["kind"] == "For":
             for p in cursor.frames[-1]["cursors"]:
                 if p.status == FAILED:
                     self._clear_failure(run, p)
