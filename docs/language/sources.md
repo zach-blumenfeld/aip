@@ -28,10 +28,15 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
 
 ## The console
 
-`zach-blumenfeld/aip-console-dev`, a private mirror of `zach-blumenfeld/aip-console`; the 0.9
-branch is `console-0.9.0`. Local checkout `~/dev/aip-inspector` with remote `dev` pointing at the
-mirror. Its AGENTS.md describes the launcher, the API client and the e2e harness; the harness runs
-the sibling `aip` checkout from `AIP_REPO`, which for 0.9 is `~/dev/aip-0.9`.
+Until milestone C1 it lives in `zach-blumenfeld/aip-console-dev`, a private mirror of
+`zach-blumenfeld/aip-console`; the 0.9 branch is `console-0.9.0`, local checkout
+`~/dev/aip-inspector` with remote `dev` pointing at the mirror. **C1 moves it into this repo**
+(plan open item 13, settled 2026-11-09): `git subtree add --prefix=console <that remote>
+console-0.9.0`, history kept, then all console work happens in `console/` here and the mirror
+becomes an archive. Its AGENTS.md describes the launcher, the API client and the e2e harness; the
+harness runs the `aip` checkout from `AIP_REPO`, which after the move is this repository (`..`).
+The console stays its own npm package with its own release workflow, and the Python build
+excludes `console/`, so the PyPI wheel carries no npm content.
 
 ## Relate (formerly CypherLite)
 

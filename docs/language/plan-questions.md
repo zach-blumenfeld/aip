@@ -173,9 +173,12 @@ Settled items are marked.
     (milestone K2, after the demo): a SKILL.md and the files, derived from the graph, followed by
     hand with no guarantees, from a bundle or a published name through the server. Discovery in
     0.9 is the catalog over MCP.
-31. **Open 2026-11-09.** Whether the console moves into this repo as `console/` with its own npm
-    release workflow (the PyPI wheel carries no npm content). Zach is weighing it; the plan's open
-    item 13 has the default if he says yes (at C1, by subtree, history kept).
+31. **Settled 2026-11-09.** The console moves into this repo as `console/`, by subtree at the
+    start of C1 with its history kept, released by its own npm workflow from that folder; the
+    Python build excludes it, so the PyPI wheel carries no npm content, which was the reason for
+    two repos. One plan, one history, one commit when the server API and the console change
+    together, and one home for the card canvas the console and the VS Code extension share.
+    `aip-console-dev` becomes an archive; D5 moves one repo.
 
 ## Decided after the first-use reports (2026-11-09)
 

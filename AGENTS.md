@@ -14,9 +14,10 @@ compiler (`aip.compiler`: parser, checker, formatter, graph, bundle), the engine
 `agent-instruction-protocol` (PyPI blocks `aip` as a look-alike of an existing project); its
 module and command are `aip`. Until 0.9 the language was a second package, `aip-spec`, in a uv
 workspace under `packages/`; it folded in at plan milestone L5 (2026-11-09) and the `aip-spec`
-distribution stays at 0.8 on PyPI with no further release. The web console is a separate
-repository, [aip-console](https://github.com/zach-blumenfeld/aip-console), with its own npm
-version.
+distribution stays at 0.8 on PyPI with no further release. The web console,
+[aip-console](https://github.com/zach-blumenfeld/aip-console) on npm, moves into this repository
+as `console/` at plan milestone C1 (its own npm version and release workflow; excluded from the
+Python build); until then it is the separate `aip-console-dev` mirror named in `docs/language/sources.md`.
 
 ## This is the private 0.9 mirror
 
