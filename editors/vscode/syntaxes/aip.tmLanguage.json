@@ -221,7 +221,7 @@
     },
     "question": {
       "comment": "name: true_or_false|choice|score [labels]",
-      "begin": "([a-z][a-z0-9_]*)\\s*(:)\\s*(true_or_false|noul|choice|score)\\b",
+      "begin": "([a-z][a-z0-9_]*)\\s*(:)\\s*(true_or_false|choice|score)\\b",
       "beginCaptures": {
         "1": {
           "name": "variable.other.key.aip"
@@ -261,7 +261,7 @@
     },
     "type": {
       "name": "support.type.aip",
-      "match": "\\b(string|integer|float|number|boolean|list|array|object|true_or_false|noul|choice|score|decision)\\b"
+      "match": "\\b(string|integer|float|number|boolean|list|array|object|true_or_false|choice|score|decision)\\b"
     },
     "constant": {
       "patterns": [

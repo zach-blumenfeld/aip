@@ -89,13 +89,13 @@ class TheGraph(unittest.TestCase):
                           "description": "Classify whether the message is about billing and how upset the customer is.",
                           "history": False, "produces": "triage_decision",
                           "line": 0, "column": 0, "end_line": 0, "end_column": 0})
-        self.assertEqual(props(g, "step:triage")["line"], 34)
+        self.assertEqual(props(g, "step:triage")["line"], 36)
         q = props(g, "question:triage.tone")
         self.assertEqual((q["type"], q["labels"], q["order"], q["criteria_labels"]), ("choice", ["angry", "calm"], 1, ["angry", "calm"]))
         self.assertTrue(q["instruction"].startswith("How upset is the customer?"), "a named string is resolved")
         self.assertEqual(one(g, "ASKS", "step:triage", "question:triage.tone"), {"order": 1})
-        self.assertEqual(props(g, "step:by_tone")["check_below"], 0.6)
-        self.assertEqual(one(g, "BELOW", "step:by_tone", "step:escalate")["below"], 0.6)
+        self.assertEqual(props(g, "step:by_tone")["check_below"], 0.9)
+        self.assertEqual(one(g, "BELOW", "step:by_tone", "step:escalate")["below"], 0.9)
         self.assertEqual(one(g, "BRANCH", "step:by_tone", "step:escalate")["value"], "angry")
         self.assertEqual(one(g, "BRANCH", "step:by_tone", "step:reply")["value"], "calm")
         read = one(g, "READ_BY", "data:triage_decision", "step:by_tone")
@@ -122,7 +122,7 @@ class TheGraph(unittest.TestCase):
         p = props(g, PROCEDURE_ID)
         self.assertEqual((p["requires_interpreter"], p["requires_version"], len(p["use_when"]), len(p["avoid"])), ("python", "3.10", 2, 2))
         self.assertEqual([e.end for e in g.edges_of("NEXT", "step:start")], ["step:triage"])
-        self.assertEqual(one(g, "NEXT", "step:start", "step:triage")["line"], 31, "a flow edge carries the clause's span")
+        self.assertEqual(one(g, "NEXT", "step:start", "step:triage")["line"], 33, "a flow edge carries the clause's span")
 
     def test_billing_support_agent(self):
         """The agent decides: labels on the produced key, the route's source is `agent`, no check."""
@@ -297,7 +297,7 @@ class TheBundleFile(unittest.TestCase):
         edits = {
             "a step": "MATCH (s:Step {name: 'triage'}) SET s.history = true",
             "a question's labels": "MATCH (q:Question {name: 'tone'}) SET q.labels = ['angry', 'calm', 'furious']",
-            "the source": "MATCH (p:Procedure) SET p.source = replace(p.source, 'Confidence_Below 0.6', 'Confidence_Below 0.9')",
+            "the source": "MATCH (p:Procedure) SET p.source = replace(p.source, 'Confidence_Below 0.9', 'Confidence_Below 0.6')",
             "a file": "MATCH (f:File {path: 'assets/config.json'}) SET f.text = '{}'",
             "an edge": "MATCH (:Route)-[b:BRANCH {value: 'angry'}]->() SET b.value = 'furious'",
             "a route's source class": "MATCH (:Data)-[r:READ_BY]->(:Route) SET r.source = 'agent'",
@@ -413,8 +413,7 @@ class CompileAndExportCommands(unittest.TestCase):
         self.assertEqual(code, 1)
         report = json.loads(out)
         self.assertEqual(report["file"], str(example / "procedure.aip"))
-        self.assertEqual([(d["code"], d["line"]) for d in report["diagnostics"] if d["severity"] == "error"][:2],
-                         [("unknown_step", 43), ("unreachable_step", 46)])
+        self.assertEqual([(d["code"], d["line"]) for d in report["diagnostics"]], [("unknown_step", 45)])
         with redirect_stdin(io.StringIO(source.replace("by_tonne", "by_tone"))):
             code, out, _ = self.run_cli("compile", "--check", "--json", "--stdin", str(example))
         self.assertEqual(code, 0)
@@ -463,7 +462,7 @@ class CompileAndExportCommands(unittest.TestCase):
             code, out, err = self.run_cli("compile", str(bad))
         self.assertEqual((code, out), (1, ""))
         self.assertIn("error unknown_step", err)
-        self.assertTrue(err.rstrip().endswith("2 errors"), err)
+        self.assertTrue(err.rstrip().endswith("1 error"), err)
         self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["bad"])
 
     def test_the_aip_command_has_export(self):

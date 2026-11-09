@@ -42,7 +42,7 @@ def calm():
 
 
 def angry():
-    return {"billing": answers.true_or_false(0.97), "tone": answers.choice({"calm": 0.2, "angry": 0.8})}
+    return {"billing": answers.true_or_false(0.97), "tone": answers.choice({"calm": 0.05, "angry": 0.95})}
 
 
 def unsure():
@@ -133,7 +133,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(run.state["queue"], "tier2")
         self.assertTrue((self.home / "cache" / self.bundle.id / "scripts" / "escalate.py").is_file())
         route = run.history[2]
-        self.assertEqual(route["check"], {"below": 0.6, "confidence": 0.8, "fired": False, "reason": None})
+        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.95, "fired": False, "reason": None})
         self.assertEqual((route["value"], route["to"]), ("angry", "escalate"))
 
     def test_the_confidence_arm_escalates_an_unsure_calm(self):
@@ -143,7 +143,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(self.steps_of(run), ["start", "triage", "by_tone", "escalate", "end"])
         route = run.history[2]
         self.assertEqual(route["read"], "triage_decision.tone")
-        self.assertEqual(route["check"], {"below": 0.6, "confidence": 0.55, "fired": True, "reason": "below"})
+        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.55, "fired": True, "reason": "below"})
         self.assertEqual((route["value"], route["to"], route["result"]), (None, "escalate", {"to": "escalate"}))
 
     def test_without_a_model_the_decision_fails_the_run_and_a_retry_with_one_goes_on(self):
@@ -378,7 +378,7 @@ class Aggregations(EngineCase):
     def test_all_any_none_with_bars_and_not_equal(self):
         engine, resolver, run = self.run_with(
             {"pii": answers.true_or_false(0.95), "claims": answers.true_or_false(0.6)},
-            {"tone": answers.choice({"calm": 0.75, "angry": 0.25}), "risk": answers.score({0: 0.5, 1: 0.3, 2: 0.2})})
+            {"tone": answers.choice({"calm": 0.75, "angry": 0.25}), "risk": answers.score({"low": 0.5, "medium": 0.3, "high": 0.2})})
         summary = run.state["summary"]
         self.assertEqual(summary, {"all_hold": {"value": True}, "both": {"value": False}, "any_fails": {"value": False},
                                    "none_angry": {"value": False}, "not_high": {"value": True}},
@@ -395,8 +395,8 @@ class Aggregations(EngineCase):
         self.assertEqual(r["any_fails"], [{"source": "policy_check.claims", "value": True, "holds": False, "probability": 0.4, "barred": False}])
         # None: `== angry` at 0.25 is under the 0.8 bar, so it counts as holding, which is what fails a None
         self.assertEqual(r["none_angry"], [{"source": "judgement.tone", "value": "calm", "holds": True, "probability": 0.25, "barred": True}])
-        # != high on a score: the level by its label; the probability is 1 - p(high) = 0.8, above the bar
-        self.assertEqual(r["not_high"], [{"source": "judgement.risk", "value": 0, "holds": True, "probability": 0.8, "barred": False}])
+        # != high on a score, whose value is its level's label; the probability is 1 - p(high) = 0.8, above the bar
+        self.assertEqual(r["not_high"], [{"source": "judgement.risk", "value": "low", "holds": True, "probability": 0.8, "barred": False}])
         # the route read summary.both (false) with no check and went to fix; the prompt names the fields
         self.assertEqual(run.status, PAUSED)
         self.assertEqual(run.history[4]["check"], None)
@@ -414,14 +414,14 @@ class Aggregations(EngineCase):
     def test_an_aggregation_that_holds_routes_to_the_end(self):
         engine, _, run = self.run_with(
             {"pii": answers.true_or_false(0.95), "claims": answers.true_or_false(0.9)},
-            {"tone": answers.choice({"calm": 0.9, "angry": 0.1}), "risk": answers.score({0: 0.9, 1: 0.05, 2: 0.05})})
+            {"tone": answers.choice({"calm": 0.9, "angry": 0.1}), "risk": answers.score({"low": 0.9, "medium": 0.05, "high": 0.05})})
         self.assertEqual((run.status, run.state["summary"]["both"]), (DONE, {"value": True}))
         self.assertEqual(self.steps_of(run), ["start", "check", "judge", "summarize", "by_all", "end"])
         self.assertEqual(set(run.result), {"work", "summary"})
 
     def test_answers_without_probabilities_fail_every_bar(self):
         """A model that returns bare values (no probabilities) is unknown under a bar, so every bar fails closed."""
-        _, _, run = self.run_with({"pii": {"value": True}, "claims": {"value": True}}, {"tone": {"value": "calm"}, "risk": {"value": 0}})
+        _, _, run = self.run_with({"pii": {"value": True}, "claims": {"value": True}}, {"tone": {"value": "calm"}, "risk": {"value": "low"}})
         summary = run.state["summary"]
         self.assertEqual(summary["all_hold"], {"value": True}, "no bar: the condition counts as it is")
         self.assertEqual(summary["both"], {"value": False})
@@ -431,9 +431,26 @@ class Aggregations(EngineCase):
 
     def test_a_model_answer_is_checked_against_the_questions(self):
         _, _, run = self.run_with({"pii": answers.true_or_false(0.95), "claims": answers.true_or_false(0.6)},
-                                  {"tone": answers.choice({"calm": 0.75, "angry": 0.25}), "risk": {"value": 7}})
+                                  {"tone": answers.choice({"calm": 0.75, "angry": 0.25}), "risk": {"value": "extreme"}})
         self.assertEqual((run.status, run.error["error"], run.error["step"], run.error["invalid"]), (FAILED, "invalid_output", "judge", ["risk"]))
-        self.assertIn("level 7 is outside 0..2", run.error["message"])
+        self.assertIn("'extreme' is not one of the levels ['low', 'medium', 'high']", run.error["message"])
+
+    def test_a_score_from_the_model_as_a_number_is_refused(self):
+        """Spec 2.4: a score's value is its level's label; the resolver maps the model's number on receipt."""
+        _, _, run = self.run_with({"pii": answers.true_or_false(0.95), "claims": answers.true_or_false(0.6)},
+                                  {"tone": answers.choice({"calm": 0.75, "angry": 0.25}), "risk": {"value": 2}})
+        self.assertEqual((run.status, run.error["error"], run.error["invalid"]), (FAILED, "invalid_output", ["risk"]))
+
+    def test_a_bar_holds_only_strictly_above_it(self):
+        """Spec 2.5: `With Confidence_Above 0.7` is above 0.7; an answer at the bar is barred."""
+        _, _, run = self.run_with({"pii": answers.true_or_false(0.95), "claims": answers.true_or_false(0.7)},
+                                  {"tone": answers.choice({"calm": 0.9, "angry": 0.1}), "risk": answers.score({"low": 0.9, "medium": 0.05, "high": 0.05})})
+        self.assertEqual(run.history[3]["resolutions"]["both"][1],
+                         {"source": "policy_check.claims", "value": True, "holds": False, "probability": 0.7, "barred": True})
+        self.assertEqual(run.state["summary"]["both"], {"value": False})
+        from aip.model import steps
+        just_above = steps.resolve_condition(answers.true_or_false(0.71), "true_or_false", None, None, 0.7, fails_as=False)
+        self.assertEqual((just_above["holds"], just_above["barred"]), (True, False))
 
 
 SCRIPTS = '''
@@ -584,17 +601,18 @@ End "Done." {
 @needs_relate
 class Scores(EngineCase):
     def test_a_score_branches_by_the_label_of_its_level(self):
-        engine = self.engine(ScriptedResolver({"rate": {"urgency": answers.score({"0": 0.1, "1": 0.2, "2": 0.7})}}))
+        engine = self.engine(ScriptedResolver({"rate": {"urgency": answers.score({"low": 0.1, "medium": 0.2, "high": 0.7})}}))
         run = engine.start(self.load(program(SCORED)), {"text": "server down"})
         self.assertEqual((run.status, run.pause["step"]), (PAUSED, "escalate"))
-        self.assertEqual(run.state["rating"]["urgency"], {"value": 2, "confidence": 0.7, "score": 1.6, "probabilities": {"0": 0.1, "1": 0.2, "2": 0.7}})
+        self.assertEqual(run.state["rating"]["urgency"], {"value": "high", "confidence": 0.7, "score": 1.6, "probabilities": {"low": 0.1, "medium": 0.2, "high": 0.7}},
+                         "the value is the level's label, the expected level stays beside it as score")
         self.assertEqual((run.history[2]["value"], run.history[2]["to"]), ("high", "escalate"))
-        self.assertEqual(run.pause["tasks"][0]["prompt"], "Escalate: urgency 2.")
+        self.assertEqual(run.pause["tasks"][0]["prompt"], "Escalate: urgency high.")
         run = engine.resume(run, [{"note": "paged"}])
         self.assertEqual(run.status, DONE)
 
     def test_an_unsure_score_takes_the_check(self):
-        engine = self.engine(ScriptedResolver({"rate": {"urgency": answers.score({"0": 0.3, "1": 0.3, "2": 0.4})}}))
+        engine = self.engine(ScriptedResolver({"rate": {"urgency": answers.score({"low": 0.3, "medium": 0.3, "high": 0.4})}}))
         run = engine.start(self.load(program(SCORED)), {"text": "x"})
         self.assertEqual((run.status, self.steps_of(run)), (DONE, ["start", "rate", "by_urgency", "end"]))
         self.assertEqual(run.history[2]["check"]["reason"], "below")
@@ -674,7 +692,7 @@ class DynamicPolicy(EngineCase):
         self.assertEqual([r["source"] for r in summary["resolutions"]["all_hold"]], ["verdicts[0].follows", "verdicts[1].follows", "verdicts[2].follows"])
         fix = run.history[7]
         self.assertEqual(fix["kind"], "Task_Agent")
-        self.assertEqual(set(fix["input"]), {"task", "work", "policies", "verdicts"})
+        self.assertEqual(set(fix["input"]), {"task", "work", "policies", "verdicts", "check_summary"})
         revise = run.history[13]
         self.assertEqual((revise["kind"], revise["pass"], revise["passes"]), ("Loop", None, []))
         self.assertEqual(revise["exit"], {"reason": "until", "where": "summarize_check", "resolution": {
@@ -1055,6 +1073,75 @@ End "Out." {
 '''
 
 
+LOOP_KEYS = """
+Procedure loop_keys "Each loop has its own index and iterations."
+
+Start "A list." {
+  items: list
+  Next_Step outer
+}
+
+Loop outer 2 Times {
+  For inner Over items As item, At_Most 5 {
+    Task_Agent each "Item {item}, pass {inner.index} of the inner loop, pass {outer.index} of the outer." {
+      Read item, inner.index
+      Produce o: string
+      Continue
+    }
+
+    Next_Step after
+  }
+
+  Task_Agent after "The inner loop ran {inner.iterations} passes in pass {outer.index}." {
+    Read inner, outer, iterations, index
+    Produce note: string
+    Continue
+  }
+
+  Next_Step last
+}
+
+Task_Agent last "Inner {inner.iterations}, outer {outer.iterations}." {
+  Read inner, outer, iterations
+  Produce z: string
+  Next_Step end
+}
+
+End "Done." {
+  Read z
+}
+"""
+
+
+@needs_relate
+class LoopKeys(EngineCase):
+    """Spec 2.6: each loop's name is the runtime's key for it, `<loop>.index` while it runs and
+    `<loop>.iterations` once it has exited, so the inner loop's count outlives the outer loop's."""
+
+    def test_each_loop_writes_its_index_and_its_iterations_under_its_name(self):
+        engine = self.engine()
+        run = engine.start(self.load(program(LOOP_KEYS)), {"items": ["a", "b", "c"]})
+        for outer in (0, 1):
+            self.assertEqual((run.status, run.pause["step"]), (PAUSED, "each"))
+            self.assertEqual([t["state"] for t in run.pause["tasks"]], [{"item": x, "index": i} for i, x in enumerate("abc")],
+                             "Read inner.index: the step sees it under the last word of the path")
+            self.assertEqual(run.pause["tasks"][1]["prompt"], f"Item b, pass 1 of the inner loop, pass {outer} of the outer.")
+            run = engine.resume(run, [{"o": "x"}] * 3)
+            self.assertEqual((run.status, run.pause["step"]), (PAUSED, "after"))
+            [task] = run.pause["tasks"]
+            self.assertEqual(task["state"], {"inner": {"iterations": 3}, "outer": {"index": outer}, "iterations": 3, "index": outer},
+                             "the bare words are the last loop that exited and the innermost loop running")
+            self.assertEqual(task["prompt"], f"The inner loop ran 3 passes in pass {outer}.")
+            run = engine.resume(run, {"note": "n"})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "last"))
+        [task] = run.pause["tasks"]
+        self.assertEqual(task["state"], {"inner": {"iterations": 3}, "outer": {"iterations": 2}, "iterations": 2},
+                         "the outer loop's exit moved the bare iterations and left the inner loop's own")
+        self.assertEqual(task["prompt"], "Inner 3, outer 2.")
+        run = engine.resume(run, {"z": "done"})
+        self.assertEqual((run.status, run.result), (DONE, {"z": "done"}))
+
+
 @needs_relate
 class Independence(EngineCase):
     def test_a_pass_reading_the_item_calls_alone_and_sees_only_the_record_before_the_loop(self):
@@ -1211,10 +1298,11 @@ class Answers(unittest.TestCase):
         self.assertEqual(answers.true_or_false(0.98), {"value": True, "confidence": 0.96, "noul": 0.98})
         self.assertEqual(answers.true_or_false(0.3)["value"], False)
         self.assertEqual(answers.choice({"angry": 0.9, "calm": 0.1}), {"value": "angry", "confidence": 0.9, "probabilities": {"angry": 0.9, "calm": 0.1}})
-        self.assertEqual(answers.score({0: 0.1, 1: 0.1, 2: 0.8}), {"value": 2, "confidence": 0.8, "score": 1.7, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}})
+        self.assertEqual(answers.score({"low": 0.1, "medium": 0.1, "high": 0.8}),
+                         {"value": "high", "confidence": 0.8, "score": 1.7, "probabilities": {"low": 0.1, "medium": 0.1, "high": 0.8}})
         self.assertEqual(answers.probability_of(answers.true_or_false(0.98), "true_or_false", False), 1 - 0.98)
         self.assertEqual(answers.probability_of(answers.choice({"a": 0.6, "b": 0.4}), "choice", "b"), 0.4)
-        self.assertEqual(answers.probability_of(answers.score({0: 0.6, 1: 0.4}), "score", 1), 0.4)
+        self.assertEqual(answers.probability_of(answers.score({"low": 0.6, "high": 0.4}), "score", "high"), 0.4)
         self.assertIsNone(answers.probability_of({"value": True}, "true_or_false", True))
 
     def test_conforms_and_normalise(self):
@@ -1232,8 +1320,10 @@ class Answers(unittest.TestCase):
         self.assertIsNotNone(conforms("choice", {"value": "a", "probabilities": {"a": 2}}), "probabilities are numbers in 0..1")
         self.assertIsNone(conforms("choice", {"value": "a", "probabilities": {"a": 0.7, "b": 0.3}}))
         self.assertIsNotNone(conforms("true_or_false", True), "a bare value is normalised before it is checked")
-        self.assertEqual((branch_key(True), branch_key("calm"), branch_key(2, ["low", "medium", "high"]), branch_key(5)),
-                         ("true", "calm", "high", "5"))
+        self.assertIsNone(conforms("score", {"value": "high"}, ["low", "high"]))
+        self.assertIsNotNone(conforms("score", {"value": 1}, ["low", "high"]), "a score's value is its level's label, not its number")
+        self.assertEqual(normalise("score", "high"), {"value": "high"})
+        self.assertEqual((branch_key(True), branch_key(False), branch_key("calm"), branch_key("high")), ("true", "false", "calm", "high"))
 
 
 if __name__ == "__main__":

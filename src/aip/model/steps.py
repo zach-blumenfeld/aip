@@ -27,13 +27,13 @@ from aip.model.answers import probability_of
 from aip.model.procedure import Aggregation, Flow, Loop, Procedure, Question, Step
 from aip.model.resolver import DecisionRequest
 from aip.model.types import (
-    ANSWER_FIELDS, JSON, VALUE_KIND, InvalidInput, InvalidOutput, LoopCap, NoBranch, ScriptFailed, ScriptTimeout, branch_key,
+    ANSWER_FIELDS, JSON, InvalidInput, InvalidOutput, LoopCap, NoBranch, ScriptFailed, ScriptTimeout, branch_key,
     conforms, describe, extra_fields, normalise,
 )
 
 WORKDIR = "AIP_WORKDIR"
 PYTHON = "python"
-INDEX, ITERATIONS = "index", "iterations"   # the runtime's keys (spec 2.1, Loops)
+INDEX, ITERATIONS = "index", "iterations"   # the runtime's keys (spec 2.6)
 PASS_SUFFIX = "__"                           # `follows__3`: question `follows` of pass 3 in a batched call (runtime.md)
 
 _FIELD = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
@@ -115,7 +115,7 @@ def answer_with(step: Step) -> dict[str, str | None]:
 
 def labels_of(step: Step) -> dict[str, list[str]]:
     """`{key: labels}` for the `Produce` keys declared under labels (`tone: choice [angry, calm]`):
-    the values an agent's `choice` answer may take, or the levels of its `score`."""
+    the values an agent's `choice` answer may take, or the levels of its `score`, by label."""
     return {p.key: list(p.labels) for p in step.produces if p.labels}
 
 
@@ -299,9 +299,9 @@ def route(procedure: Procedure, step: Step, state: JSON) -> tuple[Flow, JSON]:
         if fired:
             record["to"] = _name(check)
             return check, record
-    key = branch_key(answer["value"], procedure.labels_of(read.path))
+    key = branch_key(answer["value"])
     for b in step.branches:
-        if b.value == key or b.value == str(answer["value"]):
+        if b.value == key:
             record["value"] = b.value
             record["to"] = _name(b)
             return b, record
@@ -332,39 +332,35 @@ def _leaf_answers(value: Any, path: list[str], label: str) -> list[tuple[str, JS
 
 
 def _answer_type(answer: JSON) -> str | None:
+    """`true_or_false` for a boolean value; `choice` for a label, which is what a `score`'s value
+    is too: a condition treats the two alike, comparing labels and reading `probabilities[label]`."""
     v = answer["value"]
     if isinstance(v, bool):
         return "true_or_false"
     if isinstance(v, str):
         return "choice"
-    if isinstance(v, int):
-        return "score"
     return None
 
 
-def _target(type: str | None, word: str | None, labels: list[str] | None) -> Any:
-    """The value a condition's word stands for: `true`/`false`, a label, or a level (by label or number)."""
+def _target(type: str | None, word: str | None) -> Any:
+    """The value a condition's word stands for: `true`/`false`, or a label."""
     if type == "true_or_false":
         return word == "true" if word is not None else True
-    if type == "score" and word is not None:
-        if labels and word in labels:
-            return labels.index(word)
-        if word.isdigit():
-            return int(word)
     return word
 
 
 def resolve_condition(answer: JSON, type: str | None, operator: str | None, word: str | None, bar: float | None,
-                      labels: list[str] | None, fails_as: bool) -> JSON:
+                      fails_as: bool) -> JSON:
     """One answer against a condition (spec 2.5, step 1): whether it holds, the probability the
-    answer put on the condition (`1 −` for `!=`), and whether a bar turned it to `fails_as`."""
-    target = _target(type, word, labels)
+    answer put on the condition (`1 −` for `!=`), and whether a bar turned it to `fails_as`. A
+    bar holds only strictly above it: a probability at the bar, below it, or absent is barred."""
+    target = _target(type, word)
     equal = answer["value"] == target
     holds = equal if operator != "!=" else not equal
     p = probability_of(answer, type or "", target) if type else None
     if p is not None and operator == "!=":
         p = 1 - p
-    barred = bar is not None and (p is None or p < bar)
+    barred = bar is not None and (p is None or p <= bar)
     if barred:
         holds = fails_as
     return {"value": answer["value"], "holds": holds, "probability": None if p is None else round(p, 6), "barred": barred}
@@ -381,11 +377,10 @@ def aggregate(procedure: Procedure, step: Step, state: JSON) -> tuple[JSON, JSON
         except KeyError as err:
             raise InvalidInput(step.name, [f"the source {agg.dotted} of {agg.name} is not an answer in the state ({err.args[0]})"],
                                invalid=[agg.dotted])
-        labels = procedure.labels_of(agg.source)
         fails_as = agg.mode == "None"
         rows = []
         for label, answer in leaves:
-            resolution = resolve_condition(answer, _answer_type(answer), agg.operator, agg.value, agg.confidence_above, labels, fails_as)
+            resolution = resolve_condition(answer, _answer_type(answer), agg.operator, agg.value, agg.confidence_above, fails_as)
             rows.append({"source": label, **resolution})
         held = [r["holds"] for r in rows]
         value = all(held) if agg.mode == "All" else any(held) if agg.mode == "Any" else not any(held)
@@ -398,7 +393,7 @@ def aggregate(procedure: Procedure, step: Step, state: JSON) -> tuple[JSON, JSON
 
 def loop_items(loop: Loop, state: JSON) -> list:
     """The list a `For` or a fold runs over, and the cap check before the first pass: a list
-    longer than `At_Most` is `loop_cap` (spec 2.1, Loops)."""
+    longer than `At_Most` is `loop_cap` (spec 2.6)."""
     assert loop.over is not None
     try:
         items = lookup(state, loop.over)
@@ -416,7 +411,7 @@ def until_holds(procedure: Procedure, loop: Loop, state: JSON) -> tuple[bool, JS
     """Whether a `Loop`'s `Until` condition holds on the state, and the answer's resolution for
     the record. An absent answer does not hold and resolves to None; otherwise the condition is
     the spec's (2.1, Conditions): `== value`, `!= value`, `== true` for a bare `true_or_false`,
-    and with `With Confidence_Above` a probability below the bar, or none, does not hold."""
+    and with `With Confidence_Above` only a probability strictly above the bar holds."""
     until = loop.until
     assert until is not None
     try:
@@ -425,8 +420,7 @@ def until_holds(procedure: Procedure, loop: Loop, state: JSON) -> tuple[bool, JS
         return False, None
     if not isinstance(answer, dict) or "value" not in answer:
         raise InvalidInput(loop.name, [f"{until.dotted} is {describe(answer)}, not an answer with a value"], invalid=[until.dotted])
-    resolution = resolve_condition(answer, _answer_type(answer), until.operator, until.value, until.confidence_above,
-                                   procedure.labels_of(until.path), fails_as=False)
+    resolution = resolve_condition(answer, _answer_type(answer), until.operator, until.value, until.confidence_above, fails_as=False)
     return bool(resolution["holds"]), {"answer": until.dotted, **resolution}
 
 

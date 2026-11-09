@@ -18,7 +18,15 @@ states to every node: the keys definitely available on every path (for `Read`, t
 routes, conditions and aggregation sources) and the producers that may have written each key on
 some path (for `duplicate_producer`), with the type every declaration must agree on. A loop's
 effect on the state is computed from its body's exit points, as section 2.3 describes: a `For`
-leaves only what it collects, a `Loop` leaves what every exit has written."""
+leaves only what it collects, a `Loop` leaves what every exit has written.
+
+One mistake, one error. A finding that is only the consequence of another is not reported: a
+region with a flow that did not resolve (`unknown_step`, a missing `Next_Step` or loop exit, a
+flow across a loop's braces) reports no `unreachable_step`, since nothing can be said about what
+the flow would have reached; a `Decide` or `Aggregate` with no `Produce` silences `unknown_key`
+at the readers of the key it never named; a route whose branch lines name values the answer does
+not have reports them in one `unknown_label` and no `missing_branch`; a second producer of a key
+reports `duplicate_producer` and not the `type_mismatch` that follows from it."""
 
 from __future__ import annotations
 
@@ -31,7 +39,8 @@ from aip.compiler.keywords import ANSWER_TYPES
 
 SOURCE_FILE = "procedure.aip"
 RESOURCE_DIRS = ("assets", "references", "scripts")
-# The runtime's keys: `index` inside a loop body, `iterations` after a loop (spec 2.1, Loops).
+# The runtime's keys (spec 2.6): `index` inside a loop body, `iterations` after a loop, and each
+# loop's own name, an object holding its `index` inside its body and its `iterations` after it.
 RESERVED_KEYS = ("index", "iterations")
 # `start` is not a step name: Start has no name and nothing points at it (`end` is checked by the parser).
 RESERVED_STEPS = ("start",)
@@ -50,6 +59,7 @@ CODES: dict[str, str] = {
     "missing_clause": "error",
     "missing_type": "error",
     "missing_next_step": "error",
+    "decide_reads_nothing": "warning",
     "question_labels": "error",
     "duplicate_question": "error",
     "duplicate_aggregation": "error",
@@ -141,7 +151,8 @@ def source_class(classes) -> str:
 
 # ---------------------------------------------------------------- types and the state
 
-VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "integer"}
+# An answer's `value`: a boolean, or the label (a `score`'s value is its level's label, spec 2.4).
+VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "string"}
 
 
 @dataclass(frozen=True)
@@ -149,7 +160,8 @@ class Type:
     """The type of a key as the checker knows it. `kind` is a word of the type vocabulary, or None
     for a value whose type the program does not say (an item of a plain list). Answer types carry
     their `labels` when the question is known; a decision or an aggregation carries its `fields`; a
-    list its `element`. `sources` names the steps whose answers these are, for the source classes
+    list its `element`. `loop` is the kind of a loop's own key (`revise.index`, `revise.iterations`),
+    which is the runtime's and not a word of the vocabulary. `sources` names the steps whose answers these are, for the source classes
     of 2.2 (the Decide, the script, the agent task, the Aggregate)."""
     kind: str | None = None
     labels: tuple[str, ...] | None = None
@@ -181,9 +193,19 @@ class Type:
                 return Type("float", sources=self.sources)
         return None
 
+    def noun(self) -> str:
+        """The type in a word or two, for a sentence that names the producers itself."""
+        if self.kind == "decision":
+            return "a decision"
+        if self.kind == "aggregation":
+            return "an aggregation"
+        return self.describe()
+
     def describe(self) -> str:
         if self.kind is None:
             return "of unknown type"
+        if self.kind == "loop":
+            return "a loop's own key"
         if self.kind == "list":
             return "a list" if self.element is None else f"a list of {self.element.plural()}"
         if self.kind == "decision":
@@ -261,7 +283,7 @@ class RegionResult:
     continues: list[tuple[State, State]] = field(default_factory=list)
     agains: list[tuple[State, State]] = field(default_factory=list)
     # key -> the states after each node of the region that produced it (a step, or a nested loop
-    # whose body left it): where an enclosing `Until` is tested again (spec 2.1, Loops)
+    # whose body left it): where an enclosing `Until` is tested again (spec 2.6)
     produce_points: dict[str, list[tuple[State, State]]] = field(default_factory=dict)
 
 
@@ -340,6 +362,9 @@ class Checker:
         self.first_execute: s.Step | None = None
         self.path: tuple[str, ...] = ()
         self.sources: dict[str, str] = {}                 # route name -> the source class of the answer it reads
+        self.loops: set[str] = set()                      # the loops' names: each is the runtime's key for that loop
+        self.keyless = False                              # a Decide or Aggregate names no key: its readers' unknown_key is its consequence
+        self.broken = False                               # a flow of the region being read did not resolve
 
     # ------------------------------------------------------------ reporting
 
@@ -359,6 +384,7 @@ class Checker:
 
     def run(self) -> list[Diagnostic]:
         self.index(self.p.items, ())
+        self.loops = {n for n, node in self.nodes.items() if not isinstance(node, s.Step)}
         if "start" not in self.nodes:
             self.report("missing_start", self.p, "the procedure has no Start step; one Start names the inputs and the first step",
                         end=(self.p.line, self.p.column + len("Procedure")))
@@ -415,6 +441,9 @@ class Checker:
                     if enclosing_for is not None:
                         self.for_keys.setdefault(d.key.name, enclosing_for)
             else:
+                if name in RESERVED_KEYS:
+                    self.report_head("reserved_key", item, f"a loop cannot be called {name}: index and iterations are the runtime's keys, "
+                                     f"and a loop's name is the key that holds its own ({name}.index would read as neither)")
                 if isinstance(item, s.ForLoop) and item.collect is not None:
                     self.anywhere.setdefault(item.collect.into, []).append(name)
                 self.index(item.body, path + (name,))
@@ -444,7 +473,11 @@ class Checker:
                 for c in q.criteria:
                     self.use_str(c.text, name)
             if not st.produces:
+                self.keyless = True
                 self.report_head("missing_clause", st, f"Decide {name} names no key; Produce <key> names the one key whose fields are its answers")
+            if not st.reads:
+                self.report_head("decide_reads_nothing", st, f"Decide {name} has no Read, so the model judges nothing but its questions; Read "
+                                 "names what it judges (a {key} in a question composes the question and is not handed over as data)")
         elif st.kind == "Aggregate":
             if not st.aggregations:
                 self.report_head("missing_clause", st, f"Aggregate {name} has no aggregations; add an Aggregations block with one per line")
@@ -455,6 +488,7 @@ class Checker:
                                 end=(a.line, a.column + len(a.name)))
                 seen.add(a.name)
             if not st.produces:
+                self.keyless = True
                 self.report_head("missing_clause", st, f"Aggregate {name} names no key; Produce <key> names the one key whose fields are its aggregations")
         elif st.kind == "Execute":
             if self.first_execute is None:
@@ -482,9 +516,15 @@ class Checker:
             if d.key.name in RESERVED_KEYS:
                 self.report("reserved_key", d, f"{d.key.name} is the runtime's: index names the pass inside a loop body and "
                             "iterations the passes a loop ran; a step cannot produce it", name)
+            elif d.key.name in self.loops:
+                self.report("duplicate_name", d, self.loop_key_clash(d.key.name, "key"), name, end=(d.line, d.column + len(d.key.name)))
         if st.kind in ("Start", "Decide", "Aggregate", "Execute", "Task_Agent") and st.flow is None:
             self.report_head("missing_next_step", st, f"{_label(st)} does not say where it goes; end it with Next_Step <step>"
                              + (", or Continue or Again <step> inside a loop body" if st.kind != "Start" else ""))
+
+    def loop_key_clash(self, name: str, what: str) -> str:
+        return (f"the {what} {name} shares its name with {_label(self.nodes[name])}, and a loop's name is the runtime's key for that loop "
+                f"({name}.index in its body, {name}.iterations after it); give one of them a different name")
 
     def check_labels(self, q: s.Question, step: str):
         if q.type == "true_or_false":
@@ -559,12 +599,14 @@ class Checker:
                 self.report_head("empty_loop", loop, f"{_label(loop)} has no steps; a pass starts at the first step written in the body")
                 return result
             entry = next(iter(nodes))
+        self.broken = False
         succ = {n: self.successors(node, nodes, loop, path, parent_edges) for n, node in nodes.items()}
+        broken = self.broken  # a flow here did not resolve, so "nothing reaches X" would be its consequence, not a finding
         edges = {n: [t for k, t, _ in succ[n] if k == "edge"] for n in nodes}
         order, back = _topo(entry, edges)
         reached = set(order)
         for n, node in nodes.items():
-            if n not in reached:
+            if n not in reached and not broken:
                 how = (f"a loop is entered with Next_Step {n}" if not isinstance(node, s.Step)
                        else "a step is reached by a Next_Step, a route branch, or Again")
                 self.report_head("unreachable_step", node, f"nothing reaches {_label(node)}; {how}")
@@ -609,9 +651,12 @@ class Checker:
                 flows.extend(b.target for b in node.branches)
             elif node.kind != "End" and node.flow is not None:
                 flows.append(node.flow)
+            if node.kind != "End" and not flows:
+                self.broken = True  # missing_next_step, or a route with no branch: reported where the step is checked
         elif node.exit is not None:
             flows.append(node.exit)
         else:
+            self.broken = True
             self.report_head("missing_loop_exit", node, f"{_label(node)} does not say where the run goes when it exits; its block ends with "
                              "Next_Step <step>" + (", or Continue to end the enclosing pass" if path else ""))
         out: list[tuple[str, str | None, s.Flow]] = []
@@ -663,6 +708,8 @@ class Checker:
                         body = target_path[common]
                         self.report("jump_into_body", flow, f"Next_Step {target} points into the body of {body}; a loop body is entered only "
                                     f"through the loop itself (Next_Step {body})", name)
+        if len(out) < len(flows):
+            self.broken = True
         return out
 
     def where(self, node: str) -> str:
@@ -688,7 +735,7 @@ class Checker:
             if conflict:
                 kinds: dict[str, set[str]] = {}
                 for e in entries:
-                    kinds.setdefault(e.type.describe(), set()).update(e.producers)
+                    kinds.setdefault(e.type.noun(), set()).update(e.producers)
                 self.report_head("type_mismatch", node, f"{k} reaches {_label(node)} with different types on different paths: "
                                  + "; ".join(f"{d} from {_list(sorted(p))}" for d, p in sorted(kinds.items(), key=lambda kv: sorted(kv[1]))))
             producers = frozenset().union(*(e.producers for e in entries))
@@ -725,7 +772,7 @@ class Checker:
         produced: set[str] = set()
         for d in decls:
             k = d.key.name
-            if k in RESERVED_KEYS:
+            if k in RESERVED_KEYS or k in self.loops:
                 continue
             t = self.declared_type(st, d, name)
             prior = may.get(k)
@@ -734,9 +781,11 @@ class Checker:
                 if prior.inside:
                     self.report("duplicate_producer", d, f"{k} is already produced by {_list(sorted(prior.inside))} on a path to {name}, and a "
                                 "key has one producer per path; put the second in a loop if it is a rewrite, or give it a different name", name)
+                    produced.add(k)
+                    continue  # the first producer's key stands, so its readers report nothing more
                 if prior.type.kind is not None and t.kind is not None and prior.type.kind != t.kind:
-                    self.report("type_mismatch", d, f"{k} is {t.describe()} here and {prior.type.describe()} from "
-                                f"{_list(sorted(prior.producers))}; every declaration of a key agrees on its type", name)
+                    self.report("type_mismatch", d, f"{k} is {t.noun()} here, but {_list(sorted(prior.producers))} produced it as "
+                                f"{prior.type.noun()}; every declaration of a key agrees on its type", name)
                 inside = prior.inside
             entry = Entry(t, frozenset({name}), inside | {name})
             must[k] = entry
@@ -762,8 +811,8 @@ class Checker:
             t = self.resolve(d.key.path, m_in, d, name)
             if t is not None and d.type is not None and t.kind is not None and t.kind != d.type:
                 producers = m_in[d.key.name].producers
-                self.report("type_mismatch", d, f"{d.key.dotted} is read as {Type(d.type).describe()} but is {t.describe()}, from "
-                            f"{_list(sorted(producers))}; every declaration of a key agrees on its type", name)
+                self.report("type_mismatch", d, f"{d.key.dotted} is read as {Type(d.type).describe()}, but {_list(sorted(producers))} "
+                            f"produced it as {t.noun()}; every declaration of a key agrees on its type", name)
 
     def check_text(self, text: s.Str, state: State, step: str):
         """`{key}` and `{decision.question}` in a question or a prompt count as reads."""
@@ -785,7 +834,11 @@ class Checker:
             nt = t.field(seg)
             if nt is None:
                 prefix = ".".join(path[:i])
-                if t.fields is not None:
+                if t.kind == "loop":
+                    have = t.fields[0][0]
+                    message = (f"{prefix}.{seg}: {prefix} is the key of the loop {prefix}, which holds {prefix}.index inside its body and "
+                               f"{prefix}.iterations after it exits; here it has {have}")
+                elif t.fields is not None:
                     what = "question" if t.kind == "decision" else "aggregation"
                     message = f"{prefix} has no {what} {seg}; it has {_list(n for n, _ in t.fields)}"
                 elif t.is_answer:
@@ -802,6 +855,9 @@ class Checker:
             self.report("unavailable_key", node, "index names the pass and is available only inside a loop body", step)
         elif root == "iterations":
             self.report("unavailable_key", node, "iterations says how many passes a loop ran and is available only after one", step)
+        elif root in self.loops:
+            self.report("unavailable_key", node, f"{root} is the key of the loop {root}: {root}.index is available inside its body and "
+                        f"{root}.iterations after it exits, on the paths that ran it; neither is available at {step}", step)
         elif root in self.anywhere:
             producers = self.anywhere[root]
             enclosing_for = self.for_keys.get(root)
@@ -810,9 +866,9 @@ class Checker:
                             f"the loop exits; Collect {root} Into <list> keeps them", step)
             else:
                 verb = "does" if len(producers) == 1 else "do"
-                self.report("unavailable_key", node, f"{root} is not available at {step} on every path: {_list(producers)} {verb} not "
-                            f"run before it on every path", step)
-        else:
+                self.report("unavailable_key", node, f"{root} is not available at {step}: {_list(producers)} {verb} not run before it "
+                            "on every path", step)
+        elif not self.keyless:
             self.report("unknown_key", node, f"nothing produces {root}; a key is an input of Start or a Produce of a step", step)
 
     # ------------------------------------------------------------ routes, conditions, aggregations
@@ -874,13 +930,16 @@ class Checker:
             self.report("condition_on_plain_value", read, self.not_an_answer(dotted, t, "a route"), name)
             return
         seen: set[str] = set()
+        unknown = [b for b in st.branches if t.labels is not None and b.value not in t.labels]
+        if unknown:
+            values = list(dict.fromkeys(b.value for b in unknown))
+            verb = "is not a value" if len(values) == 1 else "are not values"
+            self.report("unknown_label", unknown[0], f"{_list(values)} {verb} of {dotted}; its values are {_list(t.labels)}", name)
         for b in st.branches:
-            if t.labels is not None and b.value not in t.labels:
-                self.report("unknown_label", b, f"{b.value} is not a value of {dotted}; its values are {_list(t.labels)}", name)
             if b.value in seen:
                 self.report("duplicate_branch", b, f"{b.value} already has a branch in {name}", name)
             seen.add(b.value)
-        if t.labels is not None:
+        if t.labels is not None and not unknown:
             missing = [label for label in t.labels if label not in seen]
             if missing:
                 self.report_head("missing_branch", st, f"Route {name} has no branch for {_list(missing)}; a route names every value "
@@ -941,7 +1000,7 @@ class Checker:
         name = loop.name
         inner = path + (name,)
         body_must, body_may = _reset(m_in), _reset(y_in)
-        pass_keys = ["index"]
+        pass_keys = ["index", name]
         if isinstance(loop, s.ForLoop):
             self.check_cap(loop, loop.at_most, "At_Most")
             self.bind_item(loop, loop.item, self.over_type(loop.over, m_in, name), m_in, y_in, body_must, body_may)
@@ -950,6 +1009,8 @@ class Checker:
                 c = loop.collect
                 if c.into in RESERVED_KEYS:
                     self.report("reserved_key", c, f"{c.into} is the runtime's and cannot be collected into", name)
+                elif c.into in self.loops:
+                    self.report("duplicate_name", c, self.loop_key_clash(c.into, "list"), name)
                 elif c.into in y_in or c.into == loop.item:
                     other = _list(sorted(y_in[c.into].producers)) if c.into in y_in else f"the item of For {name}"
                     self.report("duplicate_producer", c, f"Collect Into {c.into}: {c.into} is already produced by {other}; a key has one "
@@ -962,13 +1023,16 @@ class Checker:
             if loop.mode == "Over":
                 self.bind_item(loop, loop.item, self.over_type(loop.over, m_in, name), m_in, y_in, body_must, body_may)
                 pass_keys.append(loop.item)
+        # The pass's number, under the loop's own name and under the bare shorthand, which an
+        # inner loop's body rebinds to its own.
         body_must["index"] = body_may["index"] = Entry(Type("integer"), frozenset({name}), frozenset({name}))
+        body_must[name] = body_may[name] = Entry(Type("loop", fields=(("index", Type("integer")),)), frozenset({name}), frozenset({name}))
         body = self.region(loop.body, loop, inner, body_must, body_may, edges)
         self.path = path
         if isinstance(loop, s.ForLoop):
             must_out, may_out = dict(m_in), dict(y_in)
             produced: set[str] = set()
-            if loop.collect is not None and loop.collect.into not in RESERVED_KEYS:
+            if loop.collect is not None and loop.collect.into not in RESERVED_KEYS and loop.collect.into not in self.loops:
                 element = self.collected(loop, body, name)
                 entry = Entry(Type("list", element=element, sources=element.sources), frozenset({name}), frozenset({name}))
                 must_out[loop.collect.into] = may_out[loop.collect.into] = entry
@@ -989,7 +1053,10 @@ class Checker:
                 for k, e in list(state.items()):
                     outside = outer[k].inside if k in outer else frozenset()
                     state[k] = Entry(e.type, e.producers, e.inside | outside)
+        # How many passes ran, under the loop's own name (which a later loop does not overwrite)
+        # and under the bare shorthand, which is the last loop's that exited.
         must_out["iterations"] = may_out["iterations"] = Entry(Type("integer"), frozenset({name}), frozenset({name}))
+        must_out[name] = may_out[name] = Entry(Type("loop", fields=(("iterations", Type("integer")),)), frozenset({name}), frozenset({name}))
         return must_out, may_out, produced
 
     def check_cap(self, loop, cap: int | None, keyword: str):
@@ -1012,6 +1079,9 @@ class Checker:
         name = loop.name
         if item in RESERVED_KEYS:
             self.report_head("reserved_key", loop, f"the item cannot be called {item}; index and iterations are the runtime's")
+        elif item in self.loops:
+            self.report_head("duplicate_name", loop, self.loop_key_clash(item, "item"))
+            return
         elif item in y_in:
             self.report_head("duplicate_producer", loop, f"the item {item} of {_label(loop)} is named like the key {item} produced by "
                              f"{_list(sorted(y_in[item].producers))}; name the item differently")
@@ -1039,7 +1109,8 @@ class Checker:
 
     def check_until(self, loop: s.Loop, m_in: State, y_in: State, body: RegionResult, name: str) -> list[tuple[State, State]]:
         """The exit points an `Until` adds: after every body node that produces the answer, and the
-        head on the first pass when the answer existed before the loop. Also checks the condition."""
+        head before any pass when the answer may exist before the loop (the condition is tested at
+        the head, so a loop whose answer already holds runs no pass). Also checks the condition."""
         cond = loop.until
         root = cond.answer.name
         points = body.produce_points.get(root, [])
@@ -1059,7 +1130,7 @@ class Checker:
             else:
                 self.check_condition(t, cond, cond.answer.dotted, name, f"the Until of Loop {name}")
         exits = list(points)
-        if before:
+        if root in y_in:
             exits.append((m_in, y_in))
         return exits
 

@@ -98,8 +98,7 @@ no decision model at all.
 
 Answer with every key of `answer_with`: `{"billing": true, "tone": "calm"}`. An answer-typed
 key takes the bare value, or `{"value": ...}`: a `true_or_false` is `true` or `false`, a
-`choice` one of its `labels`, a `score` the level's number (its position in the labels, from
-0). The runtime stores it as `{"value": ...}` and nothing else: a value outside the labels, or
+`choice` or a `score` one of its `labels`. The runtime stores it as `{"value": ...}` and nothing else: a value outside the labels, or
 anything on the answer but its value (a `confidence`, say), is refused as `invalid_output` and
 the pause stands. An agent's answer has no confidence, so the route `by_tone` that reads `tone`
 branches on its value and has no `Confidence_Below` (the compiler refuses one on an agent's
@@ -109,7 +108,7 @@ script's, when the script wrote `confidence` and `probabilities` beside its `val
 ### A task that does the step's work
 
 Here `billing-support` was run with a decision model: its `triage` is a `Decide`, the model
-answered `calm` at 0.9, the route's `Confidence_Below 0.6` did not fire, and the run waits at
+answered `calm` at 0.9, the route's `Confidence_Below 0.9` did not fire, and the run waits at
 `reply` for the agent to draft the reply.
 
 <!-- cli-json: paused-task -->
@@ -385,5 +384,5 @@ it at startup and refuses an `aip` below its minimum.
 
 <!-- cli-version -->
 ```text
-aip 0.8.0 language 0.9
+aip 0.9.0 language 0.9
 ```

@@ -64,8 +64,8 @@ class TypeSafeResolverTests(unittest.TestCase):
         self.assertEqual(decision.answered_by(), {"model": "jev-1", "endpoint": "https://api.typesafe.ai"}, "what the record says")
         self.assertEqual(decision.answers["billing"], {"value": True, "confidence": 0.94, "noul": 0.97})
         self.assertEqual(decision.answers["tone"], {"value": "calm", "confidence": 0.9, "probabilities": {"angry": 0.1, "calm": 0.9}})
-        self.assertEqual(decision.answers["urgency"], {"value": 2, "confidence": 0.8, "score": 1.7, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}},
-                         "the value is the most probable level; the legend is dropped")
+        self.assertEqual(decision.answers["urgency"], {"value": "high", "confidence": 0.8, "score": 1.7, "probabilities": {"low": 0.1, "medium": 0.1, "high": 0.8}},
+                         "the value is the most probable level's label, the probabilities are by label; the legend is dropped")
 
     def test_the_history_goes_beside_the_state_when_the_step_asks(self):
         client = FakeClient()

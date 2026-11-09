@@ -1,12 +1,14 @@
 # billing-support/procedure.aip
 #
-# The billing-support procedure, written in the language of docs/spec.md, section 2.1.
+# The billing-support procedure, written in the language of docs/language/spec.md, section 2.1.
 # One decision classifies the message, a route sends angry or uncertain customers to a
 # script that opens a tier-2 ticket, and the agent drafts a reply for everyone else.
 #
-# triage is a Decide, so a run needs a decision model configured (aip config --decision-model);
-# by_tone's confidence check reads the model's confidence in the tone. billing-support-agent
-# is the same procedure with the agent classifying the message in a Task_Agent instead.
+# triage is a Decide, so a run needs a decision model configured (aip config --decision-model-key KEY).
+# by_tone's confidence check reads the model's confidence in the tone: a message that is clearly
+# calm or clearly angry routes by its value, and a mixed one, which the model answers under 0.9,
+# is escalated whatever the value. billing-support-agent is the same procedure with the agent
+# classifying the message in a Task_Agent instead.
 
 Procedure billing_support
   "Turn an inbound billing message into either a tier-2 ticket or a drafted reply.
@@ -23,7 +25,7 @@ Procedure billing_support
     "Replying to an angry customer with a templated answer instead of escalating."
     "Promising a refund the policy does not cover."
 
-tone_question = "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands."
+tone_question  = "How upset is the customer? Angry means explicit frustration, threats to cancel, or demands."
 help_reference = "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days."
 
 Start "The customer's message, as support received it." {
@@ -35,7 +37,7 @@ Decide triage "Classify whether the message is about billing and how upset the c
   Read message
   Answer_Questions {
     billing: true_or_false "Is this message about a charge, invoice, refund, or subscription payment?"
-    tone: choice [angry, calm] tone_question
+    tone:    choice [angry, calm] tone_question
       angry: "Frustrated, demanding, or threatening to leave."
       calm:  "Neutral or polite, asking a question."
   }
@@ -43,9 +45,9 @@ Decide triage "Classify whether the message is about billing and how upset the c
   Next_Step by_tone
 }
 
-Route On by_tone "Angry customers go to a human queue; calm ones get a drafted reply." {
+Route On by_tone "Angry customers, and those the model is unsure of, go to a human queue; calm ones get a drafted reply." {
   Read triage_decision.tone
-  Confidence_Below 0.6 -> escalate
+  Confidence_Below 0.9 -> escalate
   angry -> escalate
   calm  -> reply
 }
@@ -55,7 +57,7 @@ Execute escalate "Open a tier-2 ticket for the message." {
   Run_Script scripts/escalate.py
   Use assets/config.json
   Produce ticket_id: integer "The tier-2 ticket opened for the message."
-           queue: string      "The queue the ticket was routed to."
+          queue:     string  "The queue the ticket was routed to."
   Next_Step end
 }
 

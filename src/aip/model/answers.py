@@ -6,7 +6,7 @@ write the same shapes.
 |-----------------|--------------------------------|------------------------------------------------|
 | `true_or_false` | a boolean                      | `noul`, the probability of yes; `confidence` is |2·noul − 1| |
 | `choice`        | a label                        | `confidence`; `probabilities`, label to probability |
-| `score`         | the most probable level (int)  | `confidence`; `score`, the expected value; `probabilities`, level to probability |
+| `score`         | the most probable level's label | `confidence`; `score`, the expected level (a float, levels counted from 0); `probabilities`, label to probability |
 
 An answer an agent produced in a `Task_Agent` is `{"value": ...}` and nothing else; a script's
 may carry the model fields it computed (`aip.model.types.ANSWER_FIELDS`). `probability_of` reads
@@ -33,18 +33,19 @@ def choice(probabilities: dict[str, float], value: str | None = None) -> JSON:
     return {"value": label, "confidence": probabilities[label], "probabilities": dict(probabilities)}
 
 
-def score(probabilities: dict[int | str, float], value: int | None = None) -> JSON:
-    """A `score` answer from the probability of every level (0-based); the value is the most
-    probable level unless given, `score` the expected level."""
+def score(probabilities: dict[str, float], value: str | None = None) -> JSON:
+    """A `score` answer from the probability of every level, by label in the rubric's order
+    (`{"low": 0.1, "medium": 0.2, "high": 0.7}`); the value is the most probable level's label
+    unless given, `score` the expected level, the levels counted from 0."""
     probs = {str(k): float(v) for k, v in probabilities.items()}
-    level = value if value is not None else int(max(probs, key=probs.get))
-    expected = sum(int(k) * p for k, p in probs.items())
-    return {"value": level, "confidence": probs[str(level)], "score": round(expected, 6), "probabilities": probs}
+    label = value if value is not None else max(probs, key=probs.get)
+    expected = sum(i * p for i, p in enumerate(probs.values()))
+    return {"value": label, "confidence": probs[label], "score": round(expected, 6), "probabilities": probs}
 
 
 def probability_of(answer: JSON, type: str, value: Any) -> float | None:
     """The probability `answer` puts on `== value`: `noul` or `1 − noul` for a `true_or_false`,
-    the label's or level's entry in `probabilities` otherwise; None when the answer has none."""
+    the label's entry in `probabilities` otherwise; None when the answer has none."""
     if type == "true_or_false":
         p = answer.get("noul")
         if p is None:

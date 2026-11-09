@@ -20,7 +20,7 @@ returns. That is not the problem.
 The problem is what a reader believes when they see it.
 
 `all(policy_check) With Confidence 0.8` reads as "the work passed every policy, with 80%
-confidence". It is not that. It is "each answer, taken alone, had at least 80% on it". The
+confidence". It is not that. It is "each answer, taken alone, had more than 80% on it". The
 confidence of the conjunction is somewhere between 0.8 (if the answers are perfectly
 correlated) and 0.8 to the power of the number of answers (if independent), and it is lower
 still if the answers are correlated the wrong way. The language would be putting a number

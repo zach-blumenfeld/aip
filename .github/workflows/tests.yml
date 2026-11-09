@@ -54,6 +54,12 @@ jobs:
           PYTHONUTF8: "1"
         run: uv run pytest -q
 
+      - name: The examples are in canonical form
+        # A formatter change that moves the examples fails here, not in a user's CI: formatting a
+        # procedure changes its bundle id, since the id hashes the source bytes.
+        if: runner.os == 'Linux'
+        run: uv run aip fmt --check examples/language
+
       - name: A fresh venv compiles an example (L3's proof)
         if: runner.os == 'Linux' && env.RELATE_GH_TOKEN != ''
         env:

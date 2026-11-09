@@ -24,15 +24,19 @@ procedure means; this page says what running one entails.
 - A step's `Produce` keys are checked on its result and added to the state. A missing key or
   a wrong type fails the step; the runtime does not fill in a value. One normalisation is
   allowed: a script or an agent may write an answer-typed key as the bare value (`true` for
-  `passed: true_or_false`, a label for a `choice`, a level for a `score`), and the runtime stores
+  `passed: true_or_false`, the label for a `choice` or a `score`), and the runtime stores
   it as `{"value": ...}`, which is also what the record keeps.
 - A key is rebound when a loop pass writes it; every earlier value stays in the record.
 - A decision writes its one key with one answer object per question, in the shape of 2.4. An
   answer an agent produced in a `Task_Agent` has `value` and nothing else; a script's has `value`
   and whatever confidence and probabilities the script supplied.
-- The runtime's own keys: inside a body `index` is the pass's number, from 0, and after a loop
-  `iterations` is how many passes ran, a pass ended by `Until` included. When a nested loop
-  exits, `index` is the enclosing pass's again.
+- The runtime's own keys (spec 2.6): each loop's name is a key holding an object, `<loop>.index`
+  the pass's number, from 0, while the loop runs, and `<loop>.iterations` how many passes ran, a
+  pass ended by `Until` included, once it has exited. The bare `index` is the innermost running
+  loop's and the bare `iterations` the last exited loop's; when a nested loop exits, `index` is
+  the enclosing pass's again. None of these keys is in the final state of a run, done or failed.
+  (The engine writes all of them, and does not yet clear them from a final state: plan
+  milestone R5.)
 
 ## Steps
 
@@ -50,14 +54,13 @@ procedure means; this page says what running one entails.
   `confidence` first and takes the check's branch when the confidence is below the bound
   (`reason: below`) or absent (`reason: absent`, a script's answer written without one); the
   compiler allows the check only on a decision's or a script's answer. Otherwise it takes the branch for `value`: `true` or `false` for a `true_or_false`,
-  the label for a `choice`, and for a `score` the label of the level the value names (the
-  branch lines are written with the labels, the value is the level's number; the labels are the
-  question's, or the key's own when a script or an agent produced it under labels). A value
-  with no branch fails the step.
+  the label for a `choice` or a `score` (a score's value is its level's label, spec 2.4; the
+  labels are the question's, or the key's own when a script or an agent produced it under
+  labels). A value with no branch fails the step.
 - `Aggregate`: for each aggregation, the runtime tests each answer in its source against the
   line's condition (`== value`, `!= value`, or `== true` for a bare `true_or_false`), takes the
   probability the model put on that condition from the answer's probabilities, and, when the
-  line has `With Confidence_Above` and that probability is below it or absent, counts the
+  line has `With Confidence_Above` and that probability is not strictly above it, or absent, counts the
   answer as the value that fails the aggregation; then applies `All`, `Any` or `None`, and writes the one key
   with one answer per aggregation, each `{value}` and nothing else. It records each answer's
   resolution.
@@ -109,10 +112,13 @@ the answer is accepted.
   body produces the answer, or a loop in the body exits having produced it; when it holds the
   loop ends at that point, the pass counts, and the rest of the pass does not run. An absent
   answer does not hold, and with `With Confidence_Above` neither does one whose probability on the
-  condition is below the bar or missing.
-- `Again <step>` re-enters the procedure at that step and follows the flow until the enclosing
-  loop is reached again; everything on that path runs, recorded under the pass that asked for
-  it, and the head's `Until` test is what sees the fresh answer.
+  condition is not strictly above the bar, or missing. The head test comes before the first pass
+  too: a loop whose answer already holds when it is reached runs no pass and exits with
+  `iterations` 0.
+- `Again <step>` runs that step as part of the current pass and follows the flow from it until
+  the enclosing loop is reached again, which ends the pass; everything on that path runs,
+  recorded under the pass that asked for it (and with that pass's `index`), and the head's
+  `Until` test is what sees the fresh answer.
 - A loop writes one record entry when it exits (below). The loop's frame, the pass count and the
   passes in flight are part of the run's saved state, so a paused run resumes mid-loop.
 

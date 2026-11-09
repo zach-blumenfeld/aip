@@ -18,7 +18,7 @@ PREFIX = 'Procedure p "x"\n'  # line 1 of every case
 OK = 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n'
 START = 'Start "s" { m: string  Next_Step d }\n'
 DECIDE = 'Decide d "d" { Read m  Answer_Questions { q: choice [a, b] "?" }  Produce dec  Next_Step r }\n'
-NOUL = 'Decide d "d" { Read m  Answer_Questions { q: noul "?" }  Produce dec  Next_Step r }\n'
+NOUL = 'Decide d "d" { Read m  Answer_Questions { q: true_or_false "?" }  Produce dec  Next_Step r }\n'
 
 
 def diagnostics(body: str, folder=None) -> list[Diagnostic]:
@@ -43,15 +43,16 @@ CASES = [
     ("end_in_loop", 'Start "s" { m: string  Next_Step l }\nLoop l 3 Times {\n  End "e" { Read m }\n  Next_Step end\n}\n', 4, 3, "end"),
     ("reserved_key", 'Start "s" { index: integer  Next_Step t }\nTask_Agent t "t" { Read index  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 2, 13, "start"),
     ("missing_clause", START + 'Decide d "d" { Read m  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 1, "d"),
-    ("missing_clause", START + 'Decide d "d" { Read m  Answer_Questions { q: noul "?" }  Next_Step end }\nEnd "e" { Read m }\n', 3, 1, "d"),
+    ("missing_clause", START + 'Decide d "d" { Read m  Answer_Questions { q: true_or_false "?" }  Next_Step end }\nEnd "e" { Read m }\n', 3, 1, "d"),
     ("missing_clause", START.replace("d }", "a }") + 'Aggregate a "a" { Read m  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n', 3, 1, "a"),
     ("missing_clause", 'Requires python 3.10\n' + START.replace("d }", "e }") + 'Execute e "e" { Read m  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n', 4, 1, "e"),
     ("missing_type", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o  Next_Step end }\nEnd "e" { Read o }\n', 3, 36, "t"),
+    ("decide_reads_nothing", START + 'Decide d "d" { Answer_Questions { q: true_or_false "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 1, "d"),
     ("missing_next_step", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o: string }\nEnd "e" { Read o }\n', 3, 1, "t"),
     ("question_labels", START + 'Decide d "d" { Read m  Answer_Questions { q: choice [a] "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 43, "d"),
-    ("question_labels", START + 'Decide d "d" { Read m  Answer_Questions { q: noul [a, b] "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 43, "d"),
+    ("question_labels", START + 'Decide d "d" { Read m  Answer_Questions { q: true_or_false [a, b] "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 43, "d"),
     ("question_labels", START + 'Decide d "d" { Read m  Answer_Questions { q: score [a, a] "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 43, "d"),
-    ("duplicate_question", START + 'Decide d "d" { Read m  Answer_Questions { q: noul "?"  q: noul "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 56, "d"),
+    ("duplicate_question", START + 'Decide d "d" { Read m  Answer_Questions { q: true_or_false "?"  q: true_or_false "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n', 3, 65, "d"),
     ("duplicate_aggregation", START + NOUL.replace("Next_Step r", "Next_Step a")
      + 'Aggregate a "a" { Read dec  Aggregations { x: All dec  x: Any dec }  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n', 4, 56, "a"),
     ("unknown_step", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o: string  Next_Step nowhere }\nEnd "e" { Read o }\n', 3, 47, "t"),
@@ -75,7 +76,7 @@ CASES = [
                      '  Next_Step after\n}\nTask_Agent after "a" { Read m  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n', 4, 49, "t"),
     ("missing_cap", 'Start "s" { items: list  Next_Step f }\nFor f Over items As i {\n  Task_Agent t "t" { Read i  Produce o: string  Continue }\n'
                     '  Next_Step end\n}\nEnd "e" { Read items }\n', 3, 1, "f"),
-    ("missing_cap", 'Start "s" { m: string  Next_Step l }\nLoop l Until dec.q, Else_Exit {\n  Decide d "d" { Read m  Answer_Questions { q: noul "?" }  Produce dec  Continue }\n'
+    ("missing_cap", 'Start "s" { m: string  Next_Step l }\nLoop l Until dec.q, Else_Exit {\n  Decide d "d" { Read m  Answer_Questions { q: true_or_false "?" }  Produce dec  Continue }\n'
                     '  Next_Step end\n}\nEnd "e" { Read dec }\n', 3, 1, "l"),
     ("missing_cap", 'Start "s" { m: string  Next_Step l }\nLoop l 0 Times {\n  Task_Agent t "t" { Read m  Produce o: string  Continue }\n'
                     '  Next_Step end\n}\nEnd "e" { Read m }\n', 3, 1, "l"),
@@ -186,7 +187,7 @@ class StateRules(unittest.TestCase):
 
     def test_collect_needs_the_key_on_every_pass(self):
         body = ('Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 3, Collect o Into os {\n'
-                '  Decide d "d" { Read i  Answer_Questions { q: noul "?" }  Produce dec  Next_Step r }\n'
+                '  Decide d "d" { Read i  Answer_Questions { q: true_or_false "?" }  Produce dec  Next_Step r }\n'
                 '  Route r "r" { Read dec.q  true -> t  false -> Continue }\n'
                 '  Task_Agent t "t" { Read i  Produce o: string  Continue }\n  Next_Step end\n}\nEnd "e" { Read os }\n')
         [d] = diagnostics(body)
@@ -197,7 +198,7 @@ class StateRules(unittest.TestCase):
 
     def test_a_loop_leaves_only_what_every_exit_has_written(self):
         body = ('Start "s" { m: string  Next_Step l }\nLoop l Until dec.q, At_Most 3 {\n'
-                '  Decide d "d" { Read m  Answer_Questions { q: noul "?" }  Produce dec  Next_Step r }\n'
+                '  Decide d "d" { Read m  Answer_Questions { q: true_or_false "?" }  Produce dec  Next_Step r }\n'
                 '  Route r "r" { Read dec.q  true -> Continue  false -> t }\n'
                 '  Task_Agent t "t" { Read m  Produce extra: string  Continue }\n  Next_Step u\n}\n'
                 'Task_Agent u "u" { Read dec, extra  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
@@ -227,16 +228,16 @@ class StateRules(unittest.TestCase):
         self.assertEqual((d.code, d.line, d.column), ("type_mismatch", 3, 12))
 
     def test_interpolations_count_as_reads(self):
-        body = START + 'Decide d "d" { Read m  Answer_Questions { q: noul "Is {m} fine given {nope}?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n'
+        body = START + 'Decide d "d" { Read m  Answer_Questions { q: true_or_false "Is {m} fine given {nope}?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n'
         [d] = diagnostics(body)
-        self.assertEqual((d.code, d.line, d.column, d.step), ("unknown_key", 3, 70, "d"))
+        self.assertEqual((d.code, d.line, d.column, d.step), ("unknown_key", 3, 79, "d"))
         body = START + NOUL.replace("Next_Step r", "Next_Step t") + 'Task_Agent t "Judge {dec.nope} and {dec.q.value}." { Read dec  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n'
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.step), ("unknown_field", "t"))
         self.assertEqual(codes(body.replace("{dec.nope}", "{dec.q.confidence}")), [])
 
     def test_a_named_string_is_checked_where_it_is_used(self):
-        body = 'q = "About {policy}"\n' + START + 'Decide d "d" { Read m  Answer_Questions { q: noul q }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n'
+        body = 'q = "About {policy}"\n' + START + 'Decide d "d" { Read m  Answer_Questions { q: true_or_false q }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n'
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.line, d.column, d.step), ("unknown_key", 2, 12, "d"))
 
@@ -254,7 +255,7 @@ class Conditions(unittest.TestCase):
 
     def test_until_needs_its_answer_produced_before_or_inside(self):
         body = ('Start "s" { m: string  Next_Step l }\nLoop l Until dec.q, At_Most 3 {\n  Task_Agent t "t" { Read m  Produce o: string  Continue }\n'
-                '  Next_Step d\n}\nDecide d "d" { Read o  Answer_Questions { q: noul "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n')
+                '  Next_Step d\n}\nDecide d "d" { Read o  Answer_Questions { q: true_or_false "?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n')
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.line, d.column), ("unavailable_key", 3, 14))
         self.assertIn("neither before Loop l nor by a step in its body", d.message)
@@ -293,8 +294,8 @@ class Conditions(unittest.TestCase):
         plain = agent.replace("Confidence_Below 0.5 -> end  ", "")
         self.assertEqual(codes(plain), [], "no check: the route branches on the agent's answer")
         # the labels are known, so a route over the answer is checked like one over a question
-        missing, wrong = diagnostics(plain.replace("calm -> end", "furious -> end"))  # the step's head, then the branch
-        self.assertEqual((wrong.code, missing.code), ("unknown_label", "missing_branch"))
+        [wrong] = diagnostics(plain.replace("calm -> end", "furious -> end"))  # the branch, and not the missing_branch it causes
+        self.assertEqual(wrong.code, "unknown_label")
         self.assertIn("its values are angry and calm", wrong.message)
         [d] = diagnostics(plain.replace("  calm -> end", ""))
         self.assertEqual((d.code, d.step), ("missing_branch", "r"))
@@ -328,7 +329,7 @@ class Conditions(unittest.TestCase):
         self.assertEqual(sources, {"r": "scripted", "r2": "agent", "r3": "aggregated", "r4": "input"})
 
     def test_end_may_name_what_only_some_paths_produce(self):
-        body = ('Start "s" { m: string  Next_Step d }\nDecide d "d" { Read m  Answer_Questions { q: noul "?" }  Produce dec  Next_Step r }\n'
+        body = ('Start "s" { m: string  Next_Step d }\nDecide d "d" { Read m  Answer_Questions { q: true_or_false "?" }  Produce dec  Next_Step r }\n'
                 'Route r "r" { Read dec.q  true -> a  false -> b }\n'
                 'Task_Agent a "a" { Read m  Produce ticket: string  Next_Step end }\nTask_Agent b "b" { Read m  Produce reply: string  Next_Step end }\n')
         self.assertEqual(codes(body + 'End "e" { Read m, ticket, reply }\n'), [], "End takes what the path produced")
@@ -338,7 +339,7 @@ class Conditions(unittest.TestCase):
 
     def test_aggregation_sources(self):
         loop = ('Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 5, Collect verdict Into verdicts {\n'
-                '  Decide d "d" { Read i  Answer_Questions { q: noul "?"  c: choice [a, b] "?" }  Produce verdict  Continue }\n  Next_Step agg\n}\n')
+                '  Decide d "d" { Read i  Answer_Questions { q: true_or_false "?"  c: choice [a, b] "?" }  Produce verdict  Continue }\n  Next_Step agg\n}\n')
         ok = loop + 'Aggregate agg "a" { Read verdicts  Aggregations { all: All verdicts.q  none: None verdicts.c == a With Confidence_Above 0.7 }  Produce s  Next_Step end }\nEnd "e" { Read s }\n'
         self.assertEqual(codes(ok), [])
         whole = loop + 'Aggregate agg "a" { Read verdicts  Aggregations { all: All verdicts }  Produce s  Next_Step end }\nEnd "e" { Read s }\n'
@@ -424,6 +425,155 @@ class Examples(unittest.TestCase):
             self.assertIn(f"`{code}`", spec, code)
 
 
+class OneMistakeOneError(unittest.TestCase):
+    """Plan L6: a finding that is only the consequence of another is not reported, so one
+    mistake prints one error. Each case below printed several before."""
+
+    FLOW = ('Start "s" { m: string  Next_Step d }\n' + DECIDE
+            + 'Route r "r" { Read dec.q  a -> x  b -> y }\nTask_Agent x "x" { Read m  Produce o: string  Next_Step end }\n'
+              'Task_Agent y "y" { Read m  Produce o: string  Next_Step end }\nEnd "e" { Read o }\n')
+
+    def test_the_base_program_is_clean(self):
+        self.assertEqual(codes(self.FLOW), [])
+
+    def test_an_unknown_step_is_not_followed_by_the_steps_nothing_reaches(self):
+        [d] = diagnostics(self.FLOW.replace("Next_Step r }", "Next_Step rr }"))  # was unknown_step and four unreachable_step
+        self.assertEqual((d.code, d.line, d.step), ("unknown_step", 3, "d"))
+
+    def test_a_decide_without_produce_is_not_followed_by_unknown_key_at_its_readers(self):
+        [d] = diagnostics(self.FLOW.replace("Produce dec  ", ""))  # was missing_clause and an unknown_key at the route
+        self.assertEqual((d.code, d.step), ("missing_clause", "d"))
+        self.assertIn("names no key", d.message)
+        aggregate = (START + NOUL.replace("Next_Step r", "Next_Step a") + 'Aggregate a "a" { Read dec  Aggregations { all: All dec }  Next_Step r }\n'
+                     'Route r "r" { Read agg.all  true -> end  false -> end }\nEnd "e" { Read agg }\n')
+        [d] = diagnostics(aggregate)
+        self.assertEqual((d.code, d.step), ("missing_clause", "a"))
+
+    def test_wrong_true_or_false_labels_are_one_unknown_label_and_no_missing_branch(self):
+        body = START + NOUL + 'Route r "r" { Read dec.q  yes -> end  no -> end }\nEnd "e" { Read dec }\n'
+        [d] = diagnostics(body)  # was a missing_branch and two unknown_label
+        self.assertEqual((d.code, d.line, d.column, d.step), ("unknown_label", 4, 27, "r"))
+        self.assertEqual(d.message, "yes and no are not values of dec.q; its values are true and false")
+        [d] = diagnostics(self.FLOW.replace("b -> y", "bb -> y"))  # a misspelt label of a choice, the same way
+        self.assertEqual((d.code, d.message), ("unknown_label", "bb is not a value of dec.q; its values are a and b"))
+        # a branch that is simply absent is still a missing_branch
+        self.assertEqual(codes(START + NOUL + 'Route r "r" { Read dec.q  true -> end }\nEnd "e" { Read dec }\n'), ["missing_branch"])
+
+    def test_a_loop_without_an_exit_is_not_followed_by_the_steps_nothing_reaches(self):
+        body = ('Start "s" { m: string  Next_Step l }\nLoop l 3 Times {\n  Task_Agent t "t" { Read m  Produce o: string  Continue }\n}\n'
+                'Task_Agent u "u" { Read o  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
+        [d] = diagnostics(body)  # was missing_loop_exit and two unreachable_step
+        self.assertEqual((d.code, d.line, d.step), ("missing_loop_exit", 3, "l"))
+
+    def test_a_step_without_next_step_is_not_followed_by_the_steps_nothing_reaches(self):
+        [d] = diagnostics(OK.replace("Produce o: string  Next_Step end", "Produce o: string"))
+        self.assertEqual((d.code, d.step), ("missing_next_step", "t"))
+
+    def test_a_step_nothing_reaches_is_still_reported_when_every_flow_resolves(self):
+        [d] = diagnostics(OK + 'Task_Agent orphan "o" { Read m  Produce z: string  Next_Step end }\n')
+        self.assertEqual((d.code, d.step), ("unreachable_step", "orphan"))
+
+    def test_a_second_producer_is_not_followed_by_type_mismatches(self):
+        body = (START + DECIDE.replace("Next_Step r", "Next_Step t") + 'Task_Agent t "t" { Read m  Produce note: string, dec: string  Next_Step u }\n'
+                'Task_Agent u "u" { Read dec.q, note  Produce z: string  Next_Step end }\nEnd "e" { Read z, dec }\n')
+        [d] = diagnostics(body)  # was duplicate_producer and two type_mismatch
+        self.assertEqual((d.code, d.step), ("duplicate_producer", "t"))
+
+    def test_the_messages_the_reports_quoted(self):
+        body = START + DECIDE.replace("Next_Step r", "Next_Step t") + 'Task_Agent t "t" { Read dec: string  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n'
+        [d] = diagnostics(body)
+        self.assertEqual(d.message, "dec is read as a string, but d produced it as a decision; every declaration of a key agrees on its type")
+        loop = ('Start "s" { m: string  Next_Step l }\nLoop l 2 Times {\n  Task_Agent t "t" { Read m  Produce m: integer  Continue }\n  Next_Step end\n}\n'
+                'End "e" { Read m }\n')
+        [d] = diagnostics(loop)
+        self.assertEqual((d.code, d.message), ("type_mismatch", "m is an integer here, but start produced it as a string; every declaration of a key agrees on its type"))
+        route = (START + NOUL + 'Route r "r" { Read dec.q  true -> a  false -> b }\nTask_Agent a "a" { Read m  Produce x: string  Next_Step b }\n'
+                 'Task_Agent b "b" { Read x  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
+        [d] = diagnostics(route)
+        self.assertEqual((d.code, d.message), ("unavailable_key", "x is not available at b: a does not run before it on every path"))
+
+    def test_a_decide_that_reads_nothing_is_a_warning_and_still_compiles(self):
+        body = START + 'Decide d "d" { Answer_Questions { q: true_or_false "Is {m} fine?" }  Produce dec  Next_Step end }\nEnd "e" { Read dec }\n'
+        [d] = diagnostics(body)
+        self.assertEqual((d.code, d.severity, d.line, d.column, d.step), ("decide_reads_nothing", "warning", 3, 1, "d"))
+        self.assertIn("the model judges nothing but its questions", d.message)
+
+
+class LoopKeys(unittest.TestCase):
+    """Spec 2.6: each loop's name is the runtime's key for that loop, `<loop>.index` in its body
+    and `<loop>.iterations` after it; the bare `index` and `iterations` are shorthands."""
+
+    NESTED = ('Start "s" { items: list  Next_Step outer }\n'
+              'Loop outer 2 Times {\n'
+              '  For inner Over items As item, At_Most 5 {\n'
+              '    Task_Agent t "t" { Read item, index, inner.index, outer.index  Produce o: string  Continue }\n'
+              '    Next_Step after\n  }\n'
+              '  Task_Agent after "a" { Read inner.iterations, outer.index, iterations, index  Produce note: string  Continue }\n'
+              '  Next_Step last\n}\n'
+              'Task_Agent last "l" { Read inner.iterations, outer.iterations, iterations  Produce z: string  Next_Step end }\n'
+              'End "e" { Read z }\n')
+
+    def test_each_loop_has_its_own_index_and_iterations(self):
+        self.assertEqual(codes(self.NESTED), [], "a step after nested loops reads the inner loop's count by the loop's name")
+
+    def test_a_loop_key_is_read_where_it_exists(self):
+        [d] = diagnostics(self.NESTED.replace("Read inner.iterations, outer.index, iterations, index", "Read inner.index"))
+        self.assertEqual((d.code, d.step), ("unknown_field", "after"))
+        self.assertIn("inner.index inside its body and inner.iterations after it exits; here it has iterations", d.message)
+        [d] = diagnostics(self.NESTED.replace("Read inner.iterations, outer.iterations, iterations", "Read outer.index"))
+        self.assertEqual((d.code, d.step), ("unknown_field", "last"))
+        [d] = diagnostics(self.NESTED.replace("Read item, index, inner.index, outer.index", "Read item, outer.iterations"))
+        self.assertEqual((d.code, d.step), ("unknown_field", "t"))
+        before = 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read l.iterations  Produce o: string  Next_Step l }\n' \
+                 'Loop l 2 Times {\n  Task_Agent u "u" { Read o  Produce z: string  Continue }\n  Next_Step end\n}\nEnd "e" { Read z }\n'
+        [d] = diagnostics(before)
+        self.assertEqual((d.code, d.step), ("unavailable_key", "t"))
+        self.assertIn("l.index is available inside its body and l.iterations after it exits", d.message)
+
+    def test_a_for_pass_keeps_its_loop_keys_to_itself(self):
+        body = ('Start "s" { items: list  Next_Step f }\nFor f Over items As item, At_Most 5 {\n'
+                '  Loop l 2 Times {\n    Task_Agent t "t" { Read item  Produce o: string  Continue }\n    Continue\n  }\n  Next_Step u\n}\n'
+                'Task_Agent u "u" { Read l.iterations, f.iterations  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
+        [d] = diagnostics(body)
+        self.assertEqual((d.code, d.step), ("unavailable_key", "u"), "the inner loop ran once per pass of the For, and a pass's keys are gone after it")
+        self.assertEqual(codes(body.replace("Read l.iterations, f.iterations", "Read f.iterations")), [])
+
+    def test_a_key_may_not_share_a_loops_name(self):
+        body = ('Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce l: string  Next_Step l }\n'
+                'Loop l 2 Times {\n  Task_Agent u "u" { Read m  Produce z: string  Continue }\n  Next_Step end\n}\nEnd "e" { Read z }\n')
+        [d] = diagnostics(body)
+        self.assertEqual((d.code, d.severity, d.line, d.column, d.step), ("duplicate_name", "error", 3, 36, "t"))
+        self.assertIn("l.index in its body, l.iterations after it", d.message)
+        item = ('Start "s" { items: list  Next_Step f }\nFor f Over items As f, At_Most 3 {\n'
+                '  Task_Agent t "t" { Read items  Produce o: string  Continue }\n  Next_Step end\n}\nEnd "e" { Read items }\n')
+        self.assertEqual(codes(item), ["duplicate_name"])
+        self.assertEqual(codes(item.replace("As f, At_Most 3", "As i, At_Most 3, Collect o Into f")), ["duplicate_name"])
+        self.assertEqual(codes(item.replace("For f Over items As f", "For index Over items As i").replace("Next_Step f", "Next_Step index")),
+                         ["reserved_key"], "a loop cannot be called index")
+
+    def test_the_graph_says_the_loop_produces_its_key(self):
+        from aip.compiler import compile_source
+
+        bundle, found = compile_source(PREFIX + self.NESTED, [])
+        self.assertEqual(found, [])
+        g = bundle.graph
+        self.assertEqual(g.node("data:inner").properties["runtime"], True)
+        self.assertEqual([e.start for e in g.edges if e.type == "PRODUCES" and e.end == "data:inner"], ["loop:inner"])
+        fields = sorted(e.properties.get("field") for e in g.edges if e.type == "READ_BY" and e.start == "data:inner")
+        self.assertEqual(fields, ["index", "iterations", "iterations"])
+
+    def test_an_until_whose_answer_may_exist_can_end_the_loop_before_any_pass(self):
+        """Spec 2.6: `Until` is tested at the head, so a body runs no pass when the answer already
+        holds, and a key only the body writes is not there after the loop."""
+        body = ('Start "s" { m: string  Next_Step c }\n'
+                'Task_Agent c "c" { Read m  Produce passed: true_or_false  Next_Step l }\n'
+                'Loop l Until passed, At_Most 3 {\n'
+                '  Task_Agent fix "f" { Read m  Produce note: string, passed: true_or_false  Continue }\n  Next_Step u\n}\n'
+                'Task_Agent u "u" { Read note  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n')
+        [d] = diagnostics(body)
+        self.assertEqual((d.code, d.step), ("unavailable_key", "u"))
+
+
 class CompileCommand(unittest.TestCase):
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -465,8 +615,8 @@ class CompileCommand(unittest.TestCase):
             code, out, err = self.run_cli("compile", str(folder))
             self.assertEqual((code, out), (1, ""))
             self.assertIn("error unknown_step", err)
-            self.assertIn("error unreachable_step", err)
-            self.assertTrue(err.rstrip().endswith("2 errors"), err)
+            self.assertNotIn("unreachable_step", err, "the End nothing reaches is the unknown step's consequence")
+            self.assertTrue(err.rstrip().endswith("1 error"), err)
             code, out, err = self.run_cli("compile", "--json", str(folder / "procedure.aip"))
             self.assertEqual(code, 1)
             self.assertFalse(json.loads(out)["ok"])

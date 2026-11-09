@@ -314,7 +314,7 @@ class Engine:
 
     def _after_step(self, run: Run, cursor: Cursor, step: Step, written: set[str]) -> None:
         """A step is done and wrote `written`: an `Until` on the enclosing loop may end the loop
-        here (spec 2.1, Loops), otherwise the step's flow is followed."""
+        here (spec 2.6), otherwise the step's flow is followed."""
         if written and self._until_ends(run, cursor, step.id, written, where=step.name):
             return
         self._follow(run, cursor, step)
@@ -379,7 +379,7 @@ class Engine:
 
     def _head(self, run: Run, cursor: Cursor, loop: Loop, frame: JSON) -> None:
         """The head of a `Loop` pass: `Until`, the list, the count and the cap decide whether a
-        pass runs (spec 2.1, Loops; runtime.md, Loops)."""
+        pass runs (spec 2.6; runtime.md, Loops)."""
         count = frame["count"]
         frame.pop("head", None)
         if loop.until is not None:
@@ -401,6 +401,7 @@ class Engine:
                 raise LoopCap(loop.name, cap, count, f"{loop.name} ran {count} passes without its condition holding (At_Most {cap}, Else_Fail)")
             return
         cursor.state[steps.INDEX] = count
+        cursor.state[loop.name] = {steps.INDEX: count}  # the loop's own key (spec 2.6): `revise.index`
         if loop.mode == "Over":
             cursor.state[loop.item] = copy.deepcopy(frame["items"][count])
         cursor.at = loop.enters
@@ -412,6 +413,7 @@ class Engine:
         cursor.frames.pop()
         written = set(frame.get("written") or []) | loop.produced_keys
         cursor.state[steps.ITERATIONS] = frame["count"]
+        cursor.state[loop.name] = {steps.ITERATIONS: frame["count"]}  # `revise.iterations`, which a later loop does not overwrite
         produced: JSON = {steps.ITERATIONS: frame["count"], **(result or {})}
         cursor.state.update(result or {})
         enclosing = _passes(cursor)
@@ -482,6 +484,7 @@ class Engine:
         state = copy.deepcopy(cursor.state)
         state[loop.item] = copy.deepcopy(frame["items"][index])
         state[steps.INDEX] = index
+        state[loop.name] = {steps.INDEX: index}
         return Cursor(state, [], loop.enters, RUNNING, None, None, [], [*_passes(cursor), {"loop": loop.name, "pass": index}])
 
     def _decide_batch(self, run: Run, cursor: Cursor, step: Step, passes: list[Cursor]) -> None:

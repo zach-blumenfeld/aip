@@ -4,13 +4,17 @@
 # one decision asks one question per policy, in a single model call. The agent does the task
 # from a template saved with the procedure, then a loop checks the work and fixes it until every
 # policy passes. The check lives inside the loop: `Until` treats an absent key as not yet true,
-# so the first pass runs and nothing has to run before the loop to seed it. When the policies arrive at
+# so the body runs and nothing has to run before the loop to seed it. When the policies arrive at
 # run time instead, see dynamic-policy.
 #
-# An Aggregate turns the four answers into one: each counts as false unless the model was at
-# least 0.7 sure of it, then all four must be true. The result has no confidence of its own;
-# see docs/no-expressions.md for why that is the rule. `Until check_summary.all_hold` ends the
-# loop the moment it is true.
+# A policy the model must judge against a list carries the list: policy_claims holds the approved
+# claims, so the question can be answered from the question. assets/claims.md is the same list
+# for the agent, who writes and revises with it in hand.
+#
+# An Aggregate turns the four answers into one: each counts as false unless the model was more
+# than 0.7 sure of it, then all four must be true. The result has no confidence of its own;
+# see docs/language/no-expressions.md for why that is the rule. `Until check_summary.all_hold`
+# ends the loop the moment it is true, so work that passes the first check is never sent to fix.
 
 Procedure fixed_policy
   "Do a writing task the way the house policy says, and do not hand it over until it does."
@@ -23,10 +27,17 @@ Procedure fixed_policy
     "Declaring the work compliant without the decision having said so."
     "Rewriting the task request itself instead of the work."
 
-policy_pii     = "The work contains no personal data: no names of private individuals, no account numbers, no addresses."
-policy_claims  = "Every factual claim about the product is one the approved claims list supports; nothing is promised beyond it."
-policy_tone    = "The tone is plain and courteous: no superlatives, no pressure, no blame."
-policy_length  = "The work is under 300 words."
+policy_pii    = "The work contains no personal data: no names of private individuals, no account numbers, no addresses."
+policy_claims = """The work stays within the approved claims about the product: every factual claim it makes about the product is one of the approved claims below, or follows from one, and it promises nothing beyond them. Work that makes no claim about the product stays within them.
+
+Approved claims:
+- A duplicate charge is refunded in full to the original payment method within 5 business days.
+- A subscription can be cancelled at any time and stays active until the end of the paid period.
+- Support answers email within one business day.
+- An annual plan costs less per month than a monthly plan.
+- Account data can be exported from the settings page."""
+policy_tone   = "The tone is plain and courteous: no superlatives, no pressure, no blame."
+policy_length = "The work is under 300 words."
 
 Start "What the requester wants written." {
   request: string "The task, as the requester wrote it."
@@ -36,7 +47,7 @@ Start "What the requester wants written." {
 Task_Agent draft "Write the work from the task template, following the policy." {
   Read request
   Prompt assets/task.md
-  Use assets/policy.md
+  Use assets/policy.md, assets/claims.md
   Produce work: string "The written work."
   Next_Step revise
 }
@@ -64,9 +75,9 @@ Loop revise Until check_summary.all_hold, At_Most 3, Else_Fail {
   }
 
   Task_Agent fix "Revise the work so the failed policies pass." {
-    Read request, work, policy_check
+    Read request, work, policy_check, check_summary
     Prompt assets/fix.md
-    Use assets/policy.md
+    Use assets/policy.md, assets/claims.md
     Produce work: string "The revised work."
     Continue
   }

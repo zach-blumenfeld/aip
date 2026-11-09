@@ -23,8 +23,9 @@ from aip.compiler.keywords import ANSWER_TYPES
 
 JSON: TypeAlias = dict[str, Any]
 
-# The JSON kind each answer type's `value` has (spec 2.4).
-VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "integer"}
+# The JSON kind each answer type's `value` has (spec 2.4): a boolean, or a label (a `score`'s
+# value is the label of its level, as a `choice`'s is the label chosen).
+VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "string"}
 
 # The fields an answer of each type may carry beside `value`: the model's own (spec 2.4). A script
 # may supply them; an agent's answer is `value` alone.
@@ -56,7 +57,7 @@ def is_plain(type: str, value: Any) -> bool:
 
 
 def normalise(type: str | None, value: Any) -> Any:
-    """`value` as the state holds it: a bare `true`, label or level written for an answer type
+    """`value` as the state holds it: a bare `true` or label written for an answer type
     becomes `{"value": ...}`; everything else is returned as it is."""
     if type in ANSWER_TYPES and not isinstance(value, dict) and is_plain(VALUE_KIND[type], value):
         return {"value": value}
@@ -65,7 +66,7 @@ def normalise(type: str | None, value: Any) -> Any:
 
 def conforms(type: str | None, value: Any, labels: list[str] | None = None) -> str | None:
     """Why `value` is not of `type`, or None when it is. `labels` are a `choice` or `score`
-    answer's labels when known: a choice's value must be one, a score's an index into them."""
+    answer's labels when known: the value must be one of them."""
     if type is None:
         return None
     if type in ANSWER_TYPES:
@@ -75,11 +76,8 @@ def conforms(type: str | None, value: Any, labels: list[str] | None = None) -> s
         kind = VALUE_KIND[type]
         if not is_plain(kind, v):
             return f"the value of a {type} answer is a {kind}, not {describe(v)}"
-        if labels:
-            if type == "choice" and v not in labels:
-                return f"{v!r} is not one of the labels {labels}"
-            if type == "score" and not 0 <= v < len(labels):
-                return f"level {v} is outside 0..{len(labels) - 1}"
+        if labels and type in ("choice", "score") and v not in labels:
+            return f"{v!r} is not one of the {'labels' if type == 'choice' else 'levels'} {labels}"
         confidence = value.get("confidence")
         if confidence is not None and not (is_plain("float", confidence) and 0 <= confidence <= 1):
             return f"the confidence of an answer is a number in 0..1, not {describe(confidence)}"
@@ -131,14 +129,11 @@ def describe(value: Any) -> str:
     return type(value).__name__
 
 
-def branch_key(value: Any, labels: list[str] | None = None) -> str:
+def branch_key(value: Any) -> str:
     """The word a route's branch line writes for an answer's value: `true` or `false` for a
-    `true_or_false`, the label for a `choice`, and for a `score` the label of its level when the
-    question has labels, else the level's number."""
+    `true_or_false`, the label for a `choice` or a `score`."""
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, int) and labels and 0 <= value < len(labels):
-        return labels[value]
     return str(value)
 
 

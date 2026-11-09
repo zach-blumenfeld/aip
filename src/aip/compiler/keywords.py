@@ -92,7 +92,7 @@ TYPE_ALIASES: dict[str, tuple[str, ...]] = {
     "boolean": (),
     "list": ("array",),
     "object": (),
-    "true_or_false": ("noul",),
+    "true_or_false": (),
     "choice": (),
     "score": (),
     "decision": (),
@@ -108,5 +108,30 @@ for _canonical, _aliases in TYPE_ALIASES.items():
 
 
 def type_name(word: str) -> str | None:
-    """The canonical type `word` names (folding `number`, `array`, `noul`), or None."""
+    """The canonical type `word` names (folding `number` and `array`), or None."""
     return _TYPES.get(word)
+
+
+def _distance(a: str, b: str) -> int:
+    """The edit distance between two words (insertions, deletions, substitutions)."""
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        previous, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            previous, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, previous + (ca != cb))
+    return row[-1]
+
+
+def nearest(word: str, candidates) -> str | None:
+    """The canonical keyword among `candidates` that `word` most likely misspells: one whose
+    spelling, or an alias's, is within two edits of it (one for a word of four letters or fewer),
+    in any case. None when nothing is that close, or when `word` already spells a keyword."""
+    if keyword(word) is not None:
+        return None
+    best: tuple[int, str] | None = None
+    for canonical in candidates:
+        for spelling in (canonical, *ALIASES.get(canonical, ())):
+            d = _distance(word.lower(), spelling.lower())
+            if d <= (1 if len(spelling) <= 4 else 2) and (best is None or d < best[0]):
+                best = (d, canonical)
+    return None if best is None else best[1]

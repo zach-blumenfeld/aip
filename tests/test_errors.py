@@ -42,10 +42,10 @@ CASES = [
     ("flag value", 'Decide d "x" {\n  History yes\n}\n', 3, 11, "expected 'true' or 'false' after 'History', got 'yes'"),
     ("labels on a read", 'Execute e "x" {\n  Read t: choice [a, b]\n}\n', 3, 18, "labels are declared where t is produced, not where it is read"),
     ("labels unclosed", 'Execute e "x" {\n  Produce t: choice [a b]\n}\n', 3, 24, "expected ']' to close the labels, got 'b'"),
-    ("questions brace", 'Decide d "x" {\n  Answer_Questions\n    q: noul "?"\n}\n', 4, 5, "expected '{' to open the questions, got 'q'"),
-    ("questions unclosed", 'Decide d "x" {\n  Answer_Questions {\n    q: noul "?"\n', 5, 1, "expected '}' to close the questions, got the end of the file"),
-    ("question name", 'Decide d "x" {\n  Answer_Questions {\n    Q: noul "?"\n  }\n}\n', 4, 5, "expected a question name (lowercase letters, digits and underscores), got 'Q'"),
-    ("question colon", 'Decide d "x" {\n  Answer_Questions {\n    q noul "?"\n  }\n}\n', 4, 7, "expected ':' after the question name q, got 'noul'"),
+    ("questions brace", 'Decide d "x" {\n  Answer_Questions\n    q: true_or_false "?"\n}\n', 4, 5, "expected '{' to open the questions, got 'q'"),
+    ("questions unclosed", 'Decide d "x" {\n  Answer_Questions {\n    q: true_or_false "?"\n', 5, 1, "expected '}' to close the questions, got the end of the file"),
+    ("question name", 'Decide d "x" {\n  Answer_Questions {\n    Q: true_or_false "?"\n  }\n}\n', 4, 5, "expected a question name (lowercase letters, digits and underscores), got 'Q'"),
+    ("question colon", 'Decide d "x" {\n  Answer_Questions {\n    q true_or_false "?"\n  }\n}\n', 4, 7, "expected ':' after the question name q, got 'true_or_false'"),
     ("question type", 'Decide d "x" {\n  Answer_Questions {\n    q: string "?"\n  }\n}\n', 4, 8, "expected an answer type (true_or_false, choice or score), got 'string'"),
     ("question labels", 'Decide d "x" {\n  Answer_Questions {\n    q: choice [a b] "?"\n  }\n}\n', 4, 18, "expected ']' to close the labels, got 'b'"),
     ("question label case", 'Decide d "x" {\n  Answer_Questions {\n    q: choice [A] "?"\n  }\n}\n', 4, 16, "expected a label (lowercase letters, digits and underscores), got 'A'"),
@@ -78,11 +78,29 @@ CASES = [
     ("loop exit last", "Loop l 3 Times {\n  Next_Step a\n  Task_Agent t \"x\" { Read m  Produce o: string  Continue }\n}\n", 4, 3, "expected '}': the loop's exit is the last line of its block, got 'Task_Agent'"),
     ("loop unclosed", "Loop l 3 Times {\n", 3, 1, "expected '}' to close the loop l, got the end of the file"),
     ("unterminated string", 'a = "never closed\n', 2, 5, "unterminated string"),
+    # a word within an edit or two of a keyword that could stand there: did you mean
+    ("misspelt clause", 'Decide d "x" {\n  Read m\n  Answer_Quesions {\n    q: true_or_false "?"\n  }\n}\n', 4, 3,
+     "got 'Answer_Quesions'; did you mean Answer_Questions?"),
+    ("misspelt step kind", 'Decid d "x" {\n}\n', 2, 1, "got 'Decid'; did you mean Decide?"),
+    ("misspelt alias", 'Task_Agent t "x" {\n  Reads m\n  Produces o: string\n  Nxt end\n}\n', 5, 3, "got 'Nxt'; did you mean Next_Step?"),
+    ("misspelt loop option", "Loop l Until d.q, At_Mos 3 {\n}\n", 2, 19, "got 'At_Mos'; did you mean At_Most?"),
+    ("procedure misspelt", "Procedur p \"x\"\n", 1, 1, "got 'Procedur'; did you mean Procedure?"),
+    ("misspelt confidence_above", 'Loop l Until d.q With Confidence_Abov 0.7, At_Most 3 {\n}\n', 2, 23, "got 'Confidence_Abov'; did you mean Confidence_Above?"),
+    # a header clause below the header says where it belongs
+    ("header clause after a step", 'Start "s" { m: string  Next_Step end }\nUse_When "late"\n', 3, 1,
+     "'Use_When' belongs in the header, before the first step"),
+    ("header clause after a named string", 'a = "x"\nRequires python 3.10\n', 3, 1, "'Requires' belongs in the header, before the first step"),
     ("stray character", "Start \"s\" { m: string @ }\n", 2, 23, "unexpected character '@'"),
 ]
 
 
 class SyntaxErrors(unittest.TestCase):
+    def test_no_hint_when_nothing_is_close(self):
+        for body in ('Decide d "x" {\n  Frobnicate m\n}\n', 'Decide d "x" {\n  Answer_Questions {\n    q: strng "?"\n  }\n}\n', "Whatever\n"):
+            with self.subTest(body), self.assertRaises(ParseError) as caught:
+                parse(PREFIX + body)
+            self.assertNotIn("did you mean", caught.exception.message)
+
     def test_each_error_names_its_position_and_what_was_expected(self):
         for name, body, line, column, fragment in CASES:
             with self.subTest(name):

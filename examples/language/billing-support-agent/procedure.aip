@@ -23,7 +23,7 @@ Procedure billing_support_agent
     "Replying to an angry customer with a templated answer instead of escalating."
     "Promising a refund the policy does not cover."
 
-triage_prompt = """Read the customer's message and classify it.
+triage_prompt  = """Read the customer's message and classify it.
 
 Customer message:
 {message}
@@ -40,7 +40,7 @@ Start "The customer's message, as support received it." {
 
 Task_Agent triage triage_prompt {
   Read message
-  Produce billing: true_or_false       "Whether the message is about billing."
+  Produce billing: true_or_false        "Whether the message is about billing."
           tone:    choice [angry, calm] "How upset the customer is."
   Next_Step by_tone
 }
@@ -56,7 +56,7 @@ Execute escalate "Open a tier-2 ticket for the message." {
   Run_Script scripts/escalate.py
   Use assets/config.json
   Produce ticket_id: integer "The tier-2 ticket opened for the message."
-           queue: string      "The queue the ticket was routed to."
+          queue:     string  "The queue the ticket was routed to."
   Next_Step end
 }
 

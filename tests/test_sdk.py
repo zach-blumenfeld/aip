@@ -174,7 +174,7 @@ def test_a_confident_model_takes_the_calm_arm_to_the_agent_task(tmp_path):
     record = client.run_record(done.run_id)
     assert steps(record) == ["start", "triage", "by_tone", "reply", "end"]
     assert record.history[1]["answered_by"] == {"model": "jev-1", "endpoint": "https://api.typesafe.ai"}
-    assert record.history[2]["check"] == {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None}
+    assert record.history[2]["check"] == {"below": 0.9, "confidence": 0.9, "fired": False, "reason": None}
     assert record.history[3]["result"] == {"reply": REPLY}
 
 

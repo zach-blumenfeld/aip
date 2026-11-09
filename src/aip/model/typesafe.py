@@ -4,8 +4,10 @@ A `Decide` step's questions become TypeSafe's `Noul`, `Choice` and `Score` quest
 `Read` keys go as the `state` to judge (with the run's history beside them when the step says
 `History true`), and the reply's answers come back as the answer objects of spec 2.4
 (`aip.model.answers`): a `true_or_false` from the `noul`, a `choice` with its `confidence` and
-`probabilities`, a `score` whose `value` is the most probable level with the expected value as
-`score`. The model's `legend` is dropped; it repeats the question's criteria.
+`probabilities`, a `score` whose `value` is the label of the most probable level, its
+`probabilities` keyed by label (the model numbers the levels; they are mapped to the question's
+labels on receipt) and the model's expected value kept as `score`. The model's `legend` is
+dropped; it repeats the question's criteria.
 
 The model is an endpoint, not a vendor (plan question 7): `typesafe-sdk` speaks to `url`
 (`base_url`), which defaults to TypeSafe's own, `DEFAULT_URL`, so any service with that shape
@@ -58,9 +60,10 @@ def state_payload(request: DecisionRequest) -> JSON:
     return payload
 
 
-def answer_object(answer: JSON) -> JSON:
+def answer_object(answer: JSON, labels: list[str] | None = None) -> JSON:
     """One of TypeSafe's answers (`{"type": "noul" | "choice" | "score", ...}`) as the answer
-    object the state holds (spec 2.4)."""
+    object the state holds (spec 2.4). `labels` are the question's: a score's levels arrive
+    numbered from 0 and leave under their labels."""
     match answer.get("type"):
         case "noul":
             return answers.true_or_false(float(answer["noul"]))
@@ -68,10 +71,13 @@ def answer_object(answer: JSON) -> JSON:
             return {"value": answer["choice"], "confidence": float(answer["confidence"]),
                     "probabilities": {str(k): float(v) for k, v in answer["probabilities"].items()}}
         case "score":
-            probabilities = {str(k): float(v) for k, v in answer["probabilities"].items()}
-            level = int(max(probabilities, key=probabilities.get))
-            return {"value": level, "confidence": float(answer["confidence"]), "score": float(answer["score"]),
-                    "probabilities": probabilities}
+            def label(level: Any) -> str:
+                return labels[int(level)] if labels and str(level).isdigit() and int(level) < len(labels) else str(level)
+
+            by_level = sorted(answer["probabilities"].items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0)
+            probabilities = {label(k): float(v) for k, v in by_level}
+            return {"value": max(probabilities, key=probabilities.get), "confidence": float(answer["confidence"]),
+                    "score": float(answer["score"]), "probabilities": probabilities}
     raise ValueError(f"unknown answer type {answer.get('type')!r}")
 
 
@@ -114,7 +120,8 @@ class TypeSafeResolver:
     def decide(self, request: DecisionRequest) -> Decision:
         result = self.ask(request)
         given = result.get("answers") or {}
-        return Decision(result.get("model") or NAME, {name: answer_object(given[name]) for name in given}, self.url)
+        labels = {q.name: q.labels for q in request.questions}
+        return Decision(result.get("model") or NAME, {name: answer_object(given[name], labels.get(name)) for name in given}, self.url)
 
 
 __all__ = ["URL_ENV", "KEY_ENV", "DEFAULT_URL", "NAME", "TypeSafeResolver", "question_payload", "state_payload", "answer_object"]

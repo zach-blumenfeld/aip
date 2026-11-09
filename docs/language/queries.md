@@ -37,7 +37,8 @@ does not draw a second edge beside every `ENTERS`.
 ## Data flow
 
 One `Data` node per key of the state. `PRODUCES` comes from the step or loop that writes it (a
-`Produce` line, a `Start` input, a `For`'s collected list, a loop's `index` and `iterations`);
+`Produce` line, a `Start` input, a `For`'s collected list, a loop's `index` and `iterations` and
+the key under its own name, as in `revise.iterations`);
 `READ_BY` goes to every step that reads it, with `field` when the step reads one answer of a
 decision (`tone` in `triage_decision.tone`) and `interpolated: true` for a `{key}` in a question
 or prompt. Read left to right: `(Step)-[:PRODUCES]->(Data)-[:READ_BY]->(Step)`.

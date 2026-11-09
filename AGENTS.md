@@ -74,7 +74,8 @@ version.
 - **Change the language in one place and let the tests find the rest.** `docs/language/spec.md`
   is normative and its glossary is the only list of keywords in prose; `keywords.py` is the
   executable copy, and a keyword or alias added to one is added to the other in the same commit.
-  The examples under `examples/language/` must parse and round-trip through the formatter.
+  The examples under `examples/language/` must parse and be in the formatter's form (`aip fmt
+  --check examples/language`, which CI runs: formatting a procedure changes its bundle id).
 - **Do not change behaviour in a release branch.** If a test must change for a path, say so in
   the commit; if it must change for a behaviour, stop and write it down in the plan issue.
 - **Plans live in issues, not in the repo.** The roadmap is

@@ -28,7 +28,8 @@ from aip.compiler import syntax as s
 from aip.compiler.language import LANGUAGE_VERSION
 
 PROCEDURE_ID = "procedure"
-# The runtime's keys (spec 2.1, Loops): `index` inside a body, `iterations` after a loop.
+# The runtime's keys (spec 2.6): `index` inside a body, `iterations` after a loop, and each
+# loop's own name, an object holding its own `index` and `iterations` (`revise.iterations`).
 RUNTIME_KEYS = ("index", "iterations")
 
 
@@ -177,6 +178,7 @@ class _Builder:
         self.key_description: dict[str, str | None] = {}
         self.key_labels: dict[str, list[str] | None] = {}
         self.loops_at_level: dict[tuple[str, ...], list[str]] = {}
+        self.loops: set[str] = set()           # the loops' names, each the runtime's key for that loop
 
     # ------------------------------------------------------------ primitives
 
@@ -216,9 +218,9 @@ class _Builder:
         declaration agree)."""
         id = f"data:{name}"
         if id not in self.by_id:
-            self.node(id, ("Data",), {"name": name, "runtime": True if name in RUNTIME_KEYS else None})
+            self.node(id, ("Data",), {"name": name, "runtime": True if name in RUNTIME_KEYS or name in self.loops else None})
             self.edge("SUPPLIES", PROCEDURE_ID, id)
-            self.key_type[name] = "integer" if name in RUNTIME_KEYS else None
+            self.key_type[name] = "integer" if name in RUNTIME_KEYS else "object" if name in self.loops else None
             self.key_description[name] = None
             self.key_labels[name] = None
         if type is not None and self.key_type[name] is None:
@@ -270,6 +272,7 @@ class _Builder:
             self.index[_node_name(item)] = _node_id(item)
             if not isinstance(item, s.Step):
                 self.loops_at_level.setdefault(path, []).append(_node_id(item))
+                self.loops.add(item.name)
                 self.index_items(item.body, path + (item.name,))
 
     def items(self, items, path: tuple[str, ...]) -> None:
@@ -356,6 +359,8 @@ class _Builder:
         elif root == "iterations":
             for loop_id in self.loops_at_level.get(path, []):
                 self.edge("PRODUCES", loop_id, key)
+        elif root in self.loops:  # `revise.index`, `revise.iterations`: the loop's own key
+            self.edge("PRODUCES", f"loop:{root}", key)
         self.edge("READ_BY", key, step_id, {"field": ".".join(ref.path[1:]) or None, "interpolated": interpolated or None,
                                             "source": source}, at=at)
 

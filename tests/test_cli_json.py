@@ -196,7 +196,7 @@ class CliJson(unittest.TestCase):
         history = RunFile.load(self.run_file).run["history"]
         self.assertEqual([e["step"] for e in history], ["start", "triage", "by_tone", "reply", "end"])
         self.assertEqual(history[1]["answered_by"], {"model": "jev-1", "endpoint": "https://api.typesafe.ai"})
-        self.assertEqual(history[2]["check"], {"below": 0.6, "confidence": 0.9, "fired": False, "reason": None})
+        self.assertEqual(history[2]["check"], {"below": 0.9, "confidence": 0.9, "fired": False, "reason": None})
 
     def test_the_answer_can_be_keyed_by_task_index_or_listed(self):
         self.run_(AGENT, {"message": CALM})

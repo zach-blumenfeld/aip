@@ -98,7 +98,7 @@ class BillingSupport(unittest.TestCase):
         self.assertEqual(r.particle, "On")
         self.assertEqual([x.key.dotted for x in r.reads], ["triage_decision.tone"])
         self.assertEqual(r.reads[0].key.path, ["triage_decision", "tone"])
-        self.assertEqual((r.check.below, r.check.target), (0.6, s.Flow("Next_Step", "escalate")))
+        self.assertEqual((r.check.below, r.check.target), (0.9, s.Flow("Next_Step", "escalate")))
         self.assertEqual([(b.value, b.target.step) for b in r.branches], [("angry", "escalate"), ("calm", "reply")])
         self.assertIsNone(r.flow)
 
@@ -175,7 +175,7 @@ class Loops(unittest.TestCase):
             Loop a 3 Times { Task_Agent t "x" { Read items  Produce out: string  Continue }  Next_Step b }
             Loop b Over items As item, At_Most 5 { Task_Agent u "x" { Read item  Produce out: string  Continue }  Next_Step c }
             Loop c Until verdict.ok == true With Confidence_Above 0.8, Max 2, Else_Exit {
-              Decide d "x" { Read out  Questions { ok: noul "Fine?" }  Produce verdict  Continue }
+              Decide d "x" { Read out  Questions { ok: true_or_false "Fine?" }  Produce verdict  Continue }
               Next_Step e
             }
             For_Each e Over items As item At_Most 4 Collect out Into outs {
@@ -189,7 +189,6 @@ class Loops(unittest.TestCase):
         self.assertEqual((b.mode, b.over.dotted, b.item, b.at_most), ("Over", "items", "item", 5))
         self.assertEqual((c.mode, c.at_most, c.at_cap), ("Until", 2, "Else_Exit"))
         self.assertEqual(c.until, s.Condition(s.KeyRef(["verdict", "ok"]), "==", "true", 0.8))
-        self.assertEqual(c.body[0].questions[0].type, "true_or_false", "noul is an alias")
         self.assertEqual((e.at_most, e.collect), (4, s.Collect("out", "outs")), "commas between header clauses are optional")
         self.assertEqual(e.body[0].kind, "Task_Agent")
 
@@ -210,7 +209,7 @@ class Aliases(unittest.TestCase):
             start "s" { Input m: array "the list"  next a }
             decide a "d" {
               reads m
-              questions { q: noul "Yes?"  c: choice [x, y] "Which?" }
+              questions { q: true_or_false "Yes?"  c: choice [x, y] "Which?" }
               history true
               return dec
               go_to r

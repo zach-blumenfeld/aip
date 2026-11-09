@@ -18,12 +18,11 @@ Start "The batch of tickets and the policy every reply must follow." {
 }
 
 For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
-
   Decide classify classify_question {
     Read ticket
     Answer_Questions {
       billing: true_or_false "Is this a billing question?"
-      tone: choice [calm, angry] "How does the customer sound?"
+      tone:    choice [calm, angry] "How does the customer sound?"
     }
     Produce classification
     Next_Step by_tone
@@ -45,7 +44,8 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
   Execute escalate "Open a ticket in the tier-2 queue." {
     Read ticket
     Run_Script scripts/escalate.py
-    Produce reply: string, queue: string
+    Produce reply: string
+            queue: string
     Continue
   }
 
@@ -62,6 +62,7 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
       Produce reply: string
       Again check
     }
+
     Continue
   }
 

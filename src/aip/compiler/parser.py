@@ -19,7 +19,7 @@ import re
 from aip.compiler import syntax as s
 from aip.compiler.errors import ParseError
 from aip.compiler.keywords import (
-    ANSWER_TYPES, FLOW_CLAUSES, HEADER_CLAUSES, LOOP_KINDS, STEP_KINDS, TYPE_ALIASES, keyword, type_name,
+    ANSWER_TYPES, FLOW_CLAUSES, HEADER_CLAUSES, LOOP_KINDS, STEP_KINDS, TYPE_ALIASES, keyword, nearest, type_name,
 )
 from aip.compiler.lexer import EOF, PUNCT, STRING, WORD, Comment, Token, tokenize
 
@@ -88,9 +88,13 @@ class Parser:
         self.last = tok
         return tok
 
-    def error(self, expected: str, tok: Token | None = None) -> ParseError:
+    def error(self, expected: str, tok: Token | None = None, keywords: tuple[str, ...] = ()) -> ParseError:
+        """`expected X, got Y`. `keywords` are the keywords that could stand here: when the word
+        found is within an edit or two of one, the message ends with `did you mean <keyword>?`."""
         tok = self.peek() if tok is None else tok
-        return ParseError(f"expected {expected}, got {tok.describe()}", tok.line, tok.column, expected=expected,
+        meant = nearest(tok.text, keywords) if tok.kind == WORD and keywords else None
+        hint = f"; did you mean {meant}?" if meant else ""
+        return ParseError(f"expected {expected}, got {tok.describe()}{hint}", tok.line, tok.column, expected=expected,
                           found=tok.text, end_line=tok.end_line, end_column=tok.end_column, file=self.file)
 
     def fail(self, message: str, tok: Token | None = None) -> ParseError:
@@ -117,7 +121,7 @@ class Parser:
 
     def expect_kw(self, canonical: str, context: str) -> Token:
         if self.kw() != canonical:
-            raise self.error(f"'{canonical}' {context}")
+            raise self.error(f"'{canonical}' {context}", keywords=(canonical,))
         return self.next()
 
     # ------------------------------------------------------------ comments
@@ -256,7 +260,7 @@ class Parser:
         leading = self.take()
         start = self.peek()
         if self.kw() != "Procedure":
-            raise self.error("'Procedure <name>' to open the file (only named strings may come before it)")
+            raise self.error("'Procedure <name>' to open the file (only named strings may come before it)", keywords=("Procedure",))
         self.next()
         name = self.ident("the procedure's name (lowercase letters, digits and underscores)")
         program = s.Program(name, None, [], prologue)  # type: ignore[arg-type]  # the description follows
@@ -304,13 +308,18 @@ class Parser:
             return self.loop()
         if not in_loop and self.is_word() and kw is None and self.is_punct("=", 1):
             return self.named_string()
+        if kw in HEADER_CLAUSES:
+            raise self.fail(f"'{kw}' belongs in the header, before the first step: the header is the lines under 'Procedure <name>', "
+                            "and it ends at the first step, loop or named string")
         if in_loop:
-            raise self.error("a step, a loop, or the loop's exit ('Next_Step <step>' or 'Continue')")
+            raise self.error("a step, a loop, or the loop's exit ('Next_Step <step>' or 'Continue')",
+                             keywords=STEP_KINDS + LOOP_KINDS + ("Next_Step", "Continue"))
         if self.is_word() and kw is None and self.is_punct(":", 1):
             raise self.fail(f"a clause ({self.peek().text}: ...) outside a step; expected a step, a loop or a named string")
         if self.is_word() and kw is None and self.peek(1).kind == STRING:
             raise self.error(f"'=' after the name {self.peek().text} (a named string is written {self.peek().text} = \"...\")", self.peek(1))
-        raise self.error("a step (Start, Decide, Route, Aggregate, Execute, Task_Agent, End), a loop (For, Loop) or a named string")
+        raise self.error("a step (Start, Decide, Route, Aggregate, Execute, Task_Agent, End), a loop (For, Loop) or a named string",
+                         keywords=STEP_KINDS + LOOP_KINDS + HEADER_CLAUSES)
 
     def named_string(self) -> s.NamedString:
         leading = self.take()
@@ -367,7 +376,8 @@ class Parser:
         if step.kind == "Route" and kw != "Confidence_Below" and ((self.is_word() and self.is_punct("->", 1)) or kw == "When"):
             kw = "Branch"
         if kw is None:
-            raise self.error(f"a clause of {step.kind} ({_clauses_of(step.kind)})")
+            raise self.error(f"a clause of {step.kind} ({_clauses_of(step.kind)})",
+                             keywords=tuple(c for c in _ALLOWED[step.kind] if c not in _SHOWN))
         if kw not in _ALLOWED[step.kind]:
             raise self.fail(f"'{kw}' is not a clause of {step.kind}; {step.kind} takes {_clauses_of(step.kind)}")
         if kw == "Input":
@@ -557,7 +567,7 @@ class Parser:
             self.expect_punct(":", f"after the aggregation name {name}")
             mode = self.kw()
             if mode not in ("All", "Any", "None"):
-                raise self.error("'All', 'Any' or 'None'")
+                raise self.error("'All', 'Any' or 'None'", keywords=("All", "Any", "None"))
             self.next()
             condition = self.condition("the answers to aggregate")
             clause.aggregations.append(self.line_node(s.Aggregation(name, mode, condition), first, lead))
@@ -606,7 +616,7 @@ class Parser:
                 self.expect_kw("Times", "after the number of passes")
                 node = s.Loop(name, "Times", None, times, None, None, None, None, [], None)
             else:
-                raise self.error(f"'Until <condition>', 'Over <list> As <item>' or '<n> Times' after 'Loop {name}'")
+                raise self.error(f"'Until <condition>', 'Over <list> As <item>' or '<n> Times' after 'Loop {name}'", keywords=("Until", "Over"))
             options = ("At_Most", "Else_Fail", "Else_Exit") if node.mode == "Until" else ("At_Most",)
         while not self.is_punct("{"):
             if self.is_punct(","):
@@ -614,7 +624,7 @@ class Parser:
                 continue
             kw = self.kw()
             if kw not in options:
-                raise self.error(f"'{{' to open the loop, or one of {', '.join(options)}")
+                raise self.error(f"'{{' to open the loop, or one of {', '.join(options)}", keywords=options)
             self.next()
             if kw == "At_Most":
                 node.at_most = self.integer("a whole number after 'At_Most'")

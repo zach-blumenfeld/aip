@@ -3,10 +3,9 @@
 # Stress test 2. The same procedure as fixed-policy, except the task and the policies arrive
 # as inputs at Start. Inside the revise loop, a For loop checks one policy at a time with one
 # fixed question and collects the verdicts, an Aggregate ANDs them, counting any verdict the model was
-# not at least 0.7 sure of as false, and `Until check_summary.all_hold` ends the loop the moment
-# that is true; otherwise the work is fixed and the loop goes round again.
-#
-# See docs/limitations.md: one model call per policy for now, and a script to AND the verdicts.
+# not more than 0.7 sure of as false, and `Until check_summary.all_hold` ends the loop the moment
+# that is true; otherwise the work is fixed and the loop goes round again. The For's passes are
+# independent, so a batch of them (`--batch`, 10 by default) is one model call.
 
 Procedure dynamic_policy
   "Do a task the requester describes, checked against the policies the requester supplies."
@@ -24,12 +23,12 @@ policies it does not state.
 """
 
 Start "The task and the policies, from the requester." {
-  task: string     "What to do, as the requester wrote it."
-  policies: list   "The policies the work must follow, one string each."
+  task: string   "What to do, as the requester wrote it."
+  policies: list "The policies the work must follow, one string each."
   Next_Step draft
 }
 
-Task draft "Do the task, following every policy." {
+Task_Agent draft "Do the task, following every policy." {
   Read task, policies
   Prompt assets/task.md
   Produce work: string "The result of the task."
@@ -46,6 +45,7 @@ Loop revise Until check_summary.all_hold, At_Most 3, Else_Fail {
       Produce verdict
       Continue
     }
+
     Next_Step summarize_check
   }
 
@@ -59,7 +59,7 @@ Loop revise Until check_summary.all_hold, At_Most 3, Else_Fail {
   }
 
   Task_Agent fix "Revise the work so the failed policies pass." {
-    Read task, work, policies, verdicts
+    Read task, work, policies, verdicts, check_summary
     Prompt assets/fix.md
     Produce work: string "The revised work."
     Continue

@@ -208,7 +208,8 @@ class Writer:
 
     def keys(self, keyword: str, clause: s.ReadClause | s.ProduceClause, depth: int) -> None:
         """`Read a, b` on one line; `Produce` with one typed key per line, continuation lines
-        aligned under the first key, as the glossary allows."""
+        aligned under the first key, the types under each other as a block of questions has them,
+        and the descriptions under each other."""
         decls = clause.keys
         self.comments(clause.leading, depth)
         commented = any(d.leading or d.trailing for d in decls[1:]) or (decls[0].trailing and len(decls) > 1)
@@ -220,13 +221,20 @@ class Writer:
         # One key per line. A typed key continues the list by itself (`key: type`); an untyped
         # one needs the comma before it.
         pad = " " * (len(keyword) + 1)
+        key_width = max((len(d.key.dotted) + 1 for d in decls if d.type), default=0)
+
+        def typed(d: s.Declaration) -> str:
+            return (d.key.dotted + ":").ljust(key_width) + _typed(d)[len(d.key.dotted) + 1:]
+
+        width = max((len(typed(d)) for d in decls if d.type and d.description is not None), default=0)
         for n, d in enumerate(decls):
             for c in d.leading:
                 self.lines.append(INDENT * depth + (pad if n else "") + c if c else "")
             head = f"{keyword} " if n == 0 else pad
             comma = "," if n + 1 < len(decls) and not decls[n + 1].type else ""
             trailing = d.trailing or (clause.trailing if n == len(decls) - 1 else None)
-            self.lines.append(INDENT * depth + head + _declaration(d) + comma + (f"  {trailing}" if trailing else ""))
+            text = _declaration(d) if not d.type else typed(d) if d.description is None else f"{typed(d).ljust(width)} {_str(d.description)}"
+            self.lines.append(INDENT * depth + head + text + comma + (f"  {trailing}" if trailing else ""))
 
     def questions(self, clause: s.QuestionsClause, depth: int) -> None:
         self.line("Answer_Questions {", depth, clause)

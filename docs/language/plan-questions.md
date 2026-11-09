@@ -152,7 +152,13 @@ Settled items are marked.
     (`Produce tone: choice [angry, calm]`); a script may do the same and may supply a confidence.
     A confidence check on an agent's or an input's answer is a compile error. The decision model
     is an endpoint with the TypeSafe API shape, URL and key in `aip config`, not a vendor.
-    Milestones L4 and R4, done.
+    Milestones L4 and R4, done. Why, moved here from the spec's decisions table: the fallback let
+    the agent answer a decision by hand, and a hand answer has no confidence, so the route's
+    check either fired on every one (0.9's first build) or had to be skipped for it (0.8's
+    `reason: manual`, 0.9 for a day as `reason: hand`); a `Confidence_Below` on a fallback
+    decision never meant what it said. With the agent's decisions in a `Task_Agent`, every
+    decision answer carries a confidence, every check on one is honest, and governance still sees
+    which routes an agent steers.
 28. **Settled 2026-11-09.** The graph's data flow reads left to right, as 0.8 did: `Data` (was
     `Key`), `SUPPLIES` (was `HAS_KEY`), `(Data)-[:READ_BY]->(Step)` (was `READS`, reversed).
     Reviewed in a Browser: the flow edges stay distinct (`NEXT`, `BRANCH`, `BELOW`, `CONTINUES`,
@@ -194,6 +200,24 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     string and an `assets/claims.md` for the agent, so the question is answerable; billing-support
     checks `Confidence_Below 0.9`, which the model's calibration makes reachable (clear messages at
     1.0, mixed ones near 0.82). The sentence "the first pass always runs" leaves the spec.
+38. **Settled 2026-11-09, in milestone L6**, where the plan was silent. (a) A `score` answer's
+    `probabilities` are keyed by label, as a `choice`'s are, once its `value` is a label: an
+    answer that names its value `high` and its probabilities `"2"` would need the label list
+    beside it to be read. The model's level numbers are mapped on receipt; `score` stays the
+    expected level, a float. (b) Loops are spec section 2.6, after 2.5, so that every reference
+    to 2.2 through 2.5 in the code and the docs still points where it did. (c) The compiler
+    reports one mistake once by not reporting consequences: any flow that does not resolve
+    silences `unreachable_step` in its region (the plan named `unknown_step` and
+    `missing_loop_exit`; a missing `Next_Step` and a flow across a loop's braces cascade the
+    same way), and a second producer silences the `type_mismatch` after it. (d) The `noul` alias
+    of `true_or_false` is gone from the type vocabulary; `noul` remains only as the model's field
+    on a `true_or_false` answer. (e) A step sees a loop's number under the last word of its path,
+    as it sees any read (`Read revise.iterations` hands it `iterations`), so two loops' numbers
+    in one step are read as the loops' whole keys, `Read review, revise`.
+39. **Open 2026-11-09, found in L6.** Two reads of one step that end in the same word
+    (`Read review.iterations, revise.iterations`, or `Read first.tone, second.tone` from two
+    decisions) are handed to the step under one name, and one is lost without a word. Default,
+    proposed for R5: a compile error naming both reads and the fix (read the keys whole).
 
 ## Zach's rough notes (2026-11-07, verbatim)
 

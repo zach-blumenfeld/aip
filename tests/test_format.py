@@ -21,7 +21,7 @@ start "s" {
     next   each }
 for_each each over item as it max 3 collect verdict into verdicts {
 decide d "d" { reads it
-questions {   yes:  noul q
+questions {   yes:  true_or_false q
    true: "it is"
    maybe_longer: choice [a,b] "which"  }
 history true  produces verdict  next_pass }
@@ -75,15 +75,15 @@ class Canonical(unittest.TestCase):
         self.assertEqual(parse(CANONICAL), parse(MESSY))
         self.assertEqual(format_source(CANONICAL), CANONICAL)
 
-    def test_examples_are_canonical_or_nearly(self):
-        """Formatting an example changes alignment, blank lines, the layout of a `Produce` list
-        and the spelling of an alias; every word survives in order."""
-        for file in sorted(EXAMPLES.glob("*/procedure.aip")):
+    def test_the_examples_are_canonical(self):
+        """The shipped examples are in the formatter's form, so `aip fmt --check` on them passes
+        (CI runs it) and formatting one never changes its bundle id."""
+        files = sorted(EXAMPLES.glob("*/procedure.aip"))
+        self.assertEqual(len(files), 5)
+        for file in files:
             with self.subTest(file.parent.name):
                 before = file.read_text(encoding="utf-8")
-                after = format_source(before)
-                words = lambda text: text.replace(",", " ").replace("Task draft", "Task_Agent draft").split()
-                self.assertEqual(words(before), words(after))
+                self.assertEqual(format_source(before), before)
 
     def test_route_branches_align_and_check_comes_as_written(self):
         text = format_source('Procedure p "x"\nRoute r "x" {\nRead d.tone\nConfidence_Below 0.6 -> a\nangry -> a\ncalm -> b\n}\n')
@@ -92,6 +92,11 @@ class Canonical(unittest.TestCase):
     def test_produce_continues_aligned_under_the_first_key(self):
         text = format_source('Procedure p "x"\nExecute e "x" {\nRead m\nRun_Script s.py\nProduce a: string "A", b: integer\nNext_Step end\n}\n')
         self.assertIn('  Produce a: string "A"\n          b: integer\n', text)
+        nested = format_source('Procedure p "x"\nLoop l 2 Times {\nExecute e "x" {\nRun_Script s.py\nProduce reply: string, queue: string\nContinue\n}\nNext_Step end\n}\n')
+        self.assertIn('    Produce reply: string\n            queue: string\n', nested, "under the first key at any depth")
+        columns = format_source('Procedure p "x"\nExecute e "x" {\nRun_Script s.py\nProduce ticket_id: integer "The ticket.", queue: string "The queue."\nNext_Step end\n}\n')
+        self.assertIn('  Produce ticket_id: integer "The ticket."\n          queue:     string  "The queue."\n', columns,
+                      "the types line up, and the descriptions")
 
     def test_named_strings_may_open_the_file_and_stay_there(self):
         above = ('q = "Is it about a charge?"\nlonger_name = "Angry means threats or demands."\n\n'
@@ -111,7 +116,8 @@ class Canonical(unittest.TestCase):
         source = ('Procedure p "x"\nTask t "x" {\nRead m\nProduce tone: choice [angry,calm] "T", level: score [low, high]\nNext_Step end\n}\n'
                   'Start "s" { kind: choice [a, b] "K"  Next_Step t }\n')
         text = format_source(source)
-        self.assertIn('  Produce tone: choice [angry, calm] "T"\n          level: score [low, high]\n', text)
+        self.assertIn('  Produce tone:  choice [angry, calm] "T"\n          level: score [low, high]\n', text,
+                      "continuation lines sit under the first key, the types under each other")
         self.assertIn('  kind: choice [a, b] "K"\n', text)
         self.assertEqual(parse(text), parse(source))
         self.assertEqual(format_source(text), text)
@@ -169,6 +175,11 @@ class FmtCommand(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn(f"{file}:2:10: expected the description of d, a string, got '{{'", err)
             self.assertIn("1 file(s) did not parse", err)
+
+    def test_a_directory_of_programs_is_every_program_in_it(self):
+        code, out, _ = self.run_cli("fmt", "--check", str(EXAMPLES))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("unchanged "), 5, "aip fmt --check examples/language is what CI runs")
 
     def test_missing_path(self):
         code, _, err = self.run_cli("fmt", "/nonexistent/folder")

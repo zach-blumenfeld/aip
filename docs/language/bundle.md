@@ -68,7 +68,7 @@ carry the span of that clause. A property whose value would be null is left out.
 | `AGAIN` | `Step` → `Step` or `Loop` | span | `Again <step>` |
 | `BRANCH` | `Route` → `Step` or `Loop` | `value`; `continues: true` when the branch is `Continue` (then the target is the enclosing loop); span | one `<value> -> <step>` line |
 | `BELOW` | `Route` → `Step` or `Loop` | `below`; `continues: true` as for `BRANCH`; span | `Confidence_Below <n> -> <step>` |
-| `PRODUCES` | `Step` → `Data`; `Loop` → `Data` | span | a `Produce` line or a `Start` input; a `For` produces its `Collect Into` list; a loop produces `index` and `iterations` where a step reads them |
+| `PRODUCES` | `Step` → `Data`; `Loop` → `Data` | span | a `Produce` line or a `Start` input; a `For` produces its `Collect Into` list; a loop produces `index` and `iterations`, and the key under its own name (`revise`, read as `revise.index` or `revise.iterations`), where a step reads them |
 | `READ_BY` | `Data` → `Step` | `field` (the dotted path after the key, `tone` in `triage_decision.tone`), `interpolated: true` for a `{key}` in a question or prompt; on a `Route`'s edge `source`, the class of the answer it reads as the checker found it (spec 2.2: `measured`, `scripted`, `agent`, `input` or `aggregated`); span | `Read`, and interpolation, which counts as a read |
 | `ASKS` | `Decide` → `Question` | `order` | |
 | `AGGREGATES` | `Aggregate` → `Aggregation` | `order` | |
@@ -88,9 +88,12 @@ carry the span of that clause. A property whose value would be null is left out.
 file's mode. Before anything is read from a bundle, it is verified: the bytes of every file hash
 to their recorded `sha256`, the source and files hash to the recorded `bundle_id`, the stored
 source parses and checks against the stored file list, and the graph it compiles to equals the
-stored graph (the compiler's version is the one property left out of the comparison). Any
-difference is `bundle_tampered`, so a bundle edited by hand in Cypher does not export and does
-not run. A bundle of another language version is `bundle_language_version`; a file Relate cannot
+stored graph (the compiler's version is the one property left out of the comparison). A
+difference in any of these is `bundle_tampered`, so a bundle whose source, files or graph were
+edited by hand in Cypher does not export and does not run. What is verified is the content read
+back from the graph, not the bytes of the `.rl` file: the engine's file may hold pages that are
+no longer live, and two compilations of one folder share an id and differ byte for byte. The id
+is the artifact's identity; a checksum of the file is not. A bundle of another language version is `bundle_language_version`; a file Relate cannot
 open, or one without exactly one `Procedure`, is `not_a_bundle`.
 
 In Cypher, the bundle answers as any Relate store does:

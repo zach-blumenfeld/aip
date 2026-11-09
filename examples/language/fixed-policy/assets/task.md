@@ -8,4 +8,7 @@ Request:
 Policy:
 {assets[policy]}
 
+Approved claims:
+{assets[claims]}
+
 Return JSON with `work` (the text).

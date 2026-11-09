@@ -80,16 +80,16 @@ test('billing-support: step verbs, names, clauses, types, routes and comments', 
 
   const question = lineOf(source, /billing: true_or_false/);
   assert.ok(scopesOf(tokens, question, 'true_or_false').includes('support.type.answer.aip'));
-  const choice = lineOf(source, /tone: choice \[angry, calm\]/);
+  const choice = lineOf(source, /tone:\s+choice \[angry, calm\]/);
   assert.ok(scopesOf(tokens, choice, 'angry').includes('constant.other.label.aip'));
 
   const route = lineOf(source, /^Route On by_tone/);
   assert.ok(scopesOf(tokens, route, 'Route').includes('keyword.control.step.aip'));
   assert.ok(scopesOf(tokens, route, 'On').includes('keyword.other.with.aip'));
   assert.ok(scopesOf(tokens, route, 'by_tone').includes('entity.name.function.step.aip'));
-  const below = lineOf(source, /Confidence_Below 0\.6 -> escalate/);
+  const below = lineOf(source, /Confidence_Below 0\.9 -> escalate/);
   assert.ok(scopesOf(tokens, below, 'Confidence_Below').includes('keyword.other.clause.aip'));
-  assert.ok(scopesOf(tokens, below, '0.6').includes('constant.numeric.aip'));
+  assert.ok(scopesOf(tokens, below, '0.9').includes('constant.numeric.aip'));
   assert.ok(scopesOf(tokens, below, '->').includes('keyword.operator.arrow.aip'));
   assert.ok(scopesOf(tokens, below, 'escalate').includes('entity.name.function.step.aip'));
   const arm = lineOf(source, /^\s+angry -> escalate/);
@@ -108,7 +108,7 @@ test('billing-support: step verbs, names, clauses, types, routes and comments', 
   assert.ok(scopesOf(tokens, next, 'Next_Step').includes('keyword.control.flow.aip'));
   assert.ok(scopesOf(tokens, next, 'triage').includes('entity.name.function.step.aip'));
 
-  const named = lineOf(source, /^tone_question = /);
+  const named = lineOf(source, /^tone_question\s+= /);
   assert.ok(scopesOf(tokens, named, 'tone_question').includes('variable.other.constant.aip'));
   assert.ok(scopesOf(tokens, named, '=').includes('keyword.operator.assignment.aip'));
 });
