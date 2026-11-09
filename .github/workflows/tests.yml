@@ -98,3 +98,34 @@ jobs:
           npm install
           npm run build
           npm test
+
+  # The console (`console/`, the npm package `aip-console`; plan C1): the page and its harness
+  # typecheck, the bundle builds (it imports the extension's grammar from `editors/vscode`), and
+  # node's test runner passes over the modules that need no browser (the grammar tokenizer, the
+  # card canvas's model and layout, a run's history nested under its loops, the launcher's
+  # reading of what `aip` prints). Its Playwright suite, `npm run e2e`, drives the real CLI and
+  # server and so needs Relate and a browser: it is run from a checkout (console/AGENTS.md).
+  console:
+    name: Console
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test

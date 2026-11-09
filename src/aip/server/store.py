@@ -444,11 +444,14 @@ class Store:
             return path.read_bytes()
 
     def describe_bundle(self, bundle_id: str) -> JSON:
+        """A bundle's description by id, with `draft` and, when it is published, the `revision`
+        it is published as."""
         rows = self.graph.read(DESCRIBED, bundle=bundle_id)
         if not rows:
             raise NotFound(f"the store holds no bundle {bundle_id}")
+        published = self.graph.read(REVISION_OF, bundle=bundle_id)
         return {**json.loads(rows[0]["described"]), "bundle_id": bundle_id, "draft": bool(rows[0]["draft"]),
-                "stored_at": rows[0]["stored_at"]}
+                "revision": published[0]["revision"] if published else None, "stored_at": rows[0]["stored_at"]}
 
     # ---------------------------------------------------------------- catalog
 

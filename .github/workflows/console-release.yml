@@ -1,18 +1,24 @@
-name: Release to npm
+name: Release the console to npm
 
+# The console is the npm package `aip-console`, in `console/` of this repository (it was a
+# repository of its own through 0.8; plan C1 moved it here). It has its own version and its own
+# tag, `console-vX.Y.Z`: `vX.Y.Z` is the Python package's (release.yml).
+#
 # Manual trigger from the Actions tab, after the release PR is merged. Reads the version from
-# package.json (and checks package-lock.json agrees), refuses if the tag exists, builds the
-# bundle, packs the tarball and checks it carries bin/ and dist/, pushes the tag, STAGES
+# console/package.json (and checks package-lock.json agrees), refuses if the tag exists, builds
+# the bundle, packs the tarball and checks it carries bin/ and dist/, pushes the tag, STAGES
 # `aip-console` on npm with provenance, and cuts a GitHub Release whose notes are the
-# `## [X.Y.Z]` section of CHANGELOG.md.
+# `## [X.Y.Z]` section of console/CHANGELOG.md. The build reads the VS Code extension's grammar
+# from `editors/vscode` (the page colours procedure.aip with it), so it needs the whole checkout.
 #
 # Staged, not published: npm's staged publishing puts the version in a holding area that is not
 # installable until a maintainer approves it with 2FA, on npmjs.com (the package's "Staged
 # Packages" tab → Approve) or with `npm stage approve <stage-id>`. That approval is the last
 # step of a release and is always a person's. The stage job runs in the `release` GitHub
 # environment and authenticates with npm's trusted publishing (OIDC, `id-token: write`, no
-# token): the package page names this repository, `release.yml` and the `release` environment
-# as its trusted publisher, and `npm stage publish` is the one action a trusted publisher is
+# token): the package page names this repository, `console-release.yml` and the `release`
+# environment as its trusted publisher (it named the `aip-console` repository and `release.yml`
+# until the console moved here: set it again on npmjs.com before the first release from here), and `npm stage publish` is the one action a trusted publisher is
 # always allowed. The environment and the trusted publisher are set up by hand once (aip issue
 # #17, "Before starting").
 #
@@ -38,6 +44,9 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
       tarball: ${{ steps.v.outputs.tarball }}
+    defaults:
+      run:
+        working-directory: console
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +54,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: console/package-lock.json
 
       - name: Resolve the version from package.json
         id: v
@@ -63,7 +73,7 @@ jobs:
           fi
           {
             echo "version=$version"
-            echo "tag=v$version"
+            echo "tag=console-v$version"
             echo "tarball=aip-console-$version.tgz"
           } >> "$GITHUB_OUTPUT"
           echo "version $version"
@@ -74,7 +84,7 @@ jobs:
         # version that has shipped is a mistake.
         run: |
           if git ls-remote --tags origin "refs/tags/${{ steps.v.outputs.tag }}" | grep -q .; then
-            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump package.json before re-running."
+            echo "::error::tag ${{ steps.v.outputs.tag }} already exists. Bump console/package.json before re-running."
             exit 1
           fi
 
@@ -123,9 +133,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ steps.v.outputs.version }}
+          # Both under console/, which upload-artifact drops: the artifact holds the two files.
           path: |
-            ${{ steps.v.outputs.tarball }}
-            release-notes.md
+            console/${{ steps.v.outputs.tarball }}
+            console/release-notes.md
           if-no-files-found: error
 
       - name: Create and push the tag
@@ -196,7 +207,7 @@ jobs:
             echo "- on npmjs.com: https://www.npmjs.com/package/aip-console → **Staged Packages** → **Approve**, or"
             echo "- in a terminal: \`npm stage approve ${{ steps.stage.outputs.stage-id }}\`"
             echo
-            echo "Then verify from a clean directory (needs an \`aip\` 0.7.0 or newer on the PATH):"
+            echo "Then verify from a clean directory (needs an \`aip\` 0.9.0 or newer on the PATH):"
             echo
             echo '```'
             echo "npx aip-console@${{ needs.build.outputs.version }} --help"

@@ -151,6 +151,33 @@ def test_a_reference_hands_its_bundle_back(served, tmp_path):
     assert c.compile(fetched.path).bundle_id == fetched.bundle_id, "what comes back compiles to the id it was published under"
 
 
+def test_a_reference_and_a_bundle_hand_their_graph_back_as_json(served, tmp_path):
+    """`GET /catalog/{ref}/graph` and `GET /bundles/{id}/graph`: the bundle's nodes and edges as
+    `aip compile --json` prints them, with the source and the files' text, which is what the
+    console draws a procedure from and shows as its source."""
+    record(served, tmp_path)
+    compiled, _ = compile_folder(EXAMPLE)
+    reply = served.http.get("/catalog/billing_support/graph", headers={"Authorization": "Bearer secret"})
+    assert reply.status_code == 200
+    body = reply.json()
+    assert (body["name"], body["revision"], body["draft"], body["bundle_id"]) == ("billing_support", "1", False, compiled.id)
+    nodes = {n["id"]: n for n in body["graph"]["nodes"]}
+    assert nodes["procedure"]["properties"]["source"] == compiled.source
+    assert nodes["file:assets/policy.md"]["properties"]["text"].startswith("# Refund policy")
+    assert {(e["type"], e["start"], e["end"]) for e in body["graph"]["edges"]} == {(e.type, e.start, e.end) for e in compiled.graph.edges}
+    assert sorted(nodes) == sorted(n.id for n in compiled.graph.nodes)
+
+    by_id = served.http.get(f"/bundles/{compiled.id}/graph", headers={"Authorization": "Bearer secret"}).json()
+    assert by_id["graph"] == body["graph"] and by_id["revision"] == "1" and by_id["draft"] is False
+
+    bundle_id, data = rl(reworded(tmp_path), tmp_path)
+    server(served).draft(data)
+    draft = served.http.get(f"/bundles/{bundle_id}/graph", headers={"Authorization": "Bearer secret"}).json()
+    assert draft["draft"] is True and draft["revision"] is None and draft["name"] == "billing_support"
+    assert served.http.get("/bundles/nope/graph", headers={"Authorization": "Bearer secret"}).status_code == 404
+    assert served.http.get("/catalog/nope/graph", headers={"Authorization": "Bearer secret"}).status_code == 404
+
+
 # ------------------------------------------------------------------------- drafts
 
 

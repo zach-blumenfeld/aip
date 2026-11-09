@@ -304,6 +304,42 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     by the store's own statements, served as bytes by `GET /export/runs`, so it works the same
     from a remote server and on Neo4j, and every query in `queries.md` runs on the file.
 
+45. **Decided in C1 (2026-11-09), where the plan left a choice.** (a) "The server's graph for a
+    revision" is an endpoint: `GET /catalog/{ref}/graph` and `GET /bundles/{bundle_id}/graph`
+    answer the bundle's nodes and edges as JSON, with the source and the files' contents. A
+    page cannot open an `.rl`, and the alternative (the launcher fetching the bundle and
+    compiling it again) would have made the picture of a revision depend on the machine the
+    console runs on. The source view and the diff read the same reply, so the 0.8 file
+    endpoints are not brought back. (b) The canvas is one column in written order, loops as
+    frames with their bodies inset, every wire in a lane of its own in a gutter on the right.
+    A card's rows are one line each, clipped, so the layout is a pure function of the graph
+    with no measuring of the page: the same graph always draws the same picture, in the
+    console and in the extension. A port carries its target's description as text, so the
+    picture can be read without following a wire. (c) "The shipped grammar's colours" are
+    taken literally: the console runs a small TextMate tokenizer of its own over
+    `editors/vscode/syntaxes/aip.tmLanguage.json` and takes the colours from the extension's
+    `package.json`, both imported at build time. No copy of the grammar, and no list of
+    keywords, lives in `console/` (the rule that keywords are listed once). The tokenizer
+    covers what that grammar uses and no more; the extension's own harness asks the real
+    engine the same questions. (d) A draft opens at `#/p/bundle:<bundle id>`: it has no name
+    that resolves to it. The catalog's toggle lists drafts in a table of their own under the
+    published names, since several drafts may share one name. (e) The console's runs are
+    recorded as agent `console` and, as their session, an id the browser tab keeps for its
+    lifetime, so "filter history by agent and session" has something to show from the page
+    itself. (f) The run page shows the run from this machine's run file after every stop
+    (`aip runs <id> --json` through the launcher), not from the CLI's final object: an answer
+    that was refused leaves the run paused, and the run file is what says so. (g) Folder mode
+    takes a program directory, compiles it through the CLI each time the page opens and
+    shows the compiler's diagnostics; its history is this machine's run files of that folder.
+    (h) A console whose server is the local one wakes it (`aip list`, through the launcher)
+    when the page finds nothing answering: it stops itself after 15 idle minutes, and a page
+    left open would otherwise meet a dead address. (i) The console's release tag is
+    `console-vX.Y.Z`, since `vX.Y.Z` in this repository is the Python package's. (j) Gone with
+    the Studio and not replaced: skill zips (a procedure is published and fetched as a bundle,
+    `aip publish` and `aip get`), and the step graph's data-flow and run-traffic modes (a card
+    lists what its step reads and produces; traffic over the canvas is worth doing once the
+    canvas has been used).
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show

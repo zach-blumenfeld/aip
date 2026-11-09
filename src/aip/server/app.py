@@ -12,6 +12,10 @@ stopped. So the API is the contract `aip.client.server` lists, and nothing else:
 - **bundles**: `POST /bundles` (the `.rl` bytes: hold the bundle with no revision, a *draft*, so
   a run of a folder or a file can be recorded), `GET /bundles?drafts=` (what the store holds),
   `GET /bundles/{bundle_id}` (describe one, or hand its `.rl` back, by id).
+- **graph**: `GET /catalog/{ref}/graph` and `GET /bundles/{bundle_id}/graph`: the bundle's own
+  nodes and edges as JSON, the shape `aip compile --json` prints under `graph`, here with the
+  source and the files' contents, so a page can draw a procedure and show its text without
+  opening an `.rl`.
 - **runs**: `POST /runs` (the whole run as JSON, upserted by `run_id`; the bundle it names must
   be held, else 404 `unknown_bundle`; the reply names the `user` the token stands for, which the
   server writes into the run's identity whatever the client claimed), `GET /runs` (newest first;
@@ -282,6 +286,14 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
         name, revision, bundle_id = resolve(ref)
         return bundle_reply(request, bundle_id, f"{name}@{revision}", store.describe(f"{name}@{revision}"))
 
+    def graph_reply(bundle_id: str, about: JSON) -> JSON:
+        return {**about, "bundle_id": bundle_id, "graph": store.bundle_graph(bundle_id).to_dict()}
+
+    @app.get("/catalog/{ref}/graph", dependencies=[require(READ)])
+    def revision_graph(ref: str) -> JSON:
+        name, revision, bundle_id = resolve(ref)
+        return graph_reply(bundle_id, {"name": name, "revision": revision, "draft": False})
+
     @app.post("/catalog/{name}/pin", dependencies=[require(PUBLISH)])
     def pin(name: str, body: RevisionBody) -> JSON:
         revision = None if body.revision is None else str(body.revision)
@@ -313,6 +325,11 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
     @app.get("/bundles/{bundle_id}", dependencies=[require(READ)])
     def bundle(bundle_id: str, request: Request):
         return bundle_reply(request, bundle_id, bundle_id[:12], store.describe_bundle(bundle_id))
+
+    @app.get("/bundles/{bundle_id}/graph", dependencies=[require(READ)])
+    def bundle_graph(bundle_id: str) -> JSON:
+        about = store.describe_bundle(bundle_id)
+        return graph_reply(bundle_id, {"name": about["name"], "revision": about["revision"], "draft": about["draft"]})
 
     # --------------------------------------------------------------------- runs
 

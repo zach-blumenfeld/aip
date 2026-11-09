@@ -42,6 +42,7 @@ retired or not) or `name@latest` (the newest live one, whatever is pinned).
 | `POST /bundles` (the `.rl` bytes) | hold a bundle with no revision, a draft: `{"bundle_id", "name", "existed", "draft"}` |
 | `GET /bundles?drafts=` | every bundle held, newest first, each with `draft` and its `revision` if it has one; `drafts=true` for the drafts alone |
 | `GET /bundles/{bundle_id}` | describe a bundle by id, or with `Accept: application/octet-stream` hand it back |
+| `GET /catalog/{ref}/graph`, `GET /bundles/{bundle_id}/graph` | the bundle's own graph as JSON: `name`, `revision`, `draft`, `bundle_id` and `graph`, the `nodes` and `edges` of `docs/language/bundle.md` in the shape `aip compile --json` prints, here with the source (`Procedure.source`) and each file's contents (`File.text`, or `base64`). What a page draws a procedure from and shows as its source, without opening an `.rl` |
 | `POST /runs` (the run as JSON) | record a run where it stopped: the whole run each time, upserted by `run_id`. The bundle it names must be held (404 `unknown_bundle` otherwise). Replies `{"run_id", "user", "draft", "revision"}`: who the token stands for, and what the store holds the bundle as |
 | `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently updated first: `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries` |
 | `GET /runs/{run_id}` | one run's record, as it was posted |
@@ -232,4 +233,6 @@ the `user` of the runs.
 
 ## 7. Still to come
 
-The console on this API (C1); `aip mcp` (M1), which starts the local server the same way.
+`aip mcp` (M1), which starts the local server the same way. The console (`console/`, plan C1)
+is on this API: it reads the catalog, the graph of a revision or a draft, the runs and the audit
+queries from the page, and runs procedures through the `aip` CLI on its own machine.

@@ -33,15 +33,17 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
 
 ## The console
 
-Until milestone C1 it lives in `zach-blumenfeld/aip-console-dev`, a private mirror of
-`zach-blumenfeld/aip-console`; the 0.9 branch is `console-0.9.0`, local checkout
-`~/dev/aip-inspector` with remote `dev` pointing at the mirror. **C1 moves it into this repo**
-(plan open item 13, settled 2026-11-09): `git subtree add --prefix=console <that remote>
-console-0.9.0`, history kept, then all console work happens in `console/` here and the mirror
-becomes an archive. Its AGENTS.md describes the launcher, the API client and the e2e harness; the
-harness runs the `aip` checkout from `AIP_REPO`, which after the move is this repository (`..`).
-The console stays its own npm package with its own release workflow, and the Python build
-excludes `console/`, so the PyPI wheel carries no npm content.
+**It is `console/` in this repository since C1** (2026-11-09, plan open item 13): `git subtree
+add --prefix=console dev-console console-0.9.0` brought it with its history from
+`zach-blumenfeld/aip-console-dev` (the private mirror of `zach-blumenfeld/aip-console`; this
+checkout's remote `dev-console`, and the local checkout `~/dev/aip-inspector`), whose commit
+f30ed95 is the last there. That mirror is the archive now: nothing newer is in it, and console
+work happens here. `console/AGENTS.md` describes the launcher, the card canvas, the API client
+and the tests; the e2e harness runs this checkout's `aip` (`AIP_REPO`, default `..`). It stays
+its own npm package (`aip-console`) with its own version, changelog and release workflow
+(`.github/workflows/console-release.yml`, tag `console-vX.Y.Z`), and `pyproject.toml` keeps
+`console/` out of the sdist, so nothing of it reaches PyPI. Its tests need Node 24 and npm:
+`npm install && npm run typecheck && npm test && npm run e2e` in `console/`.
 
 ## Relate (formerly CypherLite)
 
@@ -88,5 +90,7 @@ files.
 - Public plan issues for context on how 0.7 and 0.8 were run: `gh issue view 18 -R
   zach-blumenfeld/aip` and `19` (19 is superseded by this plan; do not edit it).
 - Zach's constraints that are not in code: the design conversation stays in his `~/Documents` and
-  never enters a repo; keyword lists are maintained only in the spec's glossary; the console repo
-  stays separate from `aip`.
+  never enters a repo; keyword lists are maintained only in the spec's glossary (the console
+  colours `procedure.aip` from the extension's grammar for that reason, and keeps no list of its
+  own); the console stays its own npm package (it was to stay its own repository too, until plan
+  open item 13 moved it into `console/` here).

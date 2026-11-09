@@ -46,5 +46,11 @@ packages = ["src/aip"]
 "skills/aip-compile/references" = "aip/compiler/_skill/references"
 "skills/aip-compile/assets" = "aip/compiler/_skill/assets"
 
+# The console (`console/`) is an npm package with its own version and release workflow
+# (`.github/workflows/console-release.yml`); nothing of it goes to PyPI. The wheel never held it
+# (it carries `src/aip` and the force-includes above); this keeps it out of the sdist too.
+[tool.hatch.build.targets.sdist]
+exclude = ["/console"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

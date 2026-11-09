@@ -14,10 +14,11 @@ compiler (`aip.compiler`: parser, checker, formatter, graph, bundle), the engine
 `agent-instruction-protocol` (PyPI blocks `aip` as a look-alike of an existing project); its
 module and command are `aip`. Until 0.9 the language was a second package, `aip-spec`, in a uv
 workspace under `packages/`; it folded in at plan milestone L5 (2026-11-09) and the `aip-spec`
-distribution stays at 0.8 on PyPI with no further release. The web console,
-[aip-console](https://github.com/zach-blumenfeld/aip-console) on npm, moves into this repository
-as `console/` at plan milestone C1 (its own npm version and release workflow; excluded from the
-Python build); until then it is the separate `aip-console-dev` mirror named in `docs/language/sources.md`.
+distribution stays at 0.8 on PyPI with no further release. The web console, the npm package
+`aip-console`, is `console/` in this repository since plan milestone C1 (2026-11-09; it was the
+repository [aip-console](https://github.com/zach-blumenfeld/aip-console) through 0.8, and its
+history came with it): its own npm version, changelog and release workflow, and nothing of it in
+the Python build. `console/AGENTS.md` says what differs there.
 
 ## This is the private 0.9 mirror
 
@@ -54,6 +55,7 @@ Python build); until then it is the separate `aip-console-dev` mirror named in `
 | `tests/` | the runtime's tests: `test_engine.py` is the engine's, `test_cli_json.py` checks every example in `docs/cli-json.md` against the CLI's real output, `test_sdk.py` the SDK and that every `aip` command calls it (all three skip without Relate); `served.py` is the real server in process over an in-memory store, which the client's tests run against; `tests/server/` is the server's own suite, run over both backends (Neo4j when `NEO4J_URI` is set): `test_contract.py` the HTTP contract through the client, `test_queries.py` every query in `docs/language/queries.md`, the audit queries, the export and what the store keeps of a run, `scenes.py` the store they read; `test_local_server.py` starts the on-demand local server as a real process; `test_runtime_skill.py` is listed in `conftest.py` and not collected until K1 rewrites the skill |
 | `src/aip/compiler/` | **where the language lives**: `keywords.py` (every keyword with its aliases, the executable copy of the spec's glossary; the type vocabulary), `lexer.py`, `parser.py` (recursive descent; `ParseError` in `errors.py`), `syntax.py` (the tree every later pass reads), `checker.py` (every check of spec 2.2 to 2.5 as diagnostics; `CODES` is the spec's code table), `graph.py` (the bundle's graph, spec 3; the schema is `docs/language/bundle.md`), `bundle.py` (compile a folder, the bundle id, write, read with verification, export), `relate.py` (the one module that imports the engine, `relate` or `cypherlite`, and knows the `.rl` suffix), `formatter.py` (canonical form), `cli.py` (`aip compile`, `export`, `fmt`, dispatched from `aip.client.cli`), `resources.py` (finds the example programs and, for now, the `aip-compile` skill in a checkout or a wheel), `agents.py` (the agent skills directories). `LANGUAGE_VERSION` is in `language.py`. The language's tests are `tests/test_parse.py`, `test_errors.py`, `test_format.py`, `test_check.py`, `test_bundle.py` |
 | `editors/vscode/` | the VS Code extension: the grammar (`syntaxes/`), `src/compiler.js` (runs `aip compile --check --json --stdin`, no `vscode` import) and `src/extension.js` (squiggles, status bar); `npm install && npm run build && npm test` (esbuild; node's test runner over the tokenizer harness and a one-error fixture, against `uv run aip`); `dist/` and `node_modules/` are not committed |
+| `console/` | the web console, the npm package `aip-console` (Node, React, Vite; its own `package.json`, `CHANGELOG.md` and `AGENTS.md`): `bin/aip-console.mjs` the launcher that serves the page and runs procedures through the `aip` CLI, `src/canvas/` the card canvas (a component with no console state, which the extension reuses at E2), `src/highlight/` the tokenizer that colours `procedure.aip` from `editors/vscode`'s grammar, `src/views/` the pages, `test/` its unit tests (`npm test`), `e2e/` its Playwright suite against this checkout's `aip` (`npm run e2e`); `pyproject.toml` keeps it out of the sdist |
 | `scripts/` | `install-relate.sh` installs the pinned Relate wheel (not on PyPI; see `docs/language/sources.md`); `fresh-venv.sh` is L3's proof, a fresh venv installing this package and compiling an example, run by CI when it has the release token |
 | `docs/specification-0.8.md` | the prose of the 0.8 YAML format, which nothing implements any more; its fate is the docs milestone's (D4). The language's spec is `docs/language/spec.md` |
 | `skills/aip-compile/` | the authoring skill (`SKILL.md`, `references/`, `assets/procedure.schema.json`); reviewed line by line, keep diffs small |
@@ -63,6 +65,8 @@ Python build); until then it is the separate `aip-console-dev` mirror named in `
 | `CHANGELOG.md` | one changelog for both packages; before `0.7.0` the two histories are interleaved and marked `(aip)` or `(aip-spec)` |
 | `install.sh` | the one-command installer: uv, `agent-instruction-protocol[server]`, both skills, `aip skill prune` |
 | `.github/workflows/release.yml` | the release workflow, below |
+| `.github/workflows/console-release.yml` | the console's release workflow: builds from `console/`, tags `console-vX.Y.Z`, stages `aip-console` on npm for the maintainer's approval (`console/AGENTS.md`) |
+| `.github/workflows/tests.yml` | CI: pytest on Linux and Windows, the extension's build and tests, the console's build and unit tests |
 
 ## Conventions
 
@@ -123,8 +127,9 @@ The rules, decided 2026-11-01 in the roadmap (#20):
 - **Every format change ships `aip upgrade <folder>`** that rewrites a skill where the change is
   mechanical, reports what it could not migrate, and validates the result. The validator's
   outdated-format message names it.
-- The console has its own package version (npm) and declares the minimum `aip` it works with
-  (`MINIMUM_AIP` in its `bin/aip-console.mjs`).
+- The console has its own package version (npm, `console/package.json`), its own tag
+  (`console-vX.Y.Z`; `vX.Y.Z` is this package's) and declares the minimum `aip` it works with
+  (`MINIMUM_AIP` in `console/bin/aip-console.mjs`).
 
 ## Releasing
 
@@ -161,5 +166,9 @@ Never move or force-push a published tag.
 - For how a run moves, `docs/language/runtime.md` and `docs/cli-json.md` (`docs/running.md`,
   `docs/state.md`, `docs/run-modes.md` and `docs/client-execution.md` still describe 0.8, until
   D4); for the server and its store, `docs/server-design.md`.
+- For what the console reads, the same three: `docs/cli-json.md` (the launcher relays the CLI's
+  JSON), `docs/server-design.md` (the page calls the API) and `docs/language/bundle.md` (the
+  canvas draws the graph). A change to any of them that the console shows changes `console/` in
+  the same commit.
 - For what agents see, the two `SKILL.md` files are the contract; a change to the runtime's
   behaviour that they describe changes them in the same commit.
