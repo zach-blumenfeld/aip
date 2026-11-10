@@ -21,7 +21,7 @@ from aip.compiler.graph import PROCEDURE_ID
 from aip.model.types import JSON
 
 STEP_KINDS = ("Start", "Decide", "Route", "Aggregate", "Execute", "Task_Agent", "End")
-FLOW_TYPES = ("NEXT", "CONTINUES", "AGAIN", "BRANCH", "BELOW")
+FLOW_TYPES = ("NEXT", "CONTINUES", "BRANCH", "BELOW")
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class Produce:
 
 @dataclass(frozen=True)
 class Flow:
-    """An outgoing flow edge: `NEXT`, `CONTINUES`, `AGAIN`, `BRANCH` (with `value`) or `BELOW`
+    """An outgoing flow edge: `NEXT`, `CONTINUES`, `BRANCH` (with `value`) or `BELOW`
     (with `below`); `to` is the target node's id, `continues` marks a branch to `Continue`."""
     type: str
     to: str
@@ -181,7 +181,7 @@ class Step:
 
     @property
     def next(self) -> Flow | None:
-        found = [f for f in self.flows if f.type in ("NEXT", "CONTINUES", "AGAIN")]
+        found = [f for f in self.flows if f.type in ("NEXT", "CONTINUES")]
         return found[0] if found else None
 
     @property
@@ -326,7 +326,7 @@ class Procedure:
                                              "RETURN k.name AS name, k.type AS type, k.description AS description, k.labels AS labels, "
                                              "e.line AS line, e.column AS column ORDER BY e.line, e.column", id=id)]
         step.flows = [Flow(r["type"], r["to"], r["p"].get("value"), r["p"].get("below"), bool(r["p"].get("continues")))
-                      for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:NEXT|CONTINUES|AGAIN|BRANCH|BELOW]->(t) "
+                      for r in self._rows("MATCH (s {bundle_id: $b, id: $id})-[e:NEXT|CONTINUES|BRANCH|BELOW]->(t) "
                                           "RETURN type(e) AS type, properties(e) AS p, t.id AS to", id=id)]
         step.flows.sort(key=lambda f: (f.type, f.value or ""))
         step.questions = [Question(q["name"], q["type"], list(q["labels"]) if q.get("labels") else None, q.get("instruction") or "",

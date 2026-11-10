@@ -167,7 +167,10 @@ test("a batch: the passes waiting at one step are one pause, answered together",
   await pausedAt(page, "summarize");
   const loop = page.locator('[data-testid="record-loop"][data-loop="each_ticket"]');
   await expect(loop).toHaveAttribute("data-exit", "items");
-  await expect(loop.getByTestId("record-pass")).toHaveCount(3);
+  // (its own passes: each drafted ticket's review loop, inside its pass, made one pass of its own, the check that passed)
+  await expect(loop.locator(':scope > [data-testid="record-pass"]')).toHaveCount(3);
+  await expect(page.locator('[data-testid="record-loop"][data-loop="revise"]')).toHaveCount(2);
+  await expect(loop.locator('[data-testid="record-entry"][data-step="fix"]')).toHaveCount(0);
   await expect(loop.locator('[data-testid="record-entry"][data-step="draft"]')).toHaveCount(2);
   await expect(loop.locator('[data-testid="record-entry"][data-step="escalate"]')).toHaveCount(1);
 });

@@ -123,10 +123,11 @@ run waited.
   condition is not strictly above the bar, or missing. The head test comes before the first pass
   too: a loop whose answer already holds when it is reached runs no pass and exits with
   `iterations` 0.
-- `Again <step>` runs that step as part of the current pass and follows the flow from it until
-  the enclosing loop is reached again, which ends the pass; everything on that path runs,
-  recorded under the pass that asked for it (and with that pass's `index`), and the head's
-  `Until` test is what sees the fresh answer.
+- A pass ends at `Continue` and nowhere else: the flow goes to the loop node, the count moves,
+  and the head decides. Nothing leads from a body back to a step outside it, so every cycle a
+  run makes is through a loop node, and a pass's entries are exactly the steps of the body it
+  ran. A loop that checks and then fixes reaches its cap after a fix: that fix is not checked,
+  and the task for it says so (`last_pass`, under Pauses above).
 - A loop writes one history entry when it exits (below). The loop's frame, the pass count and the
   passes in flight are part of the saved run, so a paused run resumes mid-loop.
 

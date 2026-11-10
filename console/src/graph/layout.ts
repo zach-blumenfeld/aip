@@ -9,7 +9,7 @@
 // Each level is a small layered (Sugiyama-style) layout, innermost first, so that a loop with its
 // body is a block of known size by the time the level around it is laid out: longest-path layering,
 // one barycentre ordering pass, an edge that skips layers bent through a slot of its own in each
-// layer it crosses. An edge back to an earlier step (`Again`) runs along a rail on the far side.
+// layer it crosses. Nothing goes back but `Continue`, to the loop: every cycle is a loop node.
 //
 // Everything is computed along two abstract axes, rank (layer to layer) and order (across a layer),
 // and mapped to the page at the end: top-down (bodies to the right of their loops) or left-to-right
@@ -38,7 +38,7 @@ export interface Box { x: number; y: number; w: number; h: number }
 export interface PlacedEdge {
   edge: FlowEdge;
   points: [number, number][];
-  /** It goes back: `Continue` to its loop, or `Again` to an earlier step. */
+  /** It goes back: `Continue`, to its loop. */
   rail: boolean;
   /** Where its label goes, and which end of the text that point is. */
   label: [number, number];
@@ -114,36 +114,19 @@ export function layoutOf(graph: StepGraph, direction: Direction = "down"): Graph
 
     const forward: FlowEdge[] = [];
     const ending: FlowEdge[] = [];                                  // Continue, to this level's loop
-    const again: { edge: FlowEdge; a: string; b: string }[] = [];   // back to an earlier node of this level
     for (const edge of graph.edges) {
       if (edge.enter) continue;
       if (edge.toLoop) { if (edge.to === container && ids.includes(edge.from)) ending.push(edge); continue; }
       const a = childOf(edge.from), b = childOf(edge.to);
-      if (!a || !b || a === b) continue;
-      if (a !== edge.from || edge.ways.some((w) => w.kind === "again")) again.push({ edge, a, b });
-      else forward.push(edge);
+      // Both ends stand on this level: a body is left only by `Continue` or by its loop's own exit.
+      if (!a || !b || a === b || a !== edge.from) continue;
+      forward.push(edge);
     }
 
-    // Longest-path layering over the forward edges; an edge that would close a cycle goes back.
+    // Longest-path layering over the forward edges, which close no cycle: a bundle's only cycles
+    // are its loop nodes, and the compiler refuses any other (`cycle_without_loop`).
     const preds = new Map<string, string[]>(ids.map((id) => [id, []]));
-    {
-      const out = new Map<string, FlowEdge[]>(ids.map((id) => [id, []]));
-      for (const e of forward) out.get(e.from)!.push(e);
-      const state = new Map<string, 1 | 2>();
-      const cyclic = new Set<FlowEdge>();
-      const visit = (id: string) => {
-        state.set(id, 1);
-        for (const e of out.get(id)!) {
-          const s = state.get(e.to);
-          if (s === 1) cyclic.add(e);
-          else if (s === undefined) visit(e.to);
-        }
-        state.set(id, 2);
-      };
-      for (const id of ids) if (!state.has(id)) visit(id);
-      for (const e of cyclic) { forward.splice(forward.indexOf(e), 1); again.push({ edge: e, a: e.from, b: e.to }); }
-      for (const e of forward) if (!preds.get(e.to)!.includes(e.from)) preds.get(e.to)!.push(e.from);
-    }
+    for (const e of forward) if (!preds.get(e.to)!.includes(e.from)) preds.get(e.to)!.push(e.from);
     const layerOf = new Map<string, number>();
     const depth = (id: string): number => {
       const known = layerOf.get(id);
@@ -208,18 +191,11 @@ export function layoutOf(graph: StepGraph, direction: Direction = "down"): Graph
     });
 
     // Rails. `Continue` comes back on the loop's side of the body, the step nearest the loop on the
-    // rail nearest the body, so no way back crosses another. `Again` runs on the far side of the
-    // layers it spans.
+    // rail nearest the body, so no way back crosses another.
     const lowest = Math.min(0, ...all.map((id) => at.get(id)!.o));
     ending.sort((x, y) => at.get(x.from)!.layer - at.get(y.from)!.layer);
     const endRail = new Map<string, { o: number; lane: number }>(ending.map((e, lane) => [e.key, { o: lowest - SIZE.rail * (1 + lane), lane }]));
-    again.sort((x, y) => Math.abs(at.get(x.a)!.layer - at.get(x.b)!.layer) - Math.abs(at.get(y.a)!.layer - at.get(y.b)!.layer));
-    const againRail = new Map<string, number>(again.map((g, lane) => {
-      const from = Math.min(at.get(g.a)!.layer, at.get(g.b)!.layer), to = Math.max(at.get(g.a)!.layer, at.get(g.b)!.layer);
-      const spanned = layers.slice(from, to + 1).flat();
-      return [g.edge.key, Math.max(...spanned.map((id) => at.get(id)!.o + item.get(id)!.so)) + SIZE.rail * (1 + lane)];
-    }));
-    const railOs = [...[...endRail.values()].map((r) => r.o), ...againRail.values()];
+    const railOs = [...endRail.values()].map((r) => r.o);
 
     const settle = (originO: number, originR: number) => {
       for (const id of ids) {
@@ -275,12 +251,6 @@ export function layoutOf(graph: StepGraph, direction: Direction = "down"): Graph
           }
           routes.push({ edge: e, rail: true, points, label, anchor });
         }
-      }
-
-      for (const g of again) {
-        const s = rects.get(g.edge.from)!, t = rects.get(g.edge.to)!, o = originO + againRail.get(g.edge.key)!;
-        const points: Point[] = [[s.o + s.so, s.r + s.sr / 2], [o, s.r + s.sr / 2], [o, t.r + t.sr / 2], [t.o + t.so, t.r + t.sr / 2]];
-        routes.push({ edge: g.edge, rail: true, points, label: mid(points[1], points[2]), anchor: "middle" });
       }
     };
 

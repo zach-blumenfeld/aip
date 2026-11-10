@@ -37,18 +37,21 @@ _RANK = {
     "Answer_Questions": 1, "History": 1, "Aggregations": 1, "Confidence_Below": 1, "Branch": 1,
     "Run_Script": 1, "Command": 1, "Prompt": 1, "Use": 1,
     "Produce": 2,
-    "Next_Step": 3, "Continue": 3, "Again": 3,
+    "Next_Step": 3, "Continue": 3,
 }
 _ALLOWED = {
     "Start": ("Input", "Next_Step"),
-    "Decide": ("Read", "Answer_Questions", "History", "Produce", "Next_Step", "Continue", "Again"),
+    "Decide": ("Read", "Answer_Questions", "History", "Produce", "Next_Step", "Continue"),
     "Route": ("Read", "Confidence_Below", "Branch"),
-    "Aggregate": ("Read", "Aggregations", "Produce", "Next_Step", "Continue", "Again"),
-    "Execute": ("Read", "Run_Script", "Command", "Use", "Produce", "Next_Step", "Continue", "Again"),
-    "Task_Agent": ("Read", "Prompt", "Use", "Produce", "Next_Step", "Continue", "Again"),
+    "Aggregate": ("Read", "Aggregations", "Produce", "Next_Step", "Continue"),
+    "Execute": ("Read", "Run_Script", "Command", "Use", "Produce", "Next_Step", "Continue"),
+    "Task_Agent": ("Read", "Prompt", "Use", "Produce", "Next_Step", "Continue"),
     "End": ("Read",),
 }
 _SHOWN = {"Input": "<key>: <type>", "Branch": "<value> -> <step>"}
+# The clause that jumped from a loop body back to a step outside it, and its aliases: it left the
+# language (plan question 46), and a file that still writes it is told what to write instead.
+_GONE = ("again", "redo", "redo_step")
 
 
 def _clauses_of(kind: str) -> str:
@@ -375,6 +378,8 @@ class Parser:
             kw = "Input"
         if step.kind == "Route" and kw != "Confidence_Below" and ((self.is_word() and self.is_punct("->", 1)) or kw == "When"):
             kw = "Branch"
+        if kw is None and tok.kind == WORD and tok.text.lower() in _GONE:
+            raise self.fail(f"'{tok.text}' is gone: write the step inside the loop and end it with `Continue`", tok)
         if kw is None:
             raise self.error(f"a clause of {step.kind} ({_clauses_of(step.kind)})",
                              keywords=tuple(c for c in _ALLOWED[step.kind] if c not in _SHOWN))

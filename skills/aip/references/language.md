@@ -44,7 +44,7 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
   Task_Agent draft "Write a reply that follows the policy." {
     Read ticket, policy
     Produce reply: string
-    Next_Step check
+    Next_Step revise
   }
 
   Execute escalate "Open a ticket in the tier-2 queue." {
@@ -55,18 +55,18 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
     Continue
   }
 
-  Execute check "Does the reply quote the policy correctly?" {
-    Read reply, policy
-    Run_Script scripts/policy_check.py
-    Produce passed: true_or_false
-    Next_Step revise
-  }
+  Loop revise Until passed, At_Most 4, Else_Fail {
+    Execute check "Does the reply quote the policy correctly?" {
+      Read reply, policy
+      Run_Script scripts/policy_check.py
+      Produce passed: true_or_false
+      Next_Step fix
+    }
 
-  Loop revise Until passed, At_Most 3, Else_Fail {
     Task_Agent fix "Revise the reply so it quotes the policy correctly." {
       Read reply, policy
       Produce reply: string
-      Again check
+      Continue
     }
 
     Continue
@@ -97,7 +97,7 @@ End "Every ticket has a reply or an escalation, and the lead has a summary." {
   A procedure with an `Execute` step must have `Requires`.
 - **Every step is a card with a fixed order**: `Read`, the lines of its kind, `Produce`, then
   where it goes. Every step but a `Route` and `End` ends with `Next_Step <step or loop>` (or
-  `Next_Step end`); inside a loop body it may end with `Continue` or `Again <step>` instead.
+  `Next_Step end`); inside a loop body it may end with `Continue` instead.
 - **The order of steps in the file means nothing**; only `Next_Step` and branches do. A step
   nothing points at is an error. There is exactly one `Start` and one `End`, and neither has a name.
 - **A key has one producer on any path.** Two steps may produce the same key only when they are
@@ -187,16 +187,12 @@ given a list longer than its cap fails the run before the first pass, so its cap
 items the procedure should accept.
 
 `Until` is tested before every pass, the first included, and again the moment a body step
-produces the answer. Two shapes follow from that:
-
-- **Check, then fix only if needed.** The check runs before the loop and the loop holds only the
-  fix, which ends with `Again <check>`: the check runs again as part of that pass and its
-  `Next_Step <loop>` brings the fresh answer back (`check` and `revise` above). Work that passes
-  the first check never reaches the fix. `Again` names a step or a loop written at the loop's
-  own level, outside its body, and the check may be several steps (a `For`, then an `Aggregate`)
-  so long as the flow from it comes back to the loop.
-- **Check inside the loop.** The body is check, then fix ending in `Continue`; the loop ends at
-  the check that passes, so no route is needed between them.
+produces the answer. So a loop that checks and fixes has one shape, the check inside it: the
+body is the check, then the fix ending in `Continue` (`check` and `fix` in `revise` above). The
+loop ends at the check that passes, so no route is needed between them and work that passes the
+first check never reaches the fix. The check may be several steps (a `For`, then an
+`Aggregate`). A fix is checked by the next pass, so a fix made in the last pass the cap allows
+is never checked: for `n` checked fixes write `At_Most n+1`.
 
 ## Prompts and scripts
 
@@ -221,6 +217,9 @@ produced on every path), `duplicate_producer` (two producers on one path outside
 `condition_on_plain_value` (a route or `Until` on a `string` or `boolean`; produce an answer
 type instead), `confidence_on_agent_answer`, `missing_cap`, `missing_loop_exit`,
 `flow_leaves_body` (a step in a loop body with a `Next_Step` to a step outside it, `Next_Step
-end` included; it ends with `Continue` or `Again` and the loop's exit line goes on), `missing_type`
+end` included; it ends with `Continue` and the loop's exit line goes on; a check that a fix
+must go back to is written inside the loop, and the clause that once jumped back to a step
+before the loop is a `syntax_error` saying it "is gone: write the step inside the loop and end it
+with `Continue`"), `missing_type`
 (a `Produce` of an `Execute` or `Task_Agent` without a type), `missing_requires`, `missing_file`.
 Fix the first error first; one mistake is reported once, and fixing it may reveal the next.

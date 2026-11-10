@@ -48,7 +48,7 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
   Task_Agent draft "Write a reply that follows the policy." {
     Read ticket, policy
     Produce reply: string
-    Next_Step check
+    Next_Step revise
   }
 
   Execute escalate "Open a ticket in the tier-2 queue." {
@@ -58,18 +58,17 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
     Continue
   }
 
-  Execute check "Does the reply quote the policy correctly?" {
-    Read reply, policy
-    Run_Script scripts/policy_check.py
-    Produce passed: true_or_false
-    Next_Step revise
-  }
-
-  Loop revise Until passed, At_Most 3, Else_Fail {
+  Loop revise Until passed, At_Most 4, Else_Fail {
+    Execute check "Does the reply quote the policy correctly?" {
+      Read reply, policy
+      Run_Script scripts/policy_check.py
+      Produce passed: true_or_false
+      Next_Step fix
+    }
     Task_Agent fix "Revise the reply so it quotes the policy correctly." {
       Read reply, policy
       Produce reply: string
-      Again check
+      Continue
     }
     Continue
   }
@@ -124,6 +123,7 @@ A governance reader can follow that: every step is a card that says what it is, 
 | Conditions are on answers (2026-11-06) | A route reads an answer; `Until` takes a condition on one answer, `<answer> [== v \| != v] [With Confidence_Above p]`; aggregation lines take the same condition per answer. No plain `boolean`, `string` or `integer` is ever branched on; a script produces an answer type when a route needs it | One rule for all conditional logic; every confidence check sits on exactly one answer, which is what makes it mean something |
 | No expressions (2026-11-06) | No `==`, `&&`, `any()` and the like in routes or gates, even with per-atom confidence and three-valued logic | A compound next to a threshold reads as a joint confidence, which assumes independence that does not hold; `docs/language/no-expressions.md` |
 | After the first use (2026-11-09) | `With Confidence_Above p` holds only strictly above `p`; a `score` answer's `value` is its level's label; `index` and `iterations` are scoped by loop name (`revise.index`, `revise.iterations`), the bare words being shorthands; an `Until` is tested at the head, so a loop whose answer already holds runs no pass | Three agents ran every example through every branch and reported where the document and the behaviour disagreed, or where neither said (`reviews/2026-11-09-first-use-*.md`); the reasoning for each is `plan-questions.md`, items 32 to 37 |
+| Every cycle is a loop node (2026-11-09) | A step in a loop body ends with `Next_Step` inside the body or with `Continue`; nothing jumps from a body back to a step outside it. A check and its fix are both written in the loop, `Until` watches the check's answer, and a cap reached after a fix leaves that fix unchecked (`At_Most n+1` for `n` checked fixes) | The clause that re-ran a step written before the loop made one idea writable two ways, and a loop whose pass, count and picture did not contain its own test; `plan-questions.md`, item 46 |
 | State (2026-11-06) | One producer per path; a key is rebound only inside a loop body; a second producer elsewhere is an error | Catches accidental overwrites at compile time; gives review loops a correct shape. A scan of 33 existing procedures found none with two producers for any key, so nothing existing is rejected |
 
 ## 2. The program
@@ -156,7 +156,7 @@ Procedure <name> "<description>"      the header: its clauses (Use_When, Do_Not_
   <the lines of its kind>             2. questions, a script, a prompt, aggregations
   Produce <key>: <type>               3. what it produces
   Next_Step <step>                    4. where it goes: a step, a loop, or end;
-}                                        in a loop body also Continue or Again <step>
+}                                        or, in a loop body, Continue
 
 Route <name> "<description>" {        a route has no Produce and no Next_Step
   Read <answer>                       1. the one answer it branches on
@@ -171,7 +171,7 @@ For <name> Over <list> As <item>, At_Most <n> {     a loop: its header clauses c
 ```
 
 - **Three clause orders, and they are checked.** A step: `Read`, the lines of its kind, `Produce`, then where it goes. A route: `Read`, then its check and its branches, which may come in any order among themselves. A loop: the header clauses, the body, the exit line. A clause out of order is a `syntax_error` that names the order.
-- **A target** (after `Next_Step` or `->`) is a step or a loop by name, or `end`. Inside a loop body it may also be `Continue`, and a step may end with `Again <step>` (2.6).
+- **A target** (after `Next_Step` or `->`) is a step or a loop by name, or `end`. Inside a loop body it may also be `Continue` (2.6).
 - **A `Read` names a key or a field of one**: `Read classification` hands the step the whole decision, `Read classification.tone` the one answer (`{value, confidence, probabilities}`), and `Read classification.tone.value` or `Read classification.tone.confidence` the plain value or the number alone. The step sees each under the last word of its path (`tone`, `value`). A `Route` is the exception: it reads the answer itself, `Read classification.tone`, and refuses `.value` and `.confidence` (`condition_on_plain_value`), because it branches on the one and checks the other.
 - **A `Produce` needs a type** (`reply: string`), except on a `Decide` or an `Aggregate`, which name one key and no type: its fields are the questions or the aggregations.
 
@@ -201,7 +201,7 @@ For <name> Over <list> As <item>, At_Most <n> {     a loop: its header clauses c
 
 **Conditions.** All conditional logic in a procedure is on answers (2.4), and it is written one way: `<answer> [== <value> | != <value>] [With Confidence_Above <p>]`. The answer is one `true_or_false`, `choice` or `score` answer; the comparison is against a label, a level or `true`/`false`, and a `true_or_false` answer with no comparison means `== true`; a `choice` or `score` answer requires the comparison. The condition's confidence is the probability the model put on it, from the answer's probabilities, one minus for `!=`. `With Confidence_Above <p>` is a bar the condition must clear: it holds only when that probability is strictly above `p`, and at `p`, below it, or with no probability at all, it counts as false. A condition appears in exactly two places: a loop's `Until`, and each line of an `Aggregations` block, where it is applied to every answer in a source. A `Route` is the other conditional step and uses no condition: it reads one answer, branches on its value, and checks its confidence with `Confidence_Below`. No condition ever combines two answers.
 
-**Loops.** Two block forms, `For` for independent passes over a list and `Loop` for passes that build on each other, each with a required cap; `Continue` and `Again` end a pass, and every loop has its own `index` and `iterations`. Section 2.6 is all of it.
+**Loops.** Two block forms, `For` for independent passes over a list and `Loop` for passes that build on each other, each with a required cap; `Continue` ends a pass, and every loop has its own `index` and `iterations`. Section 2.6 is all of it.
 
 **Questions composed from data.** A question's instruction may interpolate `{key}` from any key available at the step: `"Does the work follow the policy described below?\n{policy}"`. That composes the question; it does not hand the key to the model as the thing to judge. `Read` is what the model judges. So a decision that checks `work` against a policy reads `work` and writes the policy into its question (`examples/language/fixed-policy`). For availability and lineage an interpolated key counts as a read.
 
@@ -238,8 +238,7 @@ Severities are `error`, `warning`, `info`. Compilation fails on `error` and prin
 | `unreachable_step` | error | nothing reaches a step or loop |
 | `cycle_without_loop` | error | a flow closes a cycle that passes through no loop body |
 | `jump_into_body`, `flow_leaves_body` | error | a `Next_Step` or branch crosses a loop's braces in either direction |
-| `continue_outside_loop`, `again_outside_loop` | error | `Continue` or `Again` outside a loop body, or `Continue` as a top-level loop's exit |
-| `again_target` | error | `Again` inside a `For`, naming its own loop, or naming a step from which the loop is not reached |
+| `continue_outside_loop` | error | `Continue` outside a loop body, or `Continue` as a top-level loop's exit |
 | `missing_cap`, `empty_loop`, `missing_loop_exit` | error | a loop without `At_Most` (or a cap below 1), with no steps, or with no exit line |
 | `unknown_key` | error | a key no step produces is read, interpolated, looped over or collected |
 | `unavailable_key` | error | a key is read where some path to the step has not produced it, including a `For` body's per-pass key read after the loop, and a loop's own key read where the loop is neither running nor behind |
@@ -266,7 +265,7 @@ The state is a set of named, typed keys. The language treats it as immutable out
 **The rule.** Along any path from `Start` to `End`, a key is written at most once, with two exceptions that are not really exceptions:
 
 - **Alternative branches.** The arms of a `Route` may each write the same key, because exactly one of them runs. After the route the key has one value and one producer, whichever arm ran. In the summary example `draft` and `escalate` both write `reply`.
-- **Loop bodies.** A step inside a `For` or `Loop` body may write a key that was written before the loop, or by an earlier pass. Each pass sees the value from the pass before it (or from before the loop, on the first pass); when the loop exits the key is bound once, to the last pass's value. This is the accumulator of a fold. `Again check` runs `check` again as part of the current pass and so rewrites that step's keys, which is the same case.
+- **Loop bodies.** A step inside a `For` or `Loop` body may write a key that was written before the loop, or by an earlier pass. Each pass sees the value from the pass before it (or from before the loop, on the first pass); when the loop exits the key is bound once, to the last pass's value. This is the accumulator of a fold, and it is what a check inside a review loop does: each pass's `check` rewrites the answer the loop watches.
 
 Everything else is an error, `duplicate_producer`, naming both producers and the fix: put the second in a loop, or give it a different name.
 
@@ -360,19 +359,20 @@ A loop is a block: a header, a body between braces, and an exit line. It has a n
 
 The header's clauses come before the brace, separated by commas. `Else_Fail` and `Else_Exit` belong to an `Until` loop only.
 
-**The body.** The body is the block between the braces, and a pass starts at the first step (or loop) written in it; the order of the rest carries no meaning, as everywhere. A step in a body goes on with `Next_Step <step>` to another step of the same body, or ends in one of two ways the top level does not have:
+**The body.** The body is the block between the braces, and a pass starts at the first step (or loop) written in it; the order of the rest carries no meaning, as everywhere. A step in a body goes on with `Next_Step <step>` to another step of the same body, or ends the one way the top level does not have:
 
 - `Continue` ends the pass. The loop tests its condition or its count and starts the next pass or exits. A route in a body may send a branch to `Continue`. Every kind of loop uses it, a `Times` loop included.
-- `Again <step>` runs a step that is written outside the body, at the level of the loop itself, as part of the current pass. `Again check` in the loop `revise` runs `check` as part of the current pass of `revise`, and the flow goes on from `check` as it is written; the pass is over when that flow reaches the loop again, and the loop then tests its condition or its count as after a `Continue`. The steps run this way belong to the pass that ran them: the record attributes them to it, and `index` is that pass's while they run. This is what makes a review loop's condition fresh: `fix` ends with `Again check`, `check` runs on the fixed work, and its `Next_Step revise` brings the answer back to the loop. `Again` is for a `Loop`, whose passes build on each other; a `For` pass is independent and ends with `Continue` (`again_target`). The step named must be at the loop's level, and the flow from it must reach the loop.
 
-The loop block ends with its **exit line**, `Next_Step <step>`, for where the procedure goes when the loop exits; a loop nested in another loop's body may end with `Continue` instead, ending the outer pass when it exits. The exit line is the last line of the block and is required (`missing_loop_exit`). A body is closed otherwise: a step inside it leaves it only through `Continue`, `Again` or the loop's exit line, never with a `Next_Step` to a step outside it (`flow_leaves_body`; `End` is not reachable inside a body), and a step outside a body points into it only by naming the loop (`jump_into_body`). Every cycle in the graph therefore passes through a loop body; a flow that closes any other cycle is an error (`cycle_without_loop`).
+The loop block ends with its **exit line**, `Next_Step <step>`, for where the procedure goes when the loop exits; a loop nested in another loop's body may end with `Continue` instead, ending the outer pass when it exits. The exit line is the last line of the block and is required (`missing_loop_exit`). A body is closed otherwise: a step inside it leaves it only through `Continue` or the loop's exit line, never with a `Next_Step` to a step outside it (`flow_leaves_body`; `End` is not reachable inside a body), and a step outside a body points into it only by naming the loop (`jump_into_body`). So the only way back to something that has already run is `Continue`, to the loop: **every cycle in a procedure is a loop node**, entered at the first step of its body and closed by a `Continue`, and a flow that closes any other cycle is an error (`cycle_without_loop`). A step that a pass must run again, such as the check a fix has to face, is therefore written inside the loop, not before it.
 
 **`For`: independent passes.** Every pass stands on its own: it may read the item, its index, and what existed before the loop, and nothing from another pass. What a pass writes is the pass's and is gone when the loop exits, unless `Collect <key> Into <list>` keeps it: `Collect` gathers one key from every pass, in input order, whatever order the passes finished in; the key may be a decision key, and the list then holds one decision object per pass. Because the passes are independent, a runtime may run them in batches (section 4).
 
-**`Loop Until`: a condition on one answer.** `Until check_summary.all_hold`, `Until review.verdict == approved With Confidence_Above 0.8`: the condition of 2.1. The loop watches the answer. The condition is tested **at the head of every pass, the first included**, and again the moment a step in the body produces the answer (or a loop in the body exits having produced it); when it holds, the loop ends there, and the rest of the pass does not run.
+**`Loop Until`: a condition on one answer.** `Until check_summary.all_hold`, `Until review.verdict == approved With Confidence_Above 0.8`: the condition of 2.1. The loop watches the answer. The condition is tested at exactly two points: **at the loop node, before every pass, the first included**, and **the moment a step in the body produces the answer** (or a loop in the body exits having produced it). When it holds at either, the loop ends there: at the head no pass runs, and in the body the pass counts and the rest of it does not run. It is not tested anywhere else; a `Continue` leads to the head, where the test and then the cap come next.
 
 - **An answer that is absent does not hold, and neither does a condition that has not cleared its bar.** Unknown never counts as a pass: an answer with no probability on the condition is under any bar.
-- **So the body runs when the answer is absent or does not hold, and not otherwise.** When the answer is produced before the loop and already holds, the loop runs no pass: it exits at its head with `iterations` 0. That is the shape of check, then fix only if needed: `check` runs before the loop, `Loop revise Until passed` holds `fix`, and work that passes the first check never reaches `fix` (`examples/language/ticket-triage`). When the answer is produced only inside the body, it is absent on arrival and the first pass runs: check, aggregate and fix inside the loop, with no route between them, because the loop ends at the check that passes (`examples/language/fixed-policy`).
+- **So the body runs when the answer is absent or does not hold, and not otherwise.** An answer produced before the loop that already holds lets no pass run: the loop exits at its head with `iterations` 0.
+- **A check and its fix are written one way: the check inside the loop.** The body is the check, then the fix, ending in `Continue`: `Loop revise Until passed` holds `check` and `fix` (`examples/language/ticket-triage`), or check, aggregate and fix (`examples/language/fixed-policy`). The answer is absent on arrival, so the first pass runs; the loop ends at the check that passes, with no route between check and fix, and work that passes the first check never reaches `fix` (`iterations` is then 1). A pass contains its own test, so the count of passes is the count of checks.
+- **A cap reached after a fix leaves that fix unchecked.** A fix is checked by the pass after it, and the last pass the cap allows has none. A loop that checks and then fixes therefore takes `At_Most n+1` for `n` checked fixes: at `At_Most 4`, three fixes are checked, and a fourth check that fails is followed by a fix nothing checks before the loop reaches its cap (the task for it says so: `last_pass`, `docs/language/runtime.md`, Pauses).
 - The compiler checks that the answer is produced by a step in the body or before the loop.
 
 **`Loop <n> Times`** runs its body `n` times and exits. **`Loop Over`** is the fold: like a `For` it takes one item per pass, and like a `Loop` each pass sees what the one before it wrote.
@@ -382,7 +382,7 @@ The loop block ends with its **exit line**, `Next_Step <step>`, for where the pr
 - inside the body of `revise`, `revise.index` is the number of the pass, from 0;
 - after `revise` has exited, `revise.iterations` is how many passes ran, a pass that `Until` ended included (0 when the loop exited at its head before any pass).
 
-So a step after two nested loops can still read the inner loop's count, and a step inside two can read either pass number. A step sees what it reads under the last word of the path, as with any key, so `Read revise.iterations` hands it `iterations`; a step that wants the numbers of two loops reads the loops' keys whole, `Read review, revise`, and is handed `review` and `revise`, each an object with its `iterations` (`Read review.iterations, revise.iterations` would hand it two things called `iterations`, and is an error, `ambiguous_read`). A template names either in full, `{review.iterations}`. The bare `index` and `iterations` are shorthands: `index` is the `index` of the innermost loop running, and `iterations` is the `iterations` of the last loop that exited. A step run by `Again` runs as part of the loop pass that ran it, so there `index` is that loop's; the name of the loop it wants (`each_ticket.index`) says which without ambiguity. A loop's key follows the rules of any key: inside a `For` pass an inner loop's count is the pass's own and is gone after the `For`. The runtime's keys are not the procedure's to write: no step produces `index`, `iterations` or a key named like a loop, and no loop item or collected list is called so (`reserved_key`, `duplicate_name`). None of them is part of a run's state or of its result: a runtime keeps them beside the state while the run is under way, and when a run ends, done or failed, no loop key is left.
+So a step after two nested loops can still read the inner loop's count, and a step inside two can read either pass number. A step sees what it reads under the last word of the path, as with any key, so `Read revise.iterations` hands it `iterations`; a step that wants the numbers of two loops reads the loops' keys whole, `Read review, revise`, and is handed `review` and `revise`, each an object with its `iterations` (`Read review.iterations, revise.iterations` would hand it two things called `iterations`, and is an error, `ambiguous_read`). A template names either in full, `{review.iterations}`. The bare `index` and `iterations` are shorthands: `index` is the `index` of the innermost loop running, and `iterations` is the `iterations` of the last loop that exited. Where the shorthand could mislead, the name of the loop (`each_ticket.index`) says which without ambiguity. A loop's key follows the rules of any key: inside a `For` pass an inner loop's count is the pass's own and is gone after the `For`. The runtime's keys are not the procedure's to write: no step produces `index`, `iterations` or a key named like a loop, and no loop item or collected list is called so (`reserved_key`, `duplicate_name`). None of them is part of a run's state or of its result: a runtime keeps them beside the state while the run is under way, and when a run ends, done or failed, no loop key is left.
 
 **What a body may read and leave behind** is the state rule of 2.3: a `For` pass reads what existed before the loop and leaves only what `Collect` keeps; a `Loop` pass reads what the pass before it wrote, and after the loop the state is the state where the loop ended.
 
@@ -490,13 +490,12 @@ A loop is `<opener> { <steps> <exit clause> }`; it has a name because steps reac
 | Keyword | Meaning | Aliases |
 |---|---|---|
 | `For <name> Over <list> As <item>, At_Most <n> [, Collect <key> Into <list>] { ... }` | independent passes over a list; `Collect` gathers one key from every pass in order | `For_Each` |
-| `Loop <name> Until <condition>, At_Most <n> [, Else_Fail\|Else_Exit] { ... }` | passes build on each other until a condition on one answer holds, `<answer> [== v \| != v] [With Confidence_Above p]`; tested at the head of every pass, the first included, and again wherever a body step produces the answer, ending the loop there; absent, or not above the bar, does not hold | |
+| `Loop <name> Until <condition>, At_Most <n> [, Else_Fail\|Else_Exit] { ... }` | passes build on each other until a condition on one answer holds, `<answer> [== v \| != v] [With Confidence_Above p]`; tested at the head of every pass, the first included, and again wherever a body step produces the answer, ending the loop there; absent, or not above the bar, does not hold; a check and its fix both go in the body | |
 | `Loop <name> <n> Times { ... }` | counted mode: exactly `n` passes; the count is its cap, so it takes no `Until`, `Else_Fail` or `Else_Exit`; its steps end a pass with `Continue` like any loop's | |
 | `Loop <name> Over <list> As <item>, At_Most <n> { ... }` | fold mode: passes build on each other over a list | |
 | `At_Most <n>` | the cap; required on every loop but a counted one, whose count is its cap | `Max` |
 | `Else_Fail` / `Else_Exit` | what an `Until` loop does at the cap; `Else_Fail` is the default; no other loop takes either | |
 | `Continue` | last clause of a step in a body, or a route branch target: the pass is over | `Next_Pass` |
-| `Again <step>` | last clause of a step in a `Loop` body: run a step (or loop) written at the enclosing loop's level as part of the current pass; the pass is over when the flow from it reaches the loop again | `Redo`, `Redo_Step` |
 | `Next_Step <step>` at block level | where the run goes when the loop exits; `Continue` instead, in a nested loop, ends the outer pass | |
 | `<loop>.index`, `<loop>.iterations` | in a `Read` or an interpolation: the pass's number inside the loop's body, and how many passes ran once it has exited; the runtime's, never produced | bare `index` (the innermost loop running), bare `iterations` (the last loop that exited) |
 

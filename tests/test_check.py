@@ -67,13 +67,6 @@ CASES = [
     ("continue_outside_loop", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o: string  Continue }\nEnd "e" { Read o }\n', 3, 47, "t"),
     ("continue_outside_loop", 'Start "s" { m: string  Next_Step l }\nLoop l 3 Times {\n  Task_Agent t "t" { Read m  Produce o: string  Continue }\n'
                               '  Continue\n}\nEnd "e" { Read m }\n', 5, 3, "l"),
-    ("again_outside_loop", 'Start "s" { m: string  Next_Step t }\nTask_Agent t "t" { Read m  Produce o: string  Again t }\nEnd "e" { Read o }\n', 3, 47, "t"),
-    ("again_target", 'Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 3 {\n  Task_Agent t "t" { Read i  Produce o: string  Again f }\n'
-                     '  Next_Step end\n}\nEnd "e" { Read items }\n', 4, 49, "t"),
-    ("again_target", 'Start "s" { m: string  Next_Step l }\nLoop l 3 Times {\n  Task_Agent t "t" { Read m  Produce o: string  Again l }\n'
-                     '  Next_Step end\n}\nEnd "e" { Read m }\n', 4, 49, "t"),
-    ("again_target", 'Start "s" { m: string  Next_Step l }\nLoop l 3 Times {\n  Task_Agent t "t" { Read m  Produce o: string  Again after }\n'
-                     '  Next_Step after\n}\nTask_Agent after "a" { Read m  Produce z: string  Next_Step end }\nEnd "e" { Read z }\n', 4, 49, "t"),
     ("missing_cap", 'Start "s" { items: list  Next_Step f }\nFor f Over items As i {\n  Task_Agent t "t" { Read i  Produce o: string  Continue }\n'
                     '  Next_Step end\n}\nEnd "e" { Read items }\n', 3, 1, "f"),
     ("missing_cap", 'Start "s" { m: string  Next_Step l }\nLoop l Until dec.q, Else_Exit {\n  Decide d "d" { Read m  Answer_Questions { q: true_or_false "?" }  Produce dec  Continue }\n'
@@ -275,7 +268,7 @@ class Conditions(unittest.TestCase):
         self.assertIn("neither before Loop l nor by a step in its body", d.message)
         self.assertEqual(codes(body.replace("Until dec.q", "Until nothing.q")), ["unknown_key"])
 
-    def test_until_answer_produced_before_the_loop_and_renewed_by_again(self):
+    def test_until_answer_produced_by_the_check_inside_the_loop(self):
         self.assertEqual([d.code for d in check_path(EXAMPLES / "ticket-triage")[1]], [])
 
     def test_a_confidence_bar_is_allowed_on_a_script_answer_and_an_error_on_an_aggregation_an_agent_or_an_input(self):

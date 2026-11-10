@@ -12,8 +12,8 @@ export interface Graph { nodes: GraphNode[]; edges: GraphEdge[] }
 /** A way out of a card or a frame. */
 export interface Port {
   /** `next`: Next_Step, or a loop's exit line; `branch`: one value of a route; `below`: a route's
-   *  Confidence_Below; `continue`: the pass is over; `again`: Again <step>. */
-  kind: "next" | "branch" | "below" | "continue" | "again";
+   *  Confidence_Below; `continue`: the pass is over. */
+  kind: "next" | "branch" | "below" | "continue";
   /** What the port is called on the card: `next`, a branch's value, `confidence below 0.9`. */
   label: string;
   /** The id of the card or frame it leads to. */
@@ -124,7 +124,6 @@ export function modelOf(graph: Graph): Model {
       else add(e, "branch", text(e.properties.value));
     }
     for (const e of from(id, "NEXT")) add(e, "next", "next");
-    for (const e of from(id, "AGAIN")) add(e, "again", "again");
     for (const e of from(id, "CONTINUES")) add(e, "continue", "continue", nextPass(e.end));
     ports.sort((a, b) => byLine(a.edge, b.edge));
     return ports.map((p) => p.port);

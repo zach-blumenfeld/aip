@@ -11,7 +11,7 @@ What the checker does, in order. It indexes the steps and loops (names, one `Sta
 nothing reserved). It checks each step on its own: the clauses its kind needs, its questions and
 their labels, its files on disk. Then it walks the flow graph region by region, where a region is
 the top level or a loop body, with the loops inside it as single nodes: it resolves every
-`Next_Step`, branch, `Continue` and `Again` (a flow may not enter or leave a body except through
+`Next_Step`, branch and `Continue` (a flow may not enter or leave a body except through
 the loop's own lines), finds the steps nothing reaches and the cycles that pass through no loop,
 and runs the state analysis over the region in topological order. That analysis carries two
 states to every node: the keys definitely available on every path (for `Read`, the interpolations,
@@ -70,8 +70,6 @@ CODES: dict[str, str] = {
     "jump_into_body": "error",
     "flow_leaves_body": "error",
     "continue_outside_loop": "error",
-    "again_outside_loop": "error",
-    "again_target": "error",
     # loops
     "missing_cap": "error",
     "empty_loop": "error",
@@ -282,7 +280,6 @@ def _reset(state: State) -> State:
 @dataclass
 class RegionResult:
     continues: list[tuple[State, State]] = field(default_factory=list)
-    agains: list[tuple[State, State]] = field(default_factory=list)
     # key -> the states after each node of the region that produced it (a step, or a nested loop
     # whose body left it): where an enclosing `Until` is tested again (spec 2.6)
     produce_points: dict[str, list[tuple[State, State]]] = field(default_factory=dict)
@@ -324,19 +321,6 @@ def _topo(entry: str, edges: dict[str, list[str]]) -> tuple[list[str], list[tupl
     visit(entry)
     order.reverse()
     return order, back
-
-
-def _reaches(edges: dict[str, list[str]], start: str, goal: str) -> bool:
-    seen, todo = set(), [start]
-    while todo:
-        n = todo.pop()
-        if n == goal:
-            return True
-        if n in seen:
-            continue
-        seen.add(n)
-        todo.extend(edges.get(n, ()))
-    return False
 
 
 def _list(words) -> str:
@@ -405,7 +389,7 @@ class Checker:
                              f"Execute {self.first_execute.name} runs a script, but the header declares no Requires; "
                              "add Requires <interpreter> <version>, such as Requires python 3.10")
         if self.region_of.get("start") == ():
-            self.region(self.p.items, None, (), {}, {}, None)
+            self.region(self.p.items, None, (), {}, {})
         for name, ns in self.names.items():
             if name not in self.used_names:
                 self.report("unused_name", ns, f"the named string {name} is never used", end=(ns.line, ns.column + len(name)))
@@ -522,7 +506,7 @@ class Checker:
                 self.report("duplicate_name", d, self.loop_key_clash(d.key.name, "key"), name, end=(d.line, d.column + len(d.key.name)))
         if st.kind in ("Start", "Decide", "Aggregate", "Execute", "Task_Agent") and st.flow is None:
             self.report_head("missing_next_step", st, f"{_label(st)} does not say where it goes; end it with Next_Step <step>"
-                             + (", or Continue or Again <step> inside a loop body" if st.kind != "Start" else ""))
+                             + (", or Continue inside a loop body" if st.kind != "Start" else ""))
 
     def loop_key_clash(self, name: str, what: str) -> str:
         return (f"the {what} {name} shares its name with {_label(self.nodes[name])}, and a loop's name is the runtime's key for that loop "
@@ -589,7 +573,7 @@ class Checker:
 
     # ------------------------------------------------------------ regions and flow
 
-    def region(self, items, loop, path: tuple[str, ...], must_in: State, may_in: State, parent_edges) -> RegionResult:
+    def region(self, items, loop, path: tuple[str, ...], must_in: State, may_in: State) -> RegionResult:
         """Analyse the top level (`loop` is None) or a loop body: flows, reachability, cycles,
         then the state at every node in topological order."""
         result = RegionResult()
@@ -602,7 +586,7 @@ class Checker:
                 return result
             entry = next(iter(nodes))
         self.broken = False
-        succ = {n: self.successors(node, nodes, loop, path, parent_edges) for n, node in nodes.items()}
+        succ = {n: self.successors(node, nodes, loop, path) for n, node in nodes.items()}
         broken = self.broken  # a flow here did not resolve, so "nothing reaches X" would be its consequence, not a finding
         edges = {n: [t for k, t, _ in succ[n] if k == "edge"] for n in nodes}
         order, back = _topo(entry, edges)
@@ -610,7 +594,7 @@ class Checker:
         for n, node in nodes.items():
             if n not in reached and not broken:
                 how = (f"a loop is entered with Next_Step {n}" if not isinstance(node, s.Step)
-                       else "a step is reached by a Next_Step, a route branch, or Again")
+                       else "a step is reached by a Next_Step or a route branch")
                 self.report_head("unreachable_step", node, f"nothing reaches {_label(node)}; {how}")
         for a, b in back:
             flow = next(f for k, t, f in succ[a] if k == "edge" and t == b)
@@ -628,7 +612,7 @@ class Checker:
             if isinstance(node, s.Step):
                 m_out, y_out, produced = self.visit_step(node, m_in, y_in)
             else:
-                m_out, y_out, produced = self.visit_loop(node, m_in, y_in, path, edges)
+                m_out, y_out, produced = self.visit_loop(node, m_in, y_in, path)
                 self.path = path
             for key in produced:
                 result.produce_points.setdefault(key, []).append((m_out, y_out))
@@ -637,13 +621,11 @@ class Checker:
                     incoming.setdefault(target, []).append((m_out, y_out))
                 elif kind == "continue":
                     result.continues.append((m_out, y_out))
-                elif kind == "again":
-                    result.agains.append((m_out, y_out))
         return result
 
-    def successors(self, node, names: dict, loop, path: tuple[str, ...], parent_edges) -> list[tuple[str, str | None, s.Flow]]:
+    def successors(self, node, names: dict, loop, path: tuple[str, ...]) -> list[tuple[str, str | None, s.Flow]]:
         """Where a node goes, each flow resolved and checked: ('edge', target) within the region,
-        ('continue', None) or ('again', target) in a body."""
+        or ('continue', None) in a body."""
         name = _node_name(node)
         flows: list[s.Flow] = []
         if isinstance(node, s.Step):
@@ -670,23 +652,6 @@ class Checker:
                     self.report("continue_outside_loop", flow, message, name)
                 else:
                     out.append(("continue", None, flow))
-            elif flow.kind == "Again":
-                if loop is None:
-                    self.report("again_outside_loop", flow, "Again re-enters an earlier step from inside a loop body and is only written there", name)
-                elif isinstance(loop, s.ForLoop):
-                    self.report("again_target", flow, f"Again is for Loop passes, which build on each other; a pass of For {loop.name} is "
-                                "independent and ends with Continue", name)
-                else:
-                    target = flow.step
-                    if target in RESERVED_STEPS or target not in self.nodes:
-                        self.report("unknown_step", flow, f"Again {target}: no step or loop is called {target}", name)
-                    elif target == loop.name:
-                        self.report("again_target", flow, f"Again {target} names the loop it is in; to end the pass write Continue", name)
-                    elif self.region_of[target] != path[:-1] or not _reaches(parent_edges or {}, target, loop.name):
-                        self.report("again_target", flow, f"Again {target}: the step must be at the level of Loop {loop.name} and the flow "
-                                    f"from it must reach the loop again; {target} is {self.where(target)}", name)
-                    else:
-                        out.append(("again", target, flow))
             else:
                 target = flow.step
                 if target in RESERVED_STEPS:
@@ -702,7 +667,7 @@ class Checker:
                     if target_path == path[:len(target_path)]:
                         where = "End is not reachable inside a loop body" if target == "end" else f"{target} is {self.where(target)}"
                         self.report("flow_leaves_body", flow, f"{_label(node)} is inside {path[-1]}, and a step in a loop body leaves it only "
-                                    f"with Continue, Again <step>, or the loop's own exit line; {where}", name)
+                                    f"with Continue or the loop's own exit line; {where}", name)
                     else:
                         common = 0
                         while common < min(len(path), len(target_path)) and path[common] == target_path[common]:
@@ -1007,7 +972,7 @@ class Checker:
 
     # ------------------------------------------------------------ loops
 
-    def visit_loop(self, loop, m_in: State, y_in: State, path: tuple[str, ...], edges) -> tuple[State, State, set[str]]:
+    def visit_loop(self, loop, m_in: State, y_in: State, path: tuple[str, ...]) -> tuple[State, State, set[str]]:
         name = loop.name
         inner = path + (name,)
         body_must, body_may = _reset(m_in), _reset(y_in)
@@ -1038,7 +1003,7 @@ class Checker:
         # inner loop's body rebinds to its own.
         body_must["index"] = body_may["index"] = Entry(Type("integer"), frozenset({name}), frozenset({name}))
         body_must[name] = body_may[name] = Entry(Type("loop", fields=(("index", Type("integer")),)), frozenset({name}), frozenset({name}))
-        body = self.region(loop.body, loop, inner, body_must, body_may, edges)
+        body = self.region(loop.body, loop, inner, body_must, body_may)
         self.path = path
         if isinstance(loop, s.ForLoop):
             must_out, may_out = dict(m_in), dict(y_in)
@@ -1049,7 +1014,7 @@ class Checker:
                 must_out[loop.collect.into] = may_out[loop.collect.into] = entry
                 produced.add(loop.collect.into)
         else:
-            exits = list(body.continues) + list(body.agains)
+            exits = list(body.continues)
             if loop.mode == "Until":
                 exits += self.check_until(loop, m_in, y_in, body, name)
             if not exits:

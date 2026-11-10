@@ -83,7 +83,7 @@ def test_a_folder_that_does_not_compile_is_fixed_until_it_does(tmp_path):
     assert isinstance(paused, aip.Paused) and paused.step == "write" and paused.task.answer_with == {"path": "string"}
     prompt = paused.task.prompt
     assert "a procedure called `echo`" in prompt and "Hand back the one string it is given." in prompt
-    assert "# The AIP procedure language on one page" in prompt and "Loop revise Until passed, At_Most 3, Else_Fail" in prompt
+    assert "# The AIP procedure language on one page" in prompt and "Loop revise Until passed, At_Most 4, Else_Fail" in prompt
     for unrendered in ("{name}", "{description}", "{materials}", "{assets[language]}"):
         assert unrendered not in prompt
     assert "`{assets[policy]}`" in prompt, "the page's own braces are left as written"
@@ -92,7 +92,7 @@ def test_a_folder_that_does_not_compile_is_fixed_until_it_does(tmp_path):
     paused = client.resume(paused, {"path": "echo"})          # relative: taken from the run's working directory
     assert isinstance(paused, aip.Paused) and paused.step == "fix"
     task = paused.task
-    assert (task.pass_, task.pass_of, task.last_pass) == (0, 5, False)
+    assert (task.pass_, task.pass_of, task.last_pass) == (0, 6, False)
     assert task.state == {"path": "echo", "diagnostics": [
         "procedure.aip:4:3: error unknown_step: Next_Step nowhere: no step or loop is called nowhere (step start)"]}
     assert "unknown_step" in task.prompt and "# The AIP procedure language on one page" in task.prompt
@@ -120,19 +120,20 @@ def test_a_folder_that_compiles_first_time_is_never_sent_to_fix(tmp_path):
     assert (folder / "procedure.aip").read_text() == CANONICAL
 
 
-def test_a_path_with_no_procedure_is_a_diagnostic_and_five_failed_fixes_end_the_run(tmp_path):
+def test_a_path_with_no_procedure_is_a_diagnostic_and_a_sixth_failed_pass_ends_the_run(tmp_path):
+    # L7: compile is inside the loop, a fix is checked by the pass after it, and At_Most 6 is five checked fixes
     client = aip.Client(agent="tests")
     paused = client.run(FOLDER, INPUTS, workdir=tmp_path)
     paused = client.resume(paused, {"path": str(tmp_path / "nothing-here")})
     assert paused.step == "fix" and len(paused.task.state["diagnostics"]) == 1
     assert "error missing_file: no procedure.aip here" in paused.task.state["diagnostics"][0]
-    for attempt in range(4):
+    for attempt in range(5):
         assert (paused.task.pass_, paused.task.last_pass) == (attempt, False)
         paused = client.resume(paused, {"path": str(tmp_path / "nothing-here")})
-    assert (paused.task.pass_, paused.task.last_pass) == (4, True)
+    assert (paused.task.pass_, paused.task.last_pass) == (5, True), "the sixth pass's compile failed too: no check follows this fix"
     with pytest.raises(aip.RunError) as failed:
         client.resume(paused, {"path": str(tmp_path / "nothing-here")})
-    assert (failed.value.kind, failed.value.error["loop"], failed.value.error["count"], failed.value.resumable) == ("loop_cap", "revise", 5, False)
+    assert (failed.value.kind, failed.value.error["loop"], failed.value.error["count"], failed.value.resumable) == ("loop_cap", "revise", 6, False)
 
 
 def test_it_runs_by_name_from_a_server_that_just_started(tmp_path):

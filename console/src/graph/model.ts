@@ -1,7 +1,7 @@
 // The step graph's model: a bundle's graph read as boxes and arrows, shaped the way the bundle is
 // (aip docs/language/queries.md, "Control flow"). Steps are nodes and a `For` or a `Loop` is a node
 // of its own; the control edges of the bundle are the arrows: `NEXT`, `BRANCH`, `BELOW`, `ENTERS`
-// from a loop to the first step of its body, `CONTINUES` from the body back to its loop, `AGAIN`,
+// from a loop to the first step of its body, `CONTINUES` from the body back to its loop,
 // and a loop's exit line from the loop to the step after it. `CONTAINS` is membership, not flow: it
 // says whose body a node is in and draws nothing. It is built on the card canvas's model, which
 // already reads the graph's steps, loops and ways out, so the two views cannot disagree about a
@@ -14,7 +14,7 @@ export type FlowKind = Port["kind"] | "enter";
 /** One way from a node to another, as the procedure wrote it. */
 export interface Way {
   kind: FlowKind;
-  /** What the arrow is called: a branch's value, `< 0.6` for a confidence check, `continue`, `again`; empty for `next`. */
+  /** What the arrow is called: a branch's value, `< 0.6` for a confidence check, `continue`; empty for `next`. */
   label: string;
   line: number | null;
 }

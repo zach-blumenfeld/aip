@@ -86,7 +86,7 @@ class CompileError(AipError):
 
 class InvalidBundle(AipError):
     """An `.rl` that is not a usable bundle; `kind` is the bundle error's code (`not_a_bundle`,
-    `bundle_tampered`, `bundle_language_version`)."""
+    `bundle_tampered`, `bundle_language_version`, `bundle_format`)."""
 
     def __init__(self, error: BundleError):
         super().__init__(error.message, error.code)

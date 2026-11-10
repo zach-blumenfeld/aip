@@ -15,9 +15,9 @@ file cache, the interpreter, the script timeout, the batch size, the clock.
 
 **Loops.** A `Loop` runs its passes in order on the one state, with a frame on the cursor's
 stack that holds the pass count; `Until` is tested at the head of every pass and the moment a
-body step (or a loop in the body) produces the watched answer, `At_Most` at the head, `Again`
-re-enters at a step at the loop's level and the pass ends when the loop is reached again. A
-`For` runs its passes as independent cursors over a copy of the state, `batch` at a time: a
+body step (or a loop in the body) produces the watched answer, `At_Most` at the head; a pass
+ends at `Continue`, the only way back to the loop, so every cycle a run makes is through a loop
+node. A `For` runs its passes as independent cursors over a copy of the state, `batch` at a time: a
 batch whose body is one `Decide` is one model call with the question keys suffixed by pass and
 mapped back; any other body drives each pass in turn until it pauses or finishes, so one pause
 carries every pass waiting at the same step. The entries of a pass are buffered and appended
@@ -452,7 +452,7 @@ class Engine:
             raise StepError(step.name, f"{step.name} has no next step")
         if flow.type == "CONTINUES":
             self._pass_over(run, cursor, flow.to)
-        else:  # NEXT, or AGAIN: re-enter at a step at the loop's level; the pass ends when the loop is reached
+        else:
             cursor.position = flow.to
 
     def _pass_over(self, run: Run, cursor: Cursor, loop_id: str) -> None:
@@ -469,7 +469,9 @@ class Engine:
     # ------------------------------------------------------------ loops
 
     def _loop(self, run: Run, cursor: Cursor, loop: Loop) -> None:
-        """The cursor is at a loop node: entering it, or back at it from `Again`."""
+        """The cursor is at a loop node: entering it. (A pass that ends goes to the head through
+        `_pass_over`, not through here; a `Loop` found with its frame already on the stack is
+        at its head all the same.)"""
         frame = cursor.frames[-1] if cursor.frames and cursor.frames[-1]["loop"] == loop.id else None
         if loop.kind == "For":
             self._for(run, cursor, loop, frame)
@@ -478,10 +480,7 @@ class Engine:
             frame = {"loop": loop.id, "name": loop.name, "kind": "Loop", "count": 0, "items": items, "written": [], "head": True}
             cursor.frames.append(frame)
             self._head(run, cursor, loop, frame)
-        elif frame.pop("head", False):
-            self._head(run, cursor, loop, frame)
-        else:  # `Again` ran its course and the flow reached the loop: the pass is over, the count moves
-            frame["count"] += 1
+        else:
             self._head(run, cursor, loop, frame)
 
     def _items(self, run: Run, cursor: Cursor, loop: Loop) -> list:

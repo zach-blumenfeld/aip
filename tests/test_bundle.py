@@ -149,17 +149,22 @@ class TheGraph(unittest.TestCase):
         one(g, "PRODUCES", "loop:each_ticket", "data:replies")
         self.assertEqual(props(g, "data:replies")["type"], "list")
         self.assertEqual([(e.end, e.properties["order"]) for e in g.edges_of("CONTAINS", "loop:each_ticket")],
-                         [("step:classify", 0), ("step:by_tone", 1), ("step:draft", 2), ("step:escalate", 3), ("step:check", 4),
-                          ("loop:revise", 5)])
+                         [("step:classify", 0), ("step:by_tone", 1), ("step:draft", 2), ("step:escalate", 3), ("loop:revise", 4)])
         one(g, "ENTERS", "loop:each_ticket", "step:classify")
         one(g, "CONTINUES", "step:escalate", "loop:each_ticket")
         one(g, "NEXT", "loop:each_ticket", "step:summarize")
         revise = props(g, "loop:revise")
         self.assertEqual((revise["kind"], revise["mode"], revise["at_most"], revise["at_cap"], revise["until_answer"]),
-                         ("Loop", "Until", 3, "Else_Fail", "passed"))
+                         ("Loop", "Until", 4, "Else_Fail", "passed"))
         self.assertEqual(bare(one(g, "WATCHES", "loop:revise", "data:passed")), {}, "a bare true_or_false condition: no field, no comparison")
         one(g, "CONTINUES", "loop:revise", "loop:each_ticket")
-        one(g, "AGAIN", "step:fix", "step:check")
+        # L7: the check is in the loop it serves, and the only way back is Continue, to the loop node
+        self.assertEqual([e.end for e in g.edges_of("CONTAINS", "loop:revise")], ["step:check", "step:fix"])
+        one(g, "NEXT", "step:draft", "loop:revise")
+        one(g, "ENTERS", "loop:revise", "step:check")
+        one(g, "NEXT", "step:check", "step:fix")
+        one(g, "CONTINUES", "step:fix", "loop:revise")
+        self.assertEqual({e.type for e in g.edges} & {"AGAIN"}, set())
         self.assertEqual(one(g, "BRANCH", "step:by_tone", "step:draft")["value"], "calm")
         self.assertEqual(props(g, "data:passed")["type"], "true_or_false")
 
@@ -339,6 +344,18 @@ class TheBundleFile(unittest.TestCase):
         with self.assertRaises(BundleError) as caught:
             read_bundle(out)
         self.assertEqual(caught.exception.code, "bundle_language_version")
+
+    def test_an_edge_the_schema_no_longer_has_is_refused_by_name(self):
+        """L7: a bundle an earlier 0.9 compiler wrote, with the edge that jumped from a loop body
+        back to a step outside it, is a format error naming the edge, before verification."""
+        out = write_bundle(compiled("ticket-triage"), self.tmp / "old.rl")
+        with relate.open(out, read_only=False) as conn:
+            conn.execute("MATCH (a:Step {name: 'fix'}), (b:Step {name: 'check'}) CREATE (a)-[:AGAIN {line: 63, column: 7}]->(b)")
+        with self.assertRaises(BundleError) as caught:
+            read_bundle(out)
+        self.assertEqual(caught.exception.code, "bundle_format")
+        self.assertIn("carries an AGAIN edge, which a bundle no longer has", caught.exception.message)
+        self.assertIn("compile its folder again", caught.exception.message)
 
     def test_export_refuses_a_directory_in_use_unless_forced(self):
         bundle = compiled("fixed-policy")

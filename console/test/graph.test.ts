@@ -35,28 +35,34 @@ test("steps are nodes and the control edges are the arrows", () => {
   assert.deepEqual(g.edges[2].ways.map((w) => w.kind), ["below", "branch"]);
 });
 
-test("a loop is a node: ENTERS into its body, Continue back to it, Again to an earlier step, and its exit", () => {
+test("a loop is a node: ENTERS into its body, Continue back to it, and its exit; nothing else goes back", () => {
   const g = stepGraphOf(graph("ticket-triage"));
   const edge = (from: string, to: string) => g.edges.find((e) => e.from === from && e.to === to);
-  assert.deepEqual(g.nodes["loop:each_ticket"].children, ["step:classify", "step:by_tone", "step:draft", "step:escalate", "step:check", "loop:revise"]);
+  assert.deepEqual(g.nodes["loop:each_ticket"].children, ["step:classify", "step:by_tone", "step:draft", "step:escalate", "loop:revise"]);
+  assert.deepEqual(g.nodes["loop:revise"].children, ["step:check", "step:fix"]);
   assert.equal(g.nodes["loop:each_ticket"].loop, true);
   assert.equal(g.nodes["step:classify"].loop, false);
   assert.equal(g.nodes["loop:revise"].parent, "loop:each_ticket");
-  assert.equal(g.nodes["loop:revise"].title, "Until passed, At_Most 3, Else_Fail");
+  assert.equal(g.nodes["loop:revise"].title, "Until passed, At_Most 4, Else_Fail");
   // The node's one line: what it runs over or until, and its cap. The rest stays in the header.
-  assert.equal(g.nodes["loop:revise"].summary, "Until passed, At_Most 3");
+  assert.equal(g.nodes["loop:revise"].summary, "Until passed, At_Most 4");
   assert.equal(g.nodes["loop:each_ticket"].summary, "Over tickets, At_Most 50");
   assert.equal(stepGraphOf(graph("fixed-policy")).nodes["loop:revise"].summary, "Until check_summary.all_hold, At_Most 3");
 
   assert.equal(edge("loop:each_ticket", "step:classify")?.enter, true);
-  assert.equal(edge("loop:revise", "step:fix")?.enter, true);
+  assert.equal(edge("loop:revise", "step:check")?.enter, true);
   // The pass is over: from a step, and from the inner loop's exit line.
   assert.deepEqual([edge("step:escalate", "loop:each_ticket")?.toLoop, edgeLabel(edge("step:escalate", "loop:each_ticket")!)], [true, "continue"]);
   assert.equal(edge("loop:revise", "loop:each_ticket")?.toLoop, true);
-  assert.equal(edgeLabel(edge("step:fix", "step:check")!), "again");
-  assert.equal(edge("step:fix", "step:check")?.toLoop, false);
+  // Every cycle is a loop node: the fix goes back to its loop, never to the check, and the only
+  // arrows that lead to a node that has already run are the Continues.
+  assert.deepEqual([edge("step:fix", "loop:revise")?.toLoop, edgeLabel(edge("step:fix", "loop:revise")!)], [true, "continue"]);
+  assert.equal(edge("step:fix", "step:check"), undefined);
+  assert.equal(edgeLabel(edge("step:check", "step:fix")!), "");
+  assert.deepEqual(g.edges.filter((e) => e.toLoop).map((e) => e.key).sort(),
+                   ["loop:revise->loop:each_ticket", "step:escalate->loop:each_ticket", "step:fix->loop:revise"]);
   // A step into a loop, and a loop's exit, are arrows to and from the loop node.
-  assert.equal(edge("step:check", "loop:revise")?.toLoop, false);
+  assert.equal(edge("step:draft", "loop:revise")?.toLoop, false);
   assert.ok(edge("loop:each_ticket", "step:summarize"));
   assert.equal(edgeLabel(edge("step:by_tone", "step:escalate")!), "< 0.6 · angry");
   // Membership draws nothing: no arrow from a loop to a step of its body but the way in.
@@ -171,10 +177,14 @@ test("the layout: a loop reads as a cycle, in beside the loop node and back alon
   assert.equal(exit.points[0][0], exit.points[1][0]);
   assert.deepEqual(exit.points[0], [loop.x + loop.w / 2, loop.y + loop.h]);
 
-  // Again: back to `check`, which is before the loop.
-  const again = placed("step:fix->step:check");
-  assert.equal(again.rail, true);
-  assert.equal(again.points[again.points.length - 1][0], layout.boxes["step:check"].x + SIZE.nodeWidth);
+  // The inner loop is a cycle of its own: `check` and `fix` beside the loop node, and `fix` back to it along a rail.
+  const revise = layout.boxes["loop:revise"], check = layout.boxes["step:check"];
+  assert.ok(check.x > revise.x + revise.w && layout.boxes["step:fix"].y > check.y);
+  const back = placed("step:fix->loop:revise");
+  assert.equal(back.rail, true);
+  assert.equal(back.points[back.points.length - 1][0], revise.x + revise.w);
+  // Nothing goes back but a Continue.
+  assert.deepEqual(layout.edges.filter((e) => e.rail).map((e) => e.edge.toLoop), [true, true, true]);
 });
 
 test("the layout: a For inside a Loop is a cycle hung off the outer loop's body", () => {

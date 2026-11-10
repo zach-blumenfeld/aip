@@ -23,13 +23,13 @@ RETURN p, n, r, m
 From the start step along every edge a run can take. `NEXT` is `Next_Step`; `BRANCH {value}`
 and `BELOW {below}` are a route's lines; `ENTERS` is a loop to the first node of its body, where
 a pass starts; `CONTINUES` is `Continue`, a step back to its enclosing loop, which then tests
-`Until` or takes the next item; `AGAIN` is `Again <step>`, the one edge allowed to form a cycle
-inside a body. A nested loop is entered only by `ENTERS`, so a walk on `NEXT` alone skips every
-loop body; this pattern does not.
+`Until` or takes the next item. Every cycle in a bundle is a loop node, `ENTERS` in and
+`CONTINUES` back: no other edge leads to a node that has already run. A nested loop is entered
+only by `ENTERS`, so a walk on `NEXT` alone skips every loop body; this pattern does not.
 
 ```cypher
 MATCH (p:Procedure {name: 'dynamic_policy'})
-MATCH flow = (p)-[:STARTS_AT]->()-[:NEXT|BRANCH|BELOW|ENTERS|CONTINUES|AGAIN*]->()
+MATCH flow = (p)-[:STARTS_AT]->()-[:NEXT|BRANCH|BELOW|ENTERS|CONTINUES*]->()
 RETURN flow
 ```
 

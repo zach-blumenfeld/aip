@@ -69,7 +69,7 @@ unless forced (`aip run name@rev --force`). Publishing its bundle again brings i
 bytes against its hash, the source and files against the bundle id, and the stored graph against
 the one the stored source compiles to. A file that is not a bundle, was edited by hand, or is of
 another language version is refused with the bundle error's own kind (422 `not_a_bundle`,
-`bundle_tampered`, `bundle_language_version`), and nothing is stored.
+`bundle_tampered`, `bundle_language_version`, `bundle_format`), and nothing is stored.
 
 **A bundle handed back is the bundle's own subgraph**, read out of the store and written to a
 new `.rl`. Its bytes differ from the file that was uploaded, and its id does not: the id is the

@@ -90,7 +90,7 @@ Everything raises a subclass of `aip.AipError`, whose `kind` uses the CLI's voca
 |---|---|
 | `aip.RunError` | a run stopped on an error; `error` is the CLI's error object, plus `step`, `run_id`, `resumable`, `run_file`, `recorded`, `cause` (the exception behind it, if any) and `stopped` (False when the call changed nothing: a refused answer, a run with nothing to resume) |
 | `aip.CompileError` | a program directory that does not compile; `diagnostics` are the compiler's |
-| `aip.InvalidBundle` | an `.rl` that is not a usable bundle; `kind` is the bundle error's code (`not_a_bundle`, `bundle_tampered`, `bundle_language_version`) |
+| `aip.InvalidBundle` | an `.rl` that is not a usable bundle; `kind` is the bundle error's code (`not_a_bundle`, `bundle_tampered`, `bundle_language_version`, `bundle_format`) |
 | `aip.NotFound` | a target that is neither a folder, a bundle file, nor a name the server knows. For a published name the message is the server's and the same from `run`, `describe`, `pull` and `get`: `no procedure 'billing-support'; did you mean `billing_support`?` (the hint when the name with `_` for `-` is published), `no revision 7 of billing_support`, `billing_support has no live revision` |
 | `aip.RetiredRevision` | `run("name@revision")` on a retired revision (`kind` `retired`); `run(..., force=True)` runs it anyway |
 | `aip.NoServer` | a catalog call, or a reference not in the cache, with no server configured |

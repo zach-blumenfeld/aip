@@ -340,6 +340,30 @@ Zach decided the product questions they raised; milestones L6 and R5 carry them.
     lists what its step reads and produces; traffic over the canvas is worth doing once the
     canvas has been used).
 
+46. **Settled 2026-11-09 (L7), revising part of item 12.** `Again` goes. `Again <step>` let a
+    step in a loop body re-run a step written before the loop, and was the one edge (`AGAIN`)
+    that closed a cycle outside a loop node. Zach, after reading the console's graph of
+    ticket-triage: "Again goes." ticket-triage and make_procedure wrote the check before the
+    loop, a lone `fix` in the body, and `Again check` jumping back out, while fixed-policy and
+    dynamic-policy wrote the check inside the body: one idea two ways, and the `Again` way made
+    a loop whose pass (`revise.iterations`, the record's nesting, the picture) did not contain
+    its own test. The rule now: the check goes inside the loop, `Until` watches its key, and
+    every cycle in a bundle is a loop node, `ENTERS` in and `CONTINUES` back. What it costs:
+    (a) `iterations` counts checks, so work that passes its first check leaves 1, where the
+    check-before shape left 0. (b) A cap reached after a fix leaves that fix unchecked, so a
+    loop that checks then fixes takes `At_Most n+1` for `n` checked fixes; ticket-triage went
+    from 3 to 4 and make_procedure from 5 to 6, and in the last pass the agent is still asked
+    for a fix nothing will check (the task says `last_pass: true`). An `Else_Fail` loop that
+    could skip that last fix would need the cap to be tested where the check fails, which is
+    a second meaning for the cap; not done. (c) The parser still knows the word, and its
+    aliases `Redo` and `Redo_Step`, only to say what to write instead ("is gone: write the
+    step inside the loop and end it with `Continue`"). (d) The language version stays 0.9,
+    since nothing is released, so a bundle an earlier 0.9 compiler wrote with an `AGAIN` edge
+    is refused by name, `bundle_format`, rather than as a source that no longer compiles.
+    (e) `Until` is tested at the loop node before each pass and the moment the watched key is
+    produced in the body; the engine already did exactly that, and the spec now says it in
+    those words.
+
 ## Zach's rough notes (2026-11-07, verbatim)
 
 We want to show

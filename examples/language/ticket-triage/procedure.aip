@@ -38,7 +38,7 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
   Task_Agent draft "Write a reply that follows the policy." {
     Read ticket, policy
     Produce reply: string
-    Next_Step check
+    Next_Step revise
   }
 
   Execute escalate "Open a ticket in the tier-2 queue." {
@@ -49,18 +49,18 @@ For each_ticket Over tickets As ticket, At_Most 50, Collect reply Into replies {
     Continue
   }
 
-  Execute check "Does the reply quote the policy correctly?" {
-    Read reply, policy
-    Run_Script scripts/policy_check.py
-    Produce passed: true_or_false
-    Next_Step revise
-  }
+  Loop revise Until passed, At_Most 4, Else_Fail {
+    Execute check "Does the reply quote the policy correctly?" {
+      Read reply, policy
+      Run_Script scripts/policy_check.py
+      Produce passed: true_or_false
+      Next_Step fix
+    }
 
-  Loop revise Until passed, At_Most 3, Else_Fail {
     Task_Agent fix "Revise the reply so it quotes the policy correctly." {
       Read reply, policy
       Produce reply: string
-      Again check
+      Continue
     }
 
     Continue

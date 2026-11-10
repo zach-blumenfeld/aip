@@ -144,15 +144,15 @@ class Loops(unittest.TestCase):
         [each] = [i for i in p.items if isinstance(i, s.ForLoop)]
         self.assertEqual((each.name, each.over.dotted, each.item, each.at_most), ("each_ticket", "tickets", "ticket", 50))
         self.assertEqual(each.collect, s.Collect("reply", "replies"))
-        self.assertEqual([b.name for b in each.body], ["classify", "by_tone", "draft", "escalate", "check", "revise"])
+        self.assertEqual([b.name for b in each.body], ["classify", "by_tone", "draft", "escalate", "revise"])
         self.assertEqual(each.exit, s.Flow("Next_Step", "summarize"))
         revise = each.body[-1]
         self.assertIsInstance(revise, s.Loop)
-        self.assertEqual((revise.mode, revise.at_most, revise.at_cap), ("Until", 3, "Else_Fail"))
+        self.assertEqual((revise.mode, revise.at_most, revise.at_cap), ("Until", 4, "Else_Fail"))
         self.assertEqual(revise.until, s.Condition(s.KeyRef(["passed"])))
         self.assertEqual(revise.exit, s.Flow("Continue"), "a nested loop may end the outer pass when it exits")
-        self.assertEqual((revise.line, revise.column), (59, 3))
-        self.assertEqual(revise.body[0].flow, s.Flow("Again", "check"))
+        self.assertEqual((revise.line, revise.column), (52, 3))
+        self.assertEqual([(st.name, st.flow) for st in revise.body], [("check", s.Flow("Next_Step", "fix")), ("fix", s.Flow("Continue"))])
         self.assertEqual([st.name for st in p.steps()][-2:], ["summarize", None])
         self.assertEqual([lp.name for lp in p.loops()], ["each_ticket", "revise"])
 

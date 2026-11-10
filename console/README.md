@@ -69,7 +69,7 @@ Routes are hash-based.
 The procedure page's main view. Steps are nodes with their kind; a `For` or a `Loop` is a frame
 around the steps of its body, with its header; the arrows are the bundle's control edges: `NEXT`,
 a route's `BRANCH`es and its `BELOW` (the confidence check) labelled, the way into a loop's body,
-`CONTINUES` along a rail back to the frame's head, `AGAIN` along a rail back to the earlier step.
+`CONTINUES` along a rail back to the loop. Every cycle is a loop node, so no other arrow goes back.
 Two ways between the same two steps are one arrow that names both (`< 0.9 · angry`). Click a node,
 or a frame's header, to read what it reads and produces and the lines of `procedure.aip` that wrote
 it. It has three modes, and the card canvas is the fourth:

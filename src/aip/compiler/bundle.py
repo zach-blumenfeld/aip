@@ -48,7 +48,7 @@ SKIPPED_FILES = (".DS_Store",)
 
 class BundleError(Exception):
     """A bundle that cannot be used. `code` is one of `not_a_bundle`, `bundle_language_version`,
-    `bundle_tampered`, `export_target`."""
+    `bundle_format`, `bundle_tampered`, `export_target`."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -163,6 +163,16 @@ ID_LABELS = {"procedure": "Procedure", "step": "Step", "loop": "Loop", "data": "
 BUNDLE_LABELS = tuple(ID_LABELS.values())
 
 
+# Edge types an earlier compiler of this language version wrote and this one does not, each with
+# what replaced it: a bundle carrying one is refused by name (`bundle_format`) instead of as a
+# source that no longer compiles.
+RETIRED_EDGES = {"AGAIN": "a loop's check is written inside its body, and every cycle is a loop node"}
+
+
+def _edges(types: list[str]) -> str:
+    return ("an " if types[0][0] in "AEIOU" else "a ") + " and ".join(types) + (" edge" if len(types) == 1 else " edges")
+
+
 def _label_of(id: str) -> str:
     return ID_LABELS[id.split(":", 1)[0]]
 
@@ -240,6 +250,10 @@ def read_bundle(path: Path | str) -> Bundle:
     language = header.get("language_version")
     if language != LANGUAGE_VERSION:
         raise BundleError("bundle_language_version", f"{target} is language {language}; this compiler is language {LANGUAGE_VERSION}")
+    gone = sorted({e.type for e in stored.edges if e.type in RETIRED_EDGES})
+    if gone:
+        raise BundleError("bundle_format", f"{target} carries {_edges(gone)}, which a bundle no longer has ({RETIRED_EDGES[gone[0]]}); "
+                          "compile its folder again with this aip")
     source = header["source"]
     files = []
     for node in stored.with_label("File"):

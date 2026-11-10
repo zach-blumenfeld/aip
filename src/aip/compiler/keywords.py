@@ -43,7 +43,6 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "Use": ("Uses", "Asset", "Reference"),
     "Next_Step": ("Next", "Go_To"),
     "Continue": ("Next_Pass",),
-    "Again": ("Redo", "Redo_Step"),
     # loops
     "For": ("For_Each",),
     "Loop": (),
@@ -82,7 +81,7 @@ def is_keyword(word: str, *canonical: str) -> bool:
 STEP_KINDS = ("Start", "Decide", "Route", "Aggregate", "Execute", "Task_Agent", "End")
 LOOP_KINDS = ("For", "Loop")
 HEADER_CLAUSES = ("Use_When", "Do_Not_Use_When", "Requires", "Avoid")
-FLOW_CLAUSES = ("Next_Step", "Continue", "Again")
+FLOW_CLAUSES = ("Next_Step", "Continue")
 
 # Types are lowercase and never keywords; `type_name()` folds the aliases.
 TYPE_ALIASES: dict[str, tuple[str, ...]] = {

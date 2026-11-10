@@ -64,7 +64,7 @@
 .aipc-port:hover { background: var(--aipc-fill); }
 .aipc-port-label { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600; }
 .aipc-port-below .aipc-port-label { color: var(--aipc-Route); }
-.aipc-port-continue .aipc-port-label, .aipc-port-again .aipc-port-label { color: var(--aipc-loop); }
+.aipc-port-continue .aipc-port-label { color: var(--aipc-loop); }
 .aipc-port-arrow { flex: none; opacity: 0.6; }
 .aipc-port-quote { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.75; }
 
@@ -85,7 +85,7 @@
 .aipc-wire { fill: none; stroke: color-mix(in srgb, currentColor 45%, transparent); stroke-width: 1.3; }
 .aipc-wire.lit { stroke: currentColor; stroke-width: 2; }
 .aipc-wire-below { stroke-dasharray: 5 3; }
-.aipc-wire-continue, .aipc-wire-again { stroke: color-mix(in srgb, var(--aipc-loop) 65%, transparent); }
+.aipc-wire-continue { stroke: color-mix(in srgb, var(--aipc-loop) 65%, transparent); }
 .aipc-wires marker path { fill: color-mix(in srgb, currentColor 60%, transparent); }
 
 .aipc-detail {

@@ -116,7 +116,7 @@ def test_the_language_page_example_compiles_and_its_keywords_are_the_language():
     lines = [line.strip() for line in fragment.splitlines()]
     assert any(whole[i:i + len(lines)] == lines for i in range(len(whole))), "the Aggregate card is not dynamic-policy's any more"
     named = set(re.findall(r"`([A-Z][a-z]+(?:_[A-Z][a-z]+)*)\b", text))
-    assert {"Task_Agent", "Confidence_Below", "Collect", "Else_Exit", "Again", "Aggregations"} <= named
+    assert {"Task_Agent", "Confidence_Below", "Collect", "Else_Exit", "Continue", "Aggregations"} <= named
     for word in named:
         assert keyword(word) == word, f"the language page names `{word}`, which is not a keyword's canonical spelling"
 

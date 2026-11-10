@@ -340,13 +340,13 @@ def test_describe_nests_a_loops_steps_under_its_header():
     d = local().describe(example_dir("ticket-triage"))
     loops = {l["name"]: l for l in d.data["loops"]}
     assert loops["each_ticket"]["header"] == "Over tickets As ticket, At_Most 50, Collect reply Into replies"
-    assert loops["revise"]["header"] == "Until passed, At_Most 3, Else_Fail"
-    assert (loops["each_ticket"]["loop"], loops["revise"]["loop"], loops["revise"]["body"]) == (None, "each_ticket", ["fix"])
+    assert loops["revise"]["header"] == "Until passed, At_Most 4, Else_Fail"
+    assert (loops["each_ticket"]["loop"], loops["revise"]["loop"], loops["revise"]["body"]) == (None, "each_ticket", ["check", "fix"])
     assert {s["name"]: s["loop"] for s in d.steps}["fix"] == "revise"
     rows = [line for line in d.summary().splitlines() if line.startswith("  ")]
     names = [line.split()[0] for line in rows[rows.index(next(r for r in rows if r.split()[0] == "start")):]]
-    assert names[:10] == ["start", "each_ticket", "classify", "by_tone", "draft", "escalate", "check", "revise", "fix", "summarize"]
-    assert "    revise     Loop        Until passed, At_Most 3, Else_Fail" in d.summary()
+    assert names[:10] == ["start", "each_ticket", "classify", "by_tone", "draft", "escalate", "revise", "check", "fix", "summarize"]
+    assert "    revise     Loop        Until passed, At_Most 4, Else_Fail" in d.summary()
     assert "      fix      Task_Agent" in d.summary()
     assert "LOOPS" not in d.summary()
     fixed = local().describe(example_dir("fixed-policy"))

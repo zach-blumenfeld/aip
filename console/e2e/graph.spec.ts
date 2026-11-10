@@ -23,7 +23,7 @@ test.beforeAll(() => {
 
   // ticket_triage, three tickets: the For runs three passes. The angry one is escalated by the script; the
   // two calm ones wait at `draft` together. One reply quotes the policy and passes the check; the other does
-  // not, so its pass goes round the inner loop once (`fix`, then `Again check`).
+  // not, so its pass goes round the inner loop twice (`check`, `fix`, then `check` on the fixed reply).
   const tickets = ["Can I get a copy of my March invoice? [calm]", "Third double charge this year! [angry]", "How do I move to the annual plan? [calm]"];
   let paused = run(TRIAGE, { tickets, policy: POLICY }, who);
   ids.drafting = paused.run_id as string;
@@ -201,7 +201,7 @@ test("ticket-triage: a loop is a node with its body beside it, a cycle of arrows
   await expect(outer).toHaveAttribute("data-kind", "For");
   await expect(inner).toHaveAttribute("data-kind", "Loop");
   await expect(outer.getByTestId("loop-summary")).toHaveText("Over tickets, At_Most 50");
-  await expect(inner.getByTestId("loop-summary")).toHaveText("Until passed, At_Most 3");
+  await expect(inner.getByTestId("loop-summary")).toHaveText("Until passed, At_Most 4");
 
   // The body hangs to the right of its loop node and starts level with it; the step after the loop is
   // straight below the loop node, past the whole body.
@@ -221,7 +221,12 @@ test("ticket-triage: a loop is a node with its body beside it, a cycle of arrows
   await expect(edge(page, "each_ticket", "summarize")).toHaveAttribute("data-kinds", "next");
   await expect(edge(page, "escalate", "each_ticket").getByTestId("branch-label")).toHaveText("continue");
   await expect(edge(page, "revise", "each_ticket")).toHaveAttribute("data-kinds", "continue");
-  await expect(edge(page, "fix", "check").getByTestId("branch-label")).toHaveText("again");
+  // Every cycle is a loop node: the check is the first step of the loop's body, and the fix goes back to the loop.
+  await expect(edge(page, "draft", "revise")).toHaveAttribute("data-kinds", "next");
+  await expect(edge(page, "revise", "check")).toHaveAttribute("data-kinds", "enter");
+  await expect(edge(page, "check", "fix")).toHaveAttribute("data-kinds", "next");
+  await expect(edge(page, "fix", "revise").getByTestId("branch-label")).toHaveText("continue");
+  await expect(edge(page, "fix", "check")).toHaveCount(0);
   await expect(edge(page, "by_tone", "escalate").getByTestId("branch-label")).toHaveText("< 0.6 · angry");
   // No label sits on a node.
   for (const label of await page.getByTestId("branch-label").all()) {
@@ -299,7 +304,7 @@ test("ticket-triage: every mode, down and to the right", async ({ page }) => {
   await expect(loopNode(page, "each_ticket")).toHaveAttribute("data-runs", String(runs));
   // A run counts once on an arrow however many passes took it; both runs wait somewhere.
   await expect(edge(page, "classify", "by_tone")).toHaveAttribute("data-runs", String(runs));
-  expect(Number(await edge(page, "fix", "check").getAttribute("data-runs"))).toBeGreaterThanOrEqual(1);
+  expect(Number(await edge(page, "fix", "revise").getAttribute("data-runs"))).toBeGreaterThanOrEqual(1);
   const table = page.getByRole("table", { name: "run traffic" });
   expect(Number(await table.locator('[data-testid="traffic-row"][data-step="draft"]').getAttribute("data-waiting"))).toBeGreaterThanOrEqual(1);
   expect(Number(await table.locator('[data-testid="traffic-row"][data-step="summarize"]').getAttribute("data-waiting"))).toBeGreaterThanOrEqual(1);
@@ -345,11 +350,13 @@ test("a run of ticket_triage whose For ran three passes: its path over the graph
   await expect(edge(drawn, "by_tone", "draft")).toHaveAttribute("data-times", "2");
   await expect(edge(drawn, "by_tone", "escalate")).toHaveAttribute("data-times", "1");
   await expect(edge(drawn, "escalate", "each_ticket")).toHaveAttribute("data-taken", "true");
-  // One draft failed the check: its pass went round the inner loop once, so `check` ran three times in two passes.
-  await expect(edge(drawn, "draft", "check")).toHaveAttribute("data-times", "2");
-  await expect(edge(drawn, "revise", "fix")).toHaveAttribute("data-times", "1");
-  await expect(edge(drawn, "fix", "check")).toHaveAttribute("data-times", "1");
-  await expect(edge(drawn, "check", "revise")).toHaveAttribute("data-times", "3");
+  // Both drafts went into the review loop, whose first step is the check. One draft failed it: that ticket's
+  // loop made a second pass, so `check` ran three times, `fix` once, and the fix went back to the loop.
+  await expect(edge(drawn, "draft", "revise")).toHaveAttribute("data-times", "2");
+  await expect(edge(drawn, "revise", "check")).toHaveAttribute("data-times", "3");
+  await expect(edge(drawn, "check", "fix")).toHaveAttribute("data-times", "1");
+  await expect(edge(drawn, "fix", "revise")).toHaveAttribute("data-times", "1");
+  await expect(edge(drawn, "fix", "check")).toHaveCount(0);
   await expect(edge(drawn, "revise", "each_ticket")).toHaveAttribute("data-times", "2");
   // The For is over and the run waits at the step after it; the end is not reached yet.
   await expect(edge(drawn, "each_ticket", "summarize")).toHaveAttribute("data-taken", "true");
@@ -362,7 +369,8 @@ test("a run of ticket_triage whose For ran three passes: its path over the graph
   await expect(loopNode(drawn, "each_ticket")).toHaveAttribute("data-visited", "true");
   await expect(loopNode(drawn, "each_ticket").getByTestId("loop-passes").locator("text")).toHaveText("3 passes");
   await expect(loopNode(drawn, "revise")).toHaveAttribute("data-visited", "true");
-  await expect(loopNode(drawn, "revise").getByTestId("loop-passes").locator("text")).toHaveText("1 pass");
+  // (the review loop's passes over the whole run: one for the reply that passed its first check, two for the one that was fixed)
+  await expect(loopNode(drawn, "revise").getByTestId("loop-passes").locator("text")).toHaveText("3 passes");
 
   // With it, the record as C1 built it: the three passes under the For. A procedure with loops is too wide
   // for the column beside the record (a body hangs beside its loop), so the graph takes the row and the

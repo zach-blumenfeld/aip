@@ -164,9 +164,9 @@ class AggregationsClause(Clause):
 
 @dataclass
 class Flow(Node):
-    """Where a step goes: `Next_Step <step>`, `Continue`, or `Again <step>`; also a route
+    """Where a step goes: `Next_Step <step>` or `Continue`; also a route
     branch's target, which is a step or `Continue`."""
-    kind: str  # Next_Step, Continue or Again
+    kind: str  # Next_Step or Continue
     step: str | None = None
 
 

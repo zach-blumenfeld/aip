@@ -118,6 +118,18 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   failures as ordinary results; it reads `self._tool_manager`, a private attribute of the SDK
   (2.3.0). `tests/test_mcp.py` fails if a new SDK moves it.
 
+## What L7 left (2026-11-09)
+
+- **`Again` is gone; every cycle is a loop node.** A check and its fix are both in the loop
+  body (spec 2.6, plan question 46). Old material still shows the other shape: the reviews
+  under `docs/language/reviews/`, the C3 screenshots in `console/docs/screenshots/c3/`, and the
+  K1 and S3 comments on the plan. `console/docs/screenshots/loops/` is current.
+- **The console's unit tests read `console/test/fixtures/<example>.graph.json`**, which is the
+  `graph` of `aip compile --check --json examples/language/<example>` written with
+  `json.dumps(graph, indent=1)` and a final newline. Write the file again when an example or
+  the graph's schema changes (L7 did for ticket-triage); the `*.run.json` records beside them
+  are runs of billing-support, fixed-policy and dynamic-policy, which L7 did not touch.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

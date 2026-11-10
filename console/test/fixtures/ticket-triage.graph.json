@@ -7,7 +7,7 @@
    ],
    "properties": {
     "id": "procedure",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "ticket_triage",
     "description": "Classify a batch of support tickets, draft replies, escalate the uncertain ones.",
     "language_version": "0.9",
@@ -27,7 +27,7 @@
    ],
    "properties": {
     "id": "file:scripts/escalate.py",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "path": "scripts/escalate.py",
     "size": 398,
     "mode": 420,
@@ -41,7 +41,7 @@
    ],
    "properties": {
     "id": "file:scripts/policy_check.py",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "path": "scripts/policy_check.py",
     "size": 505,
     "mode": 420,
@@ -56,7 +56,7 @@
    ],
    "properties": {
     "id": "step:start",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "start",
     "kind": "Start",
     "description": "The batch of tickets and the policy every reply must follow.",
@@ -73,7 +73,7 @@
    ],
    "properties": {
     "id": "data:tickets",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "tickets",
     "type": "list"
    }
@@ -85,7 +85,7 @@
    ],
    "properties": {
     "id": "data:policy",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "policy",
     "type": "string"
    }
@@ -98,7 +98,7 @@
    ],
    "properties": {
     "id": "loop:each_ticket",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "each_ticket",
     "kind": "For",
     "mode": "Over",
@@ -119,7 +119,7 @@
    ],
    "properties": {
     "id": "data:ticket",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "ticket"
    }
   },
@@ -130,7 +130,7 @@
    ],
    "properties": {
     "id": "data:reply",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "reply",
     "type": "string"
    }
@@ -142,7 +142,7 @@
    ],
    "properties": {
     "id": "data:replies",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "replies",
     "type": "list"
    }
@@ -155,7 +155,7 @@
    ],
    "properties": {
     "id": "step:classify",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "classify",
     "kind": "Decide",
     "description": "What kind of ticket is this and how does the customer sound?",
@@ -174,7 +174,7 @@
    ],
    "properties": {
     "id": "data:classification",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "classification",
     "type": "decision"
    }
@@ -186,7 +186,7 @@
    ],
    "properties": {
     "id": "question:classify.billing",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "billing",
     "type": "true_or_false",
     "instruction": "Is this a billing question?",
@@ -204,7 +204,7 @@
    ],
    "properties": {
     "id": "question:classify.tone",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "tone",
     "type": "choice",
     "labels": [
@@ -227,7 +227,7 @@
    ],
    "properties": {
     "id": "step:by_tone",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "by_tone",
     "kind": "Route",
     "description": "Calm customers get a drafted reply; angry or uncertain ones are escalated.",
@@ -246,7 +246,7 @@
    ],
    "properties": {
     "id": "step:draft",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "draft",
     "kind": "Task_Agent",
     "description": "Write a reply that follows the policy.",
@@ -264,7 +264,7 @@
    ],
    "properties": {
     "id": "step:escalate",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "escalate",
     "kind": "Execute",
     "description": "Open a ticket in the tier-2 queue.",
@@ -282,9 +282,41 @@
    ],
    "properties": {
     "id": "data:queue",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "queue",
     "type": "string"
+   }
+  },
+  {
+   "id": "loop:revise",
+   "labels": [
+    "Loop"
+   ],
+   "properties": {
+    "id": "loop:revise",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
+    "name": "revise",
+    "kind": "Loop",
+    "mode": "Until",
+    "at_most": 4,
+    "at_cap": "Else_Fail",
+    "until_answer": "passed",
+    "line": 52,
+    "column": 3,
+    "end_line": 67,
+    "end_column": 4
+   }
+  },
+  {
+   "id": "data:passed",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:passed",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
+    "name": "passed",
+    "type": "true_or_false"
    }
   },
   {
@@ -295,47 +327,15 @@
    ],
    "properties": {
     "id": "step:check",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "check",
     "kind": "Execute",
     "description": "Does the reply quote the policy correctly?",
-    "line": 52,
-    "column": 3,
-    "end_line": 57,
-    "end_column": 4,
+    "line": 53,
+    "column": 5,
+    "end_line": 58,
+    "end_column": 6,
     "script": "scripts/policy_check.py"
-   }
-  },
-  {
-   "id": "data:passed",
-   "labels": [
-    "Data"
-   ],
-   "properties": {
-    "id": "data:passed",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
-    "name": "passed",
-    "type": "true_or_false"
-   }
-  },
-  {
-   "id": "loop:revise",
-   "labels": [
-    "Loop"
-   ],
-   "properties": {
-    "id": "loop:revise",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
-    "name": "revise",
-    "kind": "Loop",
-    "mode": "Until",
-    "at_most": 3,
-    "at_cap": "Else_Fail",
-    "until_answer": "passed",
-    "line": 59,
-    "column": 3,
-    "end_line": 67,
-    "end_column": 4
    }
   },
   {
@@ -346,7 +346,7 @@
    ],
    "properties": {
     "id": "step:fix",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "fix",
     "kind": "Task_Agent",
     "description": "Revise the reply so it quotes the policy correctly.",
@@ -364,7 +364,7 @@
    ],
    "properties": {
     "id": "step:summarize",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "summarize",
     "kind": "Task_Agent",
     "description": "Summarize the batch for the team lead.",
@@ -381,7 +381,7 @@
    ],
    "properties": {
     "id": "data:summary",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "summary",
     "type": "string"
    }
@@ -394,7 +394,7 @@
    ],
    "properties": {
     "id": "step:end",
-    "bundle_id": "306a9b6ef011b2b496e84282d5c230d26dda7116c51317a240682c84444e8976",
+    "bundle_id": "6db28c6c8b0cde8c1709c4ea317522ea4156c082ecb247b95bc7fecf208c630e",
     "name": "end",
     "kind": "End",
     "description": "Every ticket has a reply or an escalation, and the lead has a summary.",
@@ -579,17 +579,9 @@
   {
    "type": "CONTAINS",
    "start": "loop:each_ticket",
-   "end": "step:check",
-   "properties": {
-    "order": 4
-   }
-  },
-  {
-   "type": "CONTAINS",
-   "start": "loop:each_ticket",
    "end": "loop:revise",
    "properties": {
-    "order": 5
+    "order": 4
    }
   },
   {
@@ -761,12 +753,12 @@
   {
    "type": "NEXT",
    "start": "step:draft",
-   "end": "step:check",
+   "end": "loop:revise",
    "properties": {
     "line": 41,
     "column": 5,
     "end_line": 41,
-    "end_column": 20
+    "end_column": 21
    }
   },
   {
@@ -832,6 +824,62 @@
    }
   },
   {
+   "type": "HAS_LOOP",
+   "start": "procedure",
+   "end": "loop:revise",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:passed",
+   "properties": {}
+  },
+  {
+   "type": "WATCHES",
+   "start": "loop:revise",
+   "end": "data:passed",
+   "properties": {
+    "line": 52,
+    "column": 21,
+    "end_line": 52,
+    "end_column": 27
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:revise",
+   "end": "step:check",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "ENTERS",
+   "start": "loop:revise",
+   "end": "step:check",
+   "properties": {}
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:revise",
+   "end": "step:fix",
+   "properties": {
+    "order": 1
+   }
+  },
+  {
+   "type": "CONTINUES",
+   "start": "loop:revise",
+   "end": "loop:each_ticket",
+   "properties": {
+    "line": 66,
+    "column": 5,
+    "end_line": 66,
+    "end_column": 13
+   }
+  },
+  {
    "type": "HAS_STEP",
    "start": "procedure",
    "end": "step:check",
@@ -842,10 +890,10 @@
    "start": "data:reply",
    "end": "step:check",
    "properties": {
-    "line": 53,
-    "column": 10,
-    "end_line": 53,
-    "end_column": 15
+    "line": 54,
+    "column": 12,
+    "end_line": 54,
+    "end_column": 17
    }
   },
   {
@@ -853,27 +901,21 @@
    "start": "data:policy",
    "end": "step:check",
    "properties": {
-    "line": 53,
-    "column": 17,
-    "end_line": 53,
-    "end_column": 23
+    "line": 54,
+    "column": 19,
+    "end_line": 54,
+    "end_column": 25
    }
-  },
-  {
-   "type": "SUPPLIES",
-   "start": "procedure",
-   "end": "data:passed",
-   "properties": {}
   },
   {
    "type": "PRODUCES",
    "start": "step:check",
    "end": "data:passed",
    "properties": {
-    "line": 55,
-    "column": 13,
-    "end_line": 55,
-    "end_column": 34
+    "line": 56,
+    "column": 15,
+    "end_line": 56,
+    "end_column": 36
    }
   },
   {
@@ -885,54 +927,12 @@
   {
    "type": "NEXT",
    "start": "step:check",
-   "end": "loop:revise",
-   "properties": {
-    "line": 56,
-    "column": 5,
-    "end_line": 56,
-    "end_column": 21
-   }
-  },
-  {
-   "type": "HAS_LOOP",
-   "start": "procedure",
-   "end": "loop:revise",
-   "properties": {}
-  },
-  {
-   "type": "WATCHES",
-   "start": "loop:revise",
-   "end": "data:passed",
-   "properties": {
-    "line": 59,
-    "column": 21,
-    "end_line": 59,
-    "end_column": 27
-   }
-  },
-  {
-   "type": "CONTAINS",
-   "start": "loop:revise",
    "end": "step:fix",
    "properties": {
-    "order": 0
-   }
-  },
-  {
-   "type": "ENTERS",
-   "start": "loop:revise",
-   "end": "step:fix",
-   "properties": {}
-  },
-  {
-   "type": "CONTINUES",
-   "start": "loop:revise",
-   "end": "loop:each_ticket",
-   "properties": {
-    "line": 66,
-    "column": 5,
-    "end_line": 66,
-    "end_column": 13
+    "line": 57,
+    "column": 7,
+    "end_line": 57,
+    "end_column": 20
    }
   },
   {
@@ -975,14 +975,14 @@
    }
   },
   {
-   "type": "AGAIN",
+   "type": "CONTINUES",
    "start": "step:fix",
-   "end": "step:check",
+   "end": "loop:revise",
    "properties": {
     "line": 63,
     "column": 7,
     "end_line": 63,
-    "end_column": 18
+    "end_column": 15
    }
   },
   {

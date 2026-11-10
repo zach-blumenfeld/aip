@@ -875,7 +875,7 @@ def triage_answers(request):
 
 @needs_relate
 class TicketTriage(EngineCase):
-    """A `For` whose body is a route, a task, a script and a review loop with `Again`: passes
+    """A `For` whose body is a route, a task, a script and a review loop (check, then fix): passes
     drive on until each pauses, one pause carries the passes waiting at the same step, and the
     record is the same at every batch size."""
 
@@ -919,16 +919,20 @@ class TicketTriage(EngineCase):
             ("start", None),
             ("classify", 0), ("by_tone", 0), ("draft", 0), ("check", 0), ("revise", 0),
             ("classify", 1), ("by_tone", 1), ("escalate", 1),
-            ("classify", 2), ("by_tone", 2), ("draft", 2), ("check", 2), ("fix", 0), ("check", 0), ("revise", 2),
+            ("classify", 2), ("by_tone", 2), ("draft", 2), ("check", 0), ("fix", 0), ("check", 1), ("revise", 2),
             ("each_ticket", None), ("summarize", None), ("end", None)])
-        self.assertEqual(run.history[5]["exit"], {"reason": "until", "where": "head", "resolution": {
+        # L7: the check is the first step of the loop's body, so the loop ends where it passes
+        self.assertEqual(run.history[5]["exit"], {"reason": "until", "where": "check", "resolution": {
             "answer": "passed", "value": True, "holds": True, "probability": None, "barred": False}})
-        self.assertEqual(run.history[5]["result"], {"iterations": 0}, "the check passed before the first pass")
-        fix, check_again, revise = run.history[13], run.history[14], run.history[15]
+        self.assertEqual(run.history[5]["result"], {"iterations": 1}, "the first check passed: one pass, and fix never ran")
+        self.assertEqual(run.history[4]["passes"], [{"loop": "each_ticket", "pass": 0}, {"loop": "revise", "pass": 0}])
+        first_check, fix, check_again, revise = run.history[12], run.history[13], run.history[14], run.history[15]
+        self.assertEqual(first_check["until"]["where"], "head", "the test at the head that let the pass run is on its first entry")
         self.assertEqual(fix["passes"], [{"loop": "each_ticket", "pass": 2}, {"loop": "revise", "pass": 0}])
-        self.assertEqual(check_again["passes"], fix["passes"], "Again check re-runs check at the loop's level, during the pass")
+        self.assertEqual(first_check["passes"], fix["passes"], "a pass is its check and the fix the check asked for")
+        self.assertEqual(check_again["passes"], [{"loop": "each_ticket", "pass": 2}, {"loop": "revise", "pass": 1}], "the next pass checks the fix")
         self.assertEqual(check_again["result"], {"passed": {"value": True}})
-        self.assertEqual((revise["exit"]["reason"], revise["exit"]["where"], revise["result"]), ("until", "head", {"iterations": 1}))
+        self.assertEqual((revise["exit"]["reason"], revise["exit"]["where"], revise["result"]), ("until", "check", {"iterations": 2}))
         self.assertEqual(run.history[8]["result"]["queue"], "tier-2")
         each = run.history[16]
         self.assertEqual((each["kind"], each["exit"], each["result"]["iterations"]), ("For", {"reason": "items"}, 3))
@@ -955,7 +959,7 @@ class TicketTriage(EngineCase):
         self.assertEqual([(e["step"], e["pass"]) for e in waiting], [
             ("start", None), ("classify", 0), ("by_tone", 0), ("draft", 0), ("check", 0), ("revise", 0),
             ("classify", 1), ("by_tone", 1), ("escalate", 1),
-            ("classify", 2), ("by_tone", 2), ("draft", 2), ("check", 2)], "each pass's entries stand together; pass 2 waits in its revise loop")
+            ("classify", 2), ("by_tone", 2), ("draft", 2), ("check", 0)], "each pass's entries stand together; pass 2 waits in its revise loop")
         self.assertEqual([e for e in waiting if e in held], held, "what the record showed before is still there, in the same order")
         run = engine.resume(run, {"reply": "We refund within 30 days. I checked your plan."})
         run = engine.resume(run, {"summary": "two replies, one escalation"})

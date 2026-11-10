@@ -67,18 +67,21 @@ test("a loop is a frame around its body, with its header and its own way out", (
   assert.deepEqual(model.cards["step:summarize_check"].sections[1], { label: "aggregates", rows: ["all_hold: All policy_check With Confidence_Above 0.7"] });
 });
 
-test("loops nest: a Loop inside a For, an Again port, a For's header", () => {
+test("loops nest: a Loop inside a For, its check and fix inside it, a For's header", () => {
   const model = modelOf(graph("ticket-triage"));
   assert.deepEqual(model.top, ["step:start", "loop:each_ticket", "step:summarize", "step:end"]);
   const each = model.frames["loop:each_ticket"];
   assert.equal(each.kind, "For");
   assert.equal(each.header, "Over tickets As ticket, At_Most 50, Collect reply Into replies");
-  assert.deepEqual(each.children, ["step:classify", "step:by_tone", "step:draft", "step:escalate", "step:check", "loop:revise"]);
+  assert.deepEqual(each.children, ["step:classify", "step:by_tone", "step:draft", "step:escalate", "loop:revise"]);
   const revise = model.frames["loop:revise"];
   assert.equal(revise.parent, "loop:each_ticket");
-  assert.equal(revise.header, "Until passed, At_Most 3, Else_Fail");
+  assert.equal(revise.header, "Until passed, At_Most 4, Else_Fail");
+  assert.deepEqual(revise.children, ["step:check", "step:fix"]);
   assert.deepEqual(revise.ports.map((p) => [p.kind, p.target]), [["continue", "loop:each_ticket"]]);
-  assert.deepEqual(model.cards["step:fix"].ports.map((p) => [p.kind, p.target]), [["again", "step:check"]]);
+  // The check is in the loop it serves, and the fix ends the pass: the only way back is to the loop.
+  assert.deepEqual(model.cards["step:check"].ports.map((p) => [p.kind, p.target]), [["next", "step:fix"]]);
+  assert.deepEqual(model.cards["step:fix"].ports.map((p) => [p.kind, p.target]), [["continue", "loop:revise"]]);
   assert.equal(model.cards["step:start"].ports[0].quote, "for each_ticket");
   assert.equal(depthOf(model, "step:start"), 0);
   assert.equal(depthOf(model, "step:classify"), 1);

@@ -109,7 +109,7 @@ test("loops are frames around their cards, and the canvas pans, zooms and fits",
   await expect(zoom).toHaveText(before!);
 });
 
-test("nested loops nest: a Loop inside a For, with the For's header and an Again port", async ({ page }) => {
+test("nested loops nest: a Loop inside a For, with the For's header and the check inside the Loop", async ({ page }) => {
   await page.goto(`./#/p/${TRIAGE}?view=cards`);
   const outer = page.locator('[data-testid="canvas-frame"][data-loop="each_ticket"]');
   const inner = page.locator('[data-testid="canvas-frame"][data-loop="revise"]');
@@ -117,7 +117,9 @@ test("nested loops nest: a Loop inside a For, with the For's header and an Again
   await expect(outer).toContainText("Over tickets As ticket, At_Most 50, Collect reply Into replies");
   const o = (await outer.boundingBox())!, i = (await inner.boundingBox())!;
   expect(i.x > o.x && i.y > o.y && i.x + i.width < o.x + o.width && i.y + i.height < o.y + o.height).toBe(true);
-  await expect(card(page, "fix").locator('[data-testid="canvas-port"][data-port="again"]')).toHaveAttribute("data-target", "check");
+  await expect(card(page, "check").locator('[data-testid="canvas-port"][data-port="next"]')).toHaveAttribute("data-target", "fix");
+  await expect(card(page, "fix").locator('[data-testid="canvas-port"][data-port="continue"]')).toContainText("the next pass of revise");
+  await expect(page.locator('[data-testid="canvas-port"][data-port="again"]')).toHaveCount(0);
   await expect(card(page, "by_tone").locator('[data-testid="canvas-port"]')).toHaveCount(3);
 });
 

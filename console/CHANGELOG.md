@@ -30,6 +30,7 @@ under way (the Studio on format 0.8) was never released and is superseded by thi
 - **The release workflow** is `.github/workflows/console-release.yml` in the aip repository, runs from `console/`, and tags `console-vX.Y.Z`.
 
 ### Removed
+- **The arrow back to an earlier step.** The language no longer has `Again` (the aip repo's plan, L7): a loop's check is written inside the loop, so every cycle in a procedure is a loop node, in by the arrow from the loop to the first step of its body and back by `continue`. The step graph draws no rail on the far side of a body, the card canvas has no `again` port, and a pass in the record holds its own check.
 - **The Studio** (`src/studio`, its views, `docs/studio.md`, `docs/studio-lint.md`, `examples/studio`, its specs and the runtime-block parity test), with the launcher's `validate`, `upgrade`, `probe` and `handoff` endpoints and the `--aip-spec` option. It was a second model of a procedure with its own serializer and linter. It returns as the card canvas with editing, where every operation is a text edit in `procedure.aip` checked by the compiler (the aip repo's plan, C2).
 - **Skill zips** (upload on the catalog, download on a procedure): a procedure is published as a bundle with `aip publish` and fetched with `aip get`.
 - The hand-rolled step graph and its data-flow and run-traffic modes: the canvas shows what a step reads and produces on its card.

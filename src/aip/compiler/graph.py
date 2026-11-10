@@ -374,7 +374,7 @@ class _Builder:
 
     def flow(self, type: str | None, start: str, flow: s.Flow, path: tuple[str, ...], props: dict | None = None,
              at: s.Node | None = None) -> None:
-        """A `Next_Step`, `Continue` or `Again`, or a route branch (`type` given) whose target may
+        """A `Next_Step` or `Continue`, or a route branch (`type` given) whose target may
         be `Continue`. `Continue` points at the enclosing loop with `continues: true`."""
         props = dict(props or {})
         if flow.kind == "Continue":
@@ -390,7 +390,7 @@ class _Builder:
             if target is None:
                 return  # unknown_step: refused by the checker
             if type is None:
-                type = "NEXT" if flow.kind == "Next_Step" else "AGAIN"
+                type = "NEXT"
         self.edge(type, start, target, props, at=at)
 
     # ------------------------------------------------------------ loops

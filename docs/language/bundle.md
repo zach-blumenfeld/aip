@@ -68,7 +68,6 @@ carry the span of that clause. A property whose value would be null is left out.
 | `STARTS_AT`, `ENDS_AT` | `Procedure` → `Start`, `End` | | where a run begins and ends |
 | `NEXT` | `Step` → `Step` or `Loop`; `Loop` → `Step` or `Loop` | span | `Next_Step`; from a loop, its exit line |
 | `CONTINUES` | `Step` → the enclosing `Loop`; nested `Loop` → outer `Loop` | span | `Continue`: the pass is over; from a nested loop, its exit line |
-| `AGAIN` | `Step` → `Step` or `Loop` | span | `Again <step>` |
 | `BRANCH` | `Route` → `Step` or `Loop` | `value`; `continues: true` when the branch is `Continue` (then the target is the enclosing loop); span | one `<value> -> <step>` line |
 | `BELOW` | `Route` → `Step` or `Loop` | `below`; `continues: true` as for `BRANCH`; span | `Confidence_Below <n> -> <step>` |
 | `PRODUCES` | `Step` → `Data`; `Loop` → `Data` | span | a `Produce` line or a `Start` input; a `For` produces its `Collect Into` list; a loop produces `index` and `iterations`, and the key under its own name (`revise`, read as `revise.index` or `revise.iterations`), where a step reads them |
@@ -96,7 +95,7 @@ difference in any of these is `bundle_tampered`, so a bundle whose source, files
 edited by hand in Cypher does not export and does not run. What is verified is the content read
 back from the graph, not the bytes of the `.rl` file: the engine's file may hold pages that are
 no longer live, and two compilations of one folder share an id and differ byte for byte. The id
-is the artifact's identity; a checksum of the file is not. A bundle of another language version is `bundle_language_version`; a file Relate cannot
+is the artifact's identity; a checksum of the file is not. A bundle of another language version is `bundle_language_version`; one that carries an edge type this schema no longer has is `bundle_format`, naming the edge (an `AGAIN` edge, which a compiler of this language version wrote before every cycle became a loop node: compile the folder again); a file Relate cannot
 open, or one without exactly one `Procedure`, is `not_a_bundle`.
 
 In Cypher, the bundle answers as any Relate store does:

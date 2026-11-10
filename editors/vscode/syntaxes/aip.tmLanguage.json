@@ -166,8 +166,8 @@
       ]
     },
     "flow": {
-      "comment": "Next_Step <step> / Next <step> / Again <step> / Continue",
-      "match": "(?i)^\\s*(Next_Step|Next|Go_To|Again|Redo_Step|Redo)\\b\\s+([a-z][a-z0-9_]*)",
+      "comment": "Next_Step <step> / Next <step> / Continue",
+      "match": "(?i)^\\s*(Next_Step|Next|Go_To)\\b\\s+([a-z][a-z0-9_]*)",
       "captures": {
         "1": {
           "name": "keyword.control.flow.aip"
