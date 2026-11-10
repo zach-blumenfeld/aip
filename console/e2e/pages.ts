@@ -53,6 +53,3 @@ export async function runIdOf(page: Page): Promise<string> {
 /** A step's entry in the record on the page; `nth` picks among the passes of a loop. */
 export const entry = (page: Page | Locator, step: string, nth = 0) =>
   page.locator(`[data-testid="record-entry"][data-step="${step}"]`).nth(nth);
-
-/** A card of the canvas, by its step's name. */
-export const card = (page: Page | Locator, step: string) => page.locator(`[data-testid="canvas-card"][data-step="${step}"]`);

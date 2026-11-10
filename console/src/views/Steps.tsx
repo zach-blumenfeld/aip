@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, describe } from "../api/client";
 import { folderGraph, isFolderMode } from "../api/console";
 import type { RunRecord } from "../api/types";
-import { Canvas } from "../canvas/Canvas.tsx";
-import { sliceOf, type Graph } from "../canvas/model.ts";
+import { sliceOf, type Graph } from "../graph/bundle.ts";
 import { dataEdges, dataKeys, type DataKey } from "../graph/dataflow.ts";
 import { layoutOf, type Direction } from "../graph/layout.ts";
 import { stepGraphOf, type StepGraph as Model } from "../graph/model.ts";
@@ -12,14 +11,13 @@ import { Code } from "../highlight/Code.tsx";
 import { DirectionToggle, SPAN, StepGraph, useDirection } from "./StepGraph";
 import { TrafficSummary, TrafficTable, useTraffic } from "./Traffic";
 
-/** What the Steps section draws: the step graph in one of its three modes, or the card canvas. */
-export type StepsView = "control" | "data" | "traffic" | "cards";
+/** What the Steps section draws: the step graph in one of its three modes. */
+export type StepsView = "control" | "data" | "traffic";
 
 const VIEWS: { view: StepsView; label: string; title: string }[] = [
   { view: "control", label: "control flow", title: "Which step follows which: a route's branches, a loop's passes." },
   { view: "data", label: "data flow", title: "Which step produces each key and which steps read it." },
   { view: "traffic", label: "run traffic", title: "How the recorded runs of this revision went through it." },
-  { view: "cards", label: "cards", title: "One card per step, with what it reads, asks and produces." },
 ];
 
 export const isStepsView = (v: string | null | undefined): v is StepsView => VIEWS.some((x) => x.view === v);
@@ -35,7 +33,7 @@ interface StepsProps {
   onView: (view: StepsView) => void;
 }
 
-/** A procedure's steps: the step graph as control flow, data flow or run traffic, or the card canvas; drawn
+/** A procedure's steps: the step graph as control flow, data flow or run traffic; drawn
  *  down or to the right. Drawn to the right it is wide, and so is a procedure with loops drawn down (a
  *  body hangs beside its loop): the section then takes the whole row of its grid. */
 export function Steps({ graph, source, name, bundleId, view: asked, onView }: StepsProps) {
@@ -53,7 +51,7 @@ export function Steps({ graph, source, name, bundleId, view: asked, onView }: St
   const traffic = useTraffic(model, name, bundleId, view === "traffic");
   useEffect(() => { setSelected(null); setFocusKey(null); }, [graph]);
   const broad = useMemo(() => layoutOf(model, direction).width > SPAN.medium, [model, direction]);
-  const wide = direction === "right" || view === "cards" || broad;
+  const wide = direction === "right" || broad;
 
   return (
     <section className={`steps${wide ? " wide" : ""}`} data-testid="steps" data-view={view} data-direction={direction}>
@@ -69,9 +67,6 @@ export function Steps({ graph, source, name, bundleId, view: asked, onView }: St
         <DirectionToggle direction={direction} onChange={setDirection} />
       </div>
       {traffic && <TrafficSummary state={traffic} />}
-      {view === "cards" ? (
-        <Canvas graph={graph} source={source} direction={direction} height={direction === "right" ? "32rem" : "70vh"} renderCode={(code, first) => <Code text={code} aip firstLine={first} />} />
-      ) : (
         <>
           <div className="graph-scroll">
             <StepGraph graph={model} direction={direction} flow={view === "data" ? flow : undefined}
@@ -81,7 +76,6 @@ export function Steps({ graph, source, name, bundleId, view: asked, onView }: St
           </div>
           {selected && <StepDetail graph={model} id={selected} source={source} onClose={() => setSelected(null)} />}
         </>
-      )}
       {view === "data" && (
         <>
           <p className="muted small" data-testid="data-hint">Pick a key below, or a step on the graph, to draw its arrows: who produces it and who reads it.</p>

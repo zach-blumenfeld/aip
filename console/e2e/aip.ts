@@ -6,10 +6,13 @@ export const E2E = path.resolve(import.meta.dirname, "..", ".aip-e2e");
 
 export const AIP_PORT = Number(process.env.AIP_E2E_PORT ?? 8765);
 export const MODEL_PORT = Number(process.env.MODEL_E2E_PORT ?? 8766);
+export const AGENT_MODEL_PORT = Number(process.env.AGENT_MODEL_E2E_PORT ?? 8767);
 export const CONSOLE_PORT = Number(process.env.CONSOLE_E2E_PORT ?? 5174);
 export const FOLDER_PORT = Number(process.env.FOLDER_E2E_PORT ?? 5175);
 export const SERVER = `http://localhost:${AIP_PORT}`;
 export const MODEL = `http://127.0.0.1:${MODEL_PORT}`;
+/** The stand-in agent model (e2e/agent.mjs), which answers build_procedure's and edit_procedure's tasks from a script. */
+export const AGENT_MODEL = `http://127.0.0.1:${AGENT_MODEL_PORT}/v1`;
 
 /** The aip repo this console is run against: the repository it lives in. */
 export const AIP_REPO = path.resolve(process.env.AIP_REPO ?? path.join(import.meta.dirname, "..", ".."));
@@ -40,14 +43,18 @@ export const STORE = path.join(E2E, "store", "store.rl");
 export const WORKDIR = path.join(E2E, "work");
 export const FOLDER_WORKDIR = path.join(E2E, "work-folder");
 
-/** The CLI's environment in the e2e run: its own run files and bundle cache, no client config, and the e2e
- *  decision model (e2e/model.mjs), which answers from marks in the text it is given. The server is set per call. */
+/** The CLI's environment in the e2e run: its own run files and bundle cache, no client config, the e2e decision
+ *  model (e2e/model.mjs), which answers from marks in the text it is given, and the stand-in agent model
+ *  (e2e/agent.mjs) in place of any this machine's shell names. The server is set per call. */
 export const CLI_ENV = {
   PATH: `${BIN}:${process.env.PATH}`,
   AIP_HOME: path.join(E2E, "home"),
   AIP_CONFIG: path.join(E2E, "no-config.json"),
   AIP_DECISION_MODEL: MODEL,
   AIP_DECISION_MODEL_KEY: "e2e",
+  AIP_AGENT_MODEL: AGENT_MODEL,
+  AIP_AGENT_MODEL_KEY: "e2e",
+  AIP_AGENT_MODEL_NAME: "stand-in-1",
 };
 
 /** `aip <args>` against the e2e server, as the specs' own client (publishing, making runs for history), from the

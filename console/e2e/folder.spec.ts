@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { CLI_ENV, FIRST_REVISION_DIR, FOLDER_WORKDIR } from "./aip";
-import { answer, card, done, entry, fill, pausedAt, pick, runIdOf, start } from "./pages";
+import { answer, done, entry, fill, pausedAt, pick, runIdOf, start } from "./pages";
 
 // The console started on a folder (`aip-console ./billing-support-agent`): no server, so no catalog, source
 // view or audit. The folder's procedure is compiled and drawn by the CLI on this machine, runs are local and
@@ -21,15 +21,11 @@ test("folder mode shows the folder's procedure and hides the server pages", asyn
   await page.getByRole("radio", { name: "right", exact: true }).check();
   await expect(page.getByTestId("step-graph")).toHaveAttribute("data-direction", "right");
   await page.getByRole("radio", { name: "down", exact: true }).check();
-  // The cards are one of its modes.
-  await page.getByRole("radio", { name: "cards" }).check();
-  await expect(page.locator('[data-testid="canvas-card"]')).toHaveCount(6);
-  await expect(card(page, "triage")).toHaveAttribute("data-kind", "Task_Agent");
   await expect(page.getByTestId("diagnostics")).toHaveCount(0);
 
   // The source slice comes from the folder's own file.
-  await card(page, "reply").locator(".aipc-title").click();
-  await expect(page.getByTestId("canvas-source")).toContainText("Task_Agent With reply");
+  await page.locator('[data-testid="step-node"][data-step="reply"]').click();
+  await expect(page.getByTestId("step-source")).toContainText("Task_Agent With reply");
 
   for (const hash of ["#/audit", "#/p/billing_support_agent", "#/server"]) {
     await page.goto(`./${hash}`);

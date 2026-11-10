@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 // #/ (the folder's procedure), #/run and #/runs apply; the others need a server.
 //   #/                          catalog (folder mode: the folder's procedure)
 //   #/p/<ref>[?view=]           a procedure: its steps (the step graph as control flow, data flow or run
-//                               traffic, or the card canvas: view=control|data|traffic|cards), header, revisions
+//                               traffic: view=control|data|traffic), header, revisions
 //   #/p/<ref>/files[/<path>]    source: procedure.aip and the bundle's files, one open
 //   #/p/<name>/diff[/<a>..<b>]  diff between two revisions of a name
 //   #/studio[/<ref>]            the Studio: the card canvas as an editor of a revision, a draft, or (no ref) a new

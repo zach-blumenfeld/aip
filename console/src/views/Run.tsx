@@ -267,7 +267,7 @@ interface FieldsProps {
   onChange: (key: string, value: string) => void;
 }
 
-function Fields({ prefix, types, labels, descriptions = {}, fields, problems, busy, onChange }: FieldsProps) {
+export function Fields({ prefix, types, labels, descriptions = {}, fields, problems, busy, onChange }: FieldsProps) {
   return (
     <div className="fields">
       {Object.entries(types).map(([key, type]) => {

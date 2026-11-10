@@ -7,7 +7,7 @@
 // already reads the graph's steps, loops and ways out, so the two views cannot disagree about a
 // procedure. No DOM: it runs under node as it is (test/graph.test.ts).
 
-import { modelOf, type Graph, type Model, type Port } from "../canvas/model.ts";
+import { modelOf, type Graph, type Model, type Port } from "./bundle.ts";
 
 export type FlowKind = Port["kind"] | "enter";
 

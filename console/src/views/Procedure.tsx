@@ -8,7 +8,7 @@ import { DraftBadge, when } from "./Record";
 import { isStepsView, Steps, type StepsView } from "./Steps";
 
 /** A procedure the server holds: a revision of a published name, or a draft bundle by its id. Its steps are
- *  drawn from the bundle's own graph (the step graph, or the card canvas: `view`, which the address carries);
+ *  drawn from the bundle's own graph (the step graph in the mode `view` names, which the address carries);
  *  the header, the inputs and the result are what `aip info` prints. */
 export function Procedure({ reference, view }: { reference: string; view?: string }) {
   const [about, setAbout] = useState<Description | null>(null);

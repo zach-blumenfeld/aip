@@ -2,10 +2,9 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { BILLING, DYNAMIC, E2E, FIXED, TRIAGE, resume, run } from "./aip";
-import { card } from "./pages";
 
-// The step graph: the procedure page's main view, in its modes (control flow, data flow, run traffic, and
-// the card canvas as the fourth), drawn down or to the right; and a run's path drawn over it. Each mode
+// The step graph: the procedure page's main view, in its modes (control flow, data flow, run traffic),
+// drawn down or to the right; and a run's path drawn over it. Each mode
 // is photographed into .aip-e2e/screenshots/ on the way.
 
 const SHOTS = path.join(E2E, "screenshots");
@@ -137,7 +136,7 @@ test("billing-support: run traffic weights the arrows by the runs that took them
   await shot(steps(page), "billing-traffic-down");
 });
 
-test("billing-support: the cards are the fourth mode, and every mode draws down or to the right", async ({ page }) => {
+test("billing-support: every mode draws down or to the right", async ({ page }) => {
   await page.goto(`./#/p/${BILLING}`);
   // Down, the steps share the row with what `aip info` says; to the right they take the whole row.
   await expect(steps(page)).not.toHaveClass(/wide/);
@@ -164,22 +163,8 @@ test("billing-support: the cards are the fourth mode, and every mode draws down 
     await shot(steps(page), `billing-${view}-right`);
   }
 
-  // The cards: C1's canvas, a row when drawn to the right, a column down.
-  await mode(page, "cards").check();
-  await expect(page).toHaveURL(/\?view=cards$/);
-  await expect(graph(page)).toHaveCount(0);
-  await expect(page.getByTestId("canvas")).toHaveAttribute("data-direction", "right");
-  await expect(page.getByTestId("canvas-card")).toHaveCount(6);
-  const cardBox = async (step: string) => (await card(page, step).boundingBox())!;
-  expect((await cardBox("triage")).x).toBeGreaterThan((await cardBox("start")).x);
-  expect(Math.round((await cardBox("triage")).y)).toBe(Math.round((await cardBox("start")).y));
-  await shot(steps(page), "billing-cards-right");
-  await direction(page, "down").check();
-  await expect(page.getByTestId("canvas")).toHaveAttribute("data-direction", "down");
-  expect((await cardBox("triage")).y).toBeGreaterThan((await cardBox("start")).y);
-  expect(Math.round((await cardBox("triage")).x)).toBe(Math.round((await cardBox("start")).x));
-  await expect(steps(page)).toHaveClass(/wide/);                       // the canvas is wide either way
-  await shot(steps(page), "billing-cards-down");
+  // There is no fourth mode: the card canvas went at C4.
+  await expect(mode(page, "cards")).toHaveCount(0);
 
   // The direction is the viewer's: it is remembered on the next page.
   await direction(page, "right").check();
@@ -326,13 +311,6 @@ test("ticket-triage: every mode, down and to the right", async ({ page }) => {
   await mode(page, "control flow").check();
   await expect(page).toHaveURL(new RegExp(`#/p/${TRIAGE}$`));
   await shot(steps(page), "triage-control-right");
-
-  await mode(page, "cards").check();
-  await expect(page.locator('[data-testid="canvas-frame"][data-loop="each_ticket"]')).toBeVisible();
-  await shot(steps(page), "triage-cards-right");
-  await direction(page, "down").check();
-  await expect(page.getByTestId("canvas")).toHaveAttribute("data-direction", "down");
-  await shot(steps(page), "triage-cards-down");
 });
 
 test("a run of ticket_triage whose For ran three passes: its path over the graph, beside its record", async ({ page }) => {

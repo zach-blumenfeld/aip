@@ -3,7 +3,7 @@
 // back or the CLI prints it from this machine's run file. Only what a view reads is typed. Types only:
 // nothing here exists at run time.
 
-import type { Graph } from "../canvas/model.ts";
+import type { Graph } from "../graph/bundle.ts";
 
 // ------------------------------------------------------------------ the catalog
 
@@ -170,6 +170,11 @@ export interface HistoryEntry {
   /** An `Execute`. */
   script?: string;
   stdin?: unknown;
+  /** A `Task_Agent` the agent model answered (`answered_by.agent` is `model`): what it did and spent, and how many
+   *  of its answers were refused before one held. */
+  tool_calls?: { name: string; args: string; seconds?: number; error?: string }[];
+  tokens?: { prompt: number; completion: number; total: number };
+  refusals?: number;
   /** A `Task_Agent`: the task as handed over, and how long the agent took. */
   prompt?: string;
   references?: Reference[];

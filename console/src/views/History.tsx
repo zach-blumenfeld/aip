@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, describe } from "../api/client";
-import { folderGraph, isFolderMode, localRun, localRuns } from "../api/console";
+import { isFolderMode, localRun, localRuns } from "../api/console";
 import type { CatalogEntry, RunRecord, RunStatus, RunSummary } from "../api/types";
-import { Canvas } from "../canvas/Canvas.tsx";
-import type { Graph } from "../canvas/model.ts";
-import { Code } from "../highlight/Code.tsx";
 import { bundleRef, href, navigate, type Route } from "../router";
 import { DraftBadge, ErrorSummary, Json, PauseSummary, RecordHistory, RecordSummary, when } from "./Record";
 import { DirectionToggle, useDirection } from "./StepGraph";
@@ -175,7 +172,6 @@ export function RunPage({ id }: { id: string }) {
           <RunRecordBody record={run} />
         </div>
       </div>
-      <RunCanvas record={run} />
     </article>
   );
 }
@@ -195,37 +191,5 @@ export function RunRecordBody({ record }: { record: RunRecord }) {
         </section>
       )}
     </>
-  );
-}
-
-/** The procedure the run ran, with the steps and loops it went through marked. */
-function RunCanvas({ record }: { record: RunRecord }) {
-  const [shown, setShown] = useState(false);
-  const [graph, setGraph] = useState<{ graph: Graph; source: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const visited = useMemo(() => new Set(record.history.map((e) => e.step)), [record]);
-
-  useEffect(() => {
-    if (!shown || graph) return;
-    const sourceIn = (g: Graph) => {
-      const source = g.nodes.find((n) => n.labels.includes("Procedure"))?.properties.source;
-      return typeof source === "string" ? source : "";
-    };
-    const asked = isFolderMode()
-      ? folderGraph().then((f) => (f.graph ? { graph: f.graph, source: f.source } : Promise.reject(new Error("the folder does not compile now"))))
-      : api.bundleGraph(record.bundle_id).then((b) => ({ graph: b.graph, source: sourceIn(b.graph) }));
-    asked.then(setGraph).catch((e: unknown) => setError(describe(e)));
-  }, [shown, graph, record.bundle_id]);
-
-  return (
-    <details className="run-canvas" onToggle={(e) => setShown((e.target as HTMLDetailsElement).open)}>
-      <summary data-testid="show-run-canvas">the procedure as cards, with what this run went through marked</summary>
-      {error && <p className="error" role="alert">{error}</p>}
-      {shown && !graph && !error && <p className="muted">Loading the procedure…</p>}
-      {shown && graph && (
-        <Canvas graph={graph.graph} source={graph.source} visited={visited}
-                renderCode={(code, first) => <Code text={code} aip firstLine={first} />} />
-      )}
-    </details>
   );
 }

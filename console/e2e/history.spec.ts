@@ -115,10 +115,9 @@ test("who answered each task, and the passes of a loop under the loop", async ({
   // Outside the loop: start, draft, end.
   await expect(page.locator('[data-testid="record"] > [data-testid="record-entry"]')).toHaveCount(3);
 
-  // The procedure, with what the run went through marked.
-  await page.getByTestId("show-run-canvas").click();
-  await expect(page.locator('[data-testid="canvas-card"].visited')).toHaveCount(6);
-  await expect(page.locator('[data-testid="canvas-frame"][data-loop="revise"]')).toHaveClass(/visited/);
+  // The procedure, with what the run went through marked: its path over the step graph.
+  await expect(page.locator('[data-testid="run-path"] [data-testid="step-node"][data-visited="true"]')).toHaveCount(6);
+  await expect(page.locator('[data-testid="run-path"] [data-testid="loop-node"][data-loop="revise"]')).toHaveAttribute("data-visited", "true");
 });
 
 test("a draft's run wears the badge, shows where it waits, and opens the bundle it ran", async ({ page }) => {

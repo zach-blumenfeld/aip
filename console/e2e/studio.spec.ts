@@ -1,21 +1,35 @@
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { BILLING, E2E, SERVER, TRIAGE, folderOf } from "./aip";
-import { card } from "./pages";
+import { BILLING, E2E, SERVER, TRIAGE } from "./aip";
 
-// The Studio (plan C2): the card canvas as an editor. Every change is a text edit of procedure.aip that the
-// console's process formats and compiles; the compiler's diagnostics are drawn on the cards while a change is
-// half done, and only what compiles is saved, as a draft the server holds with no revision.
+// The Studio (plan C4), for people who do not code: a chat that runs build_procedure and edit_procedure
+// with the agent model answering (here the stand-in, e2e/agent.mjs), the step graph beside it, forms for
+// field edits, Undo per run, save and publish. A field edit is a text edit of procedure.aip that the
+// console's process formats and compiles; only what compiles is saved.
 
 const status = (page: Page) => page.getByTestId("studio-status");
+const node = (page: Page, step: string) => page.locator(`[data-testid="studio-graph"] [data-testid="step-node"][data-step="${step}"]`);
+const loopNode = (page: Page, loop: string) => page.locator(`[data-testid="studio-graph"] [data-testid="loop-node"][data-loop="${loop}"]`);
 /** A picture of the page, into .aip-e2e/screenshots/ as graph.spec.ts does. */
 const shot = (page: Page, name: string) => page.screenshot({ path: path.join(E2E, "screenshots", `${name}.png`), fullPage: true });
+
+const BRIEF = "A support inbox procedure: refund requests checked against a 100 limit by a script, bug reports tagged by area, the rest ends.";
+const NAME = "support_inbox_refund";       // the first three words of the brief that say something
+const POLICY = "# Refunds\n\nA refund of 100 or less is approved by a script. Above it, a manager decides.\n";
 
 async function openStudio(page: Page, ref?: string) {
   await page.goto(ref ? `./#/studio/${encodeURIComponent(ref)}` : "./#/studio");
   await expect(status(page)).toHaveText("compiles", { timeout: 30_000 });
-  await page.getByTestId("studio-view-source").check();
+}
+
+/** Drop files on the chat as a person drags them from their desktop. */
+async function dropOn(page: Page, files: { name: string; text: string }[]) {
+  const data = await page.evaluateHandle((given) => {
+    const dt = new DataTransfer();
+    for (const f of given) dt.items.add(new File([f.text], f.name, { type: "text/markdown" }));
+    return dt;
+  }, files);
+  await page.getByTestId("studio-chat").dispatchEvent("drop", { dataTransfer: data });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -24,106 +38,194 @@ test.beforeEach(async ({ page }) => {
   await page.evaluate(() => localStorage.clear());
 });
 
-test("billing-support: add a Task_Agent card, connect the calm branch to it, save a draft", async ({ page, request }) => {
-  const original = readFileSync(path.join(folderOf("billing-support"), "procedure.aip"), "utf8");
-  await page.goto(`./#/p/${BILLING}@1`);
-  await page.getByTestId("open-studio").click();
-  await expect(status(page)).toHaveText("compiles", { timeout: 30_000 });
-  await expect(page.getByTestId("studio-source")).toHaveCount(0);
-  await page.getByTestId("studio-view-source").check();
-
-  await page.getByTestId("canvas-add").click();
-  const add = page.getByTestId("card-add");
-  await add.getByTestId("add-kind").selectOption("Task_Agent");
-  await add.getByTestId("add-description").fill("Review the drafted reply before it is sent.");
-  await add.getByTestId("add-after").selectOption("step:by_tone");
-  await add.getByTestId("add-next").selectOption("reply");
-  await add.getByTestId("add-submit").click();
-
-  // Half done: the card is there and nothing reaches it, which the compiler says on the card.
-  const added = card(page, "review_drafted_reply");
-  await expect(status(page)).toHaveText("1 error");
-  await expect(added).toHaveAttribute("data-problems", "1");
-  await expect(added.locator('[data-section="problems"]')).toContainText("unreachable_step");
-  await expect(page.getByTestId("studio-diagnostics").locator('[data-code="unreachable_step"]')).toBeVisible();
-  await expect(page.getByTestId("studio-save")).toBeDisabled();
-  await page.getByTestId("studio-view-source").uncheck();
-  await shot(page, "studio-half-done");
-  await page.getByTestId("studio-view-source").check();
-
-  // The route's calm branch to the new card: the diagnostics clear.
-  await card(page, "by_tone").click();
-  const calm = page.getByTestId("card-form").locator('[data-testid="form-port"][data-port="calm"]');
-  await calm.getByTestId("port-target").selectOption("review_drafted_reply");
-  await expect(status(page)).toHaveText("compiles");
-  await expect(page.getByTestId("studio-diagnostics")).toHaveCount(0);
-  await expect(card(page, "review_drafted_reply")).not.toHaveAttribute("data-problems");
-  await expect(page.getByTestId("studio-source")).toContainText("calm  -> review_drafted_reply");
-  await shot(page, "studio-connected");
-
-  await page.getByTestId("studio-save").click();
-  const saved = page.getByTestId("studio-saved");
-  await expect(saved).toContainText("Saved as a draft of billing_support");
-  const bundleId = (await saved.getAttribute("data-bundle"))!;
-
-  // The draft's procedure.aip is the original, the formatted new block, and the rewritten branch line.
-  const draft = await (await request.get(`${SERVER}/bundles/${bundleId}/graph`)).json();
-  expect([draft.name, draft.revision, draft.draft]).toEqual(["billing_support", null, true]);
-  const source = draft.graph.nodes.find((n: { labels: string[] }) => n.labels.includes("Procedure")).properties.source as string;
-  const block = 'Task_Agent review_drafted_reply "Review the drafted reply before it is sent." {\n  Next_Step reply\n}\n\n';
-  const expected = original.replace("  calm  -> reply\n", "  calm  -> review_drafted_reply\n").replace("\nExecute escalate", `\n${block}Execute escalate`);
-  expect(source).not.toBe(original);
-  expect(source).toBe(expected);
-  // It is a draft: not in the catalog, and the name still resolves to revision 1.
-  const catalog = await (await request.get(`${SERVER}/catalog`)).json();
-  expect(catalog.find((c: { name: string }) => c.name === BILLING).resolves).toBe("1");
-  await saved.getByRole("link").click();
-  await expect(page.getByTestId("draft-note")).toBeVisible();
-});
-
-test("a new procedure: renamed, an input added and read, saved, then published", async ({ page, request }) => {
+test("a brief and a document build a procedure; a label changed on its form; a step added by the chat, undone; saved and published", async ({ page, request }) => {
   await openStudio(page);
-  await page.getByTestId("studio-name").fill("studio_made");
-  await page.getByRole("button", { name: "Rename" }).click();
-  await expect(page.getByTestId("studio-source")).toContainText('Procedure studio_made "What this procedure does."');
+  await expect(page.getByTestId("studio-source")).toHaveCount(0);        // the source is closed until asked for
+  await expect(page.getByTestId("studio-send")).toHaveText("Build it");
 
-  await card(page, "start").click();
-  const form = page.getByTestId("card-form");
-  await form.getByTestId("form-output-name").fill("topic");
-  await form.getByTestId("form-output-add").click();
-  await expect(card(page, "start").locator('[data-section="inputs"]')).toContainText("topic: string");
+  // The brief, and a document dropped on the chat.
+  await dropOn(page, [{ name: "refund-policy.md", text: POLICY }]);
+  await expect(page.getByTestId("studio-documents")).toContainText("refund-policy.md");
+  await page.getByTestId("studio-message").fill(BRIEF);
+  await page.getByTestId("studio-send").click();
 
-  await card(page, "end").click();
-  await page.getByTestId("card-form").getByTestId("form-read-pick").selectOption("topic");
-  await page.getByTestId("card-form").getByTestId("form-read-add").click();
+  // build_procedure reads the document, works out the rules, and asks what they leave open: a form in the chat.
+  const turn = page.getByTestId("studio-turn").first();
+  const human = turn.getByTestId("studio-human");
+  await expect(human).toBeVisible({ timeout: 60_000 });
+  await expect(turn).toHaveAttribute("data-kind", "build");
+  await expect(turn).toHaveAttribute("data-status", "paused");
+  await expect(human).toHaveAttribute("data-step", "ask_user");
+  await expect(turn.getByTestId("studio-lines")).toContainText("reading refund-policy.md");
+  await expect(turn.getByTestId("studio-lines")).toContainText("worked out the rules");
+  await expect(human.getByTestId("studio-questions")).toContainText("What is the refund limit, and who approves above it?");
+  await expect(page.getByTestId("studio-waiting")).toBeVisible();            // no new message until it is answered
+  await expect(page.getByTestId("studio-message")).toBeDisabled();
+  await shot(page, "studio-ask-user");
+
+  // The answers: the run goes on, writes the folder, compiles it, tries it, reviews it.
+  await human.getByLabel("answers", { exact: true }).fill("1. The limit is 100; above it a manager approves.");
+  await human.getByTestId("studio-answer").click();
+  await expect(turn).toHaveAttribute("data-status", "done", { timeout: 90_000 });
+  await expect(turn.getByTestId("studio-lines")).toContainText("writing procedure.aip");
+  await expect(turn.getByTestId("studio-lines")).toContainText("compiled it");
+  await expect(turn.getByTestId("studio-review")).toContainText("stub");
+  await expect(turn.getByTestId("studio-diff")).toContainText("Task_Agent classify");
+  await expect(turn.getByTestId("studio-files")).toContainText("scripts/check_refund.py");
   await expect(status(page)).toHaveText("compiles");
-  await expect(page.getByTestId("studio-source")).toContainText("Read request, topic");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(NAME);
+  for (const step of ["start", "classify", "by_kind", "check_refund", "tag_bug", "end"]) await expect(node(page, step)).toBeVisible();
+  const buildRun = (await turn.getAttribute("data-run"))!;
+  await shot(page, "studio-built");
 
+  // A field edit: classify's labels, `bug` renamed `defect`, which the route's branch follows.
+  await node(page, "classify").click();
+  const form = page.getByTestId("studio-form");
+  await expect(form).toHaveAttribute("data-name", "classify");
+  const labels = form.locator('[data-testid="form-answer"][data-key="kind"]');
+  await expect(labels.getByTestId("form-labels-input")).toHaveValue("refund, bug, other");
+  await labels.getByTestId("form-labels-input").fill("refund, defect, other");
+  await labels.getByTestId("form-labels-save").click();
+  await expect(status(page)).toHaveText("compiles");
+  await page.getByTestId("studio-view-source").check();
+  const source = page.getByTestId("studio-source");
+  await expect(source).toContainText("Produce kind: choice [refund, defect, other]");
+  await expect(source).toContainText(/defect\s*-> tag_bug/);
+  await expect(page.locator('[data-testid="studio-graph"] [data-testid="step-edge"][data-from="by_kind"][data-to="tag_bug"]')).toHaveAttribute("data-label", "defect");
+
+  // An edit message: edit_procedure adds a step for the other messages.
+  await expect(page.getByTestId("studio-send")).toHaveText("Change it");
+  await page.getByTestId("studio-message").fill("Answer the other messages instead of just ending.");
+  await page.getByTestId("studio-send").click();
+  const edit = page.getByTestId("studio-turn").nth(1);
+  await expect(edit).toHaveAttribute("data-status", "done", { timeout: 90_000 });
+  await expect(edit).toHaveAttribute("data-kind", "edit");
+  await expect(edit.getByTestId("studio-review")).toContainText("answer_other");
+  await expect(edit.getByTestId("studio-diff")).toContainText("Task_Agent answer_other");
+  await expect(node(page, "answer_other")).toBeVisible();
+  await expect(source).toContainText(/other\s*-> answer_other/);
+  await expect(source).toContainText("choice [refund, defect, other]");       // the field edit made before it stays
+  await shot(page, "studio-edited");
+
+  // Undo takes the whole run back, and only it.
+  await page.getByTestId("studio-undo").click();
+  await expect(node(page, "answer_other")).toHaveCount(0);
+  await expect(source).toContainText("choice [refund, defect, other]");
+  await expect(status(page)).toHaveText("compiles");
+  // And again: the change it was asked for.
+  await page.getByTestId("studio-message").fill("Answer the other messages instead of just ending.");
+  await page.getByTestId("studio-send").click();
+  await expect(page.getByTestId("studio-turn").nth(2)).toHaveAttribute("data-status", "done", { timeout: 90_000 });
+  await expect(node(page, "answer_other")).toBeVisible();
+
+  // Saved as a draft, then published as the first revision of its name.
   await expect(page.getByTestId("studio-publish")).toBeDisabled();
   await page.getByTestId("studio-save").click();
-  await expect(page.getByTestId("studio-saved")).toContainText("Saved as a draft of studio_made");
+  const saved = page.getByTestId("studio-saved");
+  await expect(saved).toContainText(`Saved as a draft of ${NAME}`);
   await page.getByTestId("studio-publish").click();
-  await expect(page.getByTestId("studio-saved")).toHaveAttribute("data-revision", "1");
-  await expect(page.getByTestId("studio-saved")).toContainText("Published studio_made@1");
-  const catalog = await (await request.get(`${SERVER}/catalog`)).json();
-  expect(catalog.map((c: { name: string }) => c.name)).toContain("studio_made");
+  await expect(saved).toHaveAttribute("data-revision", "1");
+  await expect(saved).toContainText(`Published ${NAME}@1`);
+  const published = await (await request.get(`${SERVER}/catalog/${NAME}/graph`)).json();
+  const text = published.graph.nodes.find((n: { labels: string[] }) => n.labels.includes("Procedure")).properties.source as string;
+  expect(text).toContain("choice [refund, defect, other]");
+  expect(text).toContain("Task_Agent answer_other");
+  const files = published.graph.nodes.filter((n: { labels: string[] }) => n.labels.includes("File")).map((n: { properties: { path: string } }) => n.properties.path);
+  expect(files).toEqual(expect.arrayContaining(["assets/docs/refund-policy.md", "scripts/check_refund.py"]));
+
+  // The chat's runs are recorded as the studio's, with what the model did.
+  const record = await (await request.get(`${SERVER}/runs/${buildRun}`)).json();
+  expect(record.name).toBe("build_procedure");
+  expect(record.identity.agent).toBe("studio");
+  const draft = record.history.find((e: { step: string }) => e.step === "draft");
+  expect(draft.answered_by).toEqual({ agent: "model", model: "stand-in-1" });
+  expect(draft.tool_calls.map((c: { name: string }) => c.name)).toEqual(["write_file", "write_file", "compile"]);
+  const asked = record.history.find((e: { step: string }) => e.step === "ask_user");
+  expect(asked.answered_by.agent).toBe("studio");
+  // History's page of the run says so too.
+  await page.goto(`./#/runs/${buildRun}`);
+  const drafted = page.locator('[data-testid="record-entry"][data-step="draft"] [data-testid="answered-by"]');
+  await expect(drafted).toHaveAttribute("data-agent", "model");
+  await expect(drafted).toContainText("answered by the agent model stand-in-1 with 3 tool calls (write_file 2, compile 1)");
+  await expect(page.locator('[data-testid="record-entry"][data-step="ask_user"] [data-testid="answered-by"]')).toHaveAttribute("data-agent", "studio");
 });
 
-test("ticket-triage: a move that breaks the flow is drawn on the cards, and undone", async ({ page }) => {
-  await openStudio(page, `${TRIAGE}@1`);
-  await card(page, "summarize").click();
-  await page.getByTestId("card-form").getByTestId("form-move-into").selectOption({ label: "Loop revise" });
-  await expect(status(page)).not.toHaveText("compiles");
-  await expect(page.locator('[data-testid="canvas-card"][data-problems]').first()).toBeVisible();
+test("billing-support: forms change a description, a bar and a way out; a broken edit is drawn and undone", async ({ page, request }) => {
+  await openStudio(page, `${BILLING}@1`);
+  await expect(page.getByTestId("studio-send")).toHaveText("Change it");     // a revision is changed, not built
+
+  await node(page, "by_tone").click();
+  const form = page.getByTestId("studio-form");
+  await form.getByTestId("form-bar-input").fill("0.75");
+  await form.getByTestId("form-bar-save").click();
+  await expect(status(page)).toHaveText("compiles");
+  await form.locator('[data-testid="form-exit"][data-way="calm"]').getByTestId("form-exit-target").selectOption("escalate");
+  // Nothing goes to reply now: the compiler says so, and the graph marks it.
+  await expect(status(page)).toHaveText(/^\d+ errors?$/);
+  await expect(page.getByTestId("studio-diagnostics").locator('[data-code="unreachable_step"]')).toBeVisible();
+  await expect(node(page, "reply").getByTestId("node-note")).toHaveAttribute("data-note", /^\d+ errors?$/);
   await expect(page.getByTestId("studio-save")).toBeDisabled();
   await page.getByTestId("studio-undo").click();
   await expect(status(page)).toHaveText("compiles");
-  await expect(page.locator('[data-testid="canvas-card"][data-problems]')).toHaveCount(0);
 
-  // The loop's cap, changed on its frame's form.
-  await page.locator('[data-testid="canvas-frame"][data-loop="revise"] .aipc-frame-head').click();
-  await page.getByTestId("form-cap").fill("5");
-  await page.getByTestId("form-cap-save").click();
-  await expect(page.getByTestId("studio-source")).toContainText("Loop revise Until passed, At_Most 5, Else_Fail {");
+  await node(page, "reply").click();
+  await page.getByTestId("studio-form").getByTestId("form-description").locator("textarea").fill("Draft a short, calm reply grounded in the refund policy.");
+  await page.getByTestId("studio-form").getByTestId("form-description-save").click();
   await expect(status(page)).toHaveText("compiles");
+  await page.getByTestId("studio-view-source").check();
+  await expect(page.getByTestId("studio-source")).toContainText("Confidence_Below 0.75 -> escalate");
+  await expect(page.getByTestId("studio-source")).toContainText('Task_Agent With reply "Draft a short, calm reply grounded in the refund policy." {');
+
+  await page.getByTestId("studio-save").click();
+  const saved = page.getByTestId("studio-saved");
+  await expect(saved).toContainText(`Saved as a draft of ${BILLING}`);
+  // A draft: the name still resolves to revision 1.
+  const catalog = await (await request.get(`${SERVER}/catalog`)).json();
+  expect(catalog.find((c: { name: string }) => c.name === BILLING).resolves).toBe("1");
+});
+
+test("ticket-triage: a loop's cap, Until and what it does at the cap, on its form", async ({ page }) => {
+  await openStudio(page, `${TRIAGE}@1`);
+  await loopNode(page, "revise").click();
+  const form = page.getByTestId("studio-form");
+  await expect(form).toHaveAttribute("data-kind", "Loop");
+  await form.getByTestId("form-cap-input").fill("5");
+  await form.getByTestId("form-cap-save").click();
+  await expect(status(page)).toHaveText("compiles");
+  await form.getByTestId("form-at-cap").selectOption("Else_Exit");
+  await expect(status(page)).toHaveText("compiles");
+  await page.getByTestId("studio-view-source").check();
+  await expect(page.getByTestId("studio-source")).toContainText("Loop revise Until passed, At_Most 5, Else_Exit {");
+  // An Until on something that is not an answer is the compiler's to refuse.
+  await form.getByTestId("form-until").locator("textarea").fill("reply");
+  await form.getByTestId("form-until-save").click();
+  await expect(status(page)).not.toHaveText("compiles");
+  await expect(page.getByTestId("studio-diagnostics")).toContainText("condition_on_plain_value");
+  await page.getByTestId("studio-undo").click();
+  await expect(status(page)).toHaveText("compiles");
+});
+
+test("a step whose script the draft lacks is marked: it needs a developer", async ({ page }) => {
+  // An unsaved edit kept in this browser, naming a script the bundle does not have.
+  const original = await (await (await page.request.get(`${SERVER}/catalog/${BILLING}/graph`)).json());
+  const source = (original.graph.nodes.find((n: { labels: string[] }) => n.labels.includes("Procedure")).properties.source as string)
+    .replace("Run_Script scripts/escalate.py", "Run_Script scripts/open_ticket.py");
+  await page.evaluate(([key, value]) => localStorage.setItem(key, value), [`aip.studio:${BILLING}@1`, JSON.stringify({ source, files: {} })]);
+  await page.goto(`./#/studio/${encodeURIComponent(`${BILLING}@1`)}`);
+  await expect(page.getByTestId("studio-restored")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("studio-needs-scripts")).toContainText("escalate needs scripts/open_ticket.py");
+  await expect(node(page, "escalate").getByTestId("node-note")).toHaveAttribute("data-note", "needs a script");
+  await node(page, "escalate").click();
+  await expect(page.getByTestId("needs-script")).toContainText("Ask a developer");
+  await expect(page.getByTestId("studio-save")).toBeDisabled();
+});
+
+test("settings: the agent model the chat uses, never its key", async ({ page }) => {
+  await openStudio(page);
+  await page.getByTestId("studio-view-settings").check();
+  const agent = page.getByTestId("settings-agent");
+  await expect(agent).toContainText("stand-in-1");
+  await expect(agent).toContainText("key set");
+  await expect(agent).toContainText("set by the environment");
+  await expect(page.getByTestId("studio-settings")).not.toContainText("e2e");     // the stand-in's key
 });

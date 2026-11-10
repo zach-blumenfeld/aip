@@ -3,7 +3,7 @@
 // as they are printed), a folder's description and graph, this machine's run files. The rest goes to
 // the server directly (api/client.ts). The CLI's JSON is the contract of aip's docs/cli-json.md.
 
-import type { Graph } from "../canvas/model.ts";
+import type { Graph } from "../graph/bundle.ts";
 import type { Description, PassRef, RunErrorBody, RunRecord, RunSummary, Task } from "./types";
 
 /** `GET /console/config`. */
@@ -90,10 +90,20 @@ export interface StepEvent {
   iterations?: number;
 }
 
+/** `--progress` with `--answer-with model`: a tool call the agent model made while answering a task of `step`. `args` is a
+ *  summary (a path, a pattern, a written file's size), `error` set when the tool refused. */
+export interface ToolEvent { event: "tool"; step: string; task: number; tool: string; args: string; seconds?: number; error?: string }
+
+/** `--progress` with `--answer-with model`: an answer the agent model gave did not hold and went back to it. */
+export interface RefusedEvent { event: "refused"; step: string; task: number; errors: unknown }
+
 interface Stop { run_id: string | null; run_file?: string; recorded?: boolean }
 
+/** Why the agent model did not answer a pause it was to answer (`--answer-with model`): a human step, a cap, a refusal. */
+export interface Answerer { answered: false; step?: string; reason: string; refusals?: number }
+
 /** A pause: every `For` pass waiting at the step is one task, answered together. */
-export interface Paused extends Stop { paused: string; step: string; tasks: Task[]; hint: string }
+export interface Paused extends Stop { paused: string; step: string; tasks: Task[]; hint: string; answerer?: Answerer }
 
 export interface Done extends Stop { done: true; result: Record<string, unknown> }
 
@@ -108,6 +118,8 @@ export interface StreamHandlers {
   /** The launcher's id for the process, to cancel it by. */
   onProcess?: (id: string) => void;
   onStep: (e: StepEvent) => void;
+  /** The agent model's work, when it answers the run's tasks. */
+  onTool?: (e: ToolEvent | RefusedEvent) => void;
   onOutcome: (o: Outcome) => void;
   /** A line that is not one of the CLI's objects: shown, never parsed further. */
   onOther?: (line: string) => void;
@@ -115,12 +127,22 @@ export interface StreamHandlers {
 
 export type CliCall =
   | { run: { ref: string; inputs: Record<string, unknown> } }
-  | { resume: { run_id: string; answers?: unknown } };
+  | { resume: { run_id: string; answers?: unknown; studio?: boolean } }
+  | { build: { workspace: string; brief: string; name?: string; source?: string; files?: Record<string, string> } }
+  | { edit: { workspace: string; instruction: string; source?: string; files?: Record<string, string> } };
 
-/** Start `aip run` (a reference and the inputs) or `aip resume` (a run id and the answers, or none to retry),
- *  and feed what it prints to `handlers` as it arrives. Resolves with how the process ended. */
+function callOf(call: CliCall): [string, object] {
+  if ("run" in call) return ["/console/run", call.run];
+  if ("resume" in call) return ["/console/resume", call.resume];
+  if ("build" in call) return ["/console/studio/build", call.build];
+  return ["/console/studio/edit", call.edit];
+}
+
+/** Start `aip run` (a reference and the inputs) or `aip resume` (a run id and the answers, or none to retry), or one
+ *  of the Studio's runs (build_procedure, edit_procedure, answered by the agent model), and feed what it prints to
+ *  `handlers` as it arrives. Resolves with how the process ended. */
 export async function runCli(call: CliCall, handlers: StreamHandlers): Promise<Exit> {
-  const [path, body] = "run" in call ? ["/console/run", call.run] as const : ["/console/resume", call.resume] as const;
+  const [path, body] = callOf(call);
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
                                   body: JSON.stringify({ ...body, session: sessionId() }) });
   if (!res.ok || !res.body) throw new Error(await errorText(res));
@@ -155,6 +177,10 @@ function dispatch(line: string, handlers: StreamHandlers) {
   try { parsed = JSON.parse(line); } catch { handlers.onOther?.(line); return; }
   const o = parsed as Record<string, unknown> | null;
   if (o && o.event === "step") handlers.onStep(o as unknown as StepEvent);
+  else if (o && (o.event === "tool" || o.event === "refused")) {
+    if (handlers.onTool) handlers.onTool(o as unknown as ToolEvent | RefusedEvent);
+    else handlers.onOther?.(line);
+  }
   else if (o && ("paused" in o || "done" in o || "error" in o)) handlers.onOutcome(o as unknown as Outcome);
   else handlers.onOther?.(line);
 }
@@ -178,7 +204,7 @@ export function folderGraph(): Promise<FolderGraph> {
   return getJson<FolderGraph>("/console/graph");
 }
 
-// ------------------------------------------------------------------ the Studio (plan C2)
+// ------------------------------------------------------------------ the Studio (plans C2, C4)
 
 /** What the Studio's check makes of a source: the formatted text, and the compiler's report on it (the graph as far
  *  as it goes when it has errors, `partial`). */
@@ -193,9 +219,45 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** A folder on this machine holding the procedure's files (none for a new one), for the checks and the save. */
-export function studioOpen(files: { path: string; text: string | null; base64: string | null; mode: number }[]): Promise<{ workspace: string }> {
-  return postJson("/console/studio/open", { files });
+/** A folder on this machine holding the procedure's files (none for a new one), named `name`, for the checks, the
+ *  chat's runs and the save. */
+export function studioOpen(files: { path: string; text: string | null; base64: string | null; mode: number }[], name?: string): Promise<{ workspace: string }> {
+  return postJson("/console/studio/open", { files, name });
+}
+
+/** The folder as it is on disk, after a run changed it or an undo put it back: the check of its procedure.aip, its
+ *  name, its text files, and how many runs can be undone. */
+export interface StudioRead extends StudioCheck { name: string; files: Record<string, string>; undo: number }
+
+export function studioRead(workspace: string): Promise<StudioRead> {
+  return postJson("/console/studio/read", { workspace });
+}
+
+/** Put the folder back as it was before the last run. */
+export function studioUndo(workspace: string): Promise<StudioRead> {
+  return postJson("/console/studio/undo", { workspace });
+}
+
+/** Documents dropped on the chat, saved under the draft's assets/docs/: build_procedure and edit_procedure read them. */
+export function studioDocuments(workspace: string, documents: { name: string; base64: string }[]): Promise<{ documents: string[] }> {
+  return postJson("/console/studio/documents", { workspace, documents });
+}
+
+/** One model `aip config` names: where it is, which model, whether a key is set (never the key), and where that came
+ *  from (the config file, or the environment, which wins). */
+export interface ModelSetting { endpoint: string; model: string | null; key: boolean; source: string }
+export interface ModelSettings { agent: ModelSetting | null; decision: ModelSetting | null }
+export interface ModelSettingsChange {
+  agent_model?: string; agent_model_key?: string; agent_model_name?: string; decision_model?: string; decision_model_key?: string;
+}
+
+export function modelSettings(): Promise<ModelSettings> {
+  return getJson<ModelSettings>("/console/settings");
+}
+
+/** Written through `aip config`; an empty string forgets a setting. */
+export function saveModelSettings(change: ModelSettingsChange): Promise<ModelSettings> {
+  return postJson("/console/settings", change);
 }
 
 export function studioCheck(workspace: string, source: string, files: Record<string, string>): Promise<StudioCheck> {

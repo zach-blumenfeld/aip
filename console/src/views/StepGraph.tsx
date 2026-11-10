@@ -30,11 +30,14 @@ interface Props {
   selected?: string | null;
   /** In data flow, the key whose arrows are drawn; without one, the selected node's are. */
   focusKey?: string | null;
+  /** A short note pinned under a node, by its id: the Studio's "needs a script", or how many errors the compiler
+   *  found there. */
+  notes?: Record<string, string>;
 }
 
 /** The step graph: steps as nodes with their kind, a loop as a node with its body hung beside it, the
  *  control edges as arrows with a route's branches labelled. */
-export function StepGraph({ graph, direction = "down", flow, traffic, path, onSelect, selected, focusKey }: Props) {
+export function StepGraph({ graph, direction = "down", flow, traffic, path, onSelect, selected, focusKey, notes }: Props) {
   const g = useMemo(() => layoutOf(graph, direction), [graph, direction]);
   const data = useMemo(() => {
     if (!flow) return [];
@@ -128,6 +131,7 @@ export function StepGraph({ graph, direction = "down", flow, traffic, path, onSe
             <text x={W / 2} y={H / 2 + 13} textAnchor="middle" className="node-kind">{step.kind}</text>
             {traffic && <Badge x={W} y={0} runs={traffic.nodes.get(step.id) ?? 0} failed={traffic.failed.get(step.id) ?? 0} total={traffic.runs} />}
             {state && <Mark x={W} y={0} kind={state} />}
+            {notes?.[step.id] && <Note x={W} y={H} text={notes[step.id]} />}
           </g>
         );
       })}
@@ -152,6 +156,7 @@ export function StepGraph({ graph, direction = "down", flow, traffic, path, onSe
             {traffic && <Badge x={box.w} y={0} runs={traffic.nodes.get(loop.id) ?? 0} failed={traffic.failed.get(loop.id) ?? 0} total={traffic.runs} />}
             {passes !== null && passes > 0 && <Passes x={box.w} y={failed ? box.h : 0} passes={passes} />}
             {failed && <Mark x={box.w} y={0} kind="failed" />}
+            {notes?.[loop.id] && <Note x={box.w} y={box.h} text={notes[loop.id]} />}
           </g>
         );
       })}
@@ -199,6 +204,17 @@ function Mark({ x, y, kind }: { x: number; y: number; kind: "waiting" | "failed"
   const w = 8 + 6.3 * text.length;
   return (
     <g className={`badge mark-${kind}`} transform={`translate(${x - w + 8}, ${y - 9})`} data-testid="path-mark" data-mark={kind}>
+      <rect width={w} height={18} rx={9} />
+      <text x={w / 2} y={13} textAnchor="middle">{text}</text>
+    </g>
+  );
+}
+
+/** A note pinned to a node's bottom-right corner. */
+function Note({ x, y, text }: { x: number; y: number; text: string }) {
+  const w = 8 + 6.3 * text.length;
+  return (
+    <g className="badge note" transform={`translate(${x - w + 8}, ${y - 9})`} data-testid="node-note" data-note={text}>
       <rect width={w} height={18} rx={9} />
       <text x={w / 2} y={13} textAnchor="middle">{text}</text>
     </g>

@@ -6,7 +6,7 @@
 // test/preview.test.js renders it on the server.
 
 import { useEffect, useMemo, useState } from "react";
-import type { Graph } from "../../../../console/src/canvas/model.ts";
+import type { Graph } from "../../../../console/src/graph/bundle.ts";
 import { dataEdges, dataKeys } from "../../../../console/src/graph/dataflow.ts";
 import type { Direction } from "../../../../console/src/graph/layout.ts";
 import { stepGraphOf } from "../../../../console/src/graph/model.ts";

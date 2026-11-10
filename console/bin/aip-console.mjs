@@ -23,22 +23,36 @@
 //   GET  /console/record?run_id=  `aip runs <run_id> --json`: the run, from this machine's run file or the server
 //   GET  /console/runs            `aip runs --json`; in folder mode, this machine's runs of the folder
 //   POST /console/wake            starts the local server when the console's server is `aip config server local`
-//   POST /console/studio/open     {files: [{path, text | base64, mode}]} -> {workspace}: a folder holding a bundle's files
-//                                 (or none, for a new procedure), which the Studio compiles its source against
-//   POST /console/studio/check    {workspace, source, files?} -> `aip fmt --stdin` (when the source parses), then
-//                                 `aip compile --check --json --partial --stdin`: {source (formatted), formatted, ok,
-//                                 bundle_id, diagnostics, graph, partial}. `files` are changed files' text, written first
+//   POST /console/resume          ... with `studio: true`, a Studio run's: `--answer-with model`, recorded as the studio's
+//   POST /console/studio/open     {files: [{path, text | base64, mode}], name?} -> {workspace}: a folder holding a bundle's
+//                                 files (or none, for a new procedure), named `name`, inside a working directory of its own
+//   POST /console/studio/check    {workspace, source, files?} -> writes them into the folder, then `aip fmt --stdin` (when
+//                                 the source parses) and `aip compile --check --json --partial --stdin`: {source (formatted),
+//                                 formatted, ok, bundle_id, diagnostics, graph, partial}. `files` are changed files' text
+//   POST /console/studio/read     {workspace} -> the folder as it is on disk (after a run changed it): the check's object
+//                                 for its procedure.aip, with {name, files: {path: text}} (its text files) and `undo`
+//   POST /console/studio/documents {workspace, documents: [{name, base64}]} -> saved under the folder's assets/docs/
+//   POST /console/studio/build    {workspace, brief, name, session} -> event stream of `aip run build_procedure` with
+//                                 `--answer-with model --human ask_user`, writing the folder (renamed `name` first)
+//   POST /console/studio/edit     {workspace, instruction, session} -> event stream of `aip run edit_procedure
+//                                 --answer-with model` on the folder. Build and edit keep the folder as it was first:
+//   POST /console/studio/undo     {workspace} -> puts back the folder as it was before the last run; the read object
 //   POST /console/studio/save     {workspace, source, files?, publish?} -> writes the folder and runs `aip publish --draft
 //                                 --json` (with `publish`, `aip publish --json`): {name, revision, bundle_id, existed, draft}
+//   GET  /console/settings        the agent model and the decision model `aip config` names: {agent, decision}, each
+//                                 {endpoint, model?, key (whether one is set), source} or null; keys are never sent
+//   POST /console/settings        {agent_model?, agent_model_key?, agent_model_name?, decision_model?, decision_model_key?}
+//                                 -> `aip config` with those flags; the settings as GET answers them
 //
 // An event stream sends `event: process` (its id, to cancel by) first, then one `data:` event per line
-// the CLI printed (step lines, then the final paused, done or error object), then `event: exit` with
-// the exit code, signal and stderr. Closing the stream kills the subprocess too. Every run the console
-// starts is recorded with `agent: console` and the page's `session`.
+// the CLI printed (step lines, the agent model's tool lines, then the final paused, done or error
+// object), then `event: exit` with the exit code, signal and stderr. Closing the stream kills the
+// subprocess too. Every run the console starts is recorded with `agent: console` and the page's
+// `session`; the Studio's runs, with `agent: studio`.
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -48,8 +62,9 @@ import { fileURLToPath } from "node:url";
  *  pauses that carry tasks, `aip runs <id> --json`, `aip compile --json` (aip docs/cli-json.md). */
 export const MINIMUM_AIP = "0.9.0";
 
-/** Who the console's runs are recorded as (`aip run --agent`). */
+/** Who the console's runs are recorded as (`aip run --agent`), and the Studio's: build_procedure and edit_procedure. */
 export const AGENT = "console";
+export const STUDIO_AGENT = "studio";
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const TYPES = {
@@ -123,6 +138,17 @@ function configuredServer(bin) {
   return parseConfiguredServer(spawnSync(bin, ["config"], { encoding: "utf8" }).stdout);
 }
 
+/** The model lines of `aip config`, read: `{agent, decision}`, each `{endpoint, model, key, source}` or null when none is
+ *  configured. `key` says whether one is set; `aip config` never prints a key, so neither does this. */
+export function parseModels(text) {
+  const agent = /^agent model: (\S+)\s+model: (\S+)\s+key: (set|none)\s+\(from ([^)]*)\)/m.exec(text ?? "");
+  const decision = /^decision model: (\S+)(?:\s+\(TypeSafe's, the default\))?\s+key: (set|none)\s+\(from ([^)]*)\)/m.exec(text ?? "");
+  return {
+    agent: agent ? { endpoint: agent[1], model: agent[2], key: agent[3] === "set", source: agent[4] } : null,
+    decision: decision ? { endpoint: decision[1], model: null, key: decision[2] === "set", source: decision[3] } : null,
+  };
+}
+
 // ------------------------------------------------------------------ arguments
 
 const USAGE = `usage: aip-console [--server URL | FOLDER] [--port N] [--workdir DIR] [--aip PATH]
@@ -169,21 +195,21 @@ const running = new Map();
 const SESSION = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** The environment of one `aip`: the console's, with who is running. */
-function envFor(setup, session) {
-  const env = { ...setup.env, AIP_AGENT: AGENT };
+function envFor(setup, session, agent = AGENT) {
+  const env = { ...setup.env, AIP_AGENT: agent };
   if (typeof session === "string" && SESSION.test(session)) env.AIP_SESSION = session;
   return env;
 }
 
 /** Spawn `aip <args>` and stream what it prints to `res` as server-sent events. */
-function stream(res, setup, args, input, session) {
+function stream(res, setup, args, input, session, agent = AGENT) {
   const id = randomBytes(8).toString("hex");
   res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive" });
   const send = (event, data) => res.write(`${event ? `event: ${event}\n` : ""}data: ${data}\n\n`);
   send("process", JSON.stringify({ process: id }));
 
   // Its own process group, so cancelling stops the scripts it started as well.
-  const child = spawn(setup.aip, args, { cwd: setup.cwd, env: envFor(setup, session), detached: true, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(setup.aip, args, { cwd: setup.cwd, env: envFor(setup, session, agent), detached: true, stdio: ["pipe", "pipe", "pipe"] });
   const entry = { child, done: false, cancelled: false };
   running.set(id, entry);
   let stderr = "";
@@ -236,12 +262,17 @@ function said(out, what) {
 
 // ------------------------------------------------------------------ the Studio's folders
 
-/** The Studio's folders by id: each holds a procedure's files, which `aip compile --stdin` reads beside the source
- *  the page sends, and which `aip publish` uploads once the source is written in. They live under one temporary
- *  directory that goes when the console stops. */
+/** The Studio's workspaces by id. Each is a working directory of its own (`work`), holding the procedure's folder
+ *  (`work/<name>`), which `aip compile --stdin` reads beside the source the page sends, which build_procedure and
+ *  edit_procedure write (the agent model's tools reach the working directory and nothing else), and which `aip
+ *  publish` uploads. Before each run the folder is copied aside (`undo`, outside `work` so the model never sees
+ *  it), and Undo puts the last copy back. All of it lives under one temporary directory that goes when the console
+ *  stops. */
 const workspaces = new Map();
 const WORKSPACE = /^[0-9a-f]{16}$/;
 const FILE_PATH = /^(assets|references|scripts)\/(?!.*(^|\/)\.\.?(\/|$))[^\0]+$/;
+const NAME = /^[a-z][a-z0-9_]{0,63}$/;
+const DOCS = "assets/docs";
 
 function studioRoot(setup) {
   if (!setup.studio) {
@@ -261,15 +292,25 @@ function writeInto(folder, file) {
   if (Number.isInteger(file.mode)) chmodSync(target, file.mode & 0o777);
 }
 
+const folderOf = (ws) => path.join(ws.work, ws.name);
+
 function workspaceOf(body) {
-  const folder = typeof body.workspace === "string" && WORKSPACE.test(body.workspace) ? workspaces.get(body.workspace) : undefined;
-  if (!folder) throw new Error("no such studio workspace; open the procedure in the Studio again");
+  const ws = typeof body.workspace === "string" && WORKSPACE.test(body.workspace) ? workspaces.get(body.workspace) : undefined;
+  if (!ws) throw new Error("no such studio workspace; open the procedure in the Studio again");
+  return ws;
+}
+
+/** The workspace, with the page's source and changed files written into its folder first. */
+function writtenWorkspace(body) {
+  const ws = workspaceOf(body);
   if (typeof body.source !== "string") throw new Error("source is required");
-  // Changed files' text: a prompt edited on its card.
+  const folder = folderOf(ws);
+  // Changed files' text: a prompt edited on its form.
   if (body.files && typeof body.files === "object") {
     for (const [rel, text] of Object.entries(body.files)) writeInto(folder, { path: rel, text: `${text}` });
   }
-  return folder;
+  writeFileSync(path.join(folder, "procedure.aip"), body.source);
+  return ws;
 }
 
 /** Format the source when it parses, then check it: what the Studio draws. */
@@ -281,6 +322,48 @@ function studioCheck(setup, folder, source) {
   try { report = JSON.parse(out.stdout); } catch { throw new Error(said(out, "aip compile")); }
   return { source: formatted, formatted: fmt.status === 0 && formatted !== source, ok: report.ok === true, bundle_id: report.bundle_id ?? null,
            diagnostics: report.diagnostics ?? [], graph: report.graph ?? null, partial: report.partial === true };
+}
+
+/** The text files of a folder under assets/, references/ and scripts/, by path; a file that is not UTF-8 is left out. */
+function textFiles(folder) {
+  const files = {};
+  const walk = (dir, rel) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const at = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.name.startsWith(".")) continue;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), at);
+      else if (entry.isFile()) {
+        const bytes = readFileSync(path.join(dir, entry.name));
+        const text = bytes.toString("utf8");
+        if (!text.includes("�") && !text.includes("\0")) files[at] = text;
+      }
+    }
+  };
+  for (const top of ["assets", "references", "scripts"]) walk(path.join(folder, top), top);
+  return files;
+}
+
+/** The folder as it is on disk: its procedure.aip checked, its text files, whether there is a run to undo. */
+function studioRead(setup, ws) {
+  const folder = folderOf(ws);
+  const file = path.join(folder, "procedure.aip");
+  const source = existsSync(file) ? readFileSync(file, "utf8") : "";
+  return { ...studioCheck(setup, folder, source), name: ws.name, files: textFiles(folder), undo: ws.undo.length };
+}
+
+/** Keep the folder as it is, for Undo. */
+function keep(ws) {
+  const copy = `${ws.work}.undo-${ws.undo.length}`;
+  rmSync(copy, { recursive: true, force: true });
+  cpSync(folderOf(ws), copy, { recursive: true });
+  ws.undo.push({ name: ws.name, copy });
+}
+
+/** The documents the person dropped on the chat, as the run's `documents` input: a folder under the working directory. */
+function documentsOf(ws) {
+  const docs = path.join(folderOf(ws), ...DOCS.split("/"));
+  return existsSync(docs) && readdirSync(docs).length > 0 ? `${ws.name}/${DOCS}` : "";
 }
 
 // ------------------------------------------------------------------ http
@@ -369,7 +452,9 @@ function handler(setup, port) {
         const args = ["resume", body.run_id, "--progress"];
         const answered = body.answers !== undefined && body.answers !== null;
         if (answered) args.push("--answers", "-");
-        return stream(res, setup, args, answered ? body.answers : undefined, body.session);
+        // A Studio run goes on with the agent model answering, and is recorded as the studio's.
+        if (body.studio === true) args.push("--answer-with", "model");
+        return stream(res, setup, args, answered ? body.answers : undefined, body.session, body.studio === true ? STUDIO_AGENT : AGENT);
       }
       if (route === "POST /console/cancel") {
         const body = await readJson(req);
@@ -393,20 +478,70 @@ function handler(setup, port) {
       if (route === "POST /console/studio/open") {
         const body = await readJson(req);
         const id = randomBytes(8).toString("hex");
-        const folder = path.join(studioRoot(setup), id);
-        mkdirSync(folder);
-        for (const file of Array.isArray(body.files) ? body.files : []) writeInto(folder, file);
-        workspaces.set(id, folder);
+        const name = typeof body.name === "string" && NAME.test(body.name) ? body.name : "new_procedure";
+        const ws = { work: path.join(studioRoot(setup), id), name, undo: [] };
+        mkdirSync(folderOf(ws), { recursive: true });
+        for (const file of Array.isArray(body.files) ? body.files : []) writeInto(folderOf(ws), file);
+        workspaces.set(id, ws);
         return json(res, 200, { workspace: id });
       }
       if (route === "POST /console/studio/check") {
         const body = await readJson(req);
-        return json(res, 200, studioCheck(setup, workspaceOf(body), body.source));
+        return json(res, 200, studioCheck(setup, folderOf(writtenWorkspace(body)), body.source));
+      }
+      if (route === "POST /console/studio/read") {
+        const body = await readJson(req);
+        return json(res, 200, studioRead(setup, workspaceOf(body)));
+      }
+      if (route === "POST /console/studio/documents") {
+        const body = await readJson(req);
+        const ws = workspaceOf(body);
+        const saved = [];
+        for (const doc of Array.isArray(body.documents) ? body.documents : []) {
+          // The file's own name, nothing of a path: a document goes into assets/docs/ and nowhere else.
+          const name = path.basename(`${doc.name ?? ""}`).replace(/[^A-Za-z0-9._ -]/g, "_").trim();
+          if (!name || name.startsWith(".") || typeof doc.base64 !== "string") throw new Error(`${JSON.stringify(doc.name)} is not a document to save`);
+          writeInto(folderOf(ws), { path: `${DOCS}/${name}`, base64: doc.base64 });
+          saved.push(`${DOCS}/${name}`);
+        }
+        return json(res, 200, { documents: saved });
+      }
+      if (route === "POST /console/studio/build" || route === "POST /console/studio/edit") {
+        const body = await readJson(req);
+        if (setup.mode !== "server") return problem(res, 404, "not_found", "the Studio's chat runs build_procedure and edit_procedure from a server; start the console with --server");
+        const ws = typeof body.source === "string" ? writtenWorkspace(body) : workspaceOf(body);
+        const build = route.endsWith("/build");
+        const text = `${(build ? body.brief : body.instruction) ?? ""}`.trim();
+        if (!text) return problem(res, 400, "invalid_input", build ? "a brief is required: describe the procedure" : "an instruction is required: say what to change");
+        keep(ws);
+        if (build) {
+          // The folder's last part names the procedure build_procedure writes: the page names it from the brief.
+          const name = typeof body.name === "string" && NAME.test(body.name) ? body.name : ws.name;
+          if (name !== ws.name && !existsSync(path.join(ws.work, name))) {
+            renameSync(folderOf(ws), path.join(ws.work, name));
+            ws.name = name;
+          }
+        }
+        const inputs = build ? { brief: text, documents: documentsOf(ws), out: ws.name }
+                             : { folder: ws.name, instruction: text, documents: documentsOf(ws) };
+        const args = ["run", build ? "build_procedure" : "edit_procedure", "--progress", "--inputs", "-", "--workdir", ws.work,
+                      "--answer-with", "model", ...(build ? ["--human", "ask_user"] : [])];
+        return stream(res, setup, args, inputs, body.session, STUDIO_AGENT);
+      }
+      if (route === "POST /console/studio/undo") {
+        const body = await readJson(req);
+        const ws = workspaceOf(body);
+        const last = ws.undo.pop();
+        if (!last) return problem(res, 409, "conflict", "there is no run to undo");
+        rmSync(folderOf(ws), { recursive: true, force: true });
+        ws.name = last.name;
+        renameSync(last.copy, folderOf(ws));
+        return json(res, 200, studioRead(setup, ws));
       }
       if (route === "POST /console/studio/save") {
         const body = await readJson(req);
         if (setup.mode !== "server") return problem(res, 404, "not_found", "the Studio saves to a server; start the console with --server");
-        const folder = workspaceOf(body);
+        const folder = folderOf(writtenWorkspace(body));
         // Only what compiles is saved: the source as the check formats it, which is what the page shows.
         const checked = studioCheck(setup, folder, body.source);
         if (!checked.ok) return problem(res, 422, "compile_error", `it does not compile: ${checked.diagnostics.filter((d) => d.severity === "error").map((d) => d.message).join("; ")}`);
@@ -414,6 +549,24 @@ function handler(setup, port) {
         const out = aip(setup, ["publish", folder, "--json", ...(body.publish ? [] : ["--draft"])]);
         return out.status === 0 ? json(res, 200, { ...JSON.parse(out.stdout), source: checked.source })
                                 : problem(res, 502, "server", said(out, "aip publish"));
+      }
+      if (route === "GET /console/settings") {
+        return json(res, 200, parseModels(aip(setup, ["config"]).stdout));
+      }
+      if (route === "POST /console/settings") {
+        const body = await readJson(req);
+        const flags = { agent_model: "--agent-model", agent_model_key: "--agent-model-key", agent_model_name: "--agent-model-name",
+                        decision_model: "--decision-model", decision_model_key: "--decision-model-key" };
+        const args = ["config"];
+        for (const [field, flag] of Object.entries(flags)) {
+          const value = body[field];
+          if (value === undefined || value === null) continue;
+          if (typeof value !== "string" || /[\0\n]/.test(value) || value.length > 4096) return problem(res, 400, "invalid_input", `${field} must be one line of text`);
+          args.push(`${flag}=${value.trim()}`);
+        }
+        const out = aip(setup, args);
+        if (out.status !== 0) return problem(res, 422, "invalid_input", said(out, "aip config"));
+        return json(res, 200, parseModels(out.stdout));
       }
       if (route === "POST /console/wake") {
         if (!setup.local) return problem(res, 404, "not_found", "the console's server is not a local one");

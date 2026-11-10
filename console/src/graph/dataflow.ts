@@ -6,7 +6,7 @@
 // watches, and the per-pass key it collects. A key may have several producers, on different paths.
 // No DOM: it runs under node as it is (test/graph.test.ts).
 
-import type { Graph, GraphEdge } from "../canvas/model.ts";
+import type { Graph, GraphEdge } from "./bundle.ts";
 
 export interface KeyRead {
   /** The id of the step or loop that reads. */

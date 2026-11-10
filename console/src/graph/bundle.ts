@@ -1,9 +1,9 @@
-// The card canvas's model: a bundle's graph (the nodes and edges `aip compile --json` prints, which a
-// server also hands back for a revision; aip docs/language/bundle.md) read as cards. One card per step,
-// with its kind, its description as the title, what it reads and produces, and one port per way out;
-// one frame per loop around the cards of its body. Nothing here knows the console or the DOM: the
-// console's procedure page and the VS Code extension's preview draw the same model, and it runs under
-// node as it is (test/canvas.test.ts).
+// A bundle's graph (the nodes and edges `aip compile --json` prints, which a server also hands back for
+// a revision; aip docs/language/bundle.md) read as steps and loops. One card per step, with its kind,
+// its description as the title, what it reads and produces, and one port per way out; one frame per
+// loop with the ids of its body. The step graph (model.ts) is built on it, and the Studio's forms read
+// a step's sections from it. It was the card canvas's model until C4 retired the canvas; the names
+// stayed. Nothing here knows the console or the DOM: it runs under node as it is (test/bundle.test.ts).
 
 export interface GraphNode { id: string; labels: string[]; properties: Record<string, unknown> }
 export interface GraphEdge { type: string; start: string; end: string; properties: Record<string, unknown> }

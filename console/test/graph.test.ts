@@ -6,8 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import type { RunRecord } from "../src/api/types.ts";
-import { layoutOf as cardLayoutOf } from "../src/canvas/layout.ts";
-import { modelOf, type Graph } from "../src/canvas/model.ts";
+import { modelOf, type Graph } from "../src/graph/bundle.ts";
 import { dataEdges, dataKeys } from "../src/graph/dataflow.ts";
 import { layoutOf, SIZE, type Box, type Direction } from "../src/graph/layout.ts";
 import { edgeLabel, stepGraphOf } from "../src/graph/model.ts";
@@ -196,27 +195,6 @@ test("the layout: a For inside a Loop is a cycle hung off the outer loop's body"
   const back = layout.edges.find((e) => e.edge.key === "step:check->loop:review")!;
   assert.deepEqual(back.points.map((p) => p[0]), [check.x, inner.x + inner.w]);
   assert.equal(back.points[0][1], back.points[1][1]);
-});
-
-test("the card canvas draws to the right as one row, bodies inside their frames, wires under it", () => {
-  for (const name of EXAMPLES) {
-    const model = modelOf(graph(name));
-    const layout = cardLayoutOf(model, "right");
-    for (let i = 1; i < model.top.length; i++) {
-      const before = layout.boxes[model.top[i - 1]], after = layout.boxes[model.top[i]];
-      assert.ok(after.x >= before.x + before.w, `${name}: ${model.top[i]} is right of ${model.top[i - 1]}`);
-      assert.equal(after.y, before.y);
-    }
-    for (const item of [...Object.values(model.cards), ...Object.values(model.frames)]) {
-      const box = layout.boxes[item.id];
-      assert.ok(box.x + box.w < layout.width && box.y + box.h < layout.height, `${name}: ${item.id} is in the picture`);
-      if (item.parent !== null) assert.ok(within(box, layout.boxes[item.parent]), `${name}: ${item.id} is inside ${item.parent}`);
-    }
-    const ports = [...Object.values(model.cards), ...Object.values(model.frames)].reduce((n, item) => n + item.ports.length, 0);
-    assert.equal(layout.wires.length, ports);
-    // The column layout is untouched by the option.
-    assert.deepEqual(cardLayoutOf(model, "down"), cardLayoutOf(model));
-  }
 });
 
 test("data flow: who produces each key and who reads it, with whose answer steers a route", () => {

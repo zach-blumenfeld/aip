@@ -38,7 +38,7 @@ add --prefix=console dev-console console-0.9.0` brought it with its history from
 `zach-blumenfeld/aip-console-dev` (the private mirror of `zach-blumenfeld/aip-console`; this
 checkout's remote `dev-console`, and the local checkout `~/dev/aip-inspector`), whose commit
 f30ed95 is the last there. That mirror is the archive now: nothing newer is in it, and console
-work happens here. `console/AGENTS.md` describes the launcher, the card canvas, the API client
+work happens here. `console/AGENTS.md` describes the launcher, the step graph, the Studio, the API client
 and the tests; the e2e harness runs this checkout's `aip` (`AIP_REPO`, default `..`). It stays
 its own npm package (`aip-console`) with its own version, changelog and release workflow
 (`.github/workflows/console-release.yml`, tag `console-vX.Y.Z`), and `pyproject.toml` keeps
@@ -192,6 +192,25 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - **Not done:** the MCP tools take no `answer_with` (an outside agent answers its own pauses);
   the console shows the model's entries as an agent's, without the tool calls (C4 is the chat
   pane); open item 17, a language marker for human steps, is Zach's.
+
+## What C4 left (2026-11-10)
+
+- **The card canvas is gone** (`console/src/canvas/`): the procedure page has no `cards` mode and a
+  run's page no canvas. Its model moved to `console/src/graph/bundle.ts` (the step graph is built on
+  it; the names `Card`, `Frame`, `Port` stayed) and the edits the forms still make to
+  `console/src/studio/edit.ts`; the structural ones (add, remove, move, branches, reads, outputs) went,
+  since the chat makes those. `console/docs/studio.md` is the design.
+- **The chat runs the shipped procedures through the launcher** (`POST /console/studio/build`,
+  `/edit`, and `/console/resume` with `studio: true`), `--answer-with model`, as agent `studio`. The
+  draft's folder is `<workspace>/<name>`, the run's `--workdir` the workspace; a new procedure's
+  folder is renamed from the brief before `build_procedure` runs, since the folder names the
+  procedure. Undo copies sit beside the workspace, out of the model's reach.
+- **The e2e suite runs the chat against `console/e2e/agent.mjs`**, a stand-in Chat Completions
+  endpoint scripted per task (the first user message's `# Task: <step>` and the number of tool
+  results so far). `e2e/aip.ts` puts its address in `CLI_ENV` as `AIP_AGENT_MODEL*`, which overrides
+  whatever this machine's shell sets.
+- **Not done:** the real pass with the configured model is Zach's (the plan's proof says so); the
+  page shows a run's tool calls in the pane but not on History's record of it.
 
 ## Agent frameworks (track D2)
 

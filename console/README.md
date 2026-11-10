@@ -1,8 +1,8 @@
 # aip-console
 
 The console (formerly inspector) for [AIP](https://github.com/zach-blumenfeld/aip): the catalog, each
-procedure as a card canvas with its source, the run console, history and the audit queries. It is an
-npm package with its own small Node process; the aip server serves no UI.
+procedure as a step graph with its source, the Studio, the run console, history and the audit
+queries. It is an npm package with its own small Node process; the aip server serves no UI.
 
 ```
 npx aip-console                                     # the server `aip config` names (`local` included)
@@ -48,11 +48,11 @@ Routes are hash-based.
   does, and a toggle that lists the *drafts* apart (bundles the server holds with no revision, because
   a run of a folder or an `.rl` file was recorded against them).
 - `#/p/<name>[@rev]` **procedure**: its steps as the **step graph** (control flow, data flow or run
-  traffic) or as the **card canvas** (`?view=data`, `traffic` or `cards`), drawn down or to the
-  right, then what `aip info` says (when to use it, inputs, result, what its scripts require), and
+  traffic: `?view=data` or `traffic`), drawn down or to the right, then what `aip info` says (when to use it, inputs, result, what its scripts require), and
   the name's revisions with pin and retire. A draft opens as `#/p/bundle:<bundle id>`.
-- `#/studio[/<ref>]` the **Studio**: the card canvas as an editor of a revision, a draft, or (with no
-  reference) a new procedure, saving drafts. Below.
+- `#/studio[/<ref>]` the **Studio**, for people who do not code: a chat that builds and changes the
+  procedure, the step graph beside it, and forms for field edits, on a revision, a draft, or (with no
+  reference) a new procedure; saving drafts. Below.
 - `#/p/<ref>/files[/<path>]` **source**: `procedure.aip` as it was stored, in the colours of the
   grammar the VS Code extension ships, and the bundle's files. `#/p/<name>/diff[/<a>..<b>]` compares
   two revisions file by file, with a line diff for each changed text file.
@@ -74,7 +74,7 @@ a route's `BRANCH`es and its `BELOW` (the confidence check) labelled, the way in
 `CONTINUES` along a rail back to the loop. Every cycle is a loop node, so no other arrow goes back.
 Two ways between the same two steps are one arrow that names both (`< 0.9 · angry`). Click a node,
 or a frame's header, to read what it reads and produces and the lines of `procedure.aip` that wrote
-it. It has three modes, and the card canvas is the fourth:
+it. It has three modes:
 
 - **control flow**: the above.
 - **data flow**: a dashed arrow per producer and reader with the keys it carries (off `PRODUCES`
@@ -100,43 +100,38 @@ it went, every other step has one way out, and a loop's own entry leaves by its 
 In folder mode all of it is drawn from `aip compile --json`, and traffic counts this machine's runs
 of the folder as it compiles now.
 
-### The card canvas
-
-One card per step: its kind as a badge, its description as the title, what it reads and produces
-(off the graph's `READ_BY` and `PRODUCES` edges), a decision's questions, an aggregate's
-aggregations, a script or a prompt file, and one port per way out, each quoting the description of
-the step it leads to. A route has a port per label and one for its `Confidence_Below` check, and
-says whose answer steers it (a model's, a script's, an agent's). Loops are frames around the cards
-of their body, with the loop's header and its own way out. Drag to pan, wheel or buttons to zoom,
-`fit` to see it whole; click a card to read the lines of `procedure.aip` that wrote it, click a port
-to go where it leads. Drawn to the right it is one row, with the wires under it. It is drawn from the bundle's own graph: `GET /catalog/{ref}/graph` on the
-server, or `aip compile --json` through the launcher for a folder. The component (`src/canvas/`)
-keeps no console state, so the VS Code extension's preview can draw the same picture.
-
 ### The Studio
 
-The card canvas as an editor, for reading and adjusting a procedure without its file. It opens on a
-revision or a draft (`edit in the studio` on its page) or on a new procedure, and **every change is a
-text edit of `procedure.aip`** at the span the compiler gave the card, port or line
-(`src/canvas/edit.ts`): the console's process formats the text (`aip fmt --stdin`), compiles it
-against the bundle's files (`aip compile --check --json --partial --stdin` in a folder of its own),
-and the canvas draws what the compiler made of it. So the compiler is the only rule book: the Studio
-never accepts what the runtime would refuse.
+For a person who does not code (`docs/studio.md` is the design). It opens on a revision or a draft
+(`edit in the studio` on its page) or on a new procedure, and is three things on one page:
 
-- **Changes.** `+ card` adds a step of a kind after the one picked, named from its description, in the
-  shape spec 2.1 gives that kind. A card opens as a form: its description (a question's instruction, a
-  prompt file's text), what it reads (offered the keys produced upstream), what it produces (an
-  `Execute`'s, a `Task_Agent`'s, `Start`'s inputs), where each port leads (a step, a loop, `end`, or
-  `Continue` in a body), a route's missing branches and its check, a loop's cap; remove it, or move it
-  into or out of a loop (drag the card onto a loop's frame, or off it). The procedure's name and
-  description are above the canvas. Undo steps back.
-- **Half done.** While a change is unfinished the compiler's diagnostics are drawn on the cards, in its
-  words: a card nothing reaches, a red port where a branch or a `Next_Step` is missing, an input that
-  is not available. A text that does not parse keeps the last cards that did, and cannot be changed
-  until it is undone.
-- **Saving.** Only a clean compile can be saved: **Save draft** uploads the bundle with no revision
-  (`aip publish --draft`), and **Publish** gives that draft the next revision of its name. Edits that
-  are not saved stay in this browser until they are saved or discarded.
+- **A chat that runs procedures.** The first message on a new procedure is a brief, with the
+  documents it should follow dropped on the pane (saved under the draft's `assets/docs/`); it runs
+  `build_procedure` with the agent model answering (`aip run ... --answer-with model --human
+  ask_user`). The pane shows each step as it runs and the model's tool calls in plain words
+  ("reading refund-policy.md", "compiling"). When the procedure's rules leave something open the run
+  stops at `ask_user` and the questions arrive as a form in the pane; the answers resume it. When it
+  ends the pane shows the review and the diff of `procedure.aip`, and the draft is what it wrote.
+  Every later message runs `edit_procedure` on the draft with the instruction. **Undo** takes a whole
+  run back. The runs are recorded as agent `studio`, so History shows what the model did.
+- **The graph beside it**, the step graph in control or data flow, drawn again after every run and
+  every edit. A step with errors, or one whose script the draft does not have ("needs a script": a
+  script is code, so a developer writes it), is marked on the graph.
+- **Forms for field edits.** Click a step or a loop: its description, a `Task_Agent`'s prompt, a
+  question's wording, an answer's labels (a label renamed in its place is renamed on the routes that
+  branch on it), a route's confidence bar, where each way out leads among the steps there are, a
+  loop's cap, its `Until` and what it does at the cap. Each is a text edit of `procedure.aip` at the
+  span the compiler gave it (`src/studio/edit.ts`), which the console's process formats (`aip fmt
+  --stdin`) and compiles (`aip compile --check --json --partial --stdin`) before the graph is drawn
+  again, so the compiler is the only rule book. A new step, a loop or a rewire is asked of the chat.
+
+**Source** opens `procedure.aip` in the grammar's colours, with the compiler's diagnostics;
+**Settings** holds the agent model (endpoint, key, model name, a line per provider) and the decision
+model, written to `aip config` through the console's process; a key is never shown, and a model the
+environment sets says so, since the environment wins. With no agent model key the chat is closed and
+says why. Only a clean compile is saved: **Save draft** uploads the bundle with no revision (`aip
+publish --draft`), and **Publish** gives that draft the next revision of its name. Form edits that
+are not saved stay in this browser.
 
 ### A run's record
 
@@ -172,10 +167,10 @@ AIP_SERVER=http://localhost:8000 uv run aip publish examples/language/billing-su
 ## Tests
 
 `npm test` runs node's test runner over the modules that need no browser: the grammar tokenizer on
-the example programs, the canvas's and the step graph's model and layout on graphs the compiler
-printed, the Studio's edits on the examples' source and the diagnostics drawn on cards, data flow, a run's path and traffic, a run's history nested under its loops on records the
-server kept, the forms' typing, the launcher's reading of what
-`aip` prints. Node 22.18 or newer (it runs the TypeScript as it is).
+the example programs, the bundle's graph read as steps and loops and the step graph's model and
+layout on graphs the compiler printed, the Studio's field edits on the examples' source and its chat
+in words, data flow, a run's path and traffic, a run's history nested under its loops on records the
+server kept, the forms' typing, the launcher's reading of what `aip` prints. Node 22.18 or newer (it runs the TypeScript as it is).
 
 `npm run e2e` drives the real thing and needs this repository's `aip` (`AIP_REPO`, default `..`)
 with Relate installed (`../scripts/install-relate.sh`), and `uv`. Before anything starts,
@@ -183,17 +178,21 @@ with Relate installed (`../scripts/install-relate.sh`), and `uv`. Before anythin
 checkout's CLI, and procedures copied from `../examples/language` (two revisions of
 `billing-support-agent` whose escalate script files its ticket under the run's working directory and
 fails, or stalls, when the message asks it to; the loop examples as shipped). Then the bundle is
-built and four processes start: `e2e/model.mjs`, a decision model with the TypeSafe API shape that
+built and five processes start: `e2e/model.mjs`, a decision model with the TypeSafe API shape that
 answers from marks in the text it is given (`[angry]` picks a label, `[unsure]` lowers the
-confidence, `[break:WORD]` fails the questions that mention WORD); an `aip server` on a Relate store
+confidence, `[break:WORD]` fails the questions that mention WORD); `e2e/agent.mjs`, a stand-in agent
+model (Chat Completions) that answers `build_procedure`'s and `edit_procedure`'s tasks from a
+script, writing a support-inbox procedure and then adding a step to it; an `aip server` on a Relate store
 under `.aip-e2e/`; the console against it; and the console on the first revision's folder. Global
 setup publishes the procedures. The CLI runs with its own `AIP_HOME` and no `AIP_CONFIG`, so nothing
 on your machine changes what the specs see.
 
 The `console` project covers the step graph (each mode and both directions on billing-support and
 ticket-triage, a run's path through a `For` of three passes; it photographs each into
-`.aip-e2e/screenshots/`), the canvas (cards, ports, frames, the source slice, pan and zoom), the
-source view and the diff, the run page (an agent that decides, a model that decides and a check that
+`.aip-e2e/screenshots/`), the procedure page, the Studio (a brief and a dropped document through
+`ask_user` to a compiled draft, a label changed on its form, a step added by the chat and undone,
+save and publish, the forms of a route and a loop, a missing script, the settings), the source view
+and the diff, the run page (an agent that decides, a model that decides and a check that
 fires, a failing script and its retry, a loop, a loop at its cap, several tasks at once), history
 with its filters and the record of a run, drafts, the audit queries, and the launcher itself (an old
 `aip` on the PATH, `aip config`, the loopback guards). The `folder` project runs a folder with no

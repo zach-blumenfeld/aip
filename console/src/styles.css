@@ -4,7 +4,7 @@
   font-size: 15px;
   --line: color-mix(in srgb, currentColor 18%, transparent);
   --fill: color-mix(in srgb, currentColor 6%, transparent);
-  /* One colour per step kind, the same the card canvas uses (canvas/canvas.css). */
+  /* One colour per step kind, which the step graph reads (graph/graph.css). */
   --Start: #5a7d9a;
   --Decide: #3b6fd6;
   --Route: #b8860b;
@@ -67,7 +67,7 @@ button.linkish { background: none; border: 0; padding: 0; font: inherit; color: 
 strong.run-failed { color: var(--bad); }
 strong.run-done { color: var(--good); }
 
-/* Procedure: the steps beside what `aip info` says. Drawn to the right (or as cards) the steps are wide:
+/* Procedure: the steps beside what `aip info` says. Drawn to the right the steps are wide:
    they take the whole row and the rest moves below, in two columns. */
 .steps-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 1.5rem; align-items: start; margin-top: 0.5rem; }
 .steps-grid > * { min-width: 0; }
@@ -166,8 +166,7 @@ td.actions { margin: 0; }
 td.actions button { padding: 0.1rem 0.6rem; font-size: 0.85rem; }
 fieldset.question { border: 1px solid var(--line); border-radius: 6px; margin: 0.5rem 0; }
 pre.task { white-space: pre-wrap; }
-details.states summary, details.run-canvas summary { cursor: pointer; opacity: 0.7; font-size: 0.9rem; margin-top: 0.5rem; }
-details.run-canvas { margin-top: 1rem; }
+details.states summary { cursor: pointer; opacity: 0.7; font-size: 0.9rem; margin-top: 0.5rem; }
 .io-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.75rem; }
 @media (max-width: 56rem) { .io-pair { grid-template-columns: 1fr; } }
 .io-pair pre { margin: 0.25rem 0; max-height: 20rem; }
@@ -216,7 +215,35 @@ input.num-field { width: 6rem; font: inherit; }
 .studio-header label { display: flex; flex-direction: column; font-size: 0.85rem; }
 .studio-header label.grow { flex: 1; min-width: 16rem; }
 .studio-header textarea, .studio-header input { font: inherit; }
-.studio-split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
+/* The Studio (C4): the chat beside the graph, a form under the graph, source and settings toggled. */
+.studio-grid { display: grid; grid-template-columns: minmax(18rem, 2fr) minmax(0, 3fr); gap: 1rem; align-items: start; }
+@media (max-width: 70rem) { .studio-grid { grid-template-columns: 1fr; } }
+.studio-chat { border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.8rem 0.8rem; position: sticky; top: 0.5rem;
+               max-height: 92vh; overflow: auto; }
+.studio-chat.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.studio-chat h2 { margin-top: 0.2rem; }
+.studio-chat textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.studio-chat .actions { display: flex; gap: 0.8rem; align-items: center; margin-top: 0.3rem; }
+.studio-chat ol.turns { list-style: none; padding: 0; margin: 0 0 0.6rem; }
+.studio-chat .turn { border-bottom: 1px solid var(--line); padding: 0.4rem 0; }
+.studio-chat .turn .you { margin: 0.2rem 0; white-space: pre-wrap; }
+.studio-chat ul.lines { list-style: none; padding-left: 0.6rem; margin: 0.2rem 0; font-size: 0.85rem; }
+.studio-chat .line.step::before { content: "✓ "; color: var(--accent); }
+.studio-chat .line.tool { opacity: 0.75; padding-left: 1rem; }
+.studio-chat .line.note { font-style: italic; }
+.studio-chat .review { white-space: pre-wrap; font-size: 0.9rem; }
+.studio-chat .pause.human { border: 1px solid var(--warn); border-radius: 6px; padding: 0.3rem 0.6rem; margin: 0.4rem 0; }
+.studio-chat .studio-diff { font-size: 0.8rem; max-height: 40vh; overflow: auto; }
+.boundary { border-left: 3px solid var(--warn); padding: 0.2rem 0.6rem; margin: 0.4rem 0; font-size: 0.9rem; }
+.studio-form { border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.8rem 0.6rem; margin: 0.6rem 0; }
+.studio-form h3 { display: flex; gap: 0.4rem; align-items: baseline; margin-top: 0.3rem; }
+.studio-form h3 button { margin-left: auto; font: inherit; }
+.studio-form .form-field { display: flex; gap: 0.5rem; align-items: flex-end; margin: 0.3rem 0; }
+.studio-form .form-row, .studio-settings .form-row { display: flex; flex-direction: column; flex: 1; font-size: 0.85rem; }
+.studio-form textarea, .studio-form input, .studio-form select, .studio-settings input { font: inherit; }
+.studio-form .form-exit { display: flex; gap: 0.5rem; align-items: center; margin: 0.2rem 0; }
+.studio-form .form-exit input[type="number"] { width: 5rem; }
+.studio-settings { border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.8rem 0.6rem; margin: 0.6rem 0; }
+.studio-settings fieldset { display: flex; flex-direction: column; gap: 0.3rem; }
 .studio-source { max-height: 80vh; overflow: auto; }
 .studio-source h2 { margin-top: 0; }
-@media (max-width: 70rem) { .studio-split { grid-template-columns: 1fr; } }

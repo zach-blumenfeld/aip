@@ -101,6 +101,34 @@ function resolutionText(r: Resolution): string {
   return `${name} was ${JSON.stringify(r.value)}${bar}: ${r.holds ? "holds" : "does not hold"}`;
 }
 
+/** A task the agent model answered: which model, the tool calls it made (counted by tool, then one by one), the tokens
+ *  it spent and the answers refused before one held. */
+function ModelAnswer({ entry }: { entry: HistoryEntry }) {
+  const calls = entry.tool_calls ?? [];
+  const counts = new Map<string, number>();
+  for (const c of calls) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+  return (
+    <div data-testid="answered-by" data-agent="model" data-model={entry.answered_by?.model ?? ""} data-tool-calls={calls.length}>
+      <p>
+        answered by the agent model <code>{entry.answered_by?.model ?? "?"}</code> with {calls.length} tool call{calls.length === 1 ? "" : "s"}
+        {counts.size > 0 && <> ({[...counts].map(([n, k]) => `${n} ${k}`).join(", ")})</>}
+        {entry.tokens && <>, {entry.tokens.total} tokens</>}
+        {entry.refusals ? <>, after {entry.refusals} refused answer{entry.refusals === 1 ? "" : "s"}</> : null}; it produced {keyList(entry.result)}
+      </p>
+      {calls.length > 0 && (
+        <details className="states">
+          <summary>its tool calls</summary>
+          <ol className="tool-calls" data-testid="tool-calls">
+            {calls.map((c, i) => (
+              <li key={i} data-tool={c.name}><code>{c.name}</code> {c.args}{c.error && <span className="error small"> · {c.error}</span>}</li>
+            ))}
+          </ol>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /** One step's entry: the line that says what happened, then what it read and produced. */
 function EntryView({ entry, seq }: { entry: HistoryEntry; seq: number }) {
   const passes = passLabel(entry.passes);
@@ -236,6 +264,7 @@ function what(entry: HistoryEntry): ReactNode {
       return <>ran <code data-testid="script">{entry.script ?? "?"}</code> on this machine; it produced {keyList(entry.result)}</>;
     case "Task_Agent": {
       const by = entry.answered_by;
+      if (by?.agent === "model") return <ModelAnswer entry={entry} />;
       return (
         <p data-testid="answered-by" data-agent={by?.agent ?? ""} data-session={by?.session ?? ""}>
           answered by agent <code>{by?.agent ?? "?"}</code>{by?.session && <> in session <code>{by.session}</code></>}
