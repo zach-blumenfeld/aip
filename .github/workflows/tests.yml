@@ -66,10 +66,12 @@ jobs:
           GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
         run: scripts/fresh-venv.sh
 
-  # The VS Code extension (E1's proof): esbuild bundles it, node's test runner tokenizes the
-  # examples with vscode-textmate and checks a one-error fixture through `uv run aip`, which the
-  # tests default to from a checkout. There is no lockfile, so `npm install` resolves the three
-  # dev dependencies from their ranges.
+  # The VS Code extension (E1's and E2's proofs): esbuild bundles it and its graph preview (the
+  # console's card canvas, from console/src/canvas), node's test runner tokenizes the examples with
+  # vscode-textmate, checks a one-error fixture through `uv run aip`, which the tests default to
+  # from a checkout, and renders the preview over the compiler's graph before and after a
+  # `Next_Step` edit. There is no lockfile, so `npm install` resolves the dev dependencies from
+  # their ranges.
   extension:
     name: VS Code extension
     runs-on: ubuntu-latest

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- A procedure: a step that branches to two, which meet again. The dark theme's step-verb pink. -->
+  <g fill="none" stroke="#FF7AB2" stroke-width="1.3" stroke-linecap="round">
+    <path d="M8 4.2 L4.2 7.6 M8 4.2 L11.8 7.6 M4.2 8.4 L8 11.8 M11.8 8.4 L8 11.8"/>
+  </g>
+  <g fill="#FF7AB2">
+    <rect x="5.6" y="1" width="4.8" height="3.4" rx="1"/>
+    <circle cx="3.6" cy="8" r="2"/>
+    <circle cx="12.4" cy="8" r="2"/>
+    <rect x="5.6" y="11.6" width="4.8" height="3.4" rx="1"/>
+  </g>
+</svg>

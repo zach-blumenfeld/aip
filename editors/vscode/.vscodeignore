@@ -3,5 +3,8 @@ node_modules/**
 src/**
 test/**
 esbuild.mjs
+one-react.mjs
 .DS_Store
 **/*.map
+*.vsix
+package-lock.json

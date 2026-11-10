@@ -1,11 +1,16 @@
 {
   "name": "aip-lang",
   "displayName": "AIP procedure language",
-  "description": "Syntax highlighting and compiler diagnostics for .aip procedure files, and ```aip fences in Markdown.",
-  "version": "0.2.0",
+  "description": "Syntax highlighting, compiler diagnostics and a graph preview for .aip procedure files, and ```aip fences in Markdown.",
+  "version": "0.3.0",
   "publisher": "zach-blumenfeld",
   "license": "UNLICENSED",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zach-blumenfeld/aip.git",
+    "directory": "editors/vscode"
+  },
   "engines": {
     "vscode": "^1.80.0",
     "node": ">=20"
@@ -21,11 +26,15 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "test": "node --test test/compiler.test.js test/grammar.test.js",
+    "test": "node --test test/compiler.test.js test/grammar.test.js test/preview.test.js test/terminal.test.js",
+    "package": "vsce package --no-dependencies --skip-license --out aip-lang.vsix",
     "vscode:prepublish": "npm run build"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.6.0",
     "esbuild": "^0.25.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.2.0"
   },
@@ -40,7 +49,11 @@
         "extensions": [
           ".aip"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/aip-light.svg",
+          "dark": "./icons/aip-dark.svg"
+        }
       }
     ],
     "grammars": [
@@ -68,6 +81,62 @@
       {
         "command": "aip.showVersion",
         "title": "AIP: Show the compiler's version"
+      },
+      {
+        "command": "aip.openPreview",
+        "title": "AIP: Open the graph preview to the side",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "aip.compile",
+        "title": "AIP: Compile the procedure (write its bundle)"
+      },
+      {
+        "command": "aip.run",
+        "title": "AIP: Run the procedure in the terminal"
+      },
+      {
+        "command": "aip.publish",
+        "title": "AIP: Publish the procedure to the server"
+      },
+      {
+        "command": "aip.import",
+        "title": "AIP: Import a procedure from the catalog"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "aip.openPreview",
+          "when": "editorLangId == aip",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "aip.openPreview",
+          "when": "editorLangId == aip || activeWebviewPanelId == aip.preview"
+        },
+        {
+          "command": "aip.compile",
+          "when": "editorLangId == aip || activeWebviewPanelId == aip.preview"
+        },
+        {
+          "command": "aip.run",
+          "when": "editorLangId == aip || activeWebviewPanelId == aip.preview"
+        },
+        {
+          "command": "aip.publish",
+          "when": "editorLangId == aip || activeWebviewPanelId == aip.preview"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "aip.openPreview",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "editorLangId == aip"
       }
     ],
     "configuration": {

@@ -1,0 +1,22 @@
+/* The preview's page around the canvas, in the editor's theme. The canvas's own colours are
+   console/src/canvas/canvas.css; its cards are drawn on `Canvas`, so the page declares its scheme. */
+body { padding: 0.5rem 0.75rem; color: var(--vscode-foreground); background: var(--vscode-editor-background);
+  font-family: var(--vscode-font-family); }
+body.vscode-light { color-scheme: light; }
+body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
+.aipc-card, .aipc-detail { background: var(--vscode-editor-background); }
+.aipc code, .aipc pre { font-family: var(--vscode-editor-font-family); }
+.aipc button, .aipv button { color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-widget-border, transparent); border-radius: 3px; cursor: pointer; }
+.aipc .aipc-port, .aipc .aipc-frame-head, .aipc .aipc-link { background: none; border-radius: 0; }
+.aipc .aipc-port { border: 0; border-top: 1px solid var(--aipc-line); }
+.aipc .aipc-frame-head { border: 0; }
+.aipc .aipc-link { border: 0; padding: 0; text-decoration: underline; }
+.aipv-bar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.4rem; }
+.aipv-summary { opacity: 0.75; }
+.aipv-summary.bad { color: var(--vscode-errorForeground); opacity: 1; }
+.aipv-direction { margin-left: auto; display: flex; gap: 0.25rem; }
+.aipv-direction button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.aipv .aipv-problem { display: block; width: 100%; text-align: left; margin-bottom: 0.4rem; padding: 0.25rem 0.5rem;
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); background: none; }
+.aipv-empty { opacity: 0.7; }
