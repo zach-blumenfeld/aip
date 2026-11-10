@@ -15,7 +15,7 @@
     aip server                          serve the catalog and the record of runs
     aip mcp                             the same client as an MCP server, for agent frameworks and coding agents
     aip skill install | list | remove   the `aip` skill, the page an agent reads to run and write procedures
-    aip upgrade                         publish the procedures this package ships (`make_procedure`) to the server
+    aip upgrade                         publish the procedures this package ships (`make_procedure`, `build_procedure`, `edit_procedure`) to the server
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
@@ -168,7 +168,14 @@ def info_command(argv: list[str]) -> int:
 
 def _run_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--progress", action="store_true",
-                        help="print one JSON line per history entry as the run writes it, then the final object on one line")
+                        help="print one JSON line per history entry as the run writes it (and, with --answer-with model, one "
+                             "per tool call the model makes), then the final object on one line")
+    parser.add_argument("--answer-with", default=None, metavar="model",
+                        help="`model`: the configured agent model answers the Task_Agent pauses, one tool-using chat per task "
+                             "(AIP_ANSWER_WITH; see docs/answerer.md); `none`: they pause for you, as by default")
+    parser.add_argument("--human", default=None, metavar="STEP[,STEP]",
+                        help="with --answer-with model: the Task_Agent steps that pause for a person instead (AIP_HUMAN_STEPS); "
+                             "the run keeps them for its resumes")
     parser.add_argument("--debug", action="store_true", help="print a traceback on stderr when the command fails")
 
 
@@ -248,7 +255,8 @@ def run_command(argv: list[str]) -> int:
         inputs = _read_json(args.inputs, "--inputs")
         return client.run(args.target, {} if inputs is None else inputs, batch=args.batch, agent=args.agent,
                           session=args.session, workdir=args.workdir, on_step=on_step, force=args.force,
-                          on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True))
+                          on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True),
+                          answer_with=args.answer_with, human=args.human)
     return _outcome(go, client, args.progress, args.debug, starting=True)
 
 
@@ -264,7 +272,8 @@ def resume_command(argv: list[str]) -> int:
     client = _client()
 
     def go(on_step):
-        return client.resume(args.run, _read_json(args.answers, "--answers"), on_step=on_step)
+        return client.resume(args.run, _read_json(args.answers, "--answers"), on_step=on_step, answer_with=args.answer_with,
+                             human=args.human)
     return _outcome(go, client, args.progress, args.debug, starting=False)
 
 
@@ -542,6 +551,7 @@ def export_runs_command(argv: list[str]) -> int:
 
 
 def config_command(argv: list[str]) -> int:
+    from aip.client.config import DEFAULT_AGENT_MODEL_NAME, DEFAULT_AGENT_MODEL_URL
     from aip.model.typesafe import DEFAULT_URL
     from aip.sdk import configure, settings
 
@@ -549,8 +559,8 @@ def config_command(argv: list[str]) -> int:
                                      "show it. `aip config server local` records runs on this machine: a server is started "
                                      "when a command needs one and stops when idle. `aip config server URL` points at a server "
                                      "elsewhere (give its bearer token with --token); `aip config server none` records nothing. "
-                                     "AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY and AIP_BATCH "
-                                     "override the file. The decision model is an endpoint with the TypeSafe API shape; without "
+                                     "AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY, AIP_AGENT_MODEL, "
+                                     "AIP_AGENT_MODEL_KEY, AIP_AGENT_MODEL_NAME and AIP_BATCH override the file. The decision model is an endpoint with the TypeSafe API shape; without "
                                      "one a Decide step fails the run (no_decision_model) until one is set and the run is resumed.")
     parser.add_argument("setting", nargs="*", metavar="server local|URL|none", help="where runs are recorded and the catalog is")
     parser.add_argument("--server", default=None, metavar="URL", help="the same as `server URL` (an empty string forgets it)")
@@ -560,6 +570,16 @@ def config_command(argv: list[str]) -> int:
     parser.add_argument("--decision-model-key", default=None, metavar="KEY",
                         help="the decision model's API key (an empty string forgets it); never printed")
     parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once by default")
+    parser.add_argument("--agent-model", default=None, metavar="URL",
+                        help=f"the agent model's endpoint, any OpenAI Chat Completions one (default {DEFAULT_AGENT_MODEL_URL}, "
+                             "Anthropic's; an empty string forgets it)")
+    parser.add_argument("--agent-model-key", default=None, metavar="KEY", help="the agent model's API key; never printed")
+    parser.add_argument("--agent-model-name", default=None, metavar="NAME",
+                        help=f"the model the agent model endpoint runs (default {DEFAULT_AGENT_MODEL_NAME})")
+    parser.add_argument("--agent-model-max-tool-calls", type=int, default=None, metavar="N",
+                        help="the most tool calls the agent model makes on one task (default 40)")
+    parser.add_argument("--agent-model-max-tokens", type=int, default=None, metavar="N",
+                        help="the most tokens one task's chat may spend, prompt and completion (default 500000)")
     parser.add_argument("--clear", action="store_true", help="forget everything")
     args = parser.parse_args(argv)
     if args.setting:
@@ -567,9 +587,13 @@ def config_command(argv: list[str]) -> int:
             parser.error("the one setting given by name is the server: `aip config server local`, `aip config server URL` or "
                          "`aip config server none`; the rest are flags")
         args.server = args.setting[1]
-    writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model, args.decision_model_key, args.batch))
+    agent = {"agent_model": args.agent_model, "agent_model_key": args.agent_model_key, "agent_model_name": args.agent_model_name,
+             "max_tool_calls": args.agent_model_max_tool_calls, "max_tokens": args.agent_model_max_tokens}
+    writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model, args.decision_model_key, args.batch,
+                                                       *agent.values()))
     try:
-        s = configure(args.server, args.token, args.decision_model, args.decision_model_key, args.batch, clear=args.clear) if writes else settings()
+        s = configure(args.server, args.token, args.decision_model, args.decision_model_key, args.batch, clear=args.clear,
+                      **agent) if writes else settings()
     except ValueError as exc:
         parser.error(str(exc))
     if writes:
@@ -584,12 +608,13 @@ def config_command(argv: list[str]) -> int:
         print(f"server: {s.server}  (from {s.source})")
         print(f"token:  {'set' if s.token_set else 'none'}")
     print(s.decision_model)
+    print(s.agent_model)
     print(f"batch: {s.batch}")
     return 0
 
 
 def upgrade_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (make_procedure) "
+    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) "
                                      "to the configured server. A server publishes them itself when it first starts; this is "
                                      "for a server that runs an older aip than this one. A bundle the server already holds "
                                      "is left as it is.")
@@ -903,7 +928,7 @@ SUMMARIES = {
     "server": "serve the catalog and the record of runs over HTTP",
     "mcp": "serve this client to an MCP client: search, describe, compile, run, resume and pull as tools",
     "skill": "install the aip skill, the page an agent reads to run and write procedures, into the agents here",
-    "upgrade": "publish the procedures this package ships (make_procedure) to the server",
+    "upgrade": "publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) to the server",
 }
 
 

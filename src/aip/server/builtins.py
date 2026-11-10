@@ -7,12 +7,14 @@ appears on a store's first start, a new version of one appears on the first star
 upgrade that carries it, and one that was retired or superseded by hand stays that way: the
 hook never offers the same bundle twice.
 
-`make_procedure` is the one that ships: `bundles/make_procedure.rl`, compiled from
-`examples/language/make_procedure/`. Whenever that folder changes, or the graph the compiler
-derives does, compile it again and commit the file (`tests/test_make_procedure.py` fails when
-the two disagree, and its message has the command):
+Three ship: `make_procedure`, and since A1 `build_procedure` and `edit_procedure`, each
+`bundles/<name>.rl` compiled from `examples/language/<name>/`. Whenever one of those folders
+changes, or the graph the compiler derives does, compile it again and commit the file
+(`tests/test_make_procedure.py` fails when the two disagree, and its message has the command):
 
     uv run aip compile examples/language/make_procedure -o src/aip/server/bundles/make_procedure.rl
+    uv run aip compile examples/language/build_procedure -o src/aip/server/bundles/build_procedure.rl
+    uv run aip compile examples/language/edit_procedure -o src/aip/server/bundles/edit_procedure.rl
 
 Two compilations of one folder share a bundle id and differ byte for byte (spec section 3), so a
 rebuild with nothing changed still shows as a modified file; do not commit that. `aip upgrade`

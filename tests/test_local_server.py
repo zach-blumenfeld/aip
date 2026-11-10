@@ -110,7 +110,7 @@ def test_the_local_server_stops_when_idle_and_the_next_call_starts_it_again(mach
     monkeypatch.setenv("AIP_LOCAL_IDLE", "1")
     client = aip.Client("local", agent="tests")
     shipped = [(e.name, e.resolves) for e in client.list()]
-    assert shipped == [("make_procedure", "1")] and client.server.url == local.url(), "a fresh store holds what the package ships"
+    assert shipped == [("build_procedure", "1"), ("edit_procedure", "1"), ("make_procedure", "1")] and client.server.url == local.url(), "a fresh store holds what the package ships"
     first = local.health()["pid"]
     deadline = time.monotonic() + 15
     while local.health() is not None and time.monotonic() < deadline:

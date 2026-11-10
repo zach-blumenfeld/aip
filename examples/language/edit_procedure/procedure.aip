@@ -1,0 +1,77 @@
+# edit_procedure/procedure.aip
+#
+# The procedure that changes a procedure as an instruction says, meant to be answered by the
+# agent model (`aip run edit_procedure ... --answer-with model`). A script keeps the folder as it
+# is, the model rewrites it, the compile-and-fix loop runs until it compiles (`At_Most 5`: four
+# checked fixes), and a script shows the change as a unified diff against what was kept.
+#
+# It ships inside the package as a bundle (src/aip/server/bundles/edit_procedure.rl, compiled
+# from this folder), as make_procedure does.
+
+Procedure edit_procedure
+  "Change an AIP procedure as an instruction says: rewrite its folder, compile it until it does, and show the change as a diff."
+
+  Use_When
+    "An existing procedure folder is to be changed: a step added, a rule moved, a branch rerouted."
+    "The agent model is to make the change: run it with `--answer-with model`."
+  Do_Not_Use_When
+    "A new procedure is to be built: use build_procedure."
+  Requires python 3.10
+  Avoid
+    "Changing more than the instruction asks."
+    "Silencing a diagnostic by deleting the step it names instead of fixing what it says."
+
+Start "The procedure to change, what to change, and any documents the change is based on." {
+  folder: string      "The procedure's folder, under the working directory."
+  instruction: string "What to change, in the requester's words."
+  documents: string   "A folder under the working directory with documents the change is based on; an empty string when there are none."
+  Next_Step snapshot
+}
+
+Execute snapshot "Keep the folder as it is now, to compare the change with, and list the documents." {
+  Read folder, documents
+  Run_Script scripts/snapshot.py
+  Produce path:   string "The procedure's folder, relative to the working directory."
+          source: string "Its procedure.aip as it is now."
+          before: object "Every text file of the folder as it is now, by its path in the folder."
+          files:  list   "The documents' paths, relative to the working directory."
+  Next_Step rewrite
+}
+
+Task_Agent rewrite "Change the procedure as the instruction says." {
+  Read path, source, instruction, files
+  Prompt assets/rewrite.md
+  Produce changes: string "What was changed and why, in a few lines."
+  Next_Step revise
+}
+
+Loop revise Until compiled, At_Most 5, Else_Fail {
+  Execute compile "Compile the folder and report what the compiler says; the folder is left as it was written." {
+    Read path
+    Run_Script scripts/compile.py
+    Produce compiled:    true_or_false "Whether the folder compiles with no error."
+            diagnostics: list          "The compiler's diagnostics, one line each: where, severity, code, message."
+            bundle_id:   string        "The id of the bundle the folder compiles to; empty when it does not compile."
+    Next_Step fix
+  }
+
+  Task_Agent fix "Fix what the compiler reported, keeping the change the instruction asked for." {
+    Read path, diagnostics, instruction
+    Prompt assets/fix.md
+    Produce fixed: string "What was fixed, in a line or two."
+    Continue
+  }
+
+  Next_Step diff
+}
+
+Execute diff "Show the change: a unified diff of the folder against what was kept." {
+  Read path, before
+  Run_Script scripts/diff.py
+  Produce diff: string "The unified diff of every file that changed, was added or was removed."
+  Next_Step end
+}
+
+End "The changed folder, the bundle it compiles to, what was changed, and the diff." {
+  Read path, bundle_id, changes, diff
+}

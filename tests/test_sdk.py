@@ -606,7 +606,7 @@ def test_config_writes_and_reads_the_file(monkeypatch):
     s = aip.settings()
     assert code == 0 and (s.server, s.local) == (local.url(), True) and json.loads(s.path.read_text()) == {"server": "local"}
     assert local.store_file().name == "store.cl", "S3: the file the pinned engine keeps, which is the one on disk"
-    assert f"server: local  {local.url()}, started when a command needs it; its store is {local.store_file()}" in out and "token" not in out
+    assert f"server: local  {local.url()}, started when a command needs it; its store is {local.store_file()}" in out and "token:" not in out
     code, out, _ = _call("config", "server", "https://aip.example.com/", "--token", "t")
     s = aip.settings()
     assert (s.server, s.local, s.token) == ("https://aip.example.com", False, "t") and "token:  set" in out

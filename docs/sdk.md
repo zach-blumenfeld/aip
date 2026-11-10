@@ -39,7 +39,7 @@ print(result.result)                                         # aip.Done: the End
 ```
 
 `run(target, inputs, *, batch=None, agent=None, session=None, workdir=None, on_step=None,
-on_pause=None, force=False, agent_version=None, on_warning=None)` runs a target until it stops. The target is a program directory (compiled
+on_pause=None, force=False, agent_version=None, on_warning=None, answer_with=None, human=None)` runs a target until it stops. The target is a program directory (compiled
 here), an `.rl` bundle, or a catalog reference `name[@rev]` (fetched from the server, or from
 the bundle cache when `pull` put it there); every run runs on this machine from the bundle
 cache, and when a server is configured it is recorded there at every stop (a folder or file as
@@ -51,7 +51,11 @@ filtered by `agent` alone). `force` runs a `name@revision` that is retired, whic
 `aip.RetiredRevision`. When the procedure has a `Decide` and no decision model is configured,
 the run is not refused, since it may never reach that step: `on_warning` is called with one
 sentence before the first step runs, and the result (or the `RunError`'s `error`) carries the
-same sentence as `warning`. It returns:
+same sentence as `warning`. `answer_with="model"` has the configured agent model answer the
+`Task_Agent` pauses, one tool-using chat per task, except at the steps named in `human` (a list,
+or one comma-separated string), which pause as before (`docs/answerer.md`; default
+`AIP_ANSWER_WITH` and `AIP_HUMAN_STEPS`; `aip.Client(agent_chat=...)` injects the chat client in
+tests). It returns:
 
 - `aip.Paused`: `kind` (`task`, the one kind: a `Task_Agent` step waits for the agent; a
   `Decide` never pauses), `step`, `tasks` (a list of `aip.Task`, one per `For` pass waiting at
@@ -60,13 +64,15 @@ same sentence as `warning`. It returns:
   `prompt`, `state`, `references`, `answer_with` and `labels` (the values each `choice` or
   `score` in `answer_with` may take), and inside a `Loop` with a cap `last_pass` (whether this
   pass is the last the cap allows) and `pass_of` (the cap); both are `None` elsewhere.
-  `paused.task` is the one task of a pause outside a loop.
+  `paused.task` is the one task of a pause outside a loop. `answerer` is the object the agent
+  model left when it was asked to answer and did not (a human step, or it gave up), else `None`.
 - `aip.Done`: `run_id`, `result`, `run_file`, `recorded`.
 
 `recorded` is `True` when the server has this stop, `False` when the post failed
 (`client.recording_error` says why; the next stop tries again), `None` when no server is
 configured. `resume(run, answers=None, *, agent=None, session=None, on_step=None,
-on_pause=None)` answers a pause (`agent` and `session` say who answers, for the task's
+on_pause=None, answer_with=None, human=None)` answers a pause (and with `answer_with="model"`
+the pauses after it; with no answers, the one that stands) (`agent` and `session` say who answers, for the task's
 `answered_by`; by default they are found as `run` finds them, else they are the run's own); `run` is the `Paused` (or the
 `RunError`), a run id, or a run file's path; `answers` is keyed by task index
 (`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task,
@@ -111,7 +117,7 @@ catalog reference still runs from the bundle cache.
 | `list()` | `[Entry]`: `name`, `description`, `pinned`, `latest`, `resolves`, `revisions` | `aip list` |
 | `pull(ref)`, `pull_all()` | `Pulled`: `name`, `revision`, `bundle_id`, `path`, `fetched`; the bundle is in the cache, so `run` works offline | `aip pull`, `aip pull --all` |
 | `publish(target, draft=False)` | `Published`: `name`, `revision`, `bundle_id`, `existed`, `draft`; a folder is compiled here, an `.rl` taken as is. With `draft` the bundle is uploaded with no revision (`revision` None, `draft` True; `draft` False when the server already has it as a revision), and a later `publish` of the same bundle gives it one | `aip publish [--draft] [--json]` |
-| `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
+| `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`, `build_procedure`, `edit_procedure`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
 | `export_skill(target, out, force=False)` | `SkillExported`: `path`, `skill_file`, `name`, `skill` (the Agent Skills name), `bundle_id`, `revision`; the procedure as a plain Agent Skill at `out`, a `SKILL.md` that walks its steps for an agent with no runtime and the bundle's files. `target` is a folder, an `.rl` or a published name | `aip export <target> --skill DIR` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it); a retired revision is refused (`ServerError`, kind `retired`) | `aip pin name@revision`, `aip pin name --clear` |

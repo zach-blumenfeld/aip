@@ -174,6 +174,25 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   discount or credit" came back true at confidence 0.04 to 0.36, under the aggregation's 0.7, and
   the run failed at its cap. The script uses policies that say what the work does.
 
+## What A1 left (2026-11-10)
+
+- **The answerer is `src/aip/model/answerer/`**, driven from `aip.sdk.Client._settle`; `docs/answerer.md`
+  is the design. Its endpoint on this machine comes from the shell (`AIP_AGENT_MODEL`,
+  `AIP_AGENT_MODEL_KEY`, `AIP_AGENT_MODEL_NAME`: Anthropic's OpenAI-compatible
+  `https://api.anthropic.com/v1`, `claude-opus-5-5`), not from `aip config`. `tests/conftest.py`
+  clears them for every test; `tests/test_answerer.py` reads them at import, so with the key set
+  `uv run pytest -q` makes one real call (the angry branch of billing-support-agent, about a second).
+- **Three built-ins ship now** (`build_procedure`, `edit_procedure`, `make_procedure`); the
+  counts in `tests/test_make_procedure.py`, `test_local_server.py`, `server/test_contract.py`
+  and `console/e2e/catalog.spec.ts` name them. Rebuild a `.rl` with the command in
+  `src/aip/server/builtins.py` when its folder changes.
+- **The proof's runs are in the local store** (`aip runs --agent a1-proof`); the folders the
+  model wrote are under `scratch/a1/work/` (`refund-handling/`, and `billing-support/` as
+  `edit_procedure` changed it), not committed.
+- **Not done:** the MCP tools take no `answer_with` (an outside agent answers its own pauses);
+  the console shows the model's entries as an agent's, without the tool calls (C4 is the chat
+  pane); open item 17, a language marker for human steps, is Zach's.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

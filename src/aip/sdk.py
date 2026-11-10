@@ -16,13 +16,16 @@ config --decision-model URL --decision-model-key KEY`; TypeSafe's URL by default
 Every stop writes the run file (`aip.client.runs`), so a run started here can be resumed by
 `aip resume <run id>` and the other way round. When a server is configured the run is recorded
 there at every stop, a folder or file run as a run of a *draft* bundle; when none is, the run
-works and the result says `recorded=None`. Every method returns a typed value and raises an
-`AipError` subclass.
+works and the result says `recorded=None`. With `answer_with="model"` the `Task_Agent` pauses
+are answered by the configured agent model, one tool-using chat per task (`aip.model.answerer`,
+`docs/answerer.md`), except at the steps named in `human`, which pause as before. Every method
+returns a typed value and raises an `AipError` subclass.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -33,7 +36,7 @@ from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 
 from aip.client import bundles, config
 from aip.client.config import CONFIGURE_HINT, Settings, configure, settings
-from aip.client.runs import RunFile, error_outcome, local_runs, new_run_id, outcome, progress_line, run_path, RUN_ID
+from aip.client.runs import RunFile, answer_hint, error_outcome, local_runs, new_run_id, outcome, progress_line, run_path, RUN_ID
 from aip.client.server import Server, ServerError, connect
 from aip.errors import AipError
 from aip.model import DONE, FAILED, PAUSED, Engine, InvalidOutput, NotPaused, Procedure, Run, StepError, TypeSafeResolver
@@ -152,8 +155,9 @@ class Paused:
     pass waiting at `step`, all answered in one `resume`. `hint` is one line on the shape of an
     answer. `recorded` is True when the server has this stop, False when the post failed, None
     when no server is configured. `warning` is what `run` had to say before the first step (a
-    `Decide` ahead and no decision model configured), else None. `to_json()` is the CLI's
-    paused object."""
+    `Decide` ahead and no decision model configured), else None. `answerer` is there when the
+    run was to be answered by the agent model and stopped anyway: `{"answered": false, "step",
+    "reason"}`, with what the model spent when it tried. `to_json()` is the CLI's paused object."""
     kind: str
     step: str
     tasks: list[Task]
@@ -169,6 +173,10 @@ class Paused:
     @property
     def warning(self) -> str | None:
         return self.body.get("warning")
+
+    @property
+    def answerer(self) -> JSON | None:
+        return self.body.get("answerer")
 
     @property
     def task(self) -> Task:
@@ -461,13 +469,16 @@ class Client:
     and `AIP_DECISION_MODEL_KEY` override), and with neither a `Decide` fails the run
     (`no_decision_model`). `session` is an httpx-style client to send requests through. `home`
     moves `~/.aip` (default `AIP_HOME`). `agent` is the identity's `agent` when neither a call
-    nor `AIP_AGENT` names one.
+    nor `AIP_AGENT` names one. `agent_chat` injects the agent model's chat client (an
+    `aip.model.answerer.ChatClient`; tests); otherwise `--answer-with model` speaks to the
+    configured endpoint (`aip config --agent-model-key KEY`).
     """
 
     def __init__(self, server: str | Server | None = None, token: str | None = None, *, decision_client: Any = None,
-                 session: Any = None, home: Path | str | None = None, agent: str | None = None):
+                 session: Any = None, home: Path | str | None = None, agent: str | None = None, agent_chat: Any = None):
         self.settings: Settings = settings()
         self.decision_client = decision_client
+        self.agent_chat = agent_chat
         self.home = Path(home) if home is not None else None
         self.agent = agent
         self.recording_error: str | None = None   # why the last stop was not recorded, when a server is configured
@@ -629,7 +640,8 @@ class Client:
     def run(self, target: str | Path, inputs: JSON, *, batch: int | None = None, agent: str | None = None,
             session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
             on_pause: OnPause | None = None, force: bool = False, agent_version: str | None = None,
-            on_warning: Callable[[str], None] | None = None) -> Result:
+            on_warning: Callable[[str], None] | None = None, answer_with: str | None = None,
+            human: list[str] | str | None = None) -> Result:
         """Run `target` (a program directory, an `.rl`, or `name[@rev]`) on `inputs`, the Start
         step's object, until it pauses or is done. `workdir` is where its scripts read and write
         files (default the current directory); `batch` how many `For` passes run at once;
@@ -639,7 +651,10 @@ class Client:
         A `name@revision` that is retired is refused (`RetiredRevision`) unless `force`. When the
         procedure has a `Decide` and no decision model is configured, the run is not refused,
         since it may never reach the step: `on_warning` is told before the first step runs, and
-        the result (or the `RunError`) carries the same sentence as `warning`.
+        the result (or the `RunError`) carries the same sentence as `warning`. `answer_with`
+        `"model"` answers the `Task_Agent` pauses with the agent model (default `AIP_ANSWER_WITH`),
+        except at the steps in `human` (names, or one comma-separated string; default
+        `AIP_HUMAN_STEPS`), which pause as before; the run file keeps `human` for its resumes.
         Raises `RunError` when the run stops on an error, `CompileError`, `InvalidBundle`,
         `NotFound`, `RetiredRevision` or `NoServer` when the target cannot be run."""
         if not isinstance(inputs, dict):
@@ -653,7 +668,10 @@ class Client:
         where = Path(workdir if workdir is not None else Path.cwd()).resolve()
         engine = self._engine(where, batch, on_step)
         identity = config.identity(agent, session, default_agent=self.agent, agent_version=agent_version)
+        answering = self._answer_with(answer_with)
+        human_steps = _human(human)
         with Procedure.load(bundle) as procedure:
+            self._check_human(procedure, human_steps)
             try:
                 check_inputs(procedure.step(procedure.start), inputs)
                 warning = self.model_warning(procedure.describe()["steps"])
@@ -663,11 +681,13 @@ class Client:
             except StepError as exc:  # the inputs do not fit: nothing ran, nothing to resume
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc
             handle = RunFile(new_run_id(), bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
-                             origin["revision"], server=self.server.url if self.server else None)
-            return self._settle(engine, run, handle, on_pause, warning)
+                             origin["revision"], server=self.server.url if self.server else None, human=human_steps or None)
+            answerer = self._answerer(engine, procedure, where, on_step) if answering else None
+            return self._settle(engine, run, handle, on_pause, warning, answerer)
 
     def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, agent: str | None = None,
-               session: str | None = None, on_step: OnStep | None = None, on_pause: OnPause | None = None) -> Result:
+               session: str | None = None, on_step: OnStep | None = None, on_pause: OnPause | None = None,
+               answer_with: str | None = None, human: list[str] | str | None = None) -> Result:
         """Carry the agent's answers to a paused run, or with no answers retry the step a failed
         run stopped at. `run` is a run id, a run file's path, or the `Paused`/`RunError` a call
         returned; `answers` is keyed by task index (`{"0": {...}}`), a list in task order, or the
@@ -678,9 +698,14 @@ class Client:
         `not_paused`, `invalid_input`) and changes nothing: a refused answer leaves the pause
         as it was, to be answered again. `agent` and `session` say who answers, for the task's
         `answered_by` (default `AIP_AGENT` / the client's `agent`, and `AIP_SESSION`, else the
-        run's own)."""
+        run's own). `answer_with` and `human` are `run`'s: the pauses after these answers go to
+        the agent model, but for the human steps (given here, else those the run was started
+        with). With `answer_with` and no answers, the model answers the pause that stands."""
+        answering = self._answer_with(answer_with)
         path = self.run_file(run)
         handle = RunFile.load(path)
+        if human is not None:
+            handle.human = _human(human) or None
         try:
             bundle = bundles.load(handle.bundle_id, self.home)
         except KeyError:
@@ -690,9 +715,13 @@ class Client:
             raise InvalidBundle(exc) from exc
         engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step)
         with Procedure.load(bundle) as procedure:
+            self._check_human(procedure, handle.human or [])
             state = Run.from_dict(procedure, handle.run)
+            answerer = self._answerer(engine, procedure, Path(handle.workdir), on_step) if answering else None
+            if answers is None and answerer is not None and state.status == PAUSED:
+                return self._settle(engine, state, handle, on_pause, None, answerer, ask=True)  # the model answers the pause that stands
             state = self._apply(engine, state, answers, handle, path, agent, session)
-            return self._settle(engine, state, handle, on_pause)
+            return self._settle(engine, state, handle, on_pause, None, answerer)
 
     def _apply(self, engine: Engine, run: Run, answers: Any, handle: RunFile, path: Path, agent: str | None = None,
                session: str | None = None) -> Run:
@@ -724,10 +753,14 @@ class Client:
         except (InvalidOutput, NotPaused) as exc:
             raise RunError(error_outcome({**exc.to_dict(), **_where(run)}, handle.run_id, path, recorded, True), exc, stopped=False) from exc
 
-    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None, warning: str | None = None) -> Result:
+    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None, warning: str | None = None,
+                answerer: Any = None, ask: bool = False) -> Result:
         """Record the stop (server and run file), and return it as a result or raise it; with
+        `answerer`, the agent model answers each pause not at a human step (with `ask`, even a
+        human step's: the caller asked the model to answer the pause that stands); with
         `on_pause`, answer pauses in-process and go on. `warning` is `run`'s, carried on the
         object of the stop it leads to."""
+        stopped: JSON | None = None
         while True:
             handle.run = run.to_dict()
             recorded = self._record(handle)
@@ -739,14 +772,79 @@ class Client:
                 raise RunError(block)
             if run.status == DONE:
                 return Done(handle.run_id, run.result or {}, path, recorded, block)
+            if answerer is not None and stopped is None:
+                if run.pause["step"] in (handle.human or []) and not ask:
+                    stopped = {"answered": False, "step": run.pause["step"],
+                               "reason": f"{run.pause['step']} is a human step: answer it with `aip resume {handle.run_id} --answers JSON`"}
+                else:
+                    ask = False
+                    answered, stopped = self._model_answers(engine, run, answerer)
+                    if answered is not None:
+                        run, stopped = answered, None
+                        continue
+            if stopped is not None:
+                block["answerer"] = stopped
             paused = Paused(run.pause["kind"], run.pause["step"], [Task.from_dict(t) for t in run.pause["tasks"]], handle.run_id,
                             path, recorded, block)
+            stopped = None
             if on_pause is None:
                 return paused
             answers = on_pause(paused)
             if answers is None:
                 return paused
             run = self._apply(engine, run, answers, handle, path)
+
+    # ------------------------------------------------------------------ the agent model
+
+    def _answer_with(self, answer_with: str | None) -> bool:
+        """Whether the agent model answers: `model` (the argument, else `AIP_ANSWER_WITH`), or
+        nobody (`none`, empty, unset). Asking for it with no key configured is refused up front."""
+        import os
+
+        value = (answer_with if answer_with is not None else os.environ.get(config.ANSWER_WITH_ENV, "")).strip().lower()
+        if value in ("", "none"):
+            return False
+        if value != "model":
+            raise InvalidInput(f"--answer-with takes `model` (or `none`), not {value!r}")
+        if self.agent_chat is None and not self.settings.agent_model_configured:
+            raise InvalidInput(f"--answer-with model needs an agent model: {config.AGENT_MODEL_HINT}")
+        return True
+
+    def _answerer(self, engine: Engine, procedure: Procedure, workdir: Path, on_step: OnStep | None) -> Any:
+        from aip.model.answerer import ChatClient, ModelAnswerer
+
+        s = self.settings
+        chat = self.agent_chat if self.agent_chat is not None else ChatClient(s.agent_model_endpoint, s.agent_model_key)
+        return ModelAnswerer(chat, s.agent_model_model, workdir, engine.files(procedure), max_tool_calls=s.max_tool_calls,
+                             max_tokens=s.max_tokens, on_event=on_step)
+
+    def _check_human(self, procedure: Procedure, human: list[str]) -> None:
+        """Every human step names a `Task_Agent` of the procedure."""
+        tasks = [s["name"] for s in procedure.describe()["steps"] if s["kind"] == "Task_Agent"]
+        wrong = [h for h in human if h not in tasks]
+        if wrong:
+            raise InvalidInput(f"--human names {', '.join(wrong)}, which {'is' if len(wrong) == 1 else 'are'} not a Task_Agent of "
+                               f"{procedure.name}; its Task_Agent steps are {', '.join(tasks) or 'none'}")
+
+    def _model_answers(self, engine: Engine, run: Run, answerer: Any) -> tuple[Run | None, JSON | None]:
+        """The agent model answers every task of the pause, one chat each, in order; then the
+        answers go in as one resume. A task it gives up on leaves the pause standing (the
+        answers it made before are not kept: a resume answers every task at once)."""
+        from aip.model.answerer import GaveUp
+
+        pause = run.pause
+        answers: JSON = {}
+        details: dict[int, JSON] = {}
+        for task in pause["tasks"]:
+            began = time.monotonic()
+            try:
+                done = answerer.answer(pause["step"], task, len(pause["tasks"]), answer_hint([task]),
+                                       lambda answer, task=task: engine.check_answer(run, task, answer))
+            except GaveUp as exc:
+                return None, {"answered": False, "step": pause["step"], "task": task["index"], "reason": exc.reason, **exc.record}
+            answers[str(task["index"])] = done.answer
+            details[task["index"]] = {**done.record, "answer_seconds": time.monotonic() - began}
+        return engine.resume(run, answers, answered=details), None
 
     def _record(self, handle: RunFile) -> bool | None:
         """Post the run where it stopped. None without a server; False, with the reason in
@@ -853,7 +951,7 @@ class Client:
         return Published(reply["name"], str(reply["revision"]), reply["bundle_id"], bool(reply.get("existed")))
 
     def upgrade(self) -> list[Published]:
-        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`) to
+        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`, `build_procedure`, `edit_procedure`) to
         the server, as `publish` would: a bundle the server already holds keeps its revision. A
         server does this for itself when it first starts; this is for one that runs an older
         package than this client."""
@@ -931,6 +1029,16 @@ class Client:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return Exported(path, runs, exported, procedures)
+
+
+def _human(human: list[str] | str | None) -> list[str]:
+    """The human steps: the argument (names, or one comma-separated string), else `AIP_HUMAN_STEPS`."""
+    import os
+
+    if human is None:
+        human = os.environ.get(config.HUMAN_STEPS_ENV, "")
+    names = human.split(",") if isinstance(human, str) else list(human)
+    return [n.strip() for n in names if n and n.strip()]
 
 
 # --------------------------------------------------------------------------- describing

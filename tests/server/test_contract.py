@@ -383,7 +383,7 @@ def test_built_in_bundles_are_published_once_per_store(backend, tmp_path):
     bundle, _ = compile_folder(example_dir("dynamic-policy"))
     write_bundle(bundle, shipped / "dynamic_policy.rl")
     store = backend.store
-    assert [f.name for f in builtin_files()] == ["make_procedure.rl"]
+    assert [f.name for f in builtin_files()] == ["build_procedure.rl", "edit_procedure.rl", "make_procedure.rl"]
     assert publish_builtins(store, tmp_path / "none") == [] and store.offered() == []
 
     assert publish_builtins(store, shipped) == [{"name": "dynamic_policy", "revision": "1", "bundle_id": bundle.id, "existed": False}]

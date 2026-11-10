@@ -11,7 +11,11 @@ to run without the configured model. The decision model is an endpoint with the 
 shape (plan question 7): the URL defaults to TypeSafe's and the key is the endpoint's; a model
 is configured when either is set, and with none every `Decide` fails the run
 (`no_decision_model`) until one is. With no server, runs work but are not recorded; `AIP_SERVER=none`
-says so for one command whatever the file holds. The identity
+says so for one command whatever the file holds. The agent model (`agent_model: {url, api_key,
+name, max_tool_calls, max_tokens}`; `AIP_AGENT_MODEL`, `AIP_AGENT_MODEL_KEY`,
+`AIP_AGENT_MODEL_NAME`) is what answers `Task_Agent` pauses when a run asks for it (`--answer-with
+model`, `aip.model.answerer`): an endpoint with the OpenAI Chat Completions shape, Anthropic's
+by default. The identity
 of a run (`agent`, `session`; runtime.md, The record) comes from `--agent` / `AIP_AGENT` and
 `--session` / `AIP_SESSION`; `user` is the server's to fill from the token.
 """
@@ -34,6 +38,13 @@ CONFIG_ENV = "AIP_CONFIG"
 SERVER_ENV, TOKEN_ENV, BATCH_ENV = "AIP_SERVER", "AIP_TOKEN", "AIP_BATCH"
 AGENT_ENV, SESSION_ENV = "AIP_AGENT", "AIP_SESSION"
 DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV = URL_ENV, KEY_ENV
+AGENT_MODEL_ENV, AGENT_MODEL_KEY_ENV, AGENT_MODEL_NAME_ENV = "AIP_AGENT_MODEL", "AIP_AGENT_MODEL_KEY", "AIP_AGENT_MODEL_NAME"
+ANSWER_WITH_ENV, HUMAN_STEPS_ENV = "AIP_ANSWER_WITH", "AIP_HUMAN_STEPS"
+DEFAULT_AGENT_MODEL_URL = "https://api.anthropic.com/v1"
+DEFAULT_AGENT_MODEL_NAME = "claude-opus-5-5"
+DEFAULT_MAX_TOOL_CALLS = 40
+DEFAULT_MAX_TOKENS = 500_000
+AGENT_MODEL_HINT = "`aip config --agent-model-key KEY` (and `--agent-model URL --agent-model-name NAME` for an endpoint other than Anthropic's)"
 CONFIGURE_HINT = "run `aip config server local` to record runs on this machine, or `aip config server URL` for a server elsewhere"
 LOCAL, NONE = "local", "none"
 
@@ -78,6 +89,12 @@ class Settings:
     batch: int
     path: Path
     local: bool = False                # the server is this machine's, started on demand (`aip config server local`)
+    agent_model_url: str | None = None   # the agent model's endpoint as configured; None means Anthropic's
+    agent_model_key: str | None = None
+    agent_model_name: str | None = None  # None means DEFAULT_AGENT_MODEL_NAME
+    agent_model_source: str | None = None
+    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS   # per task the agent model answers
+    max_tokens: int = DEFAULT_MAX_TOKENS           # per task: prompt and completion tokens over every call of its chat
 
     @property
     def token_set(self) -> bool:
@@ -106,6 +123,28 @@ class Settings:
         key = "set" if self.decision_model_key_set else "none"
         return f"decision model: {where}  key: {key}  (from {self.decision_model_source})"
 
+    @property
+    def agent_model_configured(self) -> bool:
+        """The agent model answers when its key is set: the endpoint and the name have defaults."""
+        return bool(self.agent_model_key)
+
+    @property
+    def agent_model_endpoint(self) -> str:
+        return self.agent_model_url or DEFAULT_AGENT_MODEL_URL
+
+    @property
+    def agent_model_model(self) -> str:
+        return self.agent_model_name or DEFAULT_AGENT_MODEL_NAME
+
+    @property
+    def agent_model(self) -> str:
+        """The `aip config` line for the agent model: endpoint, model, whether a key is set, the caps."""
+        if not (self.agent_model_url or self.agent_model_key or self.agent_model_name):
+            return f"agent model: none (`--answer-with model` needs one; {AGENT_MODEL_HINT})"
+        key = "set" if self.agent_model_key else "none"
+        return (f"agent model: {self.agent_model_endpoint}  model: {self.agent_model_model}  key: {key}  "
+                f"(from {self.agent_model_source}); per task at most {self.max_tool_calls} tool calls, {self.max_tokens} tokens")
+
 
 def settings() -> Settings:
     config = load_config()
@@ -126,8 +165,17 @@ def settings() -> Settings:
     from_env = [v for v in (DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV) if os.environ.get(v)]
     model_source = ", ".join(from_env) if from_env else (str(config_path()) if url or key else None)
     batch = _int(os.environ.get(BATCH_ENV)) or _int(config.get("batch")) or DEFAULT_BATCH
+    agent = config.get("agent_model") if isinstance(config.get("agent_model"), dict) else {}
+    agent_values = {}
+    for field, env in (("url", AGENT_MODEL_ENV), ("api_key", AGENT_MODEL_KEY_ENV), ("name", AGENT_MODEL_NAME_ENV)):
+        agent_values[field] = (os.environ[env] if env in os.environ else agent.get(field)) or None
+    agent_env = [v for v in (AGENT_MODEL_ENV, AGENT_MODEL_KEY_ENV, AGENT_MODEL_NAME_ENV) if os.environ.get(v)]
+    agent_source = ", ".join(agent_env) if agent_env else (str(config_path()) if any(agent_values.values()) else None)
+    agent_url = agent_values["url"]
     return Settings(server.rstrip("/") if server else None, source, token, url.rstrip("/") if url else None, key, model_source,
-                    batch, config_path(), local)
+                    batch, config_path(), local, agent_url.rstrip("/") if agent_url else None, agent_values["api_key"],
+                    agent_values["name"], agent_source, _int(agent.get("max_tool_calls")) or DEFAULT_MAX_TOOL_CALLS,
+                    _int(agent.get("max_tokens")) or DEFAULT_MAX_TOKENS)
 
 
 def _int(value: Any) -> int | None:
@@ -139,11 +187,15 @@ def _int(value: Any) -> int | None:
 
 
 def configure(server: str | None = None, token: str | None = None, decision_model: str | None = None,
-              decision_model_key: str | None = None, batch: int | None = None, clear: bool = False) -> Settings:
+              decision_model_key: str | None = None, batch: int | None = None, clear: bool = False, *,
+              agent_model: str | None = None, agent_model_key: str | None = None, agent_model_name: str | None = None,
+              max_tool_calls: int | None = None, max_tokens: int | None = None) -> Settings:
     """Write the config file: arguments left None are unchanged, an empty string forgets the
     value, `clear` forgets everything. `server` is a URL, `local` for this machine's server
     started on demand, or `none` (the same as an empty string). `decision_model` is the
-    endpoint's URL, `decision_model_key` its key."""
+    endpoint's URL, `decision_model_key` its key. `agent_model`, `agent_model_key` and
+    `agent_model_name` are the agent model's endpoint, key and model; `max_tool_calls` and
+    `max_tokens` its caps per task."""
     if clear:
         save_config({})
         return settings()
@@ -165,6 +217,22 @@ def configure(server: str | None = None, token: str | None = None, decision_mode
         config["decision_model"] = model
     else:
         config.pop("decision_model", None)
+    agent = dict(config.get("agent_model") or {}) if isinstance(config.get("agent_model"), dict) else {}
+    for key, value in (("url", agent_model.rstrip("/") if agent_model else agent_model), ("api_key", agent_model_key),
+                       ("name", agent_model_name)):
+        if value:
+            agent[key] = value
+        elif value is not None:
+            agent.pop(key, None)
+    for key, value in (("max_tool_calls", max_tool_calls), ("max_tokens", max_tokens)):
+        if value is not None:
+            if value < 1:
+                raise ValueError(f"{key} is at least 1, not {value}")
+            agent[key] = value
+    if agent:
+        config["agent_model"] = agent
+    else:
+        config.pop("agent_model", None)
     if batch is not None:
         if batch < 1:
             raise ValueError(f"the batch size is at least 1, not {batch}")
@@ -186,5 +254,6 @@ def identity(agent: str | None = None, session: str | None = None, default_agent
 
 
 __all__ = ["CONFIG_ENV", "SERVER_ENV", "TOKEN_ENV", "BATCH_ENV", "AGENT_ENV", "SESSION_ENV", "DECISION_MODEL_ENV", "LOCAL", "NONE",
-           "DECISION_MODEL_KEY_ENV", "CONFIGURE_HINT", "DECISION_MODEL_HINT", "Settings", "config_path", "load_config", "save_config",
+           "DECISION_MODEL_KEY_ENV", "CONFIGURE_HINT", "AGENT_MODEL_ENV", "AGENT_MODEL_KEY_ENV", "AGENT_MODEL_NAME_ENV",
+           "ANSWER_WITH_ENV", "HUMAN_STEPS_ENV", "AGENT_MODEL_HINT", "DEFAULT_AGENT_MODEL_URL", "DEFAULT_AGENT_MODEL_NAME", "DECISION_MODEL_HINT", "Settings", "config_path", "load_config", "save_config",
            "settings", "configure", "identity"]

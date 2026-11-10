@@ -26,7 +26,8 @@ INPUTS = {"name": "echo", "description": "Hand back the one string it is given."
 BROKEN = 'procedure echo "Hand back a string."\nstart "The string." {\n  a: string\n  next nowhere\n}\nend "The string." {\n  read a\n}\n'
 WORKING = BROKEN.replace("nowhere", "end")
 CANONICAL = 'Procedure echo\n  "Hand back a string."\n\nStart "The string." {\n  a: string\n  Next_Step end\n}\n\nEnd "The string." {\n  Read a\n}\n'
-REBUILD = "uv run aip compile examples/language/make_procedure -o src/aip/server/bundles/make_procedure.rl"
+SHIPPED = ["build_procedure", "edit_procedure", "make_procedure"]           # A1 added the first two
+REBUILD = "uv run aip compile examples/language/{0} -o src/aip/server/bundles/{0}.rl"
 
 
 def write(folder: Path, source: str) -> Path:
@@ -39,32 +40,33 @@ def steps(client: aip.Client, run_id: str) -> list[str]:
     return [entry["step"] for entry in client.run_record(run_id).history]
 
 
-def test_the_shipped_bundle_is_the_example_folder():
-    [shipped] = builtin_files()
-    assert shipped.name == "make_procedure.rl"
-    folder, diagnostics = compile_folder(FOLDER)
-    assert folder is not None and [str(d) for d in diagnostics] == [], "the example compiles with nothing to say"
-    bundle = read_bundle(shipped)                             # verified as it is read: the graph is the one the source compiles to
-    assert (bundle.name, bundle.id) == ("make_procedure", folder.id), \
-        f"src/aip/server/bundles/make_procedure.rl is not what examples/language/make_procedure compiles to; run: {REBUILD}"
+def test_each_shipped_bundle_is_its_example_folder():
+    assert [f.stem for f in builtin_files()] == SHIPPED
+    for shipped in builtin_files():
+        folder, diagnostics = compile_folder(example_dir(shipped.stem))
+        assert folder is not None and [str(d) for d in diagnostics] == [], f"{shipped.stem} compiles with nothing to say"
+        bundle = read_bundle(shipped)                         # verified as it is read: the graph is the one the source compiles to
+        assert (bundle.name, bundle.id) == (shipped.stem, folder.id), \
+            f"src/aip/server/bundles/{shipped.name} is not what examples/language/{shipped.stem} compiles to; run: {REBUILD.format(shipped.stem)}"
 
 
 def test_a_fresh_store_has_it_and_upgrade_offers_it_to_one_that_does_not():
     fresh = Served(builtins=True)
     client = aip.Client(Server("http://testserver", session=fresh), agent="tests")
-    [entry] = client.list()
-    assert (entry.name, entry.resolves, entry.description.startswith("Build an AIP procedure from a description")) == ("make_procedure", "1", True)
-    [again] = client.upgrade()
-    assert (again.name, again.revision, again.existed) == ("make_procedure", "1", True), "the server had it: nothing changes"
+    assert [(e.name, e.resolves) for e in client.list()] == [(name, "1") for name in SHIPPED]
+    entry = client.list()[2]
+    assert entry.description.startswith("Build an AIP procedure from a description")
+    again = client.upgrade()
+    assert [(p.name, p.revision, p.existed) for p in again] == [(name, "1", True) for name in SHIPPED], "the server had them: nothing changes"
     assert client.search("write a new procedure from a description")[0].name == "make_procedure"
     fresh.close()
 
     older = Served()                                          # a server whose package ships nothing
     client = aip.Client(Server("http://testserver", session=older), agent="tests")
     assert client.list() == []
-    [published] = client.upgrade()
-    assert (published.name, published.revision, published.existed) == ("make_procedure", "1", False)
-    assert [(e.name, e.resolves) for e in client.list()] == [("make_procedure", "1")]
+    published = client.upgrade()
+    assert [(p.name, p.revision, p.existed) for p in published] == [(name, "1", False) for name in SHIPPED]
+    assert [(e.name, e.resolves) for e in client.list()] == [(name, "1") for name in SHIPPED]
     older.close()
     with pytest.raises(aip.NoServer):
         aip.Client(agent="tests").upgrade()

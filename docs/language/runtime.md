@@ -213,7 +213,11 @@ reference runtime's field names are in `docs/cli-json.md`, The run file.
   the number a bar reads, whether it held, whether a bar turned it). A script's entry keeps the
   script and what it was given on stdin. An agent task's entry keeps the prompt and references
   it was given, who answered (`agent`, `session`) and how long the run waited for the answer
-  (`waited_seconds`).
+  (`waited_seconds`). A runtime that has a model answer the task (the agent model of
+  `docs/answerer.md`) says so in `answered_by` (`{"agent": "model", "model": <name>}`) and keeps
+  what answering took: the tool calls (`name`, a summary of the arguments, `seconds`), the
+  tokens (`prompt`, `completion`, `total`), `model_seconds` and how many answers were refused
+  before one held (`refusals`). The answer itself is checked as any agent's is.
 - The history is appended, never rewritten (the entries of a batch still open are the one case
   where an entry may yet move, above). A run that fails keeps everything up to the failure
   and the error beside it; the failed step runs again on a retry, from the state before it.

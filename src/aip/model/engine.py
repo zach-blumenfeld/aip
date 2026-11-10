@@ -54,7 +54,9 @@ kind: a `Decide` entry `answered_by` (`{"model": name, "endpoint": url}`), `hist
 (`below`, `confidence`, `fired`, and `reason` when it fired: `below` or `absent`), `value` and
 `to`; an `Aggregate` entry `resolutions` per aggregation; an `Execute` entry `script` and
 `stdin`; a `Task_Agent` entry the `prompt` and `references` it was given, `answered_by`
-(`{"agent", "session"}`) and `waited_seconds` (pause to resume). The first entry a `Loop` pass
+(`{"agent", "session"}`, or `{"agent": "model", "model"}` when the agent model answered it, which
+adds `tool_calls`, `tokens`, `model_seconds` and `refusals`: `aip.model.answerer`) and
+`waited_seconds` (pause to resume). The first entry a `Loop` pass
 writes at the loop's level carries `until`, the test at the head that let the pass run
 (`{"where": "head", "holds": false, "resolution"}`). A loop writes one entry when it exits
 (`kind` `For` or `Loop`): `result` holds `iterations` and the collected list, `exit` says why
@@ -239,13 +241,15 @@ class Engine:
         self._follow(run, run, start)
         return self._settle(run)
 
-    def resume(self, run: Run, answers: Any, *, identity: JSON | None = None) -> Run:
+    def resume(self, run: Run, answers: Any, *, identity: JSON | None = None, answered: dict[int, JSON] | None = None) -> Run:
         """Carry the agent's answers to a paused run and step on. `answers` is keyed by task
         index, a list in task order, or the one answer when the pause has one task. They are as
         strict as inputs: every task answered, every `Produce` key present and of its type, and
         nothing the pause did not ask for (a key, a task index, a field on an answer). Anything
         else raises `InvalidOutput` naming all of it, nothing is applied, and the pause stands.
-        `identity` is who answers (`agent`, `session`), the run's own when not given."""
+        `identity` is who answers (`agent`, `session`), the run's own when not given. `answered`
+        holds, per task index, fields for that task's entry: an `answered_by` of its own (the agent
+        model) and what answering cost (`tool_calls`, `tokens`, `model_seconds`, `refusals`)."""
         if run.status != PAUSED or run.pause is None:
             raise NotPaused(None, f"the run is {run.status}; only a paused run takes an answer")
         began = self.timer()
@@ -285,9 +289,11 @@ class Engine:
             waiting = cursor.pause or {}
             cursor.pause, cursor.status = None, RUNNING
             cursor.state.update(produced)
-            self._record(run, cursor, step, task["state"], produced, began, spent=waiting.get("seconds") or 0.0,
-                         answered_by=answered_by, waited_seconds=_between(waiting.get("since"), now),
-                         prompt=task["prompt"], references=task["references"])
+            extra = dict((answered or {}).get(task["index"]) or {})
+            spent = (waiting.get("seconds") or 0.0) + (extra.pop("answer_seconds", None) or 0.0)  # a model's chat is the step's own time
+            self._record(run, cursor, step, task["state"], produced, began, spent=spent,
+                         answered_by=extra.pop("answered_by", answered_by), waited_seconds=_between(waiting.get("since"), now),
+                         prompt=task["prompt"], references=task["references"], **extra)
             try:
                 self._after_step(run, cursor, step, set(produced))
             except StepError as err:  # the flow after the step: a loop's cap at the head of the next pass
@@ -295,6 +301,16 @@ class Engine:
         if run.status != FAILED:  # the run's own task may have met a cap just above; a `For` goes on to its other passes
             run.pause, run.status = None, RUNNING
         return self._settle(run)
+
+    def check_answer(self, run: Run, task: JSON, answer: Any) -> JSON:
+        """One task's answer checked as `resume` checks it, applying nothing: the produced keys,
+        or `InvalidOutput` naming what does not hold."""
+        _, step = self._locate(run, task)
+        return steps.check_outputs(run.procedure, step, answer, source="agent")
+
+    def files(self, procedure: Procedure) -> Path:
+        """Where the bundle's files are unpacked (once per bundle id)."""
+        return self._root(procedure)
 
     def retry(self, run: Run) -> Run:
         """Run the step that failed again, from the state before it. A failure a retry cannot

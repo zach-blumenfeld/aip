@@ -356,6 +356,8 @@ def entry_properties(run_id: str, bundle_id: str, seq: int, entry: JSON) -> JSON
         if entry.get("kind") in LOOP_KINDS else None,
         "until_holds": until.get("holds"), "until_where": until.get("where"),
         "script": entry.get("script"),
+        "tool_calls": len(entry["tool_calls"]) if isinstance(entry.get("tool_calls"), list) else None,
+        "tokens": (entry.get("tokens") or {}).get("total") if isinstance(entry.get("tokens"), dict) else None,
     })
 
 

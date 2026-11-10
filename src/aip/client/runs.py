@@ -23,6 +23,7 @@ import json
 import os
 import re
 import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,7 @@ class RunFile:
     revision: str | None = None            # the catalog revision: the one a name resolved to, or the one the server holds the bundle as
     server: str | None = None              # where the run is recorded
     recorded: bool = False                 # whether the last stop reached the server
+    human: list[str] | None = None         # the steps the agent model leaves to a person (`--human`), for every resume
     created: str = field(default_factory=utc_now)
     updated: str = field(default_factory=utc_now)
 
@@ -258,6 +260,14 @@ def _what(entry: JSON) -> str:
         return f"-> {entry.get('to')}  ({entry.get('read')} is {entry.get('value')}{passed})"
     if kind == "Execute":
         return f"{entry.get('script')} -> {_produced(result) or 'nothing'}"
+    if kind == "Task_Agent" and (entry.get("answered_by") or {}).get("agent") == "model":
+        calls = entry.get("tool_calls") or []
+        counts = Counter(c.get("name") for c in calls)
+        tools = f"{len(calls)} tool call{'' if len(calls) == 1 else 's'}" + (f" ({', '.join(f'{n} {c}' for n, c in counts.items())})" if calls else "")
+        tokens = (entry.get("tokens") or {}).get("total")
+        refused = f", {entry['refusals']} refused" if entry.get("refusals") else ""
+        return (f"answered by model {entry['answered_by'].get('model') or ''}: {tools}" + (f", {tokens} tokens" if tokens is not None else "")
+                + f"{refused} -> {_produced(result)}")
     if kind == "Task_Agent":
         by = (entry.get("answered_by") or {}).get("agent") or "?"
         waited = entry.get("waited_seconds")

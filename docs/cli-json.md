@@ -68,6 +68,14 @@ loaded; read them when the prompt calls for it), `answer_with` (what to answer: 
 their types) and `labels` (for each `choice` or `score` among them, the values it may take).
 `hint` is one line on the shape of an answer to this pause.
 
+A run started or resumed with `--answer-with model` pauses only when the agent model does not
+answer: at a step named by `--human`, or when it gives up (its answer refused four times, its cap
+of tool calls or tokens reached, its endpoint failing). The paused object then carries
+`answerer`: `{"answered": false, "step", "reason"}`, and, when the model tried, the `task` it gave
+up on and what it spent (`tool_calls`, `tokens`, `model_seconds`, `refusals`). The pause is the
+same as any other: answer it with `aip resume`, or resume with `--answer-with model` and no
+answers to have the model try again (`docs/answerer.md`).
+
 A task whose innermost loop is a `Loop` with a cap (`At_Most` on an `Until` loop, the count of
 a `Times` loop) also carries `pass_of`, the cap, and `last_pass`: `true` when this pass is the
 last the cap allows. In `fixed-policy` (`Loop revise Until check_summary.all_hold, At_Most 3,
@@ -448,6 +456,12 @@ value); for a `Task_Agent`, `answered_by` (the agent and session that answered);
 exit, `exit` (`until`, `items`, `times` or `cap`), `where` (`head`, or the step that produced
 the `Until` answer) and `iterations`. A loop's line has no `seconds`.
 
+With `--answer-with model` the agent model's work is reported too, before the entry of the task
+it answers: one `{"event": "tool", "step", "task", "tool", "args", "seconds"}` line per tool call
+(`args` is a summary: the path, the pattern, a written file's size, never its content; `error`
+when the tool refused), and `{"event": "refused", "step", "task", "errors"}` when an answer it
+gave did not hold and went back to it.
+
 The lines of a `For` appear as its passes run, so a batch reports while it works: the
 classifications, the routes, a script, before the pause that follows. That is the order things
 happened in. The history holds the same entries pass by pass in input order, the same at every
@@ -588,7 +602,7 @@ show them in place already, so a paused loop's work is always in the record. Per
 | `Route` | `read` (the dotted key it routed on, for lineage; `input` has the answer under its short name), `check` (`null` without a `Confidence_Below`; else `below`, `confidence`, `fired`, and when it fired `reason`: `below`, or `absent` for a script's answer with no confidence), `value` (the branch word taken, `null` when the check fired) and `to`. Its `result` is empty: a route produces nothing |
 | `Aggregate` | `resolutions`: per aggregation, each answer's `source`, `value`, `holds`, `probability` (the probability the answer put on the condition, the number a `With Confidence_Above` bar reads; `null` for an answer that has none) and `barred` |
 | `Execute` | `script` and `stdin` |
-| `Task_Agent` | `prompt` and `references` as handed over; `answered_by` (`{"agent", "session"}`: who resumed with the answer); `waited_seconds`, from the pause to the answer. The entry is written when the answer is accepted |
+| `Task_Agent` | `prompt` and `references` as handed over; `answered_by` (`{"agent", "session"}`: who resumed with the answer, or `{"agent": "model", "model": NAME}` when the agent model answered); `waited_seconds`, from the pause to the answer. The entry is written when the answer is accepted. A task the agent model answered also has `tool_calls` (`[{"name", "args", "seconds"}]`, `error` on a call a tool refused), `tokens` (`{"prompt", "completion", "total"}`), `model_seconds` (its calls alone) and `refusals` |
 | `For`, `Loop` | written when the loop exits: `result` holds `iterations` and a `For`'s collected list; `exit` has `reason` (`until`, `items`, `times`, `cap`), `where` (`head`, or the step or loop that produced the `Until` answer) and that answer's `resolution`. A loop that fails the run at its cap writes it too, with `reason: cap`. No `seconds` |
 
 The first entry a `Loop Until` pass writes at the loop's own level also carries `until`, the test

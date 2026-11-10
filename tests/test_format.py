@@ -79,7 +79,7 @@ class Canonical(unittest.TestCase):
         """The shipped examples are in the formatter's form, so `aip fmt --check` on them passes
         (CI runs it) and formatting one never changes its bundle id."""
         files = sorted(EXAMPLES.glob("*/procedure.aip"))
-        self.assertEqual(len(files), 6)
+        self.assertEqual(len(files), 8)
         for file in files:
             with self.subTest(file.parent.name):
                 before = file.read_text(encoding="utf-8")
@@ -204,7 +204,7 @@ class FmtCommand(unittest.TestCase):
     def test_a_directory_of_programs_is_every_program_in_it(self):
         code, out, _ = self.run_cli("fmt", "--check", str(EXAMPLES))
         self.assertEqual(code, 0, out)
-        self.assertEqual(out.count("unchanged "), 6, "aip fmt --check examples/language is what CI runs")
+        self.assertEqual(out.count("unchanged "), 8,"aip fmt --check examples/language is what CI runs")
 
     def test_missing_path(self):
         code, _, err = self.run_cli("fmt", "/nonexistent/folder")
