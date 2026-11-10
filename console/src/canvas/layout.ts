@@ -1,6 +1,8 @@
 // Where the canvas's cards, frames and wires go. One column in written order, a loop's body inset in
 // its frame, every wire leaving a port on the right edge, running down (or up) a lane of its own in the
-// gutter to the right of everything, and arriving at the right edge of its target. The sizes are fixed
+// gutter to the right of everything, and arriving at the right edge of its target. Drawn to the right
+// instead, it is one row: a loop's body is a row inside its frame, and the wires run in a gutter
+// under everything and rise into the bottom edge of their targets. The sizes are fixed
 // numbers that canvas.css repeats (a card's rows are one line each, clipped), so the layout is known
 // without measuring the DOM, and the same model always draws the same picture. No imports but the
 // model and no DOM: it runs under node as it is (test/canvas.test.ts).
@@ -16,6 +18,7 @@ export const SIZE = {
   row: 18,          // one row of a section, and its label
   port: 22,         // one port
   gap: 22,          // between items of a column
+  rowGap: 48,       // between items of a row: the wires leave through it
   inset: 16,        // a frame's body from its sides
   frameHead: 34,    // a frame's header
   gutter: 18,       // from the widest item to the first lane
@@ -57,7 +60,13 @@ export function cardHeight(card: Card): number {
 
 const footHeight = (frame: Frame) => (frame.ports.length ? SIZE.port * frame.ports.length + 8 : SIZE.inset);
 
-export function layoutOf(model: Model): Layout {
+export type Direction = "down" | "right";
+
+export function layoutOf(model: Model, direction: Direction = "down"): Layout {
+  return direction === "right" ? rowLayout(model) : columnLayout(model);
+}
+
+function columnLayout(model: Model): Layout {
   const boxes: Record<string, Box> = {};
   const portY: Record<string, number[]> = {};
 
@@ -127,6 +136,81 @@ export function layoutOf(model: Model): Layout {
     boxes, portY, wires,
     width: right + SIZE.gutter + Math.max(lanes.length, 1) * SIZE.lane + SIZE.margin,
     height: all.h + 2 * SIZE.margin,
+  };
+}
+
+function rowLayout(model: Model): Layout {
+  const boxes: Record<string, Box> = {};
+  const portY: Record<string, number[]> = {};
+
+  /** Place `ids` as a row with its top left at (x, y); the row's width and height. */
+  const row = (ids: string[], x: number, y: number): { w: number; h: number } => {
+    let h = 0;
+    let cursor = x;
+    ids.forEach((id, i) => {
+      if (i > 0) cursor += SIZE.rowGap;
+      const size = place(id, cursor, y);
+      h = Math.max(h, size.h);
+      cursor += size.w;
+    });
+    return { w: cursor - x, h };
+  };
+
+  const place = (id: string, x: number, y: number): { w: number; h: number } => {
+    const card = model.cards[id];
+    if (card) {
+      const h = cardHeight(card);
+      boxes[id] = { x, y, w: SIZE.cardWidth, h };
+      const first = y + bodyHeight(card) + SIZE.sectionGap + SIZE.port / 2;
+      portY[id] = card.ports.map((_, i) => first + i * SIZE.port);
+      return { w: SIZE.cardWidth, h };
+    }
+    const frame = model.frames[id];
+    if (!frame) return { w: 0, h: 0 };
+    // The body's last wire leaves through the frame's right side, as a card's does through the gap.
+    const body = row(frame.children, x + SIZE.inset, y + SIZE.frameHead);
+    const w = Math.max(body.w, SIZE.cardWidth) + SIZE.inset + SIZE.rowGap;
+    const h = SIZE.frameHead + body.h + footHeight(frame);
+    boxes[id] = { x, y, w, h };
+    const first = y + SIZE.frameHead + body.h + 4 + SIZE.port / 2;
+    portY[id] = frame.ports.map((_, i) => first + i * SIZE.port);
+    return { w, h };
+  };
+
+  const all = row(model.top, SIZE.margin, SIZE.margin);
+  const bottom = SIZE.margin + all.h;
+
+  // Each wire drops from its port to a lane under everything, runs along it, and rises into the
+  // bottom edge of its target: shortest first, so short hops stay close in.
+  const pending: { from: string; port: number; to: string; kind: Port["kind"]; x0: number; x1: number; y1: number; x2: number; y2: number }[] = [];
+  const sources: (Card | Frame)[] = [...Object.values(model.cards), ...Object.values(model.frames)];
+  for (const source of sources) {
+    source.ports.forEach((port, i) => {
+      const target = boxes[port.target];
+      const ys = portY[source.id];
+      const box = boxes[source.id];
+      if (!target || !ys || !box) return;
+      const x0 = box.x + box.w;
+      pending.push({ from: source.id, port: i, to: port.target, kind: port.kind, x0, x1: x0 + 8 + (i % 6) * 6, y1: ys[i],
+                     x2: target.x + 24, y2: target.y + target.h });
+    });
+  }
+  pending.sort((a, b) => Math.abs(a.x2 - a.x1) - Math.abs(b.x2 - b.x1) || a.x1 - b.x1);
+  const lanes: { left: number; right: number }[][] = [];
+  const wires: Wire[] = [];
+  for (const w of pending) {
+    const left = Math.min(w.x1, w.x2) - 4, right = Math.max(w.x1, w.x2) + 4;
+    let lane = lanes.findIndex((taken) => taken.every((t) => right < t.left || left > t.right));
+    if (lane < 0) { lanes.push([]); lane = lanes.length - 1; }
+    lanes[lane].push({ left, right });
+    const gy = bottom + SIZE.gutter + lane * SIZE.lane;
+    wires.push({ from: w.from, port: w.port, to: w.to, kind: w.kind, path: `M ${w.x0} ${w.y1} H ${w.x1} V ${gy} H ${w.x2} V ${w.y2 + 7}` });
+  }
+
+  return {
+    boxes, portY, wires,
+    width: all.w + 2 * SIZE.margin + SIZE.rowGap,
+    height: bottom + SIZE.gutter + Math.max(lanes.length, 1) * SIZE.lane + SIZE.margin,
   };
 }
 

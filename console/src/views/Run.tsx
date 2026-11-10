@@ -9,6 +9,7 @@ import { answersFor, collect, fieldKind, fieldText, optionsOf, passLabel } from 
 import { duration } from "../record/model.ts";
 import { href } from "../router";
 import { RecordHistory, RecordSummary, ErrorSummary, Json, DraftBadge } from "./Record";
+import { RunPath } from "./Steps";
 
 /** The run console. Runs go through the `aip` CLI on this machine (`aip run --progress`, then `aip resume
  *  --progress` per answer): scripts run here, the decision model is the one this machine's `aip config` names,
@@ -184,6 +185,13 @@ function Console({ reference }: { reference?: string }) {
         </div>
 
         <aside>
+          {record && (
+            <>
+              <h2>Path</h2>
+              <p className="muted small">The run so far over the step graph: what it reached and the arrows it took are heavy.</p>
+              <RunPath record={record} direction="down" />
+            </>
+          )}
           <h2>Steps</h2>
           <p className="muted small">One line per step as the CLI reports it (<code>--progress</code>), in the order things happened.</p>
           <ol className="trace small" data-testid="trace">

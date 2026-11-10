@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 // Hash routes, so the console's process serves one page with no fallback rule. In folder mode only
 // #/ (the folder's procedure), #/run and #/runs apply; the others need a server.
 //   #/                          catalog (folder mode: the folder's procedure)
-//   #/p/<ref>                   a procedure: its card canvas, header, revisions
+//   #/p/<ref>[?view=]           a procedure: its steps (the step graph as control flow, data flow or run
+//                               traffic, or the card canvas: view=control|data|traffic|cards), header, revisions
 //   #/p/<ref>/files[/<path>]    source: procedure.aip and the bundle's files, one open
 //   #/p/<name>/diff[/<a>..<b>]  diff between two revisions of a name
 //   #/run[/<ref>]               run console: pick a procedure, then drive it through the CLI
@@ -16,7 +17,7 @@ import { useEffect, useState } from "react";
 // with no revision (a draft), which has no name to resolve.
 export type Route =
   | { page: "catalog" }
-  | { page: "procedure"; ref: string }
+  | { page: "procedure"; ref: string; view?: string }
   | { page: "source"; ref: string; path?: string }
   | { page: "diff"; name: string; a?: string; b?: string }
   | { page: "run"; ref?: string }
@@ -36,8 +37,8 @@ export const bundleOf = (ref: string): string | null => (ref.startsWith("bundle:
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#/, "").replace(/^\/+/, "");
   if (path === "") return { page: "catalog" };
-  let m = /^p\/([^/]+)$/.exec(path);
-  if (m) return { page: "procedure", ref: decodeURIComponent(m[1]) };
+  let m = /^p\/([^/?]+)(?:\?(.*))?$/.exec(path);
+  if (m) return { page: "procedure", ref: decodeURIComponent(m[1]), view: new URLSearchParams(m[2] ?? "").get("view") ?? undefined };
   m = /^p\/([^/]+)\/files(?:\/(.+))?$/.exec(path);
   if (m) return { page: "source", ref: decodeURIComponent(m[1]), path: m[2] ? decodePath(m[2]) : undefined };
   m = /^p\/([^/@]+)\/diff(?:\/([^.]+)\.\.([^.]+))?$/.exec(path);
@@ -66,7 +67,7 @@ export function parseHash(hash: string): Route {
 export function href(route: Route): string {
   switch (route.page) {
     case "catalog": return "#/";
-    case "procedure": return `#/p/${encodeURIComponent(route.ref)}`;
+    case "procedure": return `#/p/${encodeURIComponent(route.ref)}${route.view ? "?view=" + encodeURIComponent(route.view) : ""}`;
     case "source":
       return `#/p/${encodeURIComponent(route.ref)}/files${route.path ? "/" + encodePath(route.path) : ""}`;
     case "diff": {

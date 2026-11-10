@@ -14,6 +14,7 @@
   --End: #777;
   --loop: #c2185b;
   --accent: #3b6fd6;
+  --data: #0e8f8f;
   --good: #2e8b57;
   --warn: #b8860b;
   --bad: #b00020;
@@ -66,9 +67,97 @@ button.linkish { background: none; border: 0; padding: 0; font: inherit; color: 
 strong.run-failed { color: var(--bad); }
 strong.run-done { color: var(--good); }
 
-/* Procedure */
-.procedure-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; margin-top: 1rem; }
-@media (max-width: 56rem) { .procedure-grid { grid-template-columns: 1fr; } }
+/* Procedure: the steps beside what `aip info` says. Drawn to the right (or as cards) the steps are wide:
+   they take the whole row and the rest moves below, in two columns. */
+.steps-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 1.5rem; align-items: start; margin-top: 0.5rem; }
+.steps-grid > * { min-width: 0; }
+.steps-grid > .wide { grid-column: 1 / -1; }
+.about { display: grid; grid-template-columns: 1fr; gap: 0 1.5rem; }
+.steps-grid > .wide + .about { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 56rem) {
+  .steps-grid, .steps-grid > .wide + .about { grid-template-columns: 1fr; }
+}
+
+/* The step graph (views/StepGraph.tsx) */
+.graph-controls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.5rem; margin: 0.25rem 0 0.5rem; }
+.flow-toggle, .direction-toggle { display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
+.direction-toggle { margin-left: auto; }
+.graph-scroll { overflow: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.step-graph { display: block; margin: 0 auto; }
+.step-graph .node > rect { fill: Canvas; stroke: var(--kind, currentColor); stroke-width: 1.5; }
+.step-graph .node.kind-Start { --kind: var(--Start); }
+.step-graph .node.kind-Decide { --kind: var(--Decide); }
+.step-graph .node.kind-Route { --kind: var(--Route); }
+.step-graph .node.kind-Aggregate { --kind: var(--Aggregate); }
+.step-graph .node.kind-Execute { --kind: var(--Execute); }
+.step-graph .node.kind-Task_Agent { --kind: var(--Task_Agent); }
+.step-graph .node.kind-End { --kind: var(--End); }
+.step-graph .node.kind-Start > rect { stroke-dasharray: 4 3; }
+.step-graph .node .end-ring { fill: none; stroke-width: 1; }
+.step-graph .node .start-dot { fill: var(--kind); stroke: none; }
+.step-graph .node-name { font-weight: 600; font-size: 13px; fill: currentColor; }
+.step-graph .node-kind { font-size: 11px; fill: var(--kind); }
+.step-graph .node[role="button"], .step-graph .frame-head[role="button"] { cursor: pointer; }
+.step-graph .node:focus-visible, .step-graph .frame-head:focus-visible { outline: none; }
+.step-graph .node.selected > rect:first-of-type, .step-graph .node:focus-visible > rect:first-of-type { stroke-width: 3.5; fill: color-mix(in srgb, var(--kind) 14%, Canvas); }
+.step-graph .frame > rect { fill: color-mix(in srgb, var(--loop) 4%, transparent); stroke: var(--loop); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.step-graph .frame.selected > rect { stroke-dasharray: none; }
+.step-graph .frame-head { font-size: 12px; fill: currentColor; }
+.step-graph .frame-kind { fill: var(--loop); font-weight: 600; }
+.step-graph .frame-name { font-weight: 600; }
+.step-graph .frame-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; opacity: 0.75; }
+.step-graph .edge { color: color-mix(in srgb, currentColor 55%, transparent); }
+.step-graph .edge.rail { color: color-mix(in srgb, var(--loop) 70%, transparent); }
+.step-graph .arrow-head { fill: color-mix(in srgb, currentColor 60%, Canvas); }
+.step-graph .branch-label { font-size: 11px; fill: CanvasText; paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
+/* Data flow: the control edges stay, faint, under the dashed arrows that carry the keys. */
+.step-graph.data-mode .edge { color: color-mix(in srgb, currentColor 22%, transparent); }
+.step-graph.data-mode .branch-label { opacity: 0.5; }
+.step-graph .data-edge { color: var(--data); }
+.step-graph .data-arrow { fill: var(--data); }
+.step-graph .data-edge.dim { opacity: 0.12; }
+.step-graph .data-edge.lit path { stroke-width: 2.25; }
+.step-graph .data-edge.lit .data-label { font-weight: 700; }
+.step-graph .data-label { font-size: 11px; fill: var(--data); paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
+/* Run traffic: edges in the accent, thick with use; an edge no run took stays a dashed hairline. */
+.step-graph.traffic-mode .edge { color: color-mix(in srgb, currentColor 28%, transparent); }
+.step-graph.traffic-mode .edge.busy { color: var(--accent); }
+.step-graph.traffic-mode .edge.idle path { stroke-dasharray: 3 4; }
+.step-graph .busy-arrow { fill: var(--accent); }
+.step-graph .run-count { font-weight: 700; fill: var(--accent); }
+.step-graph .badge rect { fill: var(--accent); stroke: Canvas; stroke-width: 1.5; }
+.step-graph .badge text { font-size: 11px; font-weight: 600; fill: white; }
+.step-graph .badge.failed rect, .step-graph .badge.mark-failed rect { fill: var(--bad); }
+.step-graph .badge.mark-waiting rect { fill: var(--warn); }
+.step-graph .badge.none rect { fill: color-mix(in srgb, currentColor 30%, Canvas); }
+/* One run's path: what it reached and took is heavy, the rest recedes. */
+.step-graph.path-mode .edge { color: color-mix(in srgb, currentColor 25%, transparent); }
+.step-graph.path-mode .edge.taken { color: CanvasText; }
+.step-graph.path-mode .edge.taken .arrow-head { fill: CanvasText; }
+.step-graph.path-mode .node:not(.visited) { opacity: 0.45; }
+.step-graph.path-mode .node.visited > rect:first-of-type { stroke-width: 3; fill: color-mix(in srgb, var(--kind) 12%, Canvas); }
+.step-graph.path-mode .node.waiting > rect:first-of-type { stroke: var(--warn); stroke-dasharray: 6 3; }
+.step-graph.path-mode .node.failed > rect:first-of-type, .step-graph.path-mode .frame.failed > rect { stroke: var(--bad); }
+.step-graph.path-mode .frame:not(.visited) { opacity: 0.5; }
+.step-graph.path-mode .frame.visited > rect { fill: color-mix(in srgb, var(--loop) 9%, transparent); stroke-width: 2; }
+.step-detail { border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.8rem 0.5rem; margin: 0.6rem 0; }
+.step-detail h3 { display: flex; gap: 0.4rem; align-items: baseline; margin-top: 0.3rem; }
+.step-detail h3 button { margin-left: auto; font: inherit; }
+.step-detail p { margin: 0.3rem 0; white-space: pre-line; }
+.step-detail .detail-row { display: contents; }
+.share-bar { display: inline-block; width: 6rem; height: 0.55rem; background: var(--fill); border-radius: 3px; vertical-align: middle; overflow: hidden; }
+.share-bar > span { display: block; height: 100%; background: var(--accent); }
+.run-error { color: var(--bad); font-weight: 600; }
+.status-tag.source-measured { color: var(--Decide); }
+.status-tag.source-agent { color: var(--Task_Agent); }
+.status-tag.source-scripted { color: var(--Execute); }
+.status-tag.source-aggregated { color: var(--Aggregate); }
+
+/* A run's path beside its record; drawn to the right, above it. */
+.path-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0 1.5rem; align-items: start; }
+.path-grid > * { min-width: 0; }
+.path-grid.wide { grid-template-columns: 1fr; }
+@media (max-width: 56rem) { .path-grid { grid-template-columns: 1fr; } }
 .governance-box { border: 1px solid var(--line); border-radius: 6px; padding: 0.5rem 0.9rem 0.9rem; margin: 1rem 0; }
 .governance-box h2 { margin-top: 0.25rem; }
 tr[aria-current="true"] td { background: var(--fill); }

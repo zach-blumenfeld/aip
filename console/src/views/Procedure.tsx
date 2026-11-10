@@ -2,15 +2,15 @@ import { useEffect, useState } from "react";
 import { api, describe, filesOf, sourceOf } from "../api/client";
 import { consoleConfig, describeProcedure, folderGraph, type Diagnostic, type FolderGraph } from "../api/console";
 import type { BundleGraph, CatalogEntry, Description } from "../api/types";
-import { Canvas } from "../canvas/Canvas.tsx";
-import type { Graph } from "../canvas/model.ts";
 import { Code } from "../highlight/Code.tsx";
-import { bundleOf, href } from "../router";
+import { bundleOf, href, navigate } from "../router";
 import { DraftBadge, when } from "./Record";
+import { isStepsView, Steps, type StepsView } from "./Steps";
 
-/** A procedure the server holds: a revision of a published name, or a draft bundle by its id. The card canvas
- *  draws it from the bundle's own graph; the header, the inputs and the result are what `aip info` prints. */
-export function Procedure({ reference }: { reference: string }) {
+/** A procedure the server holds: a revision of a published name, or a draft bundle by its id. Its steps are
+ *  drawn from the bundle's own graph (the step graph, or the card canvas: `view`, which the address carries);
+ *  the header, the inputs and the result are what `aip info` prints. */
+export function Procedure({ reference, view }: { reference: string; view?: string }) {
   const [about, setAbout] = useState<Description | null>(null);
   const [bundle, setBundle] = useState<BundleGraph | null>(null);
   const [entry, setEntry] = useState<CatalogEntry | null>(null);
@@ -67,10 +67,13 @@ export function Procedure({ reference }: { reference: string }) {
         <span className="muted"> · bundle <code title={about.bundle_id}>{about.bundle_id.slice(0, 12)}</code></span>
       </p>
 
-      <h2>Steps</h2>
-      {bundle ? <ProcedureCanvas graph={bundle.graph} source={sourceOf(bundle)} /> : <p className="muted">Loading the graph…</p>}
-
-      <About about={about} />
+      <div className="steps-grid">
+        {bundle
+          ? <Steps graph={bundle.graph} source={sourceOf(bundle)} name={about.name} bundleId={about.bundle_id}
+                   view={isStepsView(view) ? view : "control"} onView={(v) => navigate({ page: "procedure", ref: reference, view: v === "control" ? undefined : v })} />
+          : <section><h2>Steps</h2><p className="muted">Loading the graph…</p></section>}
+        <About about={about} />
+      </div>
 
       {!draft && entry && about.revision && (
         <Revisions entry={entry} current={about.revision} onChanged={() => setVersion((v) => v + 1)} />
@@ -84,6 +87,7 @@ export function FolderProcedure() {
   const [about, setAbout] = useState<Description | null>(null);
   const [compiled, setCompiled] = useState<FolderGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<StepsView>("control");
 
   useEffect(() => {
     folderGraph().then(setCompiled).catch((e: unknown) => setError(describe(e)));
@@ -104,17 +108,14 @@ export function FolderProcedure() {
         {compiled.bundle_id && <span className="muted"> · compiles to bundle <code title={compiled.bundle_id}>{compiled.bundle_id.slice(0, 12)}</code></span>}
       </p>
       <Diagnostics diagnostics={compiled.diagnostics} />
-      <h2>Steps</h2>
-      {compiled.graph
-        ? <ProcedureCanvas graph={compiled.graph} source={compiled.source} />
-        : <><p className="muted">The folder does not compile, so there is no graph to draw. Its source:</p><Code text={compiled.source} aip /></>}
-      {about && <About about={about} />}
+      <div className="steps-grid">
+        {compiled.graph
+          ? <Steps graph={compiled.graph} source={compiled.source} name={about?.name ?? ""} bundleId={compiled.bundle_id} view={view} onView={setView} />
+          : <section className="wide"><h2>Steps</h2><p className="muted">The folder does not compile, so there is no graph to draw. Its source:</p><Code text={compiled.source} aip /></section>}
+        {about && <About about={about} />}
+      </div>
     </article>
   );
-}
-
-function ProcedureCanvas({ graph, source }: { graph: Graph; source: string }) {
-  return <Canvas graph={graph} source={source} renderCode={(code, first) => <Code text={code} aip firstLine={first} />} />;
 }
 
 function Diagnostics({ diagnostics }: { diagnostics: Diagnostic[] }) {
@@ -133,7 +134,7 @@ function Diagnostics({ diagnostics }: { diagnostics: Diagnostic[] }) {
 /** What `aip info` says: when to use it, what it takes and returns, what the scripts need. */
 function About({ about }: { about: Description }) {
   return (
-    <div className="procedure-grid">
+    <div className="about">
       <section>
         <List title="Use when" items={about.use_when} />
         <List title="Do not use when" items={about.do_not_use_when} />

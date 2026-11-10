@@ -133,5 +133,5 @@ test("a draft's run wears the badge, shows where it waits, and opens the bundle 
   await expect(page).toHaveURL(/#\/p\/bundle%3A[0-9a-f]{64}$/);
   await expect(page.getByTestId("draft-note")).toContainText("no revision");
   await expect(page.getByRole("heading", { level: 1 })).toContainText(AGENT);
-  await expect(page.locator('[data-testid="canvas-card"]')).toHaveCount(6);
+  await expect(page.getByTestId("step-node")).toHaveCount(6);
 });

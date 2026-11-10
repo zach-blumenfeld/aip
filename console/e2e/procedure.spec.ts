@@ -2,12 +2,13 @@ import { expect, test } from "@playwright/test";
 import { AGENT, BILLING, FIXED, TRIAGE } from "./aip";
 import { card } from "./pages";
 
-// The procedure page: the card canvas drawn from the revision's own graph, and what `aip info` says.
+// The procedure page's cards (`?view=cards`; the step graph, its main view, is graph.spec.ts): the card
+// canvas drawn from the revision's own graph, and what `aip info` says.
 
 const port = (scope: ReturnType<typeof card>, label: string) => scope.locator(`[data-testid="canvas-port"][data-port="${label}"]`);
 
 test("one card per step: its kind, its description as the title, what it reads and produces, where it leads", async ({ page }) => {
-  await page.goto(`./#/p/${BILLING}`);
+  await page.goto(`./#/p/${BILLING}?view=cards`);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(`${BILLING} @1`);
   await expect(page.locator('[data-testid="canvas-card"]')).toHaveCount(6);
 
@@ -34,7 +35,7 @@ test("one card per step: its kind, its description as the title, what it reads a
   await expect(card(page, "start").locator('[data-section="inputs"]')).toContainText("message: string");
   await expect(card(page, "end").locator('[data-testid="canvas-port"]')).toHaveCount(0);
 
-  // What `aip info` says, below the canvas.
+  // What `aip info` says, below the steps.
   await expect(page.getByTestId("inputs")).toContainText("message");
   await expect(page.getByTestId("result")).toContainText("reply");
   await expect(page.getByTestId("requires")).toContainText("python");
@@ -42,7 +43,7 @@ test("one card per step: its kind, its description as the title, what it reads a
 });
 
 test("the agent's version of the same procedure shows who steers the route", async ({ page }) => {
-  await page.goto(`./#/p/${AGENT}`);
+  await page.goto(`./#/p/${AGENT}?view=cards`);
   await expect(card(page, "triage")).toHaveAttribute("data-kind", "Task_Agent");
   await expect(card(page, "triage").locator('[data-section="produces"]')).toContainText("tone: choice [angry, calm]");
   const route = card(page, "by_tone");
@@ -51,7 +52,7 @@ test("the agent's version of the same procedure shows who steers the route", asy
 });
 
 test("clicking a card opens it with the lines of procedure.aip that wrote it; a port leads to its target", async ({ page }) => {
-  await page.goto(`./#/p/${BILLING}`);
+  await page.goto(`./#/p/${BILLING}?view=cards`);
   await card(page, "by_tone").locator(".aipc-title").click();
   const detail = page.getByTestId("canvas-detail");
   await expect(detail).toHaveAttribute("data-name", "by_tone");
@@ -71,7 +72,7 @@ test("clicking a card opens it with the lines of procedure.aip that wrote it; a 
 });
 
 test("loops are frames around their cards, and the canvas pans, zooms and fits", async ({ page }) => {
-  await page.goto(`./#/p/${FIXED}`);
+  await page.goto(`./#/p/${FIXED}?view=cards`);
   const frame = page.locator('[data-testid="canvas-frame"][data-loop="revise"]');
   await expect(frame).toContainText("Until check_summary.all_hold, At_Most 3, Else_Fail");
   await expect(frame.locator('[data-testid="canvas-port"][data-port="next"]')).toHaveAttribute("data-target", "end");
@@ -109,7 +110,7 @@ test("loops are frames around their cards, and the canvas pans, zooms and fits",
 });
 
 test("nested loops nest: a Loop inside a For, with the For's header and an Again port", async ({ page }) => {
-  await page.goto(`./#/p/${TRIAGE}`);
+  await page.goto(`./#/p/${TRIAGE}?view=cards`);
   const outer = page.locator('[data-testid="canvas-frame"][data-loop="each_ticket"]');
   const inner = page.locator('[data-testid="canvas-frame"][data-loop="revise"]');
   await expect(outer).toHaveAttribute("data-kind", "For");

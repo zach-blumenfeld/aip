@@ -33,7 +33,7 @@ export function App() {
 function ServerPage({ route }: { route: Route }) {
   switch (route.page) {
     case "catalog": return <Catalog />;
-    case "procedure": return <Procedure reference={route.ref} />;
+    case "procedure": return <Procedure reference={route.ref} view={route.view} />;
     case "source": return <Source reference={route.ref} path={route.path} />;
     case "diff": return <Diff name={route.name} a={route.a} b={route.b} />;
     case "run": return <Run reference={route.ref} />;

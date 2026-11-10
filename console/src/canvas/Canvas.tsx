@@ -1,6 +1,7 @@
 // The card canvas: a procedure drawn from its graph. One card per step (its kind as a badge, its
 // description as the title, what it reads and produces, one port per way out quoting where it leads),
-// loops as frames around their cards, wires in a gutter on the right. Pan by dragging, zoom with the
+// loops as frames around their cards, wires in a gutter on the right (under the cards when they are
+// drawn as a row, `direction="right"`). Pan by dragging, zoom with the
 // wheel or the buttons, "fit" shows it whole; clicking a card opens it beside the canvas with the lines
 // of procedure.aip that wrote it.
 //
@@ -9,7 +10,7 @@
 // extension's preview bundles this folder (plan E2); C2 adds editing on top. Read-only here.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { depthOf, layoutOf, SIZE } from "./layout.ts";
+import { depthOf, layoutOf, SIZE, type Direction } from "./layout.ts";
 import { modelOf, sliceOf, type Card, type Frame, type Graph, type Port } from "./model.ts";
 import "./canvas.css";
 
@@ -22,6 +23,8 @@ export interface CanvasProps {
   renderCode?: (code: string, firstLine: number) => ReactNode;
   /** Names of steps and loops to mark, the ones a run went through. */
   visited?: ReadonlySet<string>;
+  /** `down`: one column, the wires in a gutter on the right; `right`: one row, the wires under it. */
+  direction?: Direction;
   /** The canvas's height, as CSS. */
   height?: string;
   /** Called with the step or loop opened (its name and first line), or null when it is closed. */
@@ -33,9 +36,9 @@ interface View { x: number; y: number; k: number }
 const MIN_ZOOM = 0.2, MAX_ZOOM = 2;
 const clamp = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 
-export function Canvas({ graph, source, renderCode, visited, height = "70vh", onOpen }: CanvasProps) {
+export function Canvas({ graph, source, renderCode, visited, direction = "down", height = "70vh", onOpen }: CanvasProps) {
   const model = useMemo(() => modelOf(graph), [graph]);
-  const layout = useMemo(() => layoutOf(model), [model]);
+  const layout = useMemo(() => layoutOf(model, direction), [model, direction]);
   const viewport = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [open, setOpen] = useState<string | null>(null);
@@ -45,9 +48,12 @@ export function Canvas({ graph, source, renderCode, visited, height = "70vh", on
   const fit = useCallback(() => {
     const el = viewport.current;
     if (!el || layout.width === 0 || layout.height === 0) return;
-    const k = clamp(Math.min(el.clientWidth / layout.width, el.clientHeight / layout.height, 1));
+    // A row is far wider than any view: fit its height, from its first card, and let the rest be panned to.
+    const k = direction === "right"
+      ? clamp(Math.min(el.clientHeight / layout.height, 1))
+      : clamp(Math.min(el.clientWidth / layout.width, el.clientHeight / layout.height, 1));
     setView({ k, x: Math.max(0, (el.clientWidth - layout.width * k) / 2), y: 0 });
-  }, [layout]);
+  }, [layout, direction]);
 
   useEffect(() => { fit(); }, [fit]);
 
@@ -124,7 +130,7 @@ export function Canvas({ graph, source, renderCode, visited, height = "70vh", on
   );
 
   return (
-    <div className="aipc" data-testid="canvas">
+    <div className="aipc" data-testid="canvas" data-direction={direction}>
       <div className="aipc-tools">
         <button type="button" onClick={() => zoomAt(1 / 1.25)} aria-label="zoom out">−</button>
         <span className="aipc-zoom" data-testid="canvas-zoom">{Math.round(view.k * 100)}%</span>

@@ -6,8 +6,8 @@ issue, the conventions and the release rules all hold here. This file says only 
 
 ## What this folder is
 
-The console for AIP, the npm package `aip-console`: the catalog, each procedure as a card canvas
-with its source, the run console, history and the audit queries. It was a repository of its own
+The console for AIP, the npm package `aip-console`: the catalog, each procedure as a step graph
+and a card canvas with its source, the run console, history and the audit queries. It was a repository of its own
 (`aip-console`) through 0.8 and moved here at plan milestone C1 with its history (`git log --
 console/`). One small Node launcher (`bin/aip-console.mjs`) serves the built page and runs
 procedures through the `aip` CLI on this machine; the aip server serves no UI. The package
@@ -23,6 +23,7 @@ e2e harness runs this checkout's (`AIP_REPO`, default `..`) behind `uv run`.
 | `bin/aip-console.mjs` | the launcher: arguments, `aip --version` against `MINIMUM_AIP`, the `/console/*` endpoints (run, resume, cancel, procedure, graph, record, runs, wake), the static server; loopback only. Its header comment lists every endpoint |
 | `src/api/` | `types.ts` the shapes the page reads (the server's replies, the run record); `client.ts` the server's API, called directly; `console.ts` the launcher's endpoints and the CLI's JSON lines |
 | `src/canvas/` | **the card canvas**, a component on its own with no console state: `model.ts` (a bundle's graph as cards, ports and frames), `layout.ts` (where they go; fixed sizes that `canvas.css` repeats), `Canvas.tsx`. The procedure page draws a revision with it; E2 bundles this folder into the VS Code extension and C2 adds editing on top, so nothing here may import from outside the folder |
+| `src/graph/` | **the step graph**, the procedure page's main view: `model.ts` (steps as nodes, loops as frames, the control edges as arrows, built on the canvas's model), `layout.ts` (a layered layout done per level, innermost loop first, so a loop is a frame placed like a node; down or right), `dataflow.ts` (who produces and who reads each key), `traffic.ts` (a run's path over the graph from its history, and many runs folded into traffic). `views/StepGraph.tsx` draws it, `views/Steps.tsx` is the section with its modes and the run's path, `views/Traffic.tsx` reads the runs |
 | `src/highlight/` | `textmate.ts`, a small TextMate tokenizer, and `Code.tsx`, which runs it over the grammar and the colours of `../editors/vscode` (imported at build time: there is no copy of the grammar or of a keyword list here) |
 | `src/record/model.ts` | a run's flat history nested under its loops, pass by pass, and the words for why a pass ran and why a loop ended |
 | `src/run/answers.ts` | a form's fields as the JSON `aip run --inputs` and `aip resume --answers` take |
@@ -42,8 +43,8 @@ e2e harness runs this checkout's (`AIP_REPO`, default `..`) behind `uv run`.
 - **Keep dependencies few.** Add a library only when a milestone names the need: the canvas
   layout, the diff and the grammar tokenizer are hand-rolled for that reason. There is no
   runtime dependency: the launcher is Node's standard library and the page is built.
-- **The modules `test/` imports** (`canvas/model.ts`, `canvas/layout.ts`, `highlight/textmate.ts`,
-  `record/model.ts`, `run/answers.ts`) import each other with the `.ts` extension and use only
+- **The modules `test/` imports** (`canvas/model.ts`, `canvas/layout.ts`, `graph/*.ts`,
+  `highlight/textmate.ts`, `record/model.ts`, `run/answers.ts`) import each other with the `.ts` extension and use only
   syntax node can strip (no enums, no parameter properties), so they run under node unbuilt.
 - **Where the console and the runtime disagree, the runtime wins**: `../docs/cli-json.md` for the
   CLI's JSON, `../docs/server-design.md` and `../src/aip/server/app.py` for the API,

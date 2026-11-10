@@ -13,6 +13,16 @@ test("folder mode shows the folder's procedure and hides the server pages", asyn
   await expect(page.getByTestId("console-target")).toContainText(FIRST_REVISION_DIR);
   await expect(page.locator(".top-nav").getByRole("link")).toHaveText(["procedure", "run", "history"]);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("billing_support_agent");
+  // The step graph first, from `aip compile --json` on the folder; data flow says an agent steers the route.
+  await expect(page.getByTestId("step-node")).toHaveCount(6);
+  await expect(page.locator('[data-testid="step-node"][data-step="triage"]')).toHaveAttribute("data-kind", "Task_Agent");
+  await page.getByRole("radio", { name: "data flow" }).check();
+  await expect(page.locator('[data-testid="data-flow-row"][data-key="tone"]').getByTestId("source-class")).toHaveText("agent");
+  await page.getByRole("radio", { name: "right", exact: true }).check();
+  await expect(page.getByTestId("step-graph")).toHaveAttribute("data-direction", "right");
+  await page.getByRole("radio", { name: "down", exact: true }).check();
+  // The cards are one of its modes.
+  await page.getByRole("radio", { name: "cards" }).check();
   await expect(page.locator('[data-testid="canvas-card"]')).toHaveCount(6);
   await expect(card(page, "triage")).toHaveAttribute("data-kind", "Task_Agent");
   await expect(page.getByTestId("diagnostics")).toHaveCount(0);
@@ -70,4 +80,14 @@ test("the folder runs locally, both branches, with no server, and its runs are l
   await row.getByRole("link").first().click();
   await expect(page.getByTestId("run-status")).toHaveText("done");
   await expect(entry(page, "by_tone").getByTestId("route-to")).toHaveText("escalate");
+  // Its path, over the folder's graph: the agent said angry, so the reply was never reached.
+  const drawn = page.getByTestId("run-path");
+  await expect(drawn.locator('[data-testid="step-edge"][data-from="by_tone"][data-to="escalate"]')).toHaveAttribute("data-taken", "true");
+  await expect(drawn.locator('[data-testid="step-node"][data-step="reply"]')).toHaveAttribute("data-visited", "false");
+
+  // Run traffic in folder mode counts this machine's runs of the folder as it compiles now.
+  await page.goto("./");
+  await page.getByRole("radio", { name: "run traffic" }).check();
+  await expect(page.getByTestId("traffic-summary")).toHaveAttribute("data-runs", "2", { timeout: 30_000 });
+  await expect(page.locator('[data-testid="step-edge"][data-from="by_tone"][data-to="reply"]')).toHaveAttribute("data-runs", "1");
 });

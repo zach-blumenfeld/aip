@@ -7,6 +7,8 @@ import type { Graph } from "../canvas/model.ts";
 import { Code } from "../highlight/Code.tsx";
 import { bundleRef, href, navigate, type Route } from "../router";
 import { DraftBadge, ErrorSummary, Json, PauseSummary, RecordHistory, RecordSummary, when } from "./Record";
+import { DirectionToggle, useDirection } from "./StepGraph";
+import { RunPath } from "./Steps";
 
 const STATUSES: RunStatus[] = ["paused", "done", "failed"];
 
@@ -132,6 +134,7 @@ export function RunPage({ id }: { id: string }) {
   const folder = isFolderMode();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [direction, setDirection] = useDirection();
 
   useEffect(() => {
     setRun(null);
@@ -157,7 +160,20 @@ export function RunPage({ id }: { id: string }) {
         {!folder && run.revision && <>{" · "}<a href={href({ page: "run", ref })}>new run</a></>}
       </p>
       <RecordSummary record={run} />
-      <RunRecordBody record={run} />
+      {/* Drawn to the right the graph is wide: it takes the whole row and the record moves below. */}
+      <div className={`path-grid${direction === "right" ? " wide" : ""}`}>
+        <section className="run-path">
+          <h2>Path</h2>
+          <div className="graph-controls">
+            <span className="muted small">Heavy: the steps this run reached and the arrows it took; ×n: an arrow a loop repeated.</span>
+            <DirectionToggle direction={direction} onChange={setDirection} />
+          </div>
+          <RunPath record={run} direction={direction} />
+        </section>
+        <div className="run-record">
+          <RunRecordBody record={run} />
+        </div>
+      </div>
       <RunCanvas record={run} />
     </article>
   );
@@ -202,7 +218,7 @@ function RunCanvas({ record }: { record: RunRecord }) {
 
   return (
     <details className="run-canvas" onToggle={(e) => setShown((e.target as HTMLDetailsElement).open)}>
-      <summary data-testid="show-run-canvas">the procedure, with what this run went through marked</summary>
+      <summary data-testid="show-run-canvas">the procedure as cards, with what this run went through marked</summary>
       {error && <p className="error" role="alert">{error}</p>}
       {shown && !graph && !error && <p className="muted">Loading the procedure…</p>}
       {shown && graph && (

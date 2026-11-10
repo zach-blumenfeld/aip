@@ -45,6 +45,15 @@ its own npm package (`aip-console`) with its own version, changelog and release 
 `console/` out of the sdist, so nothing of it reaches PyPI. Its tests need Node 24 and npm:
 `npm install && npm run typecheck && npm test && npm run e2e` in `console/`.
 
+**The step graph (C3, 2026-11-09)** is `console/src/graph/`, ported from the 0.8 console
+(`git show 9cdf691^2:src/views/StepGraph.tsx`, `src/graph/layout.ts`, `dataflow.ts`,
+`src/views/Traffic.tsx`) onto the 0.9 graph. `console/docs/screenshots/c3/` holds a picture of each
+mode, copied from `.aip-e2e/screenshots/`, which `e2e/graph.spec.ts` writes on every run. Two
+things the record taught it, for whoever reads a run next: a run paused inside a `For` has
+`position` on the loop, and `pause.step` names the step; and an `Until` that holds where its
+answer is produced ends the pass at that step (`exit.where`), so that step did not go on to the
+next one.
+
 ## Relate (formerly CypherLite)
 
 Embedded property-graph engine with Cypher, Neo4j Labs, Apache 2.0. **Unreleased and private;
