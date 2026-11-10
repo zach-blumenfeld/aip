@@ -1,17 +1,20 @@
 // The graph preview's webview, bundled as dist/preview.js: renders Preview with what the extension posts (`{type: 'state',
-// state}` after every check of the document) and posts back `{type: 'open', line}` when a card is
-// clicked, so the editor jumps to the step. The direction is kept in the webview's own state.
+// state}` after every check of the document) and posts back `{type: 'open', line}` when a step or a
+// loop is clicked, so the editor moves the cursor to it. The mode and the direction are kept in the
+// webview's own state.
 
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Direction } from "../../../../console/src/canvas/layout.ts";
-import { Preview, type PreviewState } from "./Preview.tsx";
+import type { Direction } from "../../../../console/src/graph/layout.ts";
+import { Preview, type Mode, type PreviewState } from "./Preview.tsx";
 import "./page.css";
+
+interface Saved { direction?: Direction; mode?: Mode }
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
-  getState(): { direction?: Direction } | undefined;
-  setState(state: { direction: Direction }): void;
+  getState(): Saved | undefined;
+  setState(state: Saved): void;
 };
 
 const vscode = acquireVsCodeApi();
@@ -19,7 +22,8 @@ const vscode = acquireVsCodeApi();
 function App() {
   const [state, setState] = useState<PreviewState>({ title: "", graph: null, problems: [], stale: false });
   const [direction, setDirection] = useState<Direction>(vscode.getState()?.direction ?? "down");
-  // The same graph again (an edit that moved nothing) keeps its object, so the canvas keeps its view.
+  const [mode, setMode] = useState<Mode>(vscode.getState()?.mode ?? "control");
+  // The same graph again (an edit that moved nothing) keeps its object, so the drawing and its selection stay.
   const lastGraph = useRef<string>("");
 
   useEffect(() => {
@@ -40,8 +44,9 @@ function App() {
   }, []);
 
   return (
-    <Preview state={state} direction={direction}
-             onDirection={(d) => { setDirection(d); vscode.setState({ direction: d }); }}
+    <Preview state={state} direction={direction} mode={mode}
+             onDirection={(d) => { setDirection(d); vscode.setState({ direction: d, mode }); }}
+             onMode={(m) => { setMode(m); vscode.setState({ direction, mode: m }); }}
              onOpen={(item) => { if (item.line !== null) vscode.postMessage({ type: "open", line: item.line, name: item.name }); }} />
   );
 }

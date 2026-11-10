@@ -2,7 +2,7 @@
   "name": "aip-lang",
   "displayName": "AIP procedure language",
   "description": "Syntax highlighting, compiler diagnostics and a graph preview for .aip procedure files, and ```aip fences in Markdown.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "zach-blumenfeld",
   "license": "UNLICENSED",
   "private": true,

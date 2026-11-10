@@ -1,7 +1,8 @@
 // Two bundles. dist/extension.js, the file package.json's "main" names: src/extension.js for node,
 // `vscode` left external. dist/preview.js and dist/preview.css, what the graph preview's webview
-// loads: src/webview/main.tsx with the console's card canvas (../../console/src/canvas), React
-// included. `node esbuild.mjs` builds once; `node esbuild.mjs --watch` rebuilds on every change.
+// loads: src/webview/main.tsx with the console's step graph (../../console/src/graph and
+// ../../console/src/views/StepGraph.tsx), React included. `node esbuild.mjs` builds once;
+// `node esbuild.mjs --watch` rebuilds on every change.
 import { build, context } from 'esbuild';
 import { oneReact } from './one-react.mjs';
 

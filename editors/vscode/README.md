@@ -11,15 +11,18 @@ item shows the compiler's version (`aip 0.9.0`), or "aip not found" with the ins
 ## The graph preview
 
 **AIP: Open the graph preview to the side** (the button in the editor's title bar, or
-Cmd/Ctrl+K V, as for the Markdown preview) opens a pane beside the file drawing the procedure as
-the console draws it: the card canvas from `console/src/canvas`, bundled into the extension. One
-card per step with its kind, its description, what it reads and produces and one port per way
-out; loops as frames around their bodies; down or to the right. It is drawn from the graph the
-same check prints, so it redraws on every change, a few hundred milliseconds after the last
-keystroke. While the buffer has errors the compiler prints no graph: the preview keeps the last
-one that compiled, says so, and names the first error (click it to go there). Click a card and
-the cursor goes to its step, and the card opens with the lines that wrote it. Read-only for
-now; the canvas's editing arrives with the console's Studio (plan C2).
+Cmd/Ctrl+K V, as for the Markdown preview) opens a pane beside the file drawing the procedure's
+step graph as the console's procedure page draws it, from `console/src/graph` and
+`console/src/views/StepGraph.tsx`, bundled into the extension. Steps are nodes with their kind;
+a `For` or a `Loop` is a node of its own with its body hung beside it, the arrow in to the first
+step of the body and `Continue` back to the loop; a route's branches are labelled. The toolbar
+switches between **control flow** and **data flow** (the control edges faint, and the arrows of
+the key picked above the graph, or of the step clicked: who produces it, who reads it), and
+draws **down** or **right**. There is no run traffic: the editor has no server. It is drawn
+from the graph the same check prints, so it redraws on every change, a few hundred milliseconds
+after the last keystroke. While the buffer has errors the compiler prints no graph: the preview
+keeps the last one that compiled, says so, and names the first error (click it to go there).
+Click a step or a loop and the cursor goes to it.
 
 ![The preview of ticket-triage, drawn down](docs/preview-down.png)
 
@@ -51,7 +54,7 @@ npm run package        # aip-lang.vsix, for code --install-extension
 
 The tests run the real compiler: `aip` on PATH, or the words in `AIP_COMMAND` (from a checkout,
 `uv run aip`, the default). `npm run watch` rebuilds on every change. The preview's bundle
-includes the canvas from `../../console/src/canvas` and React from this folder's
+includes the step graph from `../../console/src` and React from this folder's
 `node_modules` (`one-react.mjs` sees that there is one copy); `console/` needs no `npm install`
 for it.
 
@@ -85,7 +88,7 @@ to one of its icons:
 ```
 
 or to this extension's SVG, by a path relative to the theme's `dist` folder (its README,
-"Custom SVG icons"), e.g. `"*.aip": "../../zach-blumenfeld.aip-lang-0.3.0/icons/aip-dark"`.
+"Custom SVG icons"), e.g. `"*.aip": "../../zach-blumenfeld.aip-lang-0.3.1/icons/aip-dark"`.
 
 ## Settings
 
@@ -133,9 +136,9 @@ vscode-textmate over the example programs and asserts these scopes.
 | `src/extension.js` | the activation: documents, debounce, the diagnostic collection, the status bar, the preview panels, the commands |
 | `src/preview.js` | the preview's page and the state posted to it after each check (the last graph that compiled kept through errors); no `vscode` import |
 | `src/terminal.js` | the command lines typed into the terminal, the import's folder, the run's inputs template; no `vscode` import |
-| `src/webview/` | the preview's page: `Preview.tsx` (the canvas and the line above it, no `vscode`), `main.tsx` (the webview's messages), `page.css` (the editor's theme) |
+| `src/webview/` | the preview's page: `Preview.tsx` (the step graph and the toolbar above it, no `vscode`), `main.tsx` (the webview's messages), `page.css` (the editor's theme and the palette the graph reads) |
 | `esbuild.mjs`, `one-react.mjs` | the build; `dist/extension.js` is what `package.json`'s `main` names, `dist/preview.js` and `preview.css` what the preview loads (not committed) |
 | `icons/` | the `.aip` file icon, light and dark |
 | `syntaxes/` | the grammar and the Markdown injection |
 | `docs/` | a picture of the preview |
-| `test/` | `compiler.test.js` (against `test/fixtures/one-error`, a procedure with one error), `grammar.test.js` (the tokenizer harness), `preview.test.js` (the preview rendered on the server over the compiler's graph, and the `Next_Step` edit that redraws an edge), `terminal.test.js` |
+| `test/` | `compiler.test.js` (against `test/fixtures/one-error`, a procedure with one error), `grammar.test.js` (the tokenizer harness), `preview.test.js` (the preview rendered on the server over the compiler's graph: ticket-triage's loops as nodes with their bodies beside them, the data-flow toggle, and the `Next_Step` edit that redraws an arrow), `terminal.test.js` |

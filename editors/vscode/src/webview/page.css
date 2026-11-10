@@ -1,22 +1,38 @@
-/* The preview's page around the canvas, in the editor's theme. The canvas's own colours are
-   console/src/canvas/canvas.css; its cards are drawn on `Canvas`, so the page declares its scheme. */
+/* The preview's page around the step graph, in the editor's theme. The graph's own rules are
+   console/src/graph/graph.css; they read the palette below, the same the console sets in its
+   styles.css, and draw on `Canvas`, so the page declares its scheme. */
+:root {
+  --Start: #5a7d9a;
+  --Decide: #3b6fd6;
+  --Route: #b8860b;
+  --Aggregate: #8a4fbf;
+  --Execute: #2e8b57;
+  --Task_Agent: #a0522d;
+  --End: #777;
+  --loop: #c2185b;
+  --accent: #3b6fd6;
+  --data: #0e8f8f;
+  --warn: #b8860b;
+  --bad: #b00020;
+}
 body { padding: 0.5rem 0.75rem; color: var(--vscode-foreground); background: var(--vscode-editor-background);
   font-family: var(--vscode-font-family); }
 body.vscode-light { color-scheme: light; }
 body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
-.aipc-card, .aipc-detail { background: var(--vscode-editor-background); }
-.aipc code, .aipc pre { font-family: var(--vscode-editor-font-family); }
-.aipc button, .aipv button { color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, transparent);
-  border: 1px solid var(--vscode-widget-border, transparent); border-radius: 3px; cursor: pointer; }
-.aipc .aipc-port, .aipc .aipc-frame-head, .aipc .aipc-link { background: none; border-radius: 0; }
-.aipc .aipc-port { border: 0; border-top: 1px solid var(--aipc-line); }
-.aipc .aipc-frame-head { border: 0; }
-.aipc .aipc-link { border: 0; padding: 0; text-decoration: underline; }
-.aipv-bar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.4rem; }
+.step-graph .node > rect { fill: var(--vscode-editor-background); }
+.step-graph .branch-label, .step-graph .data-label { stroke: var(--vscode-editor-background); }
+.aipv code { font-family: var(--vscode-editor-font-family); }
+.aipv button { color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-widget-border, transparent); border-radius: 3px; cursor: pointer; font: inherit; }
+.aipv button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.aipv-bar { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center; margin-bottom: 0.4rem; }
 .aipv-summary { opacity: 0.75; }
 .aipv-summary.bad { color: var(--vscode-errorForeground); opacity: 1; }
-.aipv-direction { margin-left: auto; display: flex; gap: 0.25rem; }
-.aipv-direction button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.aipv-toggle { display: flex; gap: 0.25rem; }
+.aipv-toggle.mode { margin-left: auto; }
 .aipv .aipv-problem { display: block; width: 100%; text-align: left; margin-bottom: 0.4rem; padding: 0.25rem 0.5rem;
   border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); background: none; }
+.aipv-keys { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; margin-bottom: 0.4rem; }
+.aipv-hint { opacity: 0.7; margin-right: 0.25rem; }
+.aipv-scroll { overflow: auto; height: calc(100vh - 5rem); border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35)); border-radius: 4px; }
 .aipv-empty { opacity: 0.7; }

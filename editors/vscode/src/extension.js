@@ -3,8 +3,8 @@
  * The extension's activation: on open, on every change (debounced) and on save, run the compiler
  * on the buffer's text and publish its diagnostics as squiggles; a status-bar item shows the
  * compiler's version, or "aip not found" with the install hint. The same check feeds the graph
- * preview, a webview beside the editor drawing the console's card canvas (dist/preview.js), where
- * clicking a card jumps to its step. The commands compile, run and publish the procedure in the
+ * preview, a webview beside the editor drawing the console's step graph (dist/preview.js), where
+ * clicking a step or a loop moves the cursor to it. The commands compile, run and publish the procedure in the
  * integrated terminal and import one from the catalog with `aip get`. The work is in compiler.js,
  * preview.js and terminal.js; this file only talks to the `vscode` module.
  */
@@ -84,7 +84,7 @@ function activate(context) {
     const source = document.getText();
     const result = await compiler.check({ ...settings(), file: document.fileName, source });
     if (document.isClosed || document.version !== version) return; // a later edit has its own check
-    showInPreview(document, result, source);
+    showInPreview(document, result);
     if (result.status === 'not-found') {
       known = result;
       paintStatus();
@@ -133,10 +133,10 @@ function activate(context) {
 
   // The graph preview.
 
-  function showInPreview(document, result, source) {
+  function showInPreview(document, result) {
     const open = previews.get(document.uri.toString());
     if (!open) return;
-    open.state = preview.previewState({ result, file: document.fileName, source, previous: open.state });
+    open.state = preview.previewState({ result, file: document.fileName, previous: open.state });
     open.panel.title = `Graph: ${open.state.title}`;
     open.panel.webview.postMessage({ type: 'state', state: open.state });
   }

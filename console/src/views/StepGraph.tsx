@@ -3,6 +3,7 @@ import type { DataEdge } from "../graph/dataflow.ts";
 import { layoutOf, SIZE, type Box, type Direction, type GraphLayout } from "../graph/layout.ts";
 import { edgeKey, edgeLabel, type StepGraph as Model } from "../graph/model.ts";
 import type { RunPath, Traffic } from "../graph/traffic.ts";
+import "../graph/graph.css";
 
 const PAD = 24;
 // A data-flow arrow bows a little to one side of the straight line between its nodes, so it does not lie

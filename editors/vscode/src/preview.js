@@ -3,7 +3,7 @@
  * The graph preview's side in the extension host, with no `vscode` import so node tests it: the
  * webview's page, and the state posted to it after every check of the document (what
  * src/webview/Preview.tsx draws). While the buffer has errors the compiler prints no graph, so the
- * state keeps the last graph that compiled, with the text it came from, and says it is stale.
+ * state keeps the last graph that compiled and says it is stale.
  */
 
 const path = require('node:path');
@@ -43,16 +43,16 @@ function titleOf(file) {
 }
 
 /**
- * The state to post after a check. `result` is what compiler.check resolved to, `source` the text
- * it checked, `previous` the state posted last (or undefined).
+ * The state to post after a check. `result` is what compiler.check resolved to, `previous` the
+ * state posted last (or undefined).
  */
-function previewState({ result, file, source, previous }) {
-  const kept = previous && previous.graph ? { graph: previous.graph, source: previous.source, title: previous.title } : null;
+function previewState({ result, file, previous }) {
+  const kept = previous && previous.graph ? { graph: previous.graph, title: previous.title } : null;
   if (!result || result.status !== 'report') {
     const status = result && result.status === 'not-found'
       ? 'aip not found: the preview needs the compiler (see the status bar)'
       : `the compiler did not answer${result && result.error ? `: ${result.error}` : ''}`;
-    return { title: kept ? kept.title : titleOf(file), graph: kept ? kept.graph : null, source: kept ? kept.source : undefined,
+    return { title: kept ? kept.title : titleOf(file), graph: kept ? kept.graph : null,
       problems: [], stale: Boolean(kept), status };
   }
   const { report } = result;
@@ -60,9 +60,9 @@ function previewState({ result, file, source, previous }) {
     severity: d.severity, message: d.message, line: typeof d.line === 'number' ? d.line : null, code: d.code,
   }));
   if (report.graph && Array.isArray(report.graph.nodes)) {
-    return { title: report.procedure || titleOf(file), graph: report.graph, source, problems, stale: false };
+    return { title: report.procedure || titleOf(file), graph: report.graph, problems, stale: false };
   }
-  return { title: kept ? kept.title : titleOf(file), graph: kept ? kept.graph : null, source: kept ? kept.source : undefined,
+  return { title: kept ? kept.title : titleOf(file), graph: kept ? kept.graph : null,
     problems, stale: Boolean(kept) };
 }
 

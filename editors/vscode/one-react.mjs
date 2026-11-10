@@ -1,5 +1,5 @@
-// An esbuild plugin: resolve every `react` and `react-dom` import from this folder. The card canvas
-// lives in console/src/canvas and would import React from console/node_modules when that is
+// An esbuild plugin: resolve every `react` and `react-dom` import from this folder. The step graph
+// lives in console/src and would import React from console/node_modules when that is
 // installed, the preview's entry from here; two copies of React in one bundle break its hooks.
 // esbuild.mjs uses it for dist/preview.js, test/preview.test.js for its server-side render.
 import { createRequire } from 'node:module';

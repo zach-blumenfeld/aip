@@ -78,63 +78,11 @@ strong.run-done { color: var(--good); }
   .steps-grid, .steps-grid > .wide + .about { grid-template-columns: 1fr; }
 }
 
-/* The step graph (views/StepGraph.tsx) */
+/* Around the step graph (views/StepGraph.tsx; the graph's own rules are graph/graph.css) */
 .graph-controls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.5rem; margin: 0.25rem 0 0.5rem; }
 .flow-toggle, .direction-toggle { display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
 .direction-toggle { margin-left: auto; }
 .graph-scroll { overflow: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
-.step-graph { display: block; margin: 0 auto; }
-.step-graph .node > rect { fill: Canvas; stroke: var(--kind, currentColor); stroke-width: 1.5; }
-.step-graph .node.kind-Start { --kind: var(--Start); }
-.step-graph .node.kind-Decide { --kind: var(--Decide); }
-.step-graph .node.kind-Route { --kind: var(--Route); }
-.step-graph .node.kind-Aggregate { --kind: var(--Aggregate); }
-.step-graph .node.kind-Execute { --kind: var(--Execute); }
-.step-graph .node.kind-Task_Agent { --kind: var(--Task_Agent); }
-.step-graph .node.kind-End { --kind: var(--End); }
-.step-graph .node.kind-Start > rect { stroke-dasharray: 4 3; }
-.step-graph .node .end-ring { fill: none; stroke-width: 1; }
-.step-graph .node .start-dot { fill: var(--kind); stroke: none; }
-.step-graph .node-name { font-weight: 600; font-size: 13px; fill: currentColor; }
-.step-graph .node-kind { font-size: 11px; fill: var(--kind); }
-.step-graph .node[role="button"] { cursor: pointer; }
-.step-graph .node:focus-visible { outline: none; }
-.step-graph .node.selected > rect:first-of-type, .step-graph .node:focus-visible > rect:first-of-type { stroke-width: 3.5; fill: color-mix(in srgb, var(--kind) 14%, Canvas); }
-.step-graph .loop-node { --kind: var(--loop); }
-.step-graph .loop-node > rect { fill: color-mix(in srgb, var(--loop) 9%, Canvas); stroke-width: 2; }
-.step-graph .loop-summary { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; fill: currentColor; opacity: 0.8; }
-.step-graph .edge { color: color-mix(in srgb, currentColor 55%, transparent); }
-/* The loop's own arrows: into the body, and back from it. */
-.step-graph.control-mode .edge.rail, .step-graph.control-mode .edge.enter { color: var(--loop); }
-.step-graph .loop-arrow { fill: var(--loop); }
-.step-graph .arrow-head { fill: color-mix(in srgb, currentColor 60%, Canvas); }
-.step-graph .branch-label { font-size: 11px; fill: CanvasText; paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
-/* Data flow: the control edges stay, faint, under the dashed arrows of the key or the step picked. */
-.step-graph.data-mode .edge { color: color-mix(in srgb, currentColor 22%, transparent); }
-.step-graph.data-mode .branch-label { opacity: 0.5; }
-.step-graph .data-edge { color: var(--data); }
-.step-graph .data-arrow { fill: var(--data); }
-.step-graph .data-label { font-size: 11px; font-weight: 600; fill: var(--data); paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
-/* Run traffic: edges in the accent, thick with use; an edge no run took stays a dashed hairline. */
-.step-graph.traffic-mode .edge { color: color-mix(in srgb, currentColor 28%, transparent); }
-.step-graph.traffic-mode .edge.busy { color: var(--accent); }
-.step-graph.traffic-mode .edge.idle path { stroke-dasharray: 3 4; }
-.step-graph .busy-arrow { fill: var(--accent); }
-.step-graph .run-count { font-weight: 700; fill: var(--accent); }
-.step-graph .badge rect { fill: var(--accent); stroke: Canvas; stroke-width: 1.5; }
-.step-graph .badge text { font-size: 11px; font-weight: 600; fill: white; }
-.step-graph .badge.failed rect, .step-graph .badge.mark-failed rect { fill: var(--bad); }
-.step-graph .badge.mark-waiting rect { fill: var(--warn); }
-.step-graph .badge.none rect { fill: color-mix(in srgb, currentColor 30%, Canvas); }
-/* One run's path: what it reached and took is heavy, the rest recedes. */
-.step-graph.path-mode .edge { color: color-mix(in srgb, currentColor 25%, transparent); }
-.step-graph.path-mode .edge.taken { color: CanvasText; }
-.step-graph.path-mode .edge.taken .arrow-head { fill: CanvasText; }
-.step-graph.path-mode .node:not(.visited) { opacity: 0.45; }
-.step-graph.path-mode .node.visited > rect:first-of-type { stroke-width: 3; fill: color-mix(in srgb, var(--kind) 12%, Canvas); }
-.step-graph.path-mode .node.waiting > rect:first-of-type { stroke: var(--warn); stroke-dasharray: 6 3; }
-.step-graph.path-mode .node.failed > rect:first-of-type { stroke: var(--bad); }
-.step-graph .badge.passes rect { fill: var(--loop); }
 .step-detail { border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.8rem 0.5rem; margin: 0.6rem 0; }
 .step-detail h3 { display: flex; gap: 0.4rem; align-items: baseline; margin-top: 0.3rem; }
 .step-detail h3 button { margin-left: auto; font: inherit; }
