@@ -60,7 +60,9 @@ directory); `batch` how many `For` passes run at once (default 10, `aip config -
 
 `recorded` is `True` when the server has this stop, `False` when the post failed
 (`client.recording_error` says why; the next stop tries again), `None` when no server is
-configured. `resume(run, answers=None)` answers a pause; `run` is the `Paused` (or the
+configured. `resume(run, answers=None, *, agent=None, session=None, on_step=None,
+on_pause=None)` answers a pause (`agent` and `session` say who answers, for the task's
+`answered_by`; by default they are found as `run` finds them, else they are the run's own); `run` is the `Paused` (or the
 `RunError`), a run id, or a run file's path; `answers` is keyed by task index
 (`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task,
 and answers every task of the pause; an answer-typed key is the bare value or `{"value": ...}`
@@ -155,4 +157,5 @@ def answer_procedure(run_id: str, answers: dict | None = None) -> str:
 The model sees exactly the CLI's JSON (`docs/cli-json.md`), so the `aip` skill's guidance
 applies unchanged. Pass `tools=[run_procedure, answer_procedure]` to `create_react_agent` or
 bind them to a chat model. `aip mcp` exposes the same calls as an MCP server for frameworks
-that speak it.
+that speak it (`docs/mcp.md`): `search`, `describe`, `compile`, `run`, `resume` and `pull` as
+tools, with the MCP client's name as the run's `agent`.

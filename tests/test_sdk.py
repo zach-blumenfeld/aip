@@ -486,7 +486,7 @@ def _call(*argv: str) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
-NOT_CLIENT = {"compile", "export", "fmt", "config", "server"}   # the language's tooling, the config, the server
+NOT_CLIENT = {"compile", "export", "fmt", "config", "server", "mcp"}   # the language's tooling, the config, the two servers
 
 
 def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):

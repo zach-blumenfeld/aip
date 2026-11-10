@@ -1,5 +1,5 @@
 """The Python SDK: `aip.Client`, the runtime as a library (`docs/sdk.md`). The `aip` command is a
-thin wrapper over it, and so is `aip mcp`.
+thin wrapper over it, and so is `aip mcp` (`aip.mcp`).
 
     import aip
 
@@ -573,8 +573,8 @@ class Client:
                              origin["revision"], server=self.server.url if self.server else None)
             return self._settle(engine, run, handle, on_pause)
 
-    def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, on_step: OnStep | None = None,
-               on_pause: OnPause | None = None) -> Result:
+    def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, agent: str | None = None,
+               session: str | None = None, on_step: OnStep | None = None, on_pause: OnPause | None = None) -> Result:
         """Carry the agent's answers to a paused run, or with no answers retry the step a failed
         run stopped at. `run` is a run id, a run file's path, or the `Paused`/`RunError` a call
         returned; `answers` is keyed by task index (`{"0": {...}}`), a list in task order, or the
@@ -583,7 +583,9 @@ class Client:
         answer to a run that is not paused, or a retry of one that has not failed or that a
         retry cannot help (`loop_cap`) is a `RunError` naming the run (`invalid_output`,
         `not_paused`, `invalid_input`) and changes nothing: a refused answer leaves the pause
-        as it was, to be answered again."""
+        as it was, to be answered again. `agent` and `session` say who answers, for the task's
+        `answered_by` (default `AIP_AGENT` / the client's `agent`, and `AIP_SESSION`, else the
+        run's own)."""
         path = self.run_file(run)
         handle = RunFile.load(path)
         try:
@@ -596,10 +598,11 @@ class Client:
         engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step)
         with Procedure.load(bundle) as procedure:
             state = Run.from_dict(procedure, handle.run)
-            state = self._apply(engine, state, answers, handle, path)
+            state = self._apply(engine, state, answers, handle, path, agent, session)
             return self._settle(engine, state, handle, on_pause)
 
-    def _apply(self, engine: Engine, run: Run, answers: Any, handle: RunFile, path: Path) -> Run:
+    def _apply(self, engine: Engine, run: Run, answers: Any, handle: RunFile, path: Path, agent: str | None = None,
+               session: str | None = None) -> Run:
         """The answers into a paused run, or a retry of a failed one. A bad answer is a
         resumable `RunError` and the pause stands."""
         recorded = handle.recorded if handle.server else None
@@ -623,7 +626,7 @@ class Client:
                          "needs a pause" + (" (resume it with no answers to retry the failed step)" if run.status == FAILED else ""),
                          run.status == FAILED)
         try:
-            return engine.resume(run, answers, identity=config.identity(default_agent=self.agent))
+            return engine.resume(run, answers, identity=config.identity(agent, session, default_agent=self.agent))
         except (InvalidOutput, NotPaused) as exc:
             raise RunError(error_outcome({**exc.to_dict(), **_where(run)}, handle.run_id, path, recorded, True), exc, stopped=False) from exc
 

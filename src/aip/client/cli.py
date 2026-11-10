@@ -12,6 +12,7 @@
     aip config                          where the client points: the server (`aip config server local | URL | none`), the token,
                                         the decision model's endpoint and key, the batch size
     aip server                          serve the catalog and the record of runs
+    aip mcp                             the same client as an MCP server, for agent frameworks and coding agents
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
@@ -512,6 +513,36 @@ def config_command(argv: list[str]) -> int:
     return 0
 
 
+# ------------------------------------------------------------------ the MCP server
+
+
+def mcp_command(argv: list[str]) -> int:
+    """`aip mcp`: the SDK as an MCP server (`aip.mcp`, `docs/mcp.md`)."""
+    parser = argparse.ArgumentParser(prog="aip mcp", description="Serve this client to an MCP client (an agent framework, a coding "
+                                     "agent): the tools search, describe, compile, run, resume and pull, each answering with the "
+                                     "JSON the command of that name prints (docs/cli-json.md). Over stdio by default, which is "
+                                     "how an MCP client starts it: give it the command `aip mcp`. Runs are recorded where `aip "
+                                     "config` points, under the MCP client's own name as the agent.")
+    parser.add_argument("--http", type=int, default=None, metavar="PORT",
+                        help="serve over streamable HTTP at http://HOST:PORT/mcp instead of stdio")
+    parser.add_argument("--host", default="127.0.0.1", help="with --http: the address to listen on (default 127.0.0.1)")
+    parser.add_argument("--agent", default=None, help="who is running, for the record, instead of the MCP client's own name "
+                        "(with neither: AIP_AGENT, else `mcp`)")
+    parser.add_argument("--session", default=None, help="the session of every run a call gives none (default AIP_SESSION, "
+                        "else an id made when this server starts)")
+    args = parser.parse_args(argv)
+    if args.http is None and args.host != "127.0.0.1":
+        parser.error("--host goes with --http PORT")
+    from aip.mcp import serve
+    from aip.sdk import Client
+
+    try:
+        serve(Client(_server()), http=args.http, host=args.host, agent=args.agent, session=args.session)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 # ------------------------------------------------------------------ the server
 
 
@@ -693,6 +724,7 @@ COMMANDS = {
     "audit": audit_command,
     "config": config_command,
     "server": server_command,
+    "mcp": mcp_command,
 }
 ALIASES = {"describe": "info"}
 RENAMED = {"governance": "audit"}       # said once, so a 0.8 habit lands somewhere
@@ -716,6 +748,7 @@ SUMMARIES = {
     "audit": "the server's audit queries over the runs and the catalog",
     "config": "where this client points: the server (local, a URL or none), the decision model, the batch size",
     "server": "serve the catalog and the record of runs over HTTP",
+    "mcp": "serve this client to an MCP client: search, describe, compile, run, resume and pull as tools",
 }
 
 

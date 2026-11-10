@@ -231,8 +231,10 @@ reported as not recorded with the reason, and the last line of the log. `aip ser
 with. A remote server is `aip config server URL --token T`; the token's name on the server is
 the `user` of the runs.
 
-## 7. Still to come
+## 7. Around the server
 
-`aip mcp` (M1), which starts the local server the same way. The console (`console/`, plan C1)
+`aip mcp` (`docs/mcp.md`) is the client as an MCP server: it records runs here as any client
+does, and with `aip config server local` its first call starts the local server the same way.
+The console (`console/`, plan C1)
 is on this API: it reads the catalog, the graph of a revision or a draft, the runs and the audit
 queries from the page, and runs procedures through the `aip` CLI on its own machine.

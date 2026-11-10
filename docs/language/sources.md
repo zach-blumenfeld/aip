@@ -78,6 +78,13 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 
 ## Agent frameworks (track D2)
 
+`aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP
+Python SDK **2.x** (`mcp` 2.3.0 in `uv.lock`): the server class is `mcp.server.mcpserver.MCPServer`
+and the client `mcp.Client`; 1.x's `FastMCP` and its examples on the web no longer import. The
+2026-07-28 protocol has no `initialize` handshake and makes the client's info optional, so read
+the client's name per request (`ctx.session.client_params`), as `aip.mcp.client_name` does.
+`examples/agents/mcp-smoke/run.py` is a working client to copy from.
+
 Each is reached over MCP (`aip mcp`, stdio). Use each framework's own MCP client; their docs are
 public and move fast, so read them at D2 time: Google ADK (`google-adk`, MCPToolset), LangGraph
 (`langchain-mcp-adapters`), Microsoft Agent Framework (`agent-framework`, MCP tools), Strands
