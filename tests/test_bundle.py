@@ -446,6 +446,33 @@ class CompileAndExportCommands(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("not found", err)
 
+    def test_partial_prints_the_graph_of_a_program_with_errors(self):
+        """`--partial`: a program that parses but has errors still has a graph to draw, as far as it
+        goes, with no bundle id; one that does not parse has none (plan C2, the Studio)."""
+        example = example_dir("billing-support")
+        source = (example / "procedure.aip").read_text(encoding="utf-8").replace("  calm  -> reply\n", "")
+        with redirect_stdin(io.StringIO(source)):
+            code, out, _ = self.run_cli("compile", "--check", "--json", "--partial", "--stdin", str(example))
+        report = json.loads(out)
+        self.assertEqual((code, report["ok"], report["partial"], report["bundle_id"]), (1, False, True, None))
+        self.assertEqual([d["code"] for d in report["diagnostics"]], ["missing_branch", "unreachable_step", "unavailable_key"])
+        ids = {n["id"] for n in report["graph"]["nodes"]}
+        self.assertIn("step:reply", ids, "the unreachable step is drawn, for its diagnostic to sit on")
+        branches = {e["properties"]["value"] for e in report["graph"]["edges"] if e["type"] == "BRANCH"}
+        self.assertEqual(branches, {"angry"})
+        with redirect_stdin(io.StringIO(source.replace("-> escalate", "-> nowhere"))):
+            _, out, _ = self.run_cli("compile", "--check", "--json", "--partial", "--stdin", str(example))
+        report = json.loads(out)
+        self.assertTrue(report["partial"])
+        ends = {n["id"] for n in report["graph"]["nodes"]}
+        self.assertTrue(all(e["start"] in ends and e["end"] in ends for e in report["graph"]["edges"]), "no edge to a step that is not there")
+        with redirect_stdin(io.StringIO(PREFIX + "Start {")):
+            _, out, _ = self.run_cli("compile", "--check", "--json", "--partial", "--stdin", str(example))
+        self.assertEqual((json.loads(out)["graph"], json.loads(out)["partial"]), (None, False))
+        with redirect_stdin(io.StringIO(source)), self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()):
+            self.run_cli("compile", "--check", "--partial", "--stdin", str(example))
+        self.assertEqual(raised.exception.code, 2, "--partial goes with --json")
+
     @needs_relate
     def test_compile_writes_and_export_restores(self):
         with contextlib.chdir(self.tmp):

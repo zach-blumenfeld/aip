@@ -9,7 +9,10 @@ schema of that graph. `src/aip/compiler/graph.py` is its only implementation and
 added there in the same commit, and the tests in `tests/test_bundle.py` hold the two together.
 
 The same graph is what `aip compile --json` prints (without the source and file contents, with
-every span) and what a server keeps in its store, node for node.
+every span) and what a server keeps in its store, node for node. A program with errors has no
+bundle and so no graph, except with `--partial`: when the file parses, the report carries the
+graph as far as it goes (`partial: true`, no `bundle_id`), an edge to a step that does not exist
+left out, so an editor can draw a change while it is half done (the console's Studio).
 
 Data flows left to right, as the 0.8 graph read: `(Step)-[:PRODUCES]->(Data)-[:READ_BY]->(Step)`,
 so a key's lineage is one path from the step that wrote it to the steps that read it. (Renamed

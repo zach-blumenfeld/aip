@@ -142,6 +142,17 @@ class Canonical(unittest.TestCase):
         self.assertIn("Route On r", text)
 
 
+@contextlib.contextmanager
+def _stdin(text):
+    import sys
+
+    saved, sys.stdin = sys.stdin, io.StringIO(text)
+    try:
+        yield
+    finally:
+        sys.stdin = saved
+
+
 class FmtCommand(unittest.TestCase):
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -175,6 +186,20 @@ class FmtCommand(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn(f"{file}:2:10: expected the description of d, a string, got '{{'", err)
             self.assertIn("1 file(s) did not parse", err)
+
+    def test_stdin_prints_the_canonical_form(self):
+        """An editor formats a buffer it holds (the console's Studio, plan C2): the text in, the
+        canonical form out, the file untouched; a buffer that does not parse prints nothing."""
+        with _stdin(MESSY):
+            code, out, err = self.run_cli("fmt", "--stdin")
+        self.assertEqual((code, out, err), (0, CANONICAL, ""))
+        with _stdin('Procedure p "x"\nDecide d {}\n'):
+            code, out, err = self.run_cli("fmt", "--stdin")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("2:10: expected the description of d, a string", err)
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()):
+            self.run_cli("fmt")
+        self.assertEqual(raised.exception.code, 2, "a PATH or --stdin")
 
     def test_a_directory_of_programs_is_every_program_in_it(self):
         code, out, _ = self.run_cli("fmt", "--check", str(EXAMPLES))

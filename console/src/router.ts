@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 //                               traffic, or the card canvas: view=control|data|traffic|cards), header, revisions
 //   #/p/<ref>/files[/<path>]    source: procedure.aip and the bundle's files, one open
 //   #/p/<name>/diff[/<a>..<b>]  diff between two revisions of a name
+//   #/studio[/<ref>]            the Studio: the card canvas as an editor of a revision, a draft, or (no ref) a new
+//                               procedure, saving drafts
 //   #/run[/<ref>]               run console: pick a procedure, then drive it through the CLI
 //   #/runs[?name=&status=&agent=&session=&user=&draft=]   history: the runs the server holds
 //   #/runs/<id>                 one run's record
@@ -21,6 +23,7 @@ export type Route =
   | { page: "source"; ref: string; path?: string }
   | { page: "diff"; name: string; a?: string; b?: string }
   | { page: "run"; ref?: string }
+  | { page: "studio"; ref?: string }
   | { page: "runs"; name?: string; status?: string; agent?: string; session?: string; user?: string; draft?: boolean }
   | { page: "run-detail"; id: string }
   | { page: "audit"; name?: string }
@@ -46,6 +49,8 @@ export function parseHash(hash: string): Route {
     return { page: "diff", name: decodeURIComponent(m[1]),
              a: m[2] ? decodeURIComponent(m[2]) : undefined, b: m[3] ? decodeURIComponent(m[3]) : undefined };
   }
+  m = /^studio(?:\/([^/]+))?$/.exec(path);
+  if (m) return { page: "studio", ref: m[1] ? decodeURIComponent(m[1]) : undefined };
   m = /^run(?:\/([^/]+))?$/.exec(path);
   if (m) return { page: "run", ref: m[1] ? decodeURIComponent(m[1]) : undefined };
   m = /^runs(?:\?(.*))?$/.exec(path);
@@ -75,6 +80,7 @@ export function href(route: Route): string {
       return `#/p/${encodeURIComponent(route.name)}/diff${pair}`;
     }
     case "run": return `#/run${route.ref ? "/" + encodeURIComponent(route.ref) : ""}`;
+    case "studio": return `#/studio${route.ref ? "/" + encodeURIComponent(route.ref) : ""}`;
     case "runs": {
       const q = new URLSearchParams();
       if (route.name) q.set("name", route.name);

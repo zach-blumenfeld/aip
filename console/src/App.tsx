@@ -3,6 +3,7 @@ import { FolderProcedure, Procedure } from "./views/Procedure";
 import { Source } from "./views/Source";
 import { Diff } from "./views/Diff";
 import { Run } from "./views/Run";
+import { Studio } from "./views/Studio";
 import { RunPage, Runs } from "./views/History";
 import { Audit } from "./views/Audit";
 import { Server } from "./views/Server";
@@ -18,6 +19,7 @@ export function App() {
         <a href={href({ page: "catalog" })}><strong>aip console</strong></a>
         <nav className="top-nav">
           <a href={href({ page: "catalog" })}>{folder ? "procedure" : "catalog"}</a>
+          {!folder && <a href={href({ page: "studio" })}>studio</a>}
           <a href={href({ page: "run" })}>run</a>
           <a href={href({ page: "runs" })}>history</a>
           {!folder && <a href={href({ page: "audit" })}>audit</a>}
@@ -37,6 +39,7 @@ function ServerPage({ route }: { route: Route }) {
     case "source": return <Source reference={route.ref} path={route.path} />;
     case "diff": return <Diff name={route.name} a={route.a} b={route.b} />;
     case "run": return <Run reference={route.ref} />;
+    case "studio": return <Studio key={route.ref ?? ""} reference={route.ref} />;
     case "runs": return <Runs route={route} />;
     case "run-detail": return <RunPage id={route.id} />;
     case "audit": return <Audit name={route.name} />;

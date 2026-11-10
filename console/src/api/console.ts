@@ -171,12 +171,40 @@ export function describeProcedure(ref?: string): Promise<Description> {
 
 /** One diagnostic of `aip compile --json`. */
 export interface Diagnostic { code: string; severity: string; message: string; line: number | null; column: number | null; step: string | null }
-
 /** `GET /console/graph`, folder mode: `aip compile --check --json` on the folder, and the text of its procedure.aip. */
 export interface FolderGraph { ok: boolean; bundle_id: string | null; diagnostics: Diagnostic[]; graph: Graph | null; source: string }
 
 export function folderGraph(): Promise<FolderGraph> {
   return getJson<FolderGraph>("/console/graph");
+}
+
+// ------------------------------------------------------------------ the Studio (plan C2)
+
+/** What the Studio's check makes of a source: the formatted text, and the compiler's report on it (the graph as far
+ *  as it goes when it has errors, `partial`). */
+export interface StudioCheck { source: string; formatted: boolean; ok: boolean; bundle_id: string | null; diagnostics: Diagnostic[]; graph: Graph | null; partial: boolean }
+
+/** What saving did: `aip publish [--draft] --json`, and the source as saved. */
+export interface StudioSaved { name: string; revision: string | null; bundle_id: string; existed: boolean; draft: boolean; source: string }
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await post(path, body);
+  if (!res.ok) throw new Error(await errorText(res));
+  return (await res.json()) as T;
+}
+
+/** A folder on this machine holding the procedure's files (none for a new one), for the checks and the save. */
+export function studioOpen(files: { path: string; text: string | null; base64: string | null; mode: number }[]): Promise<{ workspace: string }> {
+  return postJson("/console/studio/open", { files });
+}
+
+export function studioCheck(workspace: string, source: string, files: Record<string, string>): Promise<StudioCheck> {
+  return postJson("/console/studio/check", { workspace, source, files });
+}
+
+/** Save as a draft, or with `publish` as the next revision (the draft of the same bundle gets it). */
+export function studioSave(workspace: string, source: string, files: Record<string, string>, publish: boolean): Promise<StudioSaved> {
+  return postJson("/console/studio/save", { workspace, source, files, publish });
 }
 
 /** A run from this machine's run file (`aip runs <id> --json`): what a run that was not recorded leaves. */

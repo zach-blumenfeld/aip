@@ -110,7 +110,7 @@ catalog reference still runs from the bundle cache.
 | `search(query, limit=10)` | `[Hit]`: `name`, `revision`, `bundle_id`, `score`, `description` | `aip search` |
 | `list()` | `[Entry]`: `name`, `description`, `pinned`, `latest`, `resolves`, `revisions` | `aip list` |
 | `pull(ref)`, `pull_all()` | `Pulled`: `name`, `revision`, `bundle_id`, `path`, `fetched`; the bundle is in the cache, so `run` works offline | `aip pull`, `aip pull --all` |
-| `publish(target)` | `Published`: `name`, `revision`, `bundle_id`, `existed`; a folder is compiled here, an `.rl` taken as is | `aip publish` |
+| `publish(target, draft=False)` | `Published`: `name`, `revision`, `bundle_id`, `existed`, `draft`; a folder is compiled here, an `.rl` taken as is. With `draft` the bundle is uploaded with no revision (`revision` None, `draft` True; `draft` False when the server already has it as a revision), and a later `publish` of the same bundle gives it one | `aip publish [--draft] [--json]` |
 | `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it); a retired revision is refused (`ServerError`, kind `retired`) | `aip pin name@revision`, `aip pin name --clear` |

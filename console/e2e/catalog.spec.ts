@@ -8,7 +8,7 @@ const row = (name: string) => `[data-testid="catalog-row"][data-name="${name}"]`
 test("the catalog lists the published names and the revision each runs as", async ({ page }) => {
   await page.goto("./");
   await expect(page.getByTestId("console-target")).toContainText("http://localhost:");
-  await expect(page.locator(".top-nav").getByRole("link")).toHaveText(["catalog", "run", "history", "audit"]);
+  await expect(page.locator(".top-nav").getByRole("link")).toHaveText(["catalog", "studio", "run", "history", "audit"]);
   for (const name of [AGENT, BILLING, DYNAMIC, FIXED, TRIAGE]) await expect(page.locator(row(name))).toBeVisible();
   await expect(page.locator(row(AGENT))).toContainText("@2");
   await expect(page.locator(row(BILLING))).toContainText("@1");

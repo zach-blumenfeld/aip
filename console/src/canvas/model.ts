@@ -22,6 +22,9 @@ export interface Port {
   quote: string;
   /** The line of `procedure.aip` that wrote it, when the graph carries spans. */
   line: number | null;
+  /** What the compiler says is wrong with it, when the canvas draws diagnostics (problems.ts). A port the
+   *  compiler finds missing has a problem and an empty `target`. */
+  problem?: string;
 }
 
 /** A titled list on a card: what it reads, asks, produces. */
@@ -40,6 +43,8 @@ export interface Card {
   parent: string | null;
   line: number | null;
   endLine: number | null;
+  /** The compiler's messages about it, when the canvas draws diagnostics (problems.ts). */
+  problems?: string[];
 }
 
 export interface Frame {
@@ -54,6 +59,7 @@ export interface Frame {
   parent: string | null;
   line: number | null;
   endLine: number | null;
+  problems?: string[];
 }
 
 export interface Model {

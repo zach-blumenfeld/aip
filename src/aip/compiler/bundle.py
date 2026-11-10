@@ -152,6 +152,29 @@ def compile_folder(folder: Path | str, source: str | None = None) -> tuple[Bundl
     return _assemble(program, source, collect_files(folder), compiler_version(), sources), diagnostics
 
 
+def partial_graph(folder: Path | str, source: str | None = None) -> Graph | None:
+    """The graph of a program that parses but has errors, as far as it goes: what an editor draws
+    while a change is half done (`aip compile --json --partial`). An edge whose end does not exist
+    (a flow to an unknown step) is left out, as the bundle would never hold it. None when the file
+    does not parse or the graph cannot be built from what was written. Never a bundle: it has no
+    id and is never written."""
+    path = Path(folder)
+    file = path / SOURCE_FILE if path.is_dir() else path
+    if source is None:
+        try:
+            source = file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+    sources: dict[str, str] = {}
+    program, _ = check_source(source, str(file), file.parent, sources=sources)
+    if program is None:
+        return None
+    try:
+        return _assemble(program, source, collect_files(file.parent), compiler_version(), sources).graph
+    except Exception:   # a program with errors may be one the graph cannot be built from; then there is none
+        return None
+
+
 # ---------------------------------------------------------------- the file
 
 # The label a node id's prefix says its node carries (`docs/language/bundle.md`, Identity), so an

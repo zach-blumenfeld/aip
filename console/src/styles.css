@@ -261,3 +261,14 @@ input.num-field { width: 6rem; font: inherit; }
 .governance .query { margin: 1.25rem 0; }
 .governance .query h2 { margin-bottom: 0.1rem; }
 .server .fields { max-width: 40rem; }
+
+/* The Studio (views/Studio.tsx) */
+.studio-bar { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin: 0.6rem 0; }
+.studio-header { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; margin: 0.4rem 0; }
+.studio-header label { display: flex; flex-direction: column; font-size: 0.85rem; }
+.studio-header label.grow { flex: 1; min-width: 16rem; }
+.studio-header textarea, .studio-header input { font: inherit; }
+.studio-split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
+.studio-source { max-height: 80vh; overflow: auto; }
+.studio-source h2 { margin-top: 0; }
+@media (max-width: 70rem) { .studio-split { grid-template-columns: 1fr; } }

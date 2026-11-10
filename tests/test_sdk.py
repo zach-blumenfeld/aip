@@ -419,6 +419,23 @@ def test_publish_list_search_describe_pull_get(served, fake, tmp_path):
         assert str(revision.value) == "no revision 7 of billing_support"
 
 
+def test_publish_as_a_draft_and_then_for_real(served, fake, tmp_path):
+    """`publish(draft=True)` holds the bundle with no revision (the console's Studio saves that
+    way, plan C2); publishing the same bundle later gives it the next revision."""
+    held = served.publish(AGENT, draft=True)
+    assert (held.name, held.revision, held.draft, held.existed) == ("billing_support_agent", None, True, False)
+    assert [e.name for e in served.list()] == ["billing_support"], "a draft is not in the catalog"
+    assert served.publish(AGENT, draft=True).existed
+    published = served.publish(AGENT)
+    assert (published.revision, published.bundle_id, published.existed) == ("1", held.bundle_id, True)
+    again = served.publish(AGENT, draft=True)
+    assert (again.revision, again.draft) == (None, False), "a published bundle is no draft"
+    with mock.patch("aip.client.cli._server", return_value=served.server):
+        code, out, _ = _call("publish", str(EXAMPLE), "--draft", "--json")
+    assert code == 0 and json.loads(out) == {"name": "billing_support", "revision": None, "bundle_id": served.describe("billing_support").bundle_id,
+                                             "existed": True, "draft": False}
+
+
 def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     done = served.run("billing_support", {"message": ANGRY}, workdir=tmp_path, session="demo",
                       on_pause=lambda _p: {"billing": True, "tone": "angry"})

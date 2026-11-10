@@ -54,8 +54,8 @@ export function Procedure({ reference, view }: { reference: string; view?: strin
       <p className="prose">{about.description}</p>
       {draft && (
         <p className="muted small" data-testid="draft-note">
-          A draft: the server holds this bundle with no revision, because a run of a folder or a file was recorded against it.
-          It is not in the catalog and no name resolves to it; <code>aip publish</code> gives it a revision.
+          A draft: the server holds this bundle with no revision, because a run of a folder or a file was recorded against it, or the studio saved it.
+          It is not in the catalog and no name resolves to it; <code>aip publish</code> (or Publish in the studio) gives it a revision.
         </p>
       )}
       <p className="links">
@@ -63,6 +63,7 @@ export function Procedure({ reference, view }: { reference: string; view?: strin
         {bundle && <span className="muted"> · {filesOf(bundle).length + 1} files</span>}
         {previous && about.revision && <> · <a href={href({ page: "diff", name: about.name, a: previous, b: about.revision })}>diff with previous</a></>}
         {!draft && <>{" · "}<a href={href({ page: "run", ref: exact })}>run</a></>}
+        {" · "}<a href={href({ page: "studio", ref: exact })} data-testid="open-studio">edit in the studio</a>
         {" · "}<a href={href({ page: "runs", name: about.name, draft: draft ? true : undefined })}>history</a>
         <span className="muted"> · bundle <code title={about.bundle_id}>{about.bundle_id.slice(0, 12)}</code></span>
       </p>

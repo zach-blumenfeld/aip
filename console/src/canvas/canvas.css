@@ -100,6 +100,29 @@
 .aipc-detail-quote { opacity: 0.7; }
 .aipc-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
 .aipc-source pre, .aipc-source ol { margin: 0.2rem 0; font-size: 12px; }
+/* Editing (plan C2): the compiler's problems in red on their cards and ports, the forms beside the canvas. */
+.aipc { --aipc-bad: #d32f2f; }
+.aipc-card.aipc-bad { border-color: var(--aipc-bad); box-shadow: 0 0 0 1px var(--aipc-bad); }
+.aipc-frame.aipc-bad { border-color: var(--aipc-bad); }
+.aipc-card.carried { opacity: 0.85; cursor: grabbing; box-shadow: 0 6px 18px color-mix(in srgb, currentColor 25%, transparent); }
+.aipc-section[data-section="problems"] .aipc-label, .aipc-section[data-section="problems"] .aipc-row { color: var(--aipc-bad); opacity: 1; }
+.aipc-port.aipc-bad .aipc-port-label, .aipc-port.aipc-bad .aipc-port-quote { color: var(--aipc-bad); opacity: 1; }
+.aipc-error, .aipc-bad > .aipc-note, .aipc-note.aipc-bad { color: var(--aipc-bad); }
+.aipc-problems { margin: 0.3rem 0; padding-left: 1.1rem; color: var(--aipc-bad); }
+.aipc-form textarea, .aipc-form input:not([type="number"]) { font: inherit; width: 100%; box-sizing: border-box; }
+.aipc-form select, .aipc-form button, .aipc-form input { font: inherit; }
+.aipc-field { display: flex; gap: 0.3rem; align-items: flex-start; }
+.aipc-field textarea, .aipc-field input { flex: 1; }
+.aipc-inline { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin-top: 0.2rem; }
+.aipc-inline input { width: auto !important; flex: 1; }
+.aipc-chips { list-style: none; padding: 0 !important; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.aipc-chips li { border: 1px solid var(--aipc-line); border-radius: 999px; padding: 0 0.2rem 0 0.5rem; }
+.aipc-chips button { border: 0; background: none; cursor: pointer; font: inherit; }
+.aipc-form-ports { list-style: none; padding: 0 !important; }
+.aipc-form-ports li { margin: 0.15rem 0; }
+.aipc-question { margin: 0.3rem 0; }
+.aipc-note { font-size: 12px; opacity: 0.75; margin: 0.2rem 0; }
+.aipc-danger { color: var(--aipc-bad); }
 @media (max-width: 56rem) {
   .aipc-body { flex-direction: column; height: auto !important; }
   .aipc-view { min-height: 60vh; }

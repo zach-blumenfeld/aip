@@ -334,9 +334,10 @@ class Entry:
 @dataclass(frozen=True)
 class Published:
     name: str
-    revision: str
+    revision: str | None          # None for a bundle uploaded as a draft that has no revision
     bundle_id: str
     existed: bool                 # the bundle id was already in the store (a draft, or a published revision)
+    draft: bool = False           # the store holds the bundle with no revision (`publish(..., draft=True)`)
 
 
 @dataclass(frozen=True)
@@ -822,13 +823,19 @@ class Client:
         """Pull every published name's resolved revision."""
         return [self.pull(f"{e.name}@{e.resolves}") for e in self.list() if e.resolves]
 
-    def publish(self, target: str | Path) -> Published:
+    def publish(self, target: str | Path, draft: bool = False) -> Published:
         """Publish a program directory (compiled here) or an `.rl` under its procedure's name;
-        the server assigns the next revision, or finds the bundle already there."""
+        the server assigns the next revision, or finds the bundle already there. With `draft`
+        the bundle is uploaded with no revision instead, as a run of the folder would hold it:
+        it is in the store, out of the catalog, and a later `publish` of the same bundle gives
+        it its revision (`draft` comes back False when it already has one)."""
         server = self._server()
         bundle, origin = self._open(target)
         if origin["kind"] == "name":
             raise InvalidInput(f"{target!r} is a catalog reference; publish takes a program directory or an {BUNDLE_SUFFIX} file")
+        if draft:
+            held = server.draft(bundles.read_bytes(bundle.id, self.home))
+            return Published(held["name"], None, held["bundle_id"], bool(held.get("existed")), bool(held.get("draft")))
         reply = server.publish(bundles.read_bytes(bundle.id, self.home))
         bundles.remember(f"{reply['name']}@{reply['revision']}", reply["bundle_id"], reply["revision"], self.home)
         return Published(reply["name"], str(reply["revision"]), reply["bundle_id"], bool(reply.get("existed")))

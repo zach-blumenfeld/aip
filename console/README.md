@@ -51,6 +51,8 @@ Routes are hash-based.
   traffic) or as the **card canvas** (`?view=data`, `traffic` or `cards`), drawn down or to the
   right, then what `aip info` says (when to use it, inputs, result, what its scripts require), and
   the name's revisions with pin and retire. A draft opens as `#/p/bundle:<bundle id>`.
+- `#/studio[/<ref>]` the **Studio**: the card canvas as an editor of a revision, a draft, or (with no
+  reference) a new procedure, saving drafts. Below.
 - `#/p/<ref>/files[/<path>]` **source**: `procedure.aip` as it was stored, in the colours of the
   grammar the VS Code extension ships, and the bundle's files. `#/p/<name>/diff[/<a>..<b>]` compares
   two revisions file by file, with a line diff for each changed text file.
@@ -111,6 +113,31 @@ to go where it leads. Drawn to the right it is one row, with the wires under it.
 server, or `aip compile --json` through the launcher for a folder. The component (`src/canvas/`)
 keeps no console state, so the VS Code extension's preview can draw the same picture.
 
+### The Studio
+
+The card canvas as an editor, for reading and adjusting a procedure without its file. It opens on a
+revision or a draft (`edit in the studio` on its page) or on a new procedure, and **every change is a
+text edit of `procedure.aip`** at the span the compiler gave the card, port or line
+(`src/canvas/edit.ts`): the console's process formats the text (`aip fmt --stdin`), compiles it
+against the bundle's files (`aip compile --check --json --partial --stdin` in a folder of its own),
+and the canvas draws what the compiler made of it. So the compiler is the only rule book: the Studio
+never accepts what the runtime would refuse.
+
+- **Changes.** `+ card` adds a step of a kind after the one picked, named from its description, in the
+  shape spec 2.1 gives that kind. A card opens as a form: its description (a question's instruction, a
+  prompt file's text), what it reads (offered the keys produced upstream), what it produces (an
+  `Execute`'s, a `Task_Agent`'s, `Start`'s inputs), where each port leads (a step, a loop, `end`, or
+  `Continue` in a body), a route's missing branches and its check, a loop's cap; remove it, or move it
+  into or out of a loop (drag the card onto a loop's frame, or off it). The procedure's name and
+  description are above the canvas. Undo steps back.
+- **Half done.** While a change is unfinished the compiler's diagnostics are drawn on the cards, in its
+  words: a card nothing reaches, a red port where a branch or a `Next_Step` is missing, an input that
+  is not available. A text that does not parse keeps the last cards that did, and cannot be changed
+  until it is undone.
+- **Saving.** Only a clean compile can be saved: **Save draft** uploads the bundle with no revision
+  (`aip publish --draft`), and **Publish** gives that draft the next revision of its name. Edits that
+  are not saved stay in this browser until they are saved or discarded.
+
 ### A run's record
 
 The record is the run's history as the runtime wrote it; the page answers what the raw JSON leaves a
@@ -146,7 +173,7 @@ AIP_SERVER=http://localhost:8000 uv run aip publish examples/language/billing-su
 
 `npm test` runs node's test runner over the modules that need no browser: the grammar tokenizer on
 the example programs, the canvas's and the step graph's model and layout on graphs the compiler
-printed, data flow, a run's path and traffic, a run's history nested under its loops on records the
+printed, the Studio's edits on the examples' source and the diagnostics drawn on cards, data flow, a run's path and traffic, a run's history nested under its loops on records the
 server kept, the forms' typing, the launcher's reading of what
 `aip` prints. Node 22.18 or newer (it runs the TypeScript as it is).
 

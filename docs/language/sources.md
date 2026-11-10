@@ -130,6 +130,24 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   the graph's schema changes (L7 did for ticket-triage); the `*.run.json` records beside them
   are runs of billing-support, fixed-policy and dynamic-policy, which L7 did not touch.
 
+## What C2 left (2026-11-09)
+
+- **The Studio edits text, never the graph.** `console/src/canvas/edit.ts` turns each card operation
+  into text edits at the spans `aip compile --json` puts on nodes and edges (1-based, `end_column`
+  exclusive), assuming the canonical form, which the Studio restores after every edit with `aip fmt
+  --stdin`. A new operation is a function there and a test in `console/test/edit.test.ts`; the
+  e2e spec `console/e2e/studio.spec.ts` checks the result with the real formatter and compiler.
+- **A half-done program has a graph only with `--partial`** (`aip.compiler.bundle.partial_graph`):
+  the checker's program assembled as the bundle would be, edges to missing steps left out, no id.
+  If the compiler ever stops building a graph for some error, the Studio shows the last one that
+  parsed and refuses edits, which is the right failure.
+- **Saving is `aip publish --draft` on a folder the launcher keeps** (one per open Studio, under a
+  temporary directory, holding the bundle's files as the server returned them). Publishing the
+  same folder afterwards gives the draft its revision, since the store merges by bundle id.
+- **Not done:** the VS Code preview draws the canvas but does not pass `editing` yet; the edits are
+  plain ranges, so the extension can apply them as a `WorkspaceEdit` when it does. Folder mode has
+  no Studio (there is no server to save a draft to).
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

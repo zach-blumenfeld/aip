@@ -309,11 +309,22 @@ def publish_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="aip publish", description="Compile a program directory (or take an .rl), upload the "
                                      "bundle, and print `name@revision`.")
     parser.add_argument("target", metavar="folder|bundle.rl")
+    parser.add_argument("--draft", action="store_true", help="upload it with no revision, as a draft: out of the catalog until "
+                        "it is published without --draft")
+    parser.add_argument("--json", action="store_true", help="print `{name, revision, bundle_id, existed, draft}`")
     args = parser.parse_args(argv)
 
     def go() -> int:
-        p = _client().publish(args.target)
-        print(f"{p.name}@{p.revision}  bundle {p.bundle_id[:12]}" + ("  (already in the store)" if p.existed else ""))
+        p = _client().publish(args.target, draft=args.draft)
+        if args.json:
+            print(json.dumps({"name": p.name, "revision": p.revision, "bundle_id": p.bundle_id, "existed": p.existed,
+                              "draft": p.draft}, indent=2))
+        elif p.revision is None:
+            print(f"{p.name} (draft)  bundle {p.bundle_id[:12]}" + ("  (already in the store)" if p.existed else ""))
+        elif args.draft:
+            print(f"{p.name}  bundle {p.bundle_id[:12]}  is already published; it has a revision, so it is no draft")
+        else:
+            print(f"{p.name}@{p.revision}  bundle {p.bundle_id[:12]}" + ("  (already in the store)" if p.existed else ""))
         return 0
     return _serving(go)
 

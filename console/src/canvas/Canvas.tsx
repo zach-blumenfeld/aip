@@ -7,12 +7,22 @@
 //
 // It is a component on its own: it takes the graph (and, to show source, the text) as props and keeps
 // nothing but its view. The console's procedure page draws a revision with it, and the VS Code
-// extension's preview bundles this folder (plan E2); C2 adds editing on top. Read-only here.
+// extension's preview bundles this folder (plan E2). With `editing` it is an editor (plan C2, the
+// console's Studio): an open card is a form (CardForm.tsx), "+ card" adds one, a card dragged onto a
+// loop's frame moves into it (or out, dropped outside), and `problems`, the compiler's diagnostics of
+// what is written now, are drawn on the cards. Every change goes to the host as text edits (edit.ts);
+// the host applies them, compiles, and passes the new graph back.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { AddCardForm, CardForm, type Editing } from "./CardForm.tsx";
+import { EditError, move } from "./edit.ts";
 import { depthOf, layoutOf, SIZE, type Direction } from "./layout.ts";
 import { modelOf, sliceOf, type Card, type Frame, type Graph, type Port } from "./model.ts";
+import { withProblems, type Problem } from "./problems.ts";
 import "./canvas.css";
+
+export type { Editing } from "./CardForm.tsx";
+export type { Problem } from "./problems.ts";
 
 export interface CanvasProps {
   /** The bundle's graph: `graph` of `aip compile --json`, or what a server hands back for a revision. */
@@ -29,6 +39,10 @@ export interface CanvasProps {
   height?: string;
   /** Called with the step or loop opened (its name and first line), or null when it is closed. */
   onOpen?: (item: { name: string; line: number | null } | null) => void;
+  /** The compiler's diagnostics to draw on the cards. */
+  problems?: Problem[];
+  /** Make it an editor; `source` is then required, and the graph must carry the compiler's spans. */
+  editing?: Editing;
 }
 
 interface View { x: number; y: number; k: number }
@@ -36,14 +50,19 @@ interface View { x: number; y: number; k: number }
 const MIN_ZOOM = 0.2, MAX_ZOOM = 2;
 const clamp = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 
-export function Canvas({ graph, source, renderCode, visited, direction = "down", height = "70vh", onOpen }: CanvasProps) {
-  const model = useMemo(() => modelOf(graph), [graph]);
+export function Canvas({ graph, source, renderCode, visited, direction = "down", height = "70vh", onOpen, problems, editing }: CanvasProps) {
+  const model = useMemo(() => (problems ? withProblems(modelOf(graph), problems).model : modelOf(graph)), [graph, problems]);
   const layout = useMemo(() => layoutOf(model, direction), [model, direction]);
   const viewport = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [open, setOpen] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
+  // A card being dragged to move it (editing only): where it started, and how far it has gone, in screen pixels.
+  const [carry, setCarry] = useState<{ id: string; x: number; y: number; dx: number; dy: number } | null>(null);
+  const [moveError, setMoveError] = useState("");
+  const fitted = useRef(false);
 
   const fit = useCallback(() => {
     const el = viewport.current;
@@ -55,7 +74,12 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
     setView({ k, x: Math.max(0, (el.clientWidth - layout.width * k) / 2), y: 0 });
   }, [layout, direction]);
 
-  useEffect(() => { fit(); }, [fit]);
+  // An editor keeps its view across edits: only the first picture is fitted.
+  useEffect(() => {
+    if (editing && fitted.current) return;
+    fitted.current = true;
+    fit();
+  }, [fit, editing]);
 
   const zoomAt = useCallback((factor: number, px?: number, py?: number) => {
     const el = viewport.current;
@@ -84,7 +108,43 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
     drag.current = { x: e.clientX, y: e.clientY, moved: false };
     dragged.current = false;
   };
+  const onCardDown = (e: ReactPointerEvent<HTMLDivElement>, card: Card) => {
+    if (!editing || e.button !== 0 || card.kind === "Start" || card.kind === "End") return;
+    if ((e.target as Element).closest("button, select, input, textarea")) return;
+    e.stopPropagation();
+    dragged.current = false;
+    setCarry({ id: card.id, x: e.clientX, y: e.clientY, dx: 0, dy: 0 });
+  };
+  /** Drop a carried card: into the innermost frame under the pointer, or out of every frame. */
+  const drop = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const c = carry;
+    setCarry(null);
+    if (!c || !editing || source === undefined || Math.abs(c.dx) + Math.abs(c.dy) < 6) return;
+    dragged.current = true;
+    const el = viewport.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const wx = (e.clientX - box.left - view.x) / view.k, wy = (e.clientY - box.top - view.y) / view.k;
+    const under = Object.values(model.frames)
+      .filter((f) => { const b = layout.boxes[f.id]; return b && wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h; })
+      .sort((a, b) => depthOf(model, b.id) - depthOf(model, a.id))[0];
+    const into = under?.id ?? null;
+    const card = model.cards[c.id];
+    if (!card || into === card.parent) return;
+    // Out of a loop means out of the innermost one it is in: one level at a time, as the source nests.
+    try {
+      editing.onEdit(move(source, graph, c.id, into), into ? `move ${card.name} into ${model.frames[into]?.name}` : `move ${card.name} out`);
+      setMoveError("");
+    } catch (err) {
+      if (err instanceof EditError) setMoveError(err.message);
+      else throw err;
+    }
+  };
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (carry) {
+      setCarry({ ...carry, dx: e.clientX - carry.x, dy: e.clientY - carry.y });
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const dx = e.clientX - d.x, dy = e.clientY - d.y;
@@ -95,17 +155,22 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
     d.y = e.clientY;
     setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
   };
-  const onPointerUp = () => { drag.current = null; };
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    drag.current = null;
+    if (carry) drop(e);
+  };
 
   const show = (id: string | null) => {
     if (dragged.current) return;   // the click that ends a pan opens nothing
     setOpen(id);
+    setAdding(false);
     const item = id === null ? null : model.cards[id] ?? model.frames[id];
     onOpen?.(item ? { name: item.name, line: item.line } : null);
   };
 
   /** Open a port's target and bring it into view. */
   const follow = (port: Port) => {
+    if (port.target === "") return;   // a way out the compiler finds missing leads nowhere yet
     const el = viewport.current;
     const box = layout.boxes[port.target];
     if (el && box) setView((v) => ({ ...v, x: el.clientWidth / 2 - (box.x + box.w / 2) * v.k, y: Math.max(20, el.clientHeight / 3) - box.y * v.k }));
@@ -120,8 +185,9 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
   const targetName = (id: string) => (model.cards[id] ?? model.frames[id])?.name ?? id;
 
   const portRow = (owner: string, port: Port, i: number) => (
-    <button type="button" key={i} className={`aipc-port aipc-port-${port.kind}`} data-testid="canvas-port" data-port={port.label}
-            data-kind={port.kind} data-target={targetName(port.target)} title={`${port.label} → ${port.quote}`}
+    <button type="button" key={i} className={`aipc-port aipc-port-${port.kind}${port.problem ? " aipc-bad" : ""}`} data-testid="canvas-port"
+            data-port={port.label} data-kind={port.kind} data-target={targetName(port.target)} data-problem={port.problem ? "true" : undefined}
+            title={port.problem ? `${port.label}: ${port.problem}` : `${port.label} → ${port.quote}`}
             onClick={(e) => { e.stopPropagation(); follow(port); }} aria-label={`${owner}: ${port.label} leads to ${targetName(port.target)}`}>
       <span className="aipc-port-label">{port.label}</span>
       <span className="aipc-port-arrow" aria-hidden="true">→</span>
@@ -136,7 +202,11 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
         <span className="aipc-zoom" data-testid="canvas-zoom">{Math.round(view.k * 100)}%</span>
         <button type="button" onClick={() => zoomAt(1.25)} aria-label="zoom in">+</button>
         <button type="button" onClick={fit} data-testid="canvas-fit">fit</button>
-        <span className="aipc-hint">drag to pan · wheel to zoom · click a card to open it</span>
+        {editing && <button type="button" onClick={() => { setAdding(true); }} data-testid="canvas-add">+ card</button>}
+        <span className="aipc-hint">
+          {editing ? "click a card to change it · drag a card onto a loop to move it in, off it to move it out" : "drag to pan · wheel to zoom · click a card to open it"}
+        </span>
+        {moveError && <span className="aipc-error" role="alert">{moveError}</span>}
       </div>
       <div className="aipc-body" style={{ height }}>
         <div className="aipc-view" ref={viewport} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
@@ -147,11 +217,11 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
               const box = layout.boxes[frame.id];
               if (!box) return null;
               return (
-                <div key={frame.id} className={`aipc-frame${open === frame.id ? " open" : ""}${visited?.has(frame.name) ? " visited" : ""}`}
+                <div key={frame.id} className={`aipc-frame${open === frame.id ? " open" : ""}${visited?.has(frame.name) ? " visited" : ""}${frame.problems?.length ? " aipc-bad" : ""}`}
                      data-testid="canvas-frame" data-loop={frame.name} data-kind={frame.kind}
                      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}>
                   <button type="button" className="aipc-frame-head" style={{ height: SIZE.frameHead }} onClick={() => show(frame.id)}
-                          title={`${frame.kind} ${frame.name} ${frame.header}`}>
+                          title={frame.problems?.length ? frame.problems.join("\n") : `${frame.kind} ${frame.name} ${frame.header}`}>
                     <span className="aipc-kind">{frame.kind}</span> <code>{frame.name}</code> <span className="aipc-frame-header">{frame.header}</span>
                   </button>
                   <div className="aipc-frame-foot" style={{ top: (layout.portY[frame.id]?.[0] ?? box.y + box.h) - box.y - SIZE.port / 2 }}>
@@ -174,11 +244,14 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
             {cards.map((card) => {
               const box = layout.boxes[card.id];
               if (!box) return null;
+              const carried = carry?.id === card.id;
               return (
                 <div key={card.id} role="button" tabIndex={0}
-                     className={`aipc-card aipc-kind-${card.kind}${open === card.id ? " open" : ""}${visited?.has(card.name) ? " visited" : ""}`}
-                     data-testid="canvas-card" data-step={card.name} data-kind={card.kind}
-                     style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
+                     className={`aipc-card aipc-kind-${card.kind}${open === card.id ? " open" : ""}${visited?.has(card.name) ? " visited" : ""}${card.problems?.length ? " aipc-bad" : ""}${carried ? " carried" : ""}`}
+                     data-testid="canvas-card" data-step={card.name} data-kind={card.kind} data-problems={card.problems?.length || undefined}
+                     style={{ left: box.x, top: box.y, width: box.w, height: box.h,
+                              ...(carried ? { transform: `translate(${carry.dx / view.k}px, ${carry.dy / view.k}px)`, zIndex: 5 } : {}) }}
+                     onPointerDown={(e) => onCardDown(e, card)}
                      onClick={() => show(card.id)}
                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); dragged.current = false; show(card.id); } }}>
                   <div className="aipc-head"><span className="aipc-kind">{card.kind}</span> <code>{card.name}</code></div>
@@ -195,7 +268,17 @@ export function Canvas({ graph, source, renderCode, visited, direction = "down",
             })}
           </div>
         </div>
-        {opened && (
+        {editing && source !== undefined && adding && (
+          <AddCardForm graph={graph} model={model} source={source} editing={editing} after={open}
+                       onAdded={(name) => { setAdding(false); setOpen(`step:${name}`); }} onClose={() => setAdding(false)} />
+        )}
+        {editing && source !== undefined && !adding && opened && (
+          <CardForm key={opened.id} item={opened} graph={graph} model={model} source={source} editing={editing}
+                    onClose={() => { dragged.current = false; show(null); }}>
+            <SourceSlice source={source} first={opened.line} last={opened.endLine} renderCode={renderCode} />
+          </CardForm>
+        )}
+        {!editing && opened && (
           <aside className="aipc-detail" data-testid="canvas-detail" data-name={opened.name}>
             <div className="aipc-detail-head">
               <span className="aipc-kind">{opened.kind}</span> <code>{opened.name}</code>

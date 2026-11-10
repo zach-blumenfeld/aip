@@ -23,6 +23,13 @@
 //   GET  /console/record?run_id=  `aip runs <run_id> --json`: the run, from this machine's run file or the server
 //   GET  /console/runs            `aip runs --json`; in folder mode, this machine's runs of the folder
 //   POST /console/wake            starts the local server when the console's server is `aip config server local`
+//   POST /console/studio/open     {files: [{path, text | base64, mode}]} -> {workspace}: a folder holding a bundle's files
+//                                 (or none, for a new procedure), which the Studio compiles its source against
+//   POST /console/studio/check    {workspace, source, files?} -> `aip fmt --stdin` (when the source parses), then
+//                                 `aip compile --check --json --partial --stdin`: {source (formatted), formatted, ok,
+//                                 bundle_id, diagnostics, graph, partial}. `files` are changed files' text, written first
+//   POST /console/studio/save     {workspace, source, files?, publish?} -> writes the folder and runs `aip publish --draft
+//                                 --json` (with `publish`, `aip publish --json`): {name, revision, bundle_id, existed, draft}
 //
 // An event stream sends `event: process` (its id, to cancel by) first, then one `data:` event per line
 // the CLI printed (step lines, then the final paused, done or error object), then `event: exit` with
@@ -31,7 +38,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -215,15 +222,65 @@ function kill(entry) {
   try { process.kill(-entry.child.pid, "SIGTERM"); } catch { entry.child.kill("SIGTERM"); }
 }
 
-/** `aip <args>` run to its end: `{status, stdout, stderr}`. */
-function aip(setup, args) {
-  const out = spawnSync(setup.aip, args, { cwd: setup.cwd, env: envFor(setup), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+/** `aip <args>` run to its end, `input` on its stdin: `{status, stdout, stderr}`. */
+function aip(setup, args, input) {
+  const out = spawnSync(setup.aip, args, { cwd: setup.cwd, env: envFor(setup), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+                                           ...(input === undefined ? {} : { input }) });
   return { status: out.error ? null : out.status, stdout: `${out.stdout ?? ""}`, stderr: `${out.stderr ?? ""}${out.error ? out.error.message : ""}` };
 }
 
 /** What a failed `aip` said, for an error envelope. */
 function said(out, what) {
   return (out.stderr.trim() || out.stdout.trim() || `${what} exited with ${out.status}`).replace(/^aip: /, "");
+}
+
+// ------------------------------------------------------------------ the Studio's folders
+
+/** The Studio's folders by id: each holds a procedure's files, which `aip compile --stdin` reads beside the source
+ *  the page sends, and which `aip publish` uploads once the source is written in. They live under one temporary
+ *  directory that goes when the console stops. */
+const workspaces = new Map();
+const WORKSPACE = /^[0-9a-f]{16}$/;
+const FILE_PATH = /^(assets|references|scripts)\/(?!.*(^|\/)\.\.?(\/|$))[^\0]+$/;
+
+function studioRoot(setup) {
+  if (!setup.studio) {
+    setup.studio = mkdtempSync(path.join(tmpdir(), "aip-studio-"));
+    process.on("exit", () => rmSync(setup.studio, { recursive: true, force: true }));
+  }
+  return setup.studio;
+}
+
+/** Write a file of the procedure into its folder; a path outside assets/, references/ and scripts/ is refused. */
+function writeInto(folder, file) {
+  const rel = `${file.path ?? ""}`;
+  if (!FILE_PATH.test(rel) || rel.includes("\\")) throw new Error(`${rel} is not a file of a procedure (assets/, references/ or scripts/)`);
+  const target = path.join(folder, ...rel.split("/"));
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, typeof file.base64 === "string" ? Buffer.from(file.base64, "base64") : `${file.text ?? ""}`);
+  if (Number.isInteger(file.mode)) chmodSync(target, file.mode & 0o777);
+}
+
+function workspaceOf(body) {
+  const folder = typeof body.workspace === "string" && WORKSPACE.test(body.workspace) ? workspaces.get(body.workspace) : undefined;
+  if (!folder) throw new Error("no such studio workspace; open the procedure in the Studio again");
+  if (typeof body.source !== "string") throw new Error("source is required");
+  // Changed files' text: a prompt edited on its card.
+  if (body.files && typeof body.files === "object") {
+    for (const [rel, text] of Object.entries(body.files)) writeInto(folder, { path: rel, text: `${text}` });
+  }
+  return folder;
+}
+
+/** Format the source when it parses, then check it: what the Studio draws. */
+function studioCheck(setup, folder, source) {
+  const fmt = aip(setup, ["fmt", "--stdin"], source);
+  const formatted = fmt.status === 0 ? fmt.stdout : source;
+  const out = aip(setup, ["compile", "--check", "--json", "--partial", "--stdin", folder], formatted);
+  let report;
+  try { report = JSON.parse(out.stdout); } catch { throw new Error(said(out, "aip compile")); }
+  return { source: formatted, formatted: fmt.status === 0 && formatted !== source, ok: report.ok === true, bundle_id: report.bundle_id ?? null,
+           diagnostics: report.diagnostics ?? [], graph: report.graph ?? null, partial: report.partial === true };
 }
 
 // ------------------------------------------------------------------ http
@@ -332,6 +389,31 @@ function handler(setup, port) {
         if (out.status !== 0) return problem(res, 502, "server", said(out, "aip runs"));
         const runs = JSON.parse(out.stdout);
         return json(res, 200, setup.folder ? runs.filter((r) => r.target === setup.folder) : runs);
+      }
+      if (route === "POST /console/studio/open") {
+        const body = await readJson(req);
+        const id = randomBytes(8).toString("hex");
+        const folder = path.join(studioRoot(setup), id);
+        mkdirSync(folder);
+        for (const file of Array.isArray(body.files) ? body.files : []) writeInto(folder, file);
+        workspaces.set(id, folder);
+        return json(res, 200, { workspace: id });
+      }
+      if (route === "POST /console/studio/check") {
+        const body = await readJson(req);
+        return json(res, 200, studioCheck(setup, workspaceOf(body), body.source));
+      }
+      if (route === "POST /console/studio/save") {
+        const body = await readJson(req);
+        if (setup.mode !== "server") return problem(res, 404, "not_found", "the Studio saves to a server; start the console with --server");
+        const folder = workspaceOf(body);
+        // Only what compiles is saved: the source as the check formats it, which is what the page shows.
+        const checked = studioCheck(setup, folder, body.source);
+        if (!checked.ok) return problem(res, 422, "compile_error", `it does not compile: ${checked.diagnostics.filter((d) => d.severity === "error").map((d) => d.message).join("; ")}`);
+        writeFileSync(path.join(folder, "procedure.aip"), checked.source);
+        const out = aip(setup, ["publish", folder, "--json", ...(body.publish ? [] : ["--draft"])]);
+        return out.status === 0 ? json(res, 200, { ...JSON.parse(out.stdout), source: checked.source })
+                                : problem(res, 502, "server", said(out, "aip publish"));
       }
       if (route === "POST /console/wake") {
         if (!setup.local) return problem(res, 404, "not_found", "the console's server is not a local one");

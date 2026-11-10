@@ -1,8 +1,9 @@
 """The language's commands under `aip` (`aip.client.cli` dispatches to them):
 
-    aip compile <path> [-o FILE] [--check] [--json] [--stdin]   compile a program to a bundle, or just check it
+    aip compile <path> [-o FILE] [--check] [--json] [--stdin] [--partial]   compile a program to a bundle, or just check it
     aip export <bundle.rl> --out DIR [--force]        write the program directory back from a bundle
     aip fmt <path>... [--check]                       rewrite procedure files in canonical form
+    aip fmt --stdin                                   print the canonical form of the source on stdin
 
 A path is a `procedure.aip` or a program directory holding one; `fmt` also takes a directory of
 program directories (`aip fmt --check examples/language`) and formats every `procedure.aip` under it. Writing or reading a bundle needs
@@ -19,7 +20,7 @@ import sys
 from pathlib import Path
 
 from aip.compiler import ParseError, format_source, has_errors
-from aip.compiler.bundle import BUNDLE_SUFFIX, BundleError, compile_folder, export_bundle, read_bundle, write_bundle
+from aip.compiler.bundle import BUNDLE_SUFFIX, BundleError, compile_folder, export_bundle, partial_graph, read_bundle, write_bundle
 from aip.compiler.language import LANGUAGE_VERSION
 
 SOURCE_FILE = "procedure.aip"
@@ -55,14 +56,21 @@ def compile_command(argv: list[str], prog: str = "aip compile") -> int:
     with their source spans and without the file contents (`docs/language/bundle.md`).
     `--stdin` takes the source text from standard input in place of PATH's `procedure.aip`, for
     an editor checking a buffer it has not saved: the folder's other files are still read from
-    disk, the diagnostics still name the file, and the file itself need not exist yet."""
+    disk, the diagnostics still name the file, and the file itself need not exist yet.
+    `--partial` (with `--json`) adds `graph` to the report of a program that parses but has
+    errors, the graph as far as it goes, with `partial: true`, so an editor can draw a change
+    while it is half done; `ok` stays false and `bundle_id` null."""
     parser = argparse.ArgumentParser(prog=prog, description="Compile a program to a bundle, reporting every diagnostic against its source lines.")
     parser.add_argument("path", type=Path, metavar="PATH", help="a program directory, or its procedure.aip")
     parser.add_argument("-o", "--output", type=Path, metavar="FILE", help=f"where to write the bundle (default: <name>{BUNDLE_SUFFIX} here)")
     parser.add_argument("--check", action="store_true", help="check only; write nothing")
     parser.add_argument("--json", action="store_true", help="print the report as JSON on stdout")
     parser.add_argument("--stdin", action="store_true", help="read the source from stdin in place of PATH's procedure.aip (the folder's files still come from disk)")
+    parser.add_argument("--partial", action="store_true", help="with --json: when the program parses but has errors, print its graph "
+                        "as far as it goes as well (`partial: true`), for an editor drawing a change half done")
     args = parser.parse_args(argv)
+    if args.partial and not args.json:
+        parser.error("--partial goes with --json")
     source = None
     if args.stdin:
         file = args.path / SOURCE_FILE if args.path.is_dir() else args.path
@@ -96,6 +104,10 @@ def compile_command(argv: list[str], prog: str = "aip compile") -> int:
                   "output": str(output) if output is not None else None,
                   "diagnostics": [d.to_dict() for d in diagnostics],
                   "graph": bundle.graph.to_dict(content=False) if bundle is not None else None}
+        if args.partial and bundle is None:
+            graph = partial_graph(file, source)
+            report["graph"] = graph.to_dict(content=False) if graph is not None else None
+            report["partial"] = graph is not None
         print(json.dumps(report, indent=2))
         if written_error:
             print(f"{prog}: {written_error}", file=sys.stderr)
@@ -145,12 +157,27 @@ def export_command(argv: list[str], prog: str = "aip export", epilog: str | None
 
 def fmt_command(argv: list[str], prog: str = "aip fmt") -> int:
     """Exit 0 when every file is (now) in canonical form, 1 when `--check` found one that is not
-    or a file does not parse (the error names its line and column), 2 when a path is missing."""
+    or a file does not parse (the error names its line and column), 2 when a path is missing.
+    `--stdin` formats the text on standard input instead and prints it on standard output, for
+    an editor formatting a buffer: exit 0 with the canonical form, 1 with the error on stderr
+    and nothing on stdout when it does not parse."""
     parser = argparse.ArgumentParser(prog=prog, description="Rewrite procedure.aip files in canonical form.")
-    parser.add_argument("paths", nargs="+", type=Path, metavar="PATH",
+    parser.add_argument("paths", nargs="*", type=Path, metavar="PATH",
                         help="a procedure.aip, a program directory, or a directory of program directories")
     parser.add_argument("--check", action="store_true", help="report the files that would change; write nothing")
+    parser.add_argument("--stdin", action="store_true", help="format the source on stdin and print it on stdout; no PATH")
     args = parser.parse_args(argv)
+    if args.stdin:
+        if args.paths or args.check:
+            parser.error("--stdin takes no PATH and no --check")
+        try:
+            sys.stdout.write(format_source(sys.stdin.read(), SOURCE_FILE))
+        except ParseError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        return 0
+    if not args.paths:
+        parser.error("give a PATH, or --stdin")
     files = _source_paths(args.paths, prog, below=True)
     if files is None:
         return 2
