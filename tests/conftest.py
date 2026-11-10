@@ -5,13 +5,11 @@ so neither the client's `config.json` nor the server's `server.toml` in the deve
 `AIP_LOCAL_DATA` and `AIP_LOCAL_PORT` keep a test that asks for the local server (`aip config
 server local`) away from the developer's own store and from a local server that may be running.
 
-The runtime-skill test is not collected until the milestone that rewrites the skill (K1 on
-aip-dev#1); `runtime_pending_test.py` is the one visible skip that says so. `served.py` is the
-real server in process, which the client's tests run against."""
+`served.py` is the real server in process, which the client's tests run against."""
 
 import pytest
 
-collect_ignore = ["test_runtime_skill.py", "served.py"]
+collect_ignore = ["served.py"]
 
 
 @pytest.fixture(autouse=True)

@@ -486,7 +486,7 @@ def _call(*argv: str) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
-NOT_CLIENT = {"compile", "export", "fmt", "config", "server", "mcp"}   # the language's tooling, the config, the two servers
+NOT_CLIENT = {"compile", "export", "fmt", "config", "server", "mcp", "skill"}   # the language's tooling, the config, the two servers, the skill
 
 
 def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
@@ -514,6 +514,7 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
         ("audit", "delete_audit", ["--delete", "by-agent"]),
         ("export", "export_runs", ["runs", "billing_support_agent", "--since", "2026-01-01", "-o", str(tmp_path / "audit.rl")]),
         ("retire", "retire", ["billing_support@1"]),
+        ("upgrade", "upgrade", []),
     ]
     assert {c for c, _, _ in cases} | NOT_CLIENT == set(COMMANDS)
     assert ALIASES == {"describe": "info"}

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # One-command installer for AIP: the `aip` command (the language's compiler, the runtime, the
-# client and the server; one package, `agent-instruction-protocol`, from PyPI) and both skills,
-# `aip-compile` (authoring) and `aip-runtime` (running published procedures), installed into
-# every agent detected on this machine.
+# client and the server; one package, `agent-instruction-protocol`, from PyPI) and the `aip`
+# skill (how an agent runs a procedure and writes one), installed into every agent detected on
+# this machine.
 #
 #   curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 #
-# Idempotent: safe to re-run; it upgrades the package and refreshes both skills.
+# Idempotent: safe to re-run; it upgrades the package and refreshes the skill.
 # `AIP_REF=<version>` installs that release.
 set -euo pipefail
 
@@ -50,11 +50,11 @@ if aip config 2>/dev/null | grep -q '^server: none'; then
   aip config server local >/dev/null && ok "runs are recorded on this machine (aip config server local)"
 fi
 
-# 4. Both skills, into every detected agent (Claude Code, Cursor, …), then `prune`, which
-#    removes skill folders installed under a name this tool has retired (`aip`, the authoring
-#    skill's name before 0.7.0). Non-fatal: a machine with no agent directory yet should not
-#    fail the install.
-info "Installing the aip-compile and aip-runtime skills…"
+# 4. The skill, into every detected agent (Claude Code, Codex, Cursor, …): `install` also
+#    removes the two skills of 0.8 (`aip-compile`, `aip-runtime`) where an earlier aip recorded
+#    installing them, and `prune` removes the ones it has no record of. Non-fatal: a machine
+#    with no agent directory yet should not fail the install.
+info "Installing the aip skill…"
 skills="$(aip skill install 2>&1)" || {
   printf '%s\n' "$skills" >&2
   warn "skill install skipped: no supported agent detected. Later: 'aip skill install <agent>' (see 'aip skill list') or 'aip skill install --path <skills dir>'."
@@ -67,13 +67,13 @@ echo
 tools="$(uv tool list 2>/dev/null)"
 ok "agent-instruction-protocol $(printf '%s\n' "$tools" | sed -n 's/^agent-instruction-protocol v//p')  ($(aip --version))"
 if [ -n "$skills" ]; then
-  # `aip skill install` prints one `installed <skill> -> <folder>  (<agent>)` line per skill and
-  # agent, and `removed <folder>  (...)` for a folder it installed earlier and no longer ships.
+  # `aip skill install` prints one `installed aip -> <folder>  (<agent>)` line per agent, and
+  # `removed <folder>  (...)` for a folder it installed earlier and no longer ships.
   installed="$(printf '%s\n' "$skills" | sed -n 's/^installed .* (\(.*\))$/\1/p' | sort -u | paste -sd ', ' -)"
-  [ -n "$installed" ] && ok "skills installed into: $installed"
+  [ -n "$installed" ] && ok "the aip skill is installed into: $installed"
   removed="$(printf '%s\n' "$skills" | grep '^removed ' || true)"
   [ -n "$removed" ] && printf '%s\n' "$removed" | while IFS= read -r line; do ok "$line"; done
 fi
 [ -n "$pruned" ] && printf '%s\n' "$pruned" | while IFS= read -r line; do ok "$line"; done
 echo
-ok "aip ready. 'aip --help' lists the commands, 'aip skill list' shows the skills per agent, 'aip compile --check <folder>' checks a procedure by hand."
+ok "aip ready. 'aip --help' lists the commands, 'aip skill list' shows which agents have the skill, 'aip list' shows the catalog (make_procedure is in it)."

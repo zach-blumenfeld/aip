@@ -105,6 +105,7 @@ catalog reference still runs from the bundle cache.
 | `list()` | `[Entry]`: `name`, `description`, `pinned`, `latest`, `resolves`, `revisions` | `aip list` |
 | `pull(ref)`, `pull_all()` | `Pulled`: `name`, `revision`, `bundle_id`, `path`, `fetched`; the bundle is in the cache, so `run` works offline | `aip pull`, `aip pull --all` |
 | `publish(target)` | `Published`: `name`, `revision`, `bundle_id`, `existed`; a folder is compiled here, an `.rl` taken as is | `aip publish` |
+| `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it) | `aip pin` |
 | `retire("name@revision")` | `Retired` | `aip retire` |

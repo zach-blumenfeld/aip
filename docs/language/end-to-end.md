@@ -89,10 +89,10 @@ agent runs it through `aip`. Export writes the program directory back for people
 
 ## Scene 8: bring an existing procedure across
 
-`aip upgrade old-skill/` converts a procedure written in today's YAML format into a program
-directory, and prints what it could not convert mechanically: a script that read a question's
-key as a scalar, a route on a plain value that now needs an answer type. The person fixes those,
-compiles, and the old procedure runs under the new runtime.
+Dropped on 2026-11-08 (`plan-questions.md`, item 20): there is no converter from the YAML
+format. An old procedure worth keeping is rewritten by hand or with `make_procedure`, given the
+old skill folder as its `materials`. (`aip upgrade` is a different thing since 0.9: it publishes
+the procedures the package ships to the configured server.)
 
 Needs: the upgrade tool; a list of what changes for scripts and templates; a compatibility
 window in which the runtime still loads the old format with a warning.

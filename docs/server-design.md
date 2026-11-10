@@ -148,7 +148,13 @@ same on both backends; an exact name wins outright.
 `aip.server.builtins.publish_builtins` runs when the app is built: each `.rl` shipped under
 `aip/server/bundles/` that the store has not been offered before is published, and the store
 remembers the ids it has been offered, so a built-in appears on a store's first start and is not
-brought back after someone retires it. None ships yet; `make_procedure` is the first (plan K1).
+brought back after someone retires it. One ships: `make_procedure`, the procedure that writes a
+procedure from a description (`examples/language/make_procedure/` is its source; the `.rl` in
+the package is that folder compiled, and a test fails when the two disagree). So `aip list` on a
+store that has just been created shows `make_procedure@1`, and a package upgrade that carries a
+changed one publishes it as the next revision on the server's next start. `aip upgrade` publishes
+the same bundles from a client, as `aip publish` would, for a server that runs an older package
+than the client; a bundle the server already holds keeps its revision.
 
 ## 4. Audit
 

@@ -5,7 +5,9 @@ contract's own tests are `tests/server/test_contract.py`, which run the same app
 backends.
 
 `requests` lists every call made, and `runs[run_id]` is the server's record of a run, so a test
-can say what the client sent and what the store kept."""
+can say what the client sent and what the store kept. The catalog starts empty: the bundles the
+package ships (`make_procedure`) are not published here unless a test asks (`builtins=True`), so
+a test's catalog holds what the test published."""
 
 from __future__ import annotations
 
@@ -45,6 +47,7 @@ class Served:
         self.backend = backend if backend is not None else RelateBackend(":memory:")
         self.store = self.backend.store
         tokens = {**{token: Token(name=name) for token, name in (token_names or {}).items()}, **(tokens or {})}
+        options.setdefault("builtins", False)
         self.app = create_app(self.backend, tokens=tokens, **options)
         self.http = TestClient(self.app)
         self.requests: list[tuple[str, str]] = []

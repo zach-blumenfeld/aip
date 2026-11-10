@@ -1,13 +1,14 @@
-"""Where the bundled example programs and the authoring skill live.
+"""Where the bundled example programs and the `aip` skill live.
 
 The wheel carries the repository's `examples/` under `aip/compiler/examples/` and the entries of
-`skills/aip-compile/` under `aip/compiler/_skill/` (`[tool.hatch.build.targets.wheel.force-include]`
+`skills/aip/` under `aip/compiler/_skill/` (`[tool.hatch.build.targets.wheel.force-include]`
 in `pyproject.toml`). One copy on disk in the repo, no duplicates to keep in sync. In an editable
 checkout the wheel was never built, so both fall back to the repository root, found by walking up
 from this module (`src/aip/compiler/`).
 
 The example programs are the language's, under `examples/language/<name>/procedure.aip`. The
-skill entries stay here for the runtime's `aip skill install` until the 0.9 skill replaces them."""
+skill is the one page an agent reads to run and to write procedures, with the language on one
+page beside it (`references/language.md`); `aip skill install` writes it into an agent."""
 
 from importlib.resources import files
 from pathlib import Path
@@ -15,13 +16,15 @@ from pathlib import Path
 SOURCE_FILE = "procedure.aip"
 EXAMPLES_FOLDER = Path("examples") / "language"
 
-# The entries of the authoring skill, in `skills/aip-compile/` and under `_skill/` in the wheel.
-SKILL_ENTRIES = ("SKILL.md", "references", "assets")
-SKILL_NAME = "aip-compile"
-# Skill names this tool used to install and has retired: `aip`, the authoring skill up to 0.6a1.
-# `skill prune` removes their folders (with a frontmatter guard); the table only grows.
-LEGACY_SKILL_NAMES = ("aip",)
-SKILL_FOLDER = Path("skills") / "aip-compile"
+# The entries of the skill, in `skills/aip/` and under `_skill/` in the wheel.
+SKILL_ENTRIES = ("SKILL.md", "references")
+SKILL_NAME = "aip"
+# Skill names this tool used to install and has retired: the two skills of 0.7 and 0.8, which
+# the one `aip` skill replaced in 0.9. `skill prune` removes their folders (with a frontmatter
+# guard). `aip` itself was the authoring skill's name up to 0.6a1 and is the skill's name again:
+# `skill install` overwrites that folder, so it is not pruned.
+LEGACY_SKILL_NAMES = ("aip-compile", "aip-runtime")
+SKILL_FOLDER = Path("skills") / "aip"
 
 
 def _repo_root() -> Path:
@@ -29,14 +32,14 @@ def _repo_root() -> Path:
 
 
 def skill_dir() -> Path:
-    """The folder holding the authoring skill's `SKILL.md`, `references/`, and `assets/`."""
+    """The folder holding the `aip` skill's `SKILL.md` and `references/`."""
     bundled = Path(str(files("aip.compiler").joinpath("_skill")))
     if (bundled / "SKILL.md").is_file():
         return bundled
     checkout = _repo_root() / SKILL_FOLDER
     if (checkout / "SKILL.md").is_file():
         return checkout
-    raise FileNotFoundError(f"the authoring skill is neither bundled at {bundled} nor checked out at {checkout}")
+    raise FileNotFoundError(f"the aip skill is neither bundled at {bundled} nor checked out at {checkout}")
 
 
 def examples_dir() -> Path:

@@ -749,6 +749,16 @@ class Client:
         bundles.remember(f"{reply['name']}@{reply['revision']}", reply["bundle_id"], reply["revision"], self.home)
         return Published(reply["name"], str(reply["revision"]), reply["bundle_id"], bool(reply.get("existed")))
 
+    def upgrade(self) -> list[Published]:
+        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`) to
+        the server, as `publish` would: a bundle the server already holds keeps its revision. A
+        server does this for itself when it first starts; this is for one that runs an older
+        package than this client."""
+        from aip.server.builtins import builtin_files
+
+        self._server()
+        return [self.publish(path) for path in builtin_files()]
+
     def get(self, ref: str, out: str | Path, force: bool = False) -> Fetched:
         """Write the program directory of a catalog reference at `out` (`aip export` of the
         pulled bundle)."""

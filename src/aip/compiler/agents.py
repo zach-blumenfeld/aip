@@ -3,9 +3,9 @@
 An agent is detected by a marker directory under the home directory and has a skills
 directory beside it; a skill is installed by copying its folder to
 `<skills_dir>/<skill name>/`. The catalog mirrors neo4j-cli's and knowledge-index's so users
-have one mental model across tools. Through 0.8, `aip-spec skill install` installed the authoring skill
-through this module, and `aip skill install` installs it and `aip-runtime` through the
-same functions, so adding an agent is one line in `AGENTS`. `install` keeps a record of what
+have one mental model across tools. `aip skill install` installs the `aip` skill through this
+module (through 0.8 it installed two, `aip-compile` and `aip-runtime`), so adding an agent is
+one line in `AGENTS`. `install` keeps a record of what
 it wrote where and removes its own earlier folders that are no longer in the set; `prune`
 removes folders written under names this tool retired before the record existed.
 
@@ -15,6 +15,7 @@ resolve at call time, so tests can point `HOME` at a temporary directory."""
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,9 @@ SKILL_ENTRIES = ("SKILL.md", "scripts", "references", "assets", "source")
 # A skill to install: its folder, or the folder with the entries to take from it.
 Source = Path | tuple[Path, Sequence[str]]
 IGNORE = shutil.ignore_patterns("__pycache__", ".DS_Store")
+FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+# What a skill folder's description must mention for `prune` to take it for one of ours.
+OURS = ("Agent Instruction Protocol", "AIP")
 
 
 @dataclass(frozen=True)
@@ -92,8 +96,6 @@ def detected_agents() -> list[Agent]:
 
 def frontmatter(folder: Path) -> dict:
     """The folder's `SKILL.md` frontmatter as a dict; empty when there is none to read."""
-    from aip.compiler.skill import FRONTMATTER_PATTERN
-
     import yaml
 
     try:
@@ -145,8 +147,8 @@ def target_dirs(agent: str | None = None, path: Path | None = None) -> list[tupl
 # the ones it wrote earlier that are no longer in its set (a renamed, split or dropped skill) and
 # never anything else. One file, `skills.json` under `AIP_HOME` (else `~/.aip`, where the runtime
 # keeps its run files): {"version": 1, "dirs": {<skills dir>: {<tool>: [<folder name>, ...]}}}.
-# Entries are per tool because `aip skill install` writes two skills and 0.8's `aip-spec skill install`
-# one; each only cleans up after its own earlier runs.
+# Entries are per tool because through 0.8 two commands installed skills (`aip skill install` and
+# `aip-spec skill install`); each only cleans up after its own earlier runs.
 RECORD_VERSION = 1
 
 
@@ -235,7 +237,7 @@ def prune(names: Sequence[str], agent: str | None = None, path: Path | None = No
     """Remove the folders of `names`, the skill names this tool used to install, from every
     detected agent (or one agent, or `path`): folders written before the install record existed,
     which `install` cannot find. A folder goes only when its `SKILL.md` frontmatter carries that
-    name and a description mentioning "Agent Instruction Protocol"; any other folder of the name
+    name and a description mentioning the Agent Instruction Protocol or AIP; any other folder of the name
     is left with a reason. `dry_run` reports without removing. Returns (removed, skipped)."""
     try:
         dirs = [d for _, d in target_dirs(agent, path)]
@@ -250,7 +252,7 @@ def prune(names: Sequence[str], agent: str | None = None, path: Path | None = No
             front = frontmatter(folder)
             if front.get("name") != name:
                 skipped.append((folder, f"its SKILL.md is not named {name!r}"))
-            elif "Agent Instruction Protocol" not in str(front.get("description", "")):
+            elif not any(word in str(front.get("description", "")) for word in OURS):
                 skipped.append((folder, "its SKILL.md does not describe an Agent Instruction Protocol skill"))
             else:
                 if not dry_run:

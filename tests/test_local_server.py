@@ -109,14 +109,15 @@ def test_a_run_starts_the_local_server_and_is_recorded_as_a_draft(machine):
 def test_the_local_server_stops_when_idle_and_the_next_call_starts_it_again(machine, monkeypatch):
     monkeypatch.setenv("AIP_LOCAL_IDLE", "1")
     client = aip.Client("local", agent="tests")
-    assert client.list() == [] and client.server.url == local.url()
+    shipped = [(e.name, e.resolves) for e in client.list()]
+    assert shipped == [("make_procedure", "1")] and client.server.url == local.url(), "a fresh store holds what the package ships"
     first = local.health()["pid"]
     deadline = time.monotonic() + 15
     while local.health() is not None and time.monotonic() < deadline:
         time.sleep(1.5)                                                      # asking is a request too: ask less often than it waits
     assert local.health() is None, "no request for a second, and it stopped by itself"
     assert "no request for 1s; stopping" in local.log_path().read_text()
-    assert client.list() == [] and local.health()["pid"] != first
+    assert [(e.name, e.resolves) for e in client.list()] == shipped and local.health()["pid"] != first, "offered once: still @1"
 
 
 def test_a_port_something_else_holds_does_not_stop_the_run(machine):

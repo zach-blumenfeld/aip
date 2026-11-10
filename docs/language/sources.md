@@ -76,6 +76,24 @@ a score question. Docs: https://docs.typesafe.ai/ (returned 308 to its new home 
 follow the redirect). The key lives in `aip config`, never in the repo. Tests use the scripted
 resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for any proof before D1.
 
+## The skill and `make_procedure` (since K1, 2026-11-09)
+
+- **One skill, `skills/aip/`**: `SKILL.md` (find, run, answer a pause, write) and
+  `references/language.md` (the language on one page). `aip skill install [agent | --path DIR]`
+  writes it; `aip-runtime` and `aip-compile` are gone from the tree (they are on public `main`
+  and in this repository's history), and `install` removes the folders an earlier `aip` recorded.
+  Zach reviews this skill line by line: change it in small diffs.
+- **`make_procedure`** is `examples/language/make_procedure/` and ships compiled as
+  `src/aip/server/bundles/make_procedure.rl`, which every server publishes on its first start.
+  The `.rl` is a binary committed to the repository; when the folder changes, or the graph the
+  compiler derives does, compile it again with the command in `src/aip/server/builtins.py`
+  (`tests/test_make_procedure.py` fails until you do). Its `assets/language.md` is a copy of the
+  skill's language page, held equal by `tests/test_skill.py`; the page is interpolated into the
+  procedure's prompts, so it must not contain `{name}`, `{description}`, `{materials}`, `{path}`
+  or `{diagnostics}` in braces.
+- Its `compile` step imports `aip.compiler` from the interpreter that runs `aip` (scripts are
+  launched with `sys.executable`), so it needs no `aip` on `PATH` and no Relate.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

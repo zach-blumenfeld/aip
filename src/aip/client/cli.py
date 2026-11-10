@@ -13,6 +13,8 @@
                                         the decision model's endpoint and key, the batch size
     aip server                          serve the catalog and the record of runs
     aip mcp                             the same client as an MCP server, for agent frameworks and coding agents
+    aip skill install | list | remove   the `aip` skill, the page an agent reads to run and write procedures
+    aip upgrade                         publish the procedures this package ships (`make_procedure`) to the server
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
@@ -513,6 +515,82 @@ def config_command(argv: list[str]) -> int:
     return 0
 
 
+def upgrade_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (make_procedure) "
+                                     "to the configured server. A server publishes them itself when it first starts; this is "
+                                     "for a server that runs an older aip than this one. A bundle the server already holds "
+                                     "is left as it is.")
+    parser.parse_args(argv)
+
+    def go() -> int:
+        published = _client().upgrade()
+        for p in published:
+            print(f"{p.name}@{p.revision}  bundle {p.bundle_id[:12]}" + ("  (already in the store)" if p.existed else ""))
+        if not published:
+            print("this package ships no procedure")
+        return 0
+    return _serving(go)
+
+
+# ------------------------------------------------------------------ the skill
+
+
+def skill_command(argv: list[str]) -> int:
+    """`aip skill install | list | remove | prune`: the `aip` skill (`skills/aip/`, shipped in the
+    package) in the skills directory of the agents on this machine. `install` records what it
+    wrote and removes its own earlier folders that are no longer its skill (the two skills of
+    0.8); `prune` removes folders under those retired names that no record knows of."""
+    from aip.compiler import agents
+    from aip.compiler.resources import LEGACY_SKILL_NAMES, SKILL_ENTRIES, SKILL_NAME, skill_dir
+
+    parser = argparse.ArgumentParser(prog="aip skill", description=f"Install the `{SKILL_NAME}` skill, the page an agent reads to "
+                                     "run and to write procedures, into the agents on this machine.")
+    sub = parser.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("install", help="into every detected agent, one named agent, or a skills directory")
+    p.add_argument("agent", nargs="?", help=f"one of: {', '.join(agents.AGENTS)}")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR", help=f"a skills directory; writes DIR/{SKILL_NAME}/")
+    sub.add_parser("list", help="supported agents, whether each is detected, and whether the skill is installed")
+    p = sub.add_parser("remove", help="from one agent, a skills directory, or every agent that has it")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    p = sub.add_parser("prune", help=f"remove skill folders installed under a retired name ({', '.join(LEGACY_SKILL_NAMES)}) "
+                                     "from every detected agent, one agent, or a skills directory")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--path", type=Path, default=None, metavar="DIR")
+    p.add_argument("--dry-run", action="store_true", help="report what would be removed, remove nothing")
+    args = parser.parse_args(argv)
+
+    if args.action == "list":
+        print(agents.table([SKILL_NAME]))
+        return 0
+    try:
+        if args.action == "prune":
+            removed, skipped = agents.prune(LEGACY_SKILL_NAMES, args.agent, args.path, dry_run=args.dry_run)
+            for folder in removed:
+                print(f"{'would remove' if args.dry_run else 'removed'} {folder}  (a retired skill name)")
+            for folder, reason in skipped:
+                print(f"aip skill prune: left {folder} alone: {reason}", file=sys.stderr)
+            if not removed and not skipped:
+                print(f"nothing to prune: no {', '.join(LEGACY_SKILL_NAMES)} skill folder in any agent `aip skill list` looks at")
+            return 0
+        if args.action == "install":
+            written, removed = agents.install([(skill_dir(), SKILL_ENTRIES)], args.agent, args.path, tool="aip")
+            for label, folder in written:
+                print(f"installed {folder.name} -> {folder}  ({label})")
+            for folder in removed:
+                print(f"removed {folder}  (installed by an earlier aip, no longer its skill)")
+            return 0
+        removed = agents.remove([SKILL_NAME], args.agent, args.path)
+        for folder in removed:
+            print(f"removed {folder}")
+        if not removed:
+            print(f"the {SKILL_NAME} skill is not installed anywhere `aip skill list` looks")
+        return 0
+    except (KeyError, agents.NoAgentDetected) as exc:
+        print(f"aip skill: {exc.args[0]}", file=sys.stderr)
+        return 1
+
+
 # ------------------------------------------------------------------ the MCP server
 
 
@@ -725,6 +803,8 @@ COMMANDS = {
     "config": config_command,
     "server": server_command,
     "mcp": mcp_command,
+    "skill": skill_command,
+    "upgrade": upgrade_command,
 }
 ALIASES = {"describe": "info"}
 RENAMED = {"governance": "audit"}       # said once, so a 0.8 habit lands somewhere
@@ -749,6 +829,8 @@ SUMMARIES = {
     "config": "where this client points: the server (local, a URL or none), the decision model, the batch size",
     "server": "serve the catalog and the record of runs over HTTP",
     "mcp": "serve this client to an MCP client: search, describe, compile, run, resume and pull as tools",
+    "skill": "install the aip skill, the page an agent reads to run and write procedures, into the agents here",
+    "upgrade": "publish the procedures this package ships (make_procedure) to the server",
 }
 
 

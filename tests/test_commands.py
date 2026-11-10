@@ -1,19 +1,12 @@
-"""The runtime-skill test waits for the milestone that rewrites the skill (K1); see `conftest.py`. The engine's tests are `test_engine.py`, the CLI's and the
-SDK's `test_cli_json.py` and `test_sdk.py`. The language's commands under `aip` are checked
-here so the command stays importable even where Relate is missing."""
+"""The language's commands under `aip`, checked here so the command stays importable even where
+Relate is missing. The engine's tests are `test_engine.py`, the CLI's and the SDK's
+`test_cli_json.py` and `test_sdk.py`, the skill's `test_skill.py`."""
 
 import contextlib
 import io
 import unittest
 
-import pytest
-
 from aip.client.cli import main
-
-
-@pytest.mark.skip(reason="the runtime-skill test is not collected: it checks the 0.8 skill, which K1 replaces (plan aip-dev#1)")
-def test_skill_pending():
-    pass
 
 
 class AipLanguageCommands(unittest.TestCase):

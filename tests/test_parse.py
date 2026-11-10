@@ -17,7 +17,7 @@ def source(name: str) -> str:
 class Examples(unittest.TestCase):
     def test_every_example_parses_and_round_trips(self):
         files = sorted(EXAMPLES.glob("*/procedure.aip"))
-        self.assertEqual(len(files), 5, files)
+        self.assertEqual(len(files), 6, files)
         for file in files:
             with self.subTest(file=file.parent.name):
                 text = file.read_text(encoding="utf-8")
@@ -27,7 +27,8 @@ class Examples(unittest.TestCase):
                 self.assertEqual(format_program(parse(formatted)), formatted, "the formatter is idempotent")
 
     def test_bundled_examples_are_the_language_examples(self):
-        self.assertEqual(example_names(), ["billing-support", "billing-support-agent", "dynamic-policy", "fixed-policy", "ticket-triage"])
+        self.assertEqual(example_names(), ["billing-support", "billing-support-agent", "dynamic-policy", "fixed-policy", "make_procedure",
+                                           "ticket-triage"])
         self.assertTrue((example_dir("billing-support") / "procedure.aip").is_file())
         with self.assertRaises(FileNotFoundError):
             example_dir("nope")

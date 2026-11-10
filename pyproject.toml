@@ -36,16 +36,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/aip"]
 
-# The example programs and the authoring skill live once, at the repository root (`examples/`
-# and `skills/aip-compile/`), where GitHub renders them. The wheel carries the same files under
+# The example programs and the `aip` skill live once, at the repository root (`examples/`
+# and `skills/aip/`), where GitHub renders them. The wheel carries the same files under
 # `aip/compiler/examples/` and `aip/compiler/_skill/`, so an installed `aip` finds them
 # (`aip.compiler.resources` looks in the wheel first, then walks up to the checkout). The sdist
 # holds the whole tree, so a wheel built from it finds the same relative paths.
 [tool.hatch.build.targets.wheel.force-include]
 "examples" = "aip/compiler/examples"
-"skills/aip-compile/SKILL.md" = "aip/compiler/_skill/SKILL.md"
-"skills/aip-compile/references" = "aip/compiler/_skill/references"
-"skills/aip-compile/assets" = "aip/compiler/_skill/assets"
+"skills/aip/SKILL.md" = "aip/compiler/_skill/SKILL.md"
+"skills/aip/references" = "aip/compiler/_skill/references"
 
 # The console (`console/`) is an npm package with its own version and release workflow
 # (`.github/workflows/console-release.yml`); nothing of it goes to PyPI. The wheel never held it
