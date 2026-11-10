@@ -148,6 +148,18 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   plain ranges, so the extension can apply them as a `WorkspaceEdit` when it does. Folder mode has
   no Studio (there is no server to save a draft to).
 
+## What K2 left (2026-11-09)
+
+- **`aip export <target> --skill DIR`** is `src/aip/compiler/skill.py` (`render_skill` over the
+  graph, `export_skill` writing the folder) and `Client.export_skill`; `tests/test_export_skill.py`
+  renders every example and holds the frontmatter to the Agent Skills limits. A new step kind,
+  loop form or edge type needs a line there, or the page says nothing about it.
+- **Claude Code listing the folder as a skill was not run by K2's session**: its sandbox refused a
+  nested `claude`. The check is to export into `<project>/.claude/skills/billing-support/` and ask
+  `claude -p` in that project which skills it has.
+- **A user-level `~/.config/aip/server.toml` with `server.inspector` in it stops `aip server`**
+  (that key went in 0.6a0). The one on this machine has it; K2's proof passed `--config` a scratch file.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

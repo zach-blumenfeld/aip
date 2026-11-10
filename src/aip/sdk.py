@@ -361,6 +361,18 @@ class Fetched:
 
 
 @dataclass(frozen=True)
+class SkillExported:
+    """A procedure written as a plain Agent Skill (`aip export --skill`): the folder, its
+    `SKILL.md`, the procedure's name and the skill's (`billing_support`, `billing-support`)."""
+    path: Path
+    skill_file: Path
+    name: str
+    skill: str
+    bundle_id: str
+    revision: str | None
+
+
+@dataclass(frozen=True)
 class Pinned:
     name: str
     revision: str | None
@@ -860,6 +872,20 @@ class Client:
             raise InvalidInput(exc.message) from exc
         return Fetched(path, bundle.name, bundle.id, revision)
 
+    def export_skill(self, target: str | Path, out: str | Path, force: bool = False) -> SkillExported:
+        """Write a procedure as a plain Agent Skill at `out` (`aip export <target> --skill DIR`):
+        a `SKILL.md` that walks the steps for an agent with no runtime, and the bundle's files.
+        `target` is a program directory, an `.rl` or a catalog reference, pulled as `get` does."""
+        from aip.compiler.skill import SKILL_FILE, export_skill, skill_name
+
+        bundle, origin = self._open(target, cache=False)
+        run_with = str(target) if origin["kind"] == "name" else None
+        try:
+            path = export_skill(bundle, Path(out), force=force, run_with=run_with)
+        except BundleError as exc:
+            raise InvalidInput(exc.message) from exc
+        return SkillExported(path, path / SKILL_FILE, bundle.name, skill_name(bundle.name), bundle.id, origin["revision"])
+
     def pin(self, name: str, revision: str | None) -> Pinned:
         """Make `name` resolve to `revision`; None clears the pin."""
         self._server().pin(name, revision)
@@ -928,5 +954,5 @@ def describe_procedure(procedure: Procedure) -> JSON:
 __all__ = [
     "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
     "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired", "RetiredRevision",
-    "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "Task", "configure", "describe_procedure", "settings",
+    "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "SkillExported", "Task", "configure", "describe_procedure", "settings",
 ]

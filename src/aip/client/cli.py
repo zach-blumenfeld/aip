@@ -4,6 +4,7 @@
     aip resume <run_id> --answers JSON  answer a pause (or, with no answers, retry a failed run)
     aip compile | export | fmt          the language's tooling (aip.compiler)
     aip export runs [name] -o FILE      the server's runs and the procedures they ran, as one Relate file
+    aip export <target> --skill DIR     a procedure as a plain Agent Skill, followed by hand with no runtime
     aip info <target>                   what a procedure is and what to give it
     aip pull | publish | get            move bundles between the cache and the catalog
     aip search | list | pin | retire    the catalog
@@ -52,10 +53,36 @@ def export_command(argv: list[str]) -> int:
     `aip export runs [name] -o FILE`: the server's runs and the procedures they ran, as one file."""
     if argv and argv[0] == "runs":
         return export_runs_command(argv[1:])
+    if any(a == "--skill" or a.startswith("--skill=") for a in argv):
+        return export_skill_command(argv)
     from aip.compiler.cli import export_command as compiler_export
 
-    return compiler_export(argv, prog="aip export", epilog="`aip export runs [name] -o FILE` is the other export: the server's "
-                           "runs and the procedures they ran, as one file (`aip export runs --help`).")
+    return compiler_export(argv, prog="aip export", epilog="`aip export <target> --skill DIR` writes the procedure as a plain "
+                           "Agent Skill instead (`aip export --skill DIR --help`); `aip export runs [name] -o FILE` is the other "
+                           "export: the server's runs and the procedures they ran, as one file (`aip export runs --help`).")
+
+
+def export_skill_command(argv: list[str]) -> int:
+    """`aip export <folder | bundle.rl | name[@rev]> --skill DIR`: the procedure as a plain Agent
+    Skill, a `SKILL.md` an agent with no runtime follows by hand, and the bundle's files."""
+    parser = argparse.ArgumentParser(
+        prog="aip export", usage="aip export TARGET --skill DIR [--force]",
+        description="Write a procedure as a plain Agent Skill: a SKILL.md that walks its steps in order, for an agent with "
+                    "no aip to follow by hand, with none of the runtime's guarantees, and the bundle's files beside it. "
+                    "Name DIR after the skill (the procedure's name with hyphens) when an agent is to find it.")
+    parser.add_argument("target", help="a program directory, an .rl bundle, or a published `name` or `name@rev` (pulled from the server)")
+    parser.add_argument("--skill", type=Path, required=True, metavar="DIR", help="the skill folder to write; must not exist or be empty")
+    parser.add_argument("--force", action="store_true", help="write into a directory that is not empty")
+    args = parser.parse_args(argv)
+
+    def go() -> int:
+        e = _client().export_skill(args.target, args.skill, force=args.force)
+        where = f"{e.name}@{e.revision}" if e.revision else e.name
+        print(f"wrote the skill {e.skill} from {where} (bundle {e.bundle_id[:12]}) to {e.path}")
+        if e.path.resolve().name != e.skill:
+            print(f"note: an agent expects the folder to be named after the skill, {e.skill}")
+        return 0
+    return _serving(go)
 
 
 def fmt_command(argv: list[str]) -> int:
@@ -860,7 +887,7 @@ SUMMARIES = {
     "run": "run a procedure (a folder, an .rl bundle or a published name) until it pauses or is done",
     "resume": "answer a paused run, or retry the step a failed run stopped at",
     "compile": "check a program directory and write its .rl bundle",
-    "export": "write a bundle's program directory back; `export runs`: the server's runs as one Relate file",
+    "export": "write a bundle's program directory back; `--skill DIR`: as a plain Agent Skill; `export runs`: the server's runs as one Relate file",
     "fmt": "rewrite procedure.aip in the canonical form",
     "info": "what a procedure does: its inputs, its steps and loops, its result",
     "pull": "put a published procedure's bundle in this machine's cache",

@@ -553,6 +553,7 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
         ("audit", "audit", ["by-agent"]),
         ("audit", "delete_audit", ["--delete", "by-agent"]),
         ("export", "export_runs", ["runs", "billing_support_agent", "--since", "2026-01-01", "-o", str(tmp_path / "audit.rl")]),
+        ("export", "export_skill", ["billing_support@1", "--skill", str(tmp_path / "billing-support")]),
         ("retire", "retire", ["billing_support@1"]),
         ("upgrade", "upgrade", []),
     ]

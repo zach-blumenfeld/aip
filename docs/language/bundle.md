@@ -90,7 +90,10 @@ carry the span of that clause. A property whose value would be null is left out.
 ## Reading a bundle
 
 `aip export <bundle.rl> --out DIR` writes the program directory back, byte for byte, with each
-file's mode. Before anything is read from a bundle, it is verified: the bytes of every file hash
+file's mode. `aip export <target> --skill DIR` writes it as a plain Agent Skill instead, a
+`SKILL.md` rendered from this graph alone (`aip.compiler.skill.render_skill`: the header, then the
+steps walked from `STARTS_AT` over `NEXT`, `BELOW` and `BRANCH`, a loop's body from `ENTERS` and
+`CONTAINS`, `WATCHES` placing each `Until` test), with the files beside it. Before anything is read from a bundle, it is verified: the bytes of every file hash
 to their recorded `sha256`, the source and files hash to the recorded `bundle_id`, the stored
 source parses and checks against the stored file list, and the graph it compiles to equals the
 stored graph (the compiler's version is the one property left out of the comparison). A
