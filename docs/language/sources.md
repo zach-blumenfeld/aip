@@ -160,6 +160,20 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - **A user-level `~/.config/aip/server.toml` with `server.inspector` in it stops `aip server`**
   (that key went in 0.6a0). The one on this machine has it; K2's proof passed `--config` a scratch file.
 
+## What D1 left (2026-11-09)
+
+- **`docs/demo/local.md` is the script.** Sections 0 to 4 and 6 ran on this machine from a clean
+  config (`AIP_CONFIG`, `AIP_LOCAL_PORT`, `AIP_LOCAL_DATA` pointed at `/tmp/aip-d1`, the key
+  copied in from the real config without printing it). The session doing it was itself Claude
+  Code, acting as the agent in the demo. **Section 5, Codex, has not run**: `codex` is not
+  installed here. Running it, pasting its output and the `aip runs --agent codex` lines ends D1.
+- **Nobody sets `AIP_AGENT` for the agent.** The skill does not mention it, so a run made by
+  Claude Code or Codex is recorded with no agent unless the person exports it before starting the
+  agent, as the script does.
+- **The decision model doubts a policy that says what the work must not do.** "Do not offer any
+  discount or credit" came back true at confidence 0.04 to 0.36, under the aggregation's 0.7, and
+  the run failed at its cap. The script uses policies that say what the work does.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP
