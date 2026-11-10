@@ -68,13 +68,18 @@ loaded; read them when the prompt calls for it), `answer_with` (what to answer: 
 their types) and `labels` (for each `choice` or `score` among them, the values it may take).
 `hint` is one line on the shape of an answer to this pause.
 
-A run started or resumed with `--answer-with model` pauses only when the agent model does not
-answer: at a step named by `--human`, or when it gives up (its answer refused four times, its cap
-of tool calls or tokens reached, its endpoint failing). The paused object then carries
-`answerer`: `{"answered": false, "step", "reason"}`, and, when the model tried, the `task` it gave
-up on and what it spent (`tool_calls`, `tokens`, `model_seconds`, `refusals`). The pause is the
-same as any other: answer it with `aip resume`, or resume with `--answer-with model` and no
-answers to have the model try again (`docs/answerer.md`).
+`aip runah` prints the same three objects (`docs/runah.md`). It pauses only where its model
+does not answer: at a step named by `--human`, or when the model gives up (its answer refused
+four times, its cap of tool calls or tokens reached, its endpoint failing). The paused object
+then carries `answerer`: `{"answered": false, "step", "reason"}`, and, when the model tried, the
+`task` it gave up on and what it spent (`tool_calls`, `tokens`, `model_seconds`, `refusals`).
+The pause is the same as any other: answer it with `aip resume` or `aip runah <run_id>
+--answers JSON`, or run `aip runah <run_id>` with no answers to have the model try again.
+
+`aip resume --work JSON` adds what the answering agent says it spent to the task's history
+entry, marked `work: "reported"` (below); it changes nothing else in the object printed. A
+`--work` that does not fit (a key other than `model`, `tool_calls`, `tokens`, `seconds`, a value
+of the wrong kind) is refused as `invalid_input`, resumable, and the pause stands.
 
 A task whose innermost loop is a `Loop` with a cap (`At_Most` on an `Until` loop, the count of
 a `Times` loop) also carries `pass_of`, the cap, and `last_pass`: `true` when this pass is the
@@ -289,12 +294,13 @@ and `run_file` when `resumable` is true.
 | `invalid_output` | a result does not match the step's `Produce` keys: a script's (then `script` is set), or an answer to a pause; a key the step does not produce, an answer's value outside the key's labels, or anything on an agent's answer but its value, counts | `missing`, `invalid` (key names); for an answer to a pause also `missing_tasks` (task indexes left unanswered) and `invalid_tasks` (indexes the pause does not have), each present when it names something |
 | `no_branch` | a route read a value none of its branch lines names | `key`, `value`, `branches` |
 | `script_failed` | a script exited non-zero, or did not print one JSON object (then `exit_code` is 0) | `script`, `exit_code`, `stderr` |
-| `timeout` | a script ran past the timeout | `script`, `seconds` |
+| `timeout` | a script ran past the cap on one script, `aip config --script-timeout` (`AIP_SCRIPT_TIMEOUT`, 300 seconds by default); the message names the knob, and a retry runs the script again | `script`, `seconds` |
+| `script_not_run` | a run that executes no script (the SDK's `run(..., scripts=False)`, a trial) reached an `Execute`; it stops there, before the script starts, and is over: never resumable, and not recorded | `script` |
 | `requires_unmet` | the machine lacks what the procedure's `Requires` names, checked before the first script runs | `missing` |
 | `no_decision_model` | a `Decide` step and this client has no decision model configured | |
 | `decision_model_failed` | the decision model failed on a `Decide` step (unreachable, refused the key, a bad reply) | `model`, `endpoint`, `cause` |
 | `loop_cap` | a `For` (or fold) given more items than `At_Most`, or an `Until` loop at its cap with `Else_Fail`; `step` is `null` and `loop` names the loop; never resumable | `loop`, `cap` (the most passes, or items, allowed), `count` (the passes run, or the items given) |
-| `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done or that failed in a way a retry would only repeat (`loop_cap`) | |
+| `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done or that failed in a way a retry would only repeat (`loop_cap`, `script_not_run`) | |
 | `server` | anything else: a bug, an unreachable server | |
 
 A step that failed while running leaves the run at the state before it, so
@@ -456,8 +462,7 @@ value); for a `Task_Agent`, `answered_by` (the agent and session that answered);
 exit, `exit` (`until`, `items`, `times` or `cap`), `where` (`head`, or the step that produced
 the `Until` answer) and `iterations`. A loop's line has no `seconds`.
 
-With `--answer-with model` the agent model's work is reported too, before the entry of the task
-it answers: one `{"event": "tool", "step", "task", "tool", "args", "seconds"}` line per tool call
+With `aip runah` its model's work is reported too, before the entry of the task it answers: one `{"event": "tool", "step", "task", "tool", "args", "seconds"}` line per tool call
 (`args` is a summary: the path, the pattern, a written file's size, never its content; `error`
 when the tool refused), and `{"event": "refused", "step", "task", "errors"}` when an answer it
 gave did not hold and went back to it.
@@ -566,8 +571,11 @@ top: `run_id`, `bundle_id` (once, here; the bundle is in the cache under that id
 `target` and `origin` (what `aip run` was given: a `folder`, a `file` or a `name`), `revision`
 (the one a name resolved to, or the one the server said the bundle is published as; a run with
 none is a draft's),
-`workdir`, `server` and `recorded` (where it is recorded, and whether the last stop got there),
-`created` and `updated` (the file's own times), and `run`, which holds:
+`workdir` (the run's working directory; `aip runs <run_id> --json` prints it, and the server's
+record keeps it), `server` and `recorded` (where it is recorded, and whether the last stop got
+there), `human` (the steps `aip runah` leaves to a person, kept for the run's later calls),
+`scripts` (false for a trial, which executes no script and is not recorded), `created` and
+`updated` (the file's own times), and `run`, which holds:
 
 | key | what |
 |---|---|
@@ -602,7 +610,7 @@ show them in place already, so a paused loop's work is always in the record. Per
 | `Route` | `read` (the dotted key it routed on, for lineage; `input` has the answer under its short name), `check` (`null` without a `Confidence_Below`; else `below`, `confidence`, `fired`, and when it fired `reason`: `below`, or `absent` for a script's answer with no confidence), `value` (the branch word taken, `null` when the check fired) and `to`. Its `result` is empty: a route produces nothing |
 | `Aggregate` | `resolutions`: per aggregation, each answer's `source`, `value`, `holds`, `probability` (the probability the answer put on the condition, the number a `With Confidence_Above` bar reads; `null` for an answer that has none) and `barred` |
 | `Execute` | `script` and `stdin` |
-| `Task_Agent` | `prompt` and `references` as handed over; `answered_by` (`{"agent", "session"}`: who resumed with the answer, or `{"agent": "model", "model": NAME}` when the agent model answered); `waited_seconds`, from the pause to the answer. The entry is written when the answer is accepted. A task the agent model answered also has `tool_calls` (`[{"name", "args", "seconds"}]`, `error` on a call a tool refused), `tokens` (`{"prompt", "completion", "total"}`), `model_seconds` (its calls alone) and `refusals` |
+| `Task_Agent` | `prompt` and `references` as handed over; `answered_by` (`{"agent", "session"}`: who resumed with the answer, or `{"agent": "runah", "model": ID}` when runah's model answered, `ID` being the model the endpoint said answered); `waited_seconds`, from the pause to the answer. The entry is written when the answer is accepted. What answering took, when it is known, is marked `work`: `"observed"` for a task runah's model answered, which has `tool_calls` (`[{"name", "args", "seconds"}]`, `error` on a call a tool refused), `tokens` (`{"prompt", "completion", "total"}`), `model_seconds` (its calls alone) and `refusals`; `"reported"` for an answer given with `aip resume --work`, which has what the agent said: `model` in `answered_by`, `tool_calls` (a count, or a list as above), `tokens` (at least `total`) and `work_seconds` |
 | `For`, `Loop` | written when the loop exits: `result` holds `iterations` and a `For`'s collected list; `exit` has `reason` (`until`, `items`, `times`, `cap`), `where` (`head`, or the step or loop that produced the `Until` answer) and that answer's `resolution`. A loop that fails the run at its cap writes it too, with `reason: cap`. No `seconds` |
 
 The first entry a `Loop Until` pass writes at the loop's own level also carries `until`, the test

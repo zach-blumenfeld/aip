@@ -2,7 +2,7 @@
 
 `aip mcp` is the SDK (`aip.Client`, `docs/sdk.md`) in a process that speaks the
 [Model Context Protocol](https://modelcontextprotocol.io/), so an agent framework or a coding
-agent reaches procedures with the MCP client it already has. It adds nothing of its own: six
+agent reaches procedures with the MCP client it already has. It adds nothing of its own: seven
 tools, each one SDK call, each answering with the object the `aip` command prints for the same
 thing (`docs/cli-json.md`). The module is `aip.mcp`.
 
@@ -44,7 +44,8 @@ run started over MCP can be resumed with `aip resume <run_id>` and read with `ai
 | `describe` | `target` | the description `aip info --json` prints, with `example_inputs`, `result_on_some_paths`, and a `warning` when it has a `Decide` and no decision model is configured | `Client.describe` |
 | `compile` | `folder`, `output` (a path ending in `.rl`, optional; any other name is refused) | `ok`, `name`, `bundle_id`, `diagnostics`, `output` | `Client.compile` |
 | `run` | `target`, `inputs`, and optionally `session`, `batch`, `workdir` | where the run stopped: paused, done or error | `Client.run` |
-| `resume` | `run_id`, `answers` (none: retry a failed step) | where the run stopped | `Client.resume` |
+| `resume` | `run_id`, `answers` (none: retry a failed step), and optionally `work` (what answering cost you: `model`, `tool_calls`, `tokens`, `seconds`; kept marked `reported`) | where the run stopped | `Client.resume` |
+| `runah` | `target` (or a `run_id` to carry on), `inputs`, and optionally `answers`, `human`, `session`, `workdir` | where the run stopped; this server's chat model (`aip config runah`) answered the tasks it could (`docs/runah.md`) | `Client.runah` |
 | `pull` | `ref` (none: every published name) | `pulled`: `ref`, `name`, `revision`, `bundle_id`, `path`, `fetched` | `Client.pull`, `pull_all` |
 
 A `target` is what `aip run` takes: a published name (`name`, `name@rev`), a program directory,

@@ -1,6 +1,7 @@
 // What the Studio's chat says while build_procedure or edit_procedure runs (plan C4): the CLI's
 // `--progress` lines (aip docs/cli-json.md) in plain words, the questions a human step asks, and the
-// boundary the Studio shows rather than hides, a step whose script the draft does not have. No DOM, no
+// boundary the Studio shows rather than hides: a step whose script the draft does not have, and the scripts
+// the model wrote, which a person reads before the draft runs. No DOM, no
 // imports but types: it runs under node as it is (test/studio.test.ts).
 
 import type { Diagnostic, RefusedEvent, StepEvent, ToolEvent } from "../api/console.ts";
@@ -8,7 +9,7 @@ import type { Diagnostic, RefusedEvent, StepEvent, ToolEvent } from "../api/cons
 /** The last part of a path, which is what a person recognises: `refund-policy.md`. */
 const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
 
-/** A tool call of the agent model, in plain words: "reading refund-policy.md", "compiling refund_handling". `args` is
+/** A tool call of runah's model, in plain words: "reading refund-policy.md", "compiling refund_handling". `args` is
  *  the CLI's summary: a path, `pattern=...`, or a written file's path and size. */
 export function toolWords(e: ToolEvent | RefusedEvent): string {
   if (e.event === "refused") return `its answer at ${e.step} was refused, and went back to it`;
@@ -70,13 +71,8 @@ export function missingScripts(diagnostics: Diagnostic[]): Map<string, string> {
   return out;
 }
 
-/** A name for a new procedure from its brief: its first three words that say something, lowercase, joined by `_`.
- *  build_procedure names the procedure after the folder it writes, which the launcher renames to this. */
-export function nameFromBrief(brief: string): string {
-  const stop = new Set(["a", "an", "the", "of", "to", "and", "or", "for", "in", "on", "with", "is", "it", "its", "be", "by", "as", "at",
-                        "this", "that", "from", "into", "if", "then", "so", "we", "i", "our", "my", "procedure", "build", "make", "write"]);
-  const words = brief.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !stop.has(w));
-  let name = words.slice(0, 3).join("_") || "new_procedure";
-  if (!/^[a-z]/.test(name)) name = `p_${name}`;
-  return name.slice(0, 48).replace(/_+$/, "");
+/** The scripts a run wrote: the files under `scripts/` it added or changed, from the draft's text files before the run
+ *  and after it, sorted. The Studio shows them, with their text, before the draft can be run or published. */
+export function scriptsWritten(before: Record<string, string>, after: Record<string, string>): string[] {
+  return Object.keys(after).filter((p) => p.startsWith("scripts/") && after[p] !== before[p]).sort();
 }

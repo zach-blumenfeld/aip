@@ -1,15 +1,17 @@
 // The Studio's chat (plan C4): every message runs a procedure. The first message on a new procedure is
-// a brief, which runs build_procedure; every later one runs edit_procedure with the draft and the
-// instruction. Both run through the launcher with the agent model answering (`--answer-with model`),
-// recorded as agent `studio`; the pane shows the steps as they run and the model's tool calls in plain
-// words. build_procedure's `ask_user` is a human step: it arrives here as a form, and its answers resume
-// the run. When a run ends the page reads the folder it wrote; the pane shows the review and the diff.
+// a brief (with the procedure's name, if the person gives one), which runs build_procedure; every later
+// one runs edit_procedure with the draft and the instruction. Both run through the launcher as `aip
+// runah`, a chat model answering their tasks, recorded as agent `studio`; the pane shows the steps as
+// they run and the model's tool calls in plain words. build_procedure's `ask_user` is a human step
+// (`--human ask_user`): it arrives here as a form, and its answers go back through `aip runah <run id>
+// --answers`, which runs on. When a run ends the page reads the folder it wrote; the pane shows the
+// review and the diff, and the page the scripts the model wrote.
 
 import { useRef, useState, type DragEvent } from "react";
 import { describe } from "../api/client";
 import { runCli, type CliCall, type ModelSettings, type Outcome, type Paused } from "../api/console";
 import { diffLines, type LineOp } from "../diff/lines";
-import { questionsOf, stepWords, toolWords } from "../studio/chat.ts";
+import { questionsOf, scriptsWritten, stepWords, toolWords } from "../studio/chat.ts";
 import { collect } from "../run/answers";
 import { Hunks } from "./Diff";
 import { Fields } from "./Run";
@@ -34,8 +36,13 @@ export interface Turn {
 
 /** What the page does for the chat: the call that starts a run, and reading the folder when it stops. */
 export interface ChatHost {
-  /** The run a message starts: build_procedure for the first brief of a new procedure, edit_procedure after. */
-  start: (text: string) => { kind: "build" | "edit"; call: CliCall };
+  /** The run a message starts: build_procedure for the first brief of a new procedure (`title` is the name the person
+   *  gave it, or empty for the model to choose), edit_procedure after. */
+  start: (text: string, title: string) => { kind: "build" | "edit"; call: CliCall };
+  /** The call that puts a person's answers into a run's pause and runs on. */
+  answer: (runId: string, answers: unknown) => CliCall;
+  /** A run wrote these scripts (added or changed, under scripts/): the page shows them before the draft runs. */
+  wrote: (scripts: string[]) => void;
   /** The run stopped (done, failed, or paused at a human step): read the folder it wrote. Resolves with the
    *  folder's procedure.aip and text files as they are now. */
   settled: () => Promise<{ source: string; files: Record<string, string> } | null>;
@@ -59,11 +66,12 @@ interface Props {
 export function StudioChat({ host, next, settings, documents, busy, setBusy }: Props) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
   const [dropping, setDropping] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const seq = useRef(0);
 
-  const noModel = settings !== null && !settings.agent?.key;
+  const noModel = settings !== null && !settings.runah?.key;
   // A run waiting on the person: the next message waits until it is answered.
   const waiting = turns.some((t) => t.status === "paused");
   const update = (id: number, change: (t: Turn) => Turn) => setTurns((all) => all.map((t) => (t.id === id ? change(t) : t)));
@@ -88,6 +96,7 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
       const after = await host.settled();
       const diff = after ? diffLines(before.source, after.source) : null;
       const files = after ? Object.keys(after.files).filter((f) => after.files[f] !== before.files[f]).sort() : [];
+      if (after) host.wrote(scriptsWritten(before.files, after.files));
       if ("paused" in o) {
         update(id, (t) => ({ ...t, status: "paused", pause: o, runId: o.run_id }));
       } else if ("done" in o) {
@@ -108,11 +117,14 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
   const send = () => {
     const message = text.trim();
     if (!message || busy || waiting) return;
-    const { kind, call } = host.start(message);
+    const name = next === "build" ? title.trim() : "";
+    const { kind, call } = host.start(message, name);
     const id = ++seq.current;
     const before = host.before();
-    setTurns((all) => [...all, { id, kind, text: message, lines: [], status: "running", runId: null, pause: null, error: null, review: null, diff: null, files: [] }]);
+    const said = name ? `${message} (name it ${name})` : message;
+    setTurns((all) => [...all, { id, kind, text: said, lines: [], status: "running", runId: null, pause: null, error: null, review: null, diff: null, files: [] }]);
     setText("");
+    setTitle("");
     beforeOf.current.set(id, before);
     void drive(id, kind, call, before);
   };
@@ -121,7 +133,7 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
   const answer = (turn: Turn, answers: unknown) => {
     if (!turn.runId) return;
     say(turn.id, "note", "you answered");
-    void drive(turn.id, turn.kind, { resume: { run_id: turn.runId, answers, studio: true } }, beforeOf.current.get(turn.id) ?? host.before());
+    void drive(turn.id, turn.kind, host.answer(turn.runId, answers), beforeOf.current.get(turn.id) ?? host.before());
   };
 
   const drop = async (files: File[]) => {
@@ -138,8 +150,8 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
       {turns.length === 0 && (
         <p className="muted small">
           {next === "build"
-            ? "Describe the procedure: what comes in, what is decided and by whom, what goes out. Drop the documents it should follow (a policy, a runbook) here. The agent model reads them, asks you what they leave open, writes the procedure and compiles it."
-            : "Say what to change: a step to add, a rule to move, a branch to send elsewhere. The agent model changes the procedure and compiles it; Undo puts it back."}
+            ? "Describe the procedure: what comes in, what is decided and by whom, what goes out. Drop the documents it should follow (a policy, a runbook) here. The model reads them, asks you what they leave open, writes the procedure and compiles it. Give it a name, or leave that to the model, which names it after what it handles."
+            : "Say what to change: a step to add, a rule to move, a branch to send elsewhere. The model changes the procedure and compiles it; Undo puts it back."}
         </p>
       )}
       <ol className="turns">
@@ -150,10 +162,16 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
       )}
       {noModel && (
         <p className="boundary" data-testid="studio-no-model">
-          The chat needs an agent model: set its key under Settings. The agent model is what reads the documents and writes the procedure.
+          The chat needs a model to run ahead with (<code>aip runah</code>): set its key under Settings. The model is what reads the documents and writes the procedure.
         </p>
       )}
       {waiting && <p className="muted small" data-testid="studio-waiting">Answer the question above first: the run waits for it.</p>}
+      {next === "build" && (
+        <label className="form-row small">
+          name <input type="text" value={title} disabled={busy || noModel || waiting} data-testid="studio-title" maxLength={64}
+                      placeholder="optional: the model names it from what it handles" onChange={(e) => setTitle(e.target.value)} />
+        </label>
+      )}
       <textarea rows={4} value={text} disabled={busy || noModel || waiting} data-testid="studio-message" aria-label={next === "build" ? "brief" : "instruction"}
                 placeholder={next === "build" ? "Describe the procedure…" : "What should change?"} onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />

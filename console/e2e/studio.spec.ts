@@ -1,11 +1,12 @@
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { BILLING, E2E, SERVER, TRIAGE } from "./aip";
+import { AGENT_MODEL_NAME, AGENT_MODEL_REPORTED, BILLING, E2E, SERVER, TRIAGE } from "./aip";
 
-// The Studio (plan C4), for people who do not code: a chat that runs build_procedure and edit_procedure
-// with the agent model answering (here the stand-in, e2e/agent.mjs), the step graph beside it, forms for
-// field edits, Undo per run, save and publish. A field edit is a text edit of procedure.aip that the
-// console's process formats and compiles; only what compiles is saved.
+// The Studio (plan C4, A2), for people who do not code: a chat that runs build_procedure and edit_procedure
+// with `aip runah` (its model here the stand-in, e2e/agent.mjs), the step graph beside it, forms for field
+// edits, Undo per run, save and publish. A field edit is a text edit of procedure.aip that the console's
+// process formats and compiles; only what compiles is saved. The scripts the model wrote are shown, and
+// saving or publishing a draft that has them asks once.
 
 const status = (page: Page) => page.getByTestId("studio-status");
 const node = (page: Page, step: string) => page.locator(`[data-testid="studio-graph"] [data-testid="step-node"][data-step="${step}"]`);
@@ -14,7 +15,7 @@ const loopNode = (page: Page, loop: string) => page.locator(`[data-testid="studi
 const shot = (page: Page, name: string) => page.screenshot({ path: path.join(E2E, "screenshots", `${name}.png`), fullPage: true });
 
 const BRIEF = "A support inbox procedure: refund requests checked against a 100 limit by a script, bug reports tagged by area, the rest ends.";
-const NAME = "support_inbox_refund";       // the first three words of the brief that say something
+const NAME = "support_inbox";              // the stand-in names it after the brief's subject when no name is given
 const POLICY = "# Refunds\n\nA refund of 100 or less is approved by a script. Above it, a manager decides.\n";
 
 async function openStudio(page: Page, ref?: string) {
@@ -118,12 +119,16 @@ test("a brief and a document build a procedure; a label changed on its form; a s
   await expect(page.getByTestId("studio-turn").nth(2)).toHaveAttribute("data-status", "done", { timeout: 90_000 });
   await expect(node(page, "answer_other")).toBeVisible();
 
-  // Saved as a draft, then published as the first revision of its name.
+  // Saved as a draft, then published as the first revision of its name. The draft has a script the model wrote: saving
+  // asks once whether it was read, and publishing does not ask again.
   await expect(page.getByTestId("studio-publish")).toBeDisabled();
   await page.getByTestId("studio-save").click();
+  await expect(page.getByTestId("studio-scripts-ask")).toContainText("scripts/check_refund.py");
+  await page.getByTestId("studio-scripts-ok").click();
   const saved = page.getByTestId("studio-saved");
   await expect(saved).toContainText(`Saved as a draft of ${NAME}`);
   await page.getByTestId("studio-publish").click();
+  await expect(page.getByTestId("studio-scripts-ask")).toHaveCount(0);
   await expect(saved).toHaveAttribute("data-revision", "1");
   await expect(saved).toContainText(`Published ${NAME}@1`);
   const published = await (await request.get(`${SERVER}/catalog/${NAME}/graph`)).json();
@@ -133,21 +138,69 @@ test("a brief and a document build a procedure; a label changed on its form; a s
   const files = published.graph.nodes.filter((n: { labels: string[] }) => n.labels.includes("File")).map((n: { properties: { path: string } }) => n.properties.path);
   expect(files).toEqual(expect.arrayContaining(["assets/docs/refund-policy.md", "scripts/check_refund.py"]));
 
-  // The chat's runs are recorded as the studio's, with what the model did.
+  // The chat's runs are recorded as the studio's, with what runah's model did: the model as the endpoint reported it.
   const record = await (await request.get(`${SERVER}/runs/${buildRun}`)).json();
   expect(record.name).toBe("build_procedure");
   expect(record.identity.agent).toBe("studio");
   const draft = record.history.find((e: { step: string }) => e.step === "draft");
-  expect(draft.answered_by).toEqual({ agent: "model", model: "stand-in-1" });
+  expect(draft.answered_by).toEqual({ agent: "runah", model: AGENT_MODEL_REPORTED });
+  expect(draft.work).toBe("observed");
   expect(draft.tool_calls.map((c: { name: string }) => c.name)).toEqual(["write_file", "write_file", "compile"]);
+  expect(draft.result.procedure).toBe(NAME);
   const asked = record.history.find((e: { step: string }) => e.step === "ask_user");
   expect(asked.answered_by.agent).toBe("studio");
   // History's page of the run says so too.
   await page.goto(`./#/runs/${buildRun}`);
   const drafted = page.locator('[data-testid="record-entry"][data-step="draft"] [data-testid="answered-by"]');
-  await expect(drafted).toHaveAttribute("data-agent", "model");
-  await expect(drafted).toContainText("answered by the agent model stand-in-1 with 3 tool calls (write_file 2, compile 1)");
+  await expect(drafted).toHaveAttribute("data-agent", "runah");
+  await expect(drafted).toHaveAttribute("data-work", "observed");
+  await expect(drafted).toContainText(`answered by runah (${AGENT_MODEL_REPORTED}), observed: 3 tool calls (write_file 2, compile 1)`);
   await expect(page.locator('[data-testid="record-entry"][data-step="ask_user"] [data-testid="answered-by"]')).toHaveAttribute("data-agent", "studio");
+});
+
+test("a name given in the brief box names the procedure; the script the model wrote is shown, and saving asks once", async ({ page, request }) => {
+  await openStudio(page);
+  await page.getByTestId("studio-title").fill("Refund Desk");
+  await page.getByTestId("studio-message").fill(BRIEF);
+  await page.getByTestId("studio-send").click();
+  const turn = page.getByTestId("studio-turn").first();
+  const human = turn.getByTestId("studio-human");
+  await expect(human).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("studio-scripts")).toHaveCount(0);           // nothing written yet
+  await human.getByLabel("answers", { exact: true }).fill("1. The limit is 100.");
+  await human.getByTestId("studio-answer").click();
+  await expect(turn).toHaveAttribute("data-status", "done", { timeout: 90_000 });
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("refund_desk");
+  await expect(turn.getByTestId("studio-review")).toContainText("Scripts:");
+
+  // The script, with its text, under the heading that says to read it.
+  const scripts = page.getByTestId("studio-scripts");
+  await expect(scripts.getByRole("heading")).toHaveText("scripts the model wrote, read before you run or publish");
+  const script = scripts.locator('[data-testid="studio-script"][data-path="scripts/check_refund.py"]');
+  await expect(script).toContainText("Approve a refund of 100 or less");
+  await expect(script).toContainText("json.dump({\"approved\": True}, sys.stdout)");
+  await expect(scripts).toHaveAttribute("data-read", "false");
+  await shot(page, "studio-scripts");
+
+  // Saving asks; "not yet" saves nothing, and the next try asks again.
+  await page.getByTestId("studio-save").click();
+  const ask = page.getByTestId("studio-scripts-ask");
+  await expect(ask).toHaveAttribute("data-action", "save");
+  await expect(ask).toContainText("scripts/check_refund.py");
+  await page.getByTestId("studio-scripts-cancel").click();
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId("studio-saved")).toHaveCount(0);
+  await page.getByTestId("studio-save").click();
+  await page.getByTestId("studio-scripts-ok").click();
+  await expect(page.getByTestId("studio-saved")).toContainText("Saved as a draft of refund_desk");
+  await expect(scripts).toHaveAttribute("data-read", "true");
+  // Asked once: publishing, and saving again, go straight through.
+  await page.getByTestId("studio-publish").click();
+  await expect(page.getByTestId("studio-saved")).toContainText("Published refund_desk@1");
+  await expect(ask).toHaveCount(0);
+  const published = await (await request.get(`${SERVER}/catalog/refund_desk/graph`)).json();
+  const files = published.graph.nodes.filter((n: { labels: string[] }) => n.labels.includes("File")).map((n: { properties: { path: string } }) => n.properties.path);
+  expect(files).toContain("scripts/check_refund.py");
 });
 
 test("billing-support: forms change a description, a bar and a way out; a broken edit is drawn and undone", async ({ page, request }) => {
@@ -220,12 +273,13 @@ test("a step whose script the draft lacks is marked: it needs a developer", asyn
   await expect(page.getByTestId("studio-save")).toBeDisabled();
 });
 
-test("settings: the agent model the chat uses, never its key", async ({ page }) => {
+test("settings: the model `aip runah` runs the chat with, never its key", async ({ page }) => {
   await openStudio(page);
   await page.getByTestId("studio-view-settings").check();
-  const agent = page.getByTestId("settings-agent");
-  await expect(agent).toContainText("stand-in-1");
-  await expect(agent).toContainText("key set");
-  await expect(agent).toContainText("set by the environment");
+  const runah = page.getByTestId("settings-runah");
+  await expect(runah).toContainText(AGENT_MODEL_NAME);
+  await expect(runah).toContainText("key set");
+  await expect(runah).toContainText("set by the environment");
+  await expect(runah).toContainText("AIP_RUNAH_MODEL_KEY");
   await expect(page.getByTestId("studio-settings")).not.toContainText("e2e");     // the stand-in's key
 });

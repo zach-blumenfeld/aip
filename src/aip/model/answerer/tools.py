@@ -1,4 +1,4 @@
-"""The tools the agent model works with, executed here and confined to the run's working directory.
+"""The tools runah's model works with, executed here and confined to the run's working directory.
 
 `read_file`, `list_files` and `search` read; `write_file` writes; `compile` runs the compiler on a
 program folder (`aip compile --check --json`, in process). Every path is relative to the working

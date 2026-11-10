@@ -1,7 +1,7 @@
 # edit_procedure/procedure.aip
 #
-# The procedure that changes a procedure as an instruction says, meant to be answered by the
-# agent model (`aip run edit_procedure ... --answer-with model`). A script keeps the folder as it
+# The procedure that changes a procedure as an instruction says, meant to be run ahead
+# (`aip runah edit_procedure ...`). A script keeps the folder as it
 # is, the model rewrites it, the compile-and-fix loop runs until it compiles (`At_Most 5`: four
 # checked fixes), and a script shows the change as a unified diff against what was kept.
 #
@@ -13,7 +13,7 @@ Procedure edit_procedure
 
   Use_When
     "An existing procedure folder is to be changed: a step added, a rule moved, a branch rerouted."
-    "The agent model is to make the change: run it with `--answer-with model`."
+    "A chat model is to make the change: run it with `aip runah edit_procedure ...`."
   Do_Not_Use_When
     "A new procedure is to be built: use build_procedure."
   Requires python 3.10
@@ -41,7 +41,7 @@ Execute snapshot "Keep the folder as it is now, to compare the change with, and 
 Task_Agent rewrite "Change the procedure as the instruction says." {
   Read path, source, instruction, files
   Prompt assets/rewrite.md
-  Produce changes: string "What was changed and why, in a few lines."
+  Produce changes: string "What was changed and why, in a few lines, and for each script written or changed what it touches outside the working directory."
   Next_Step revise
 }
 

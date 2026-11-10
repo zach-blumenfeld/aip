@@ -23,18 +23,23 @@ of cards is still a program to someone who has never written one.
 
 ## The chat runs procedures
 
-The Studio has no conversation of its own: every message runs a procedure that ships with aip, with
-the agent model answering its `Task_Agent` steps (`--answer-with model`, aip's `docs/answerer.md`).
+The Studio has no conversation of its own: every message runs a procedure that ships with aip ahead,
+with a chat model answering its `Task_Agent` steps (`aip runah`, aip's `docs/runah.md`).
 
-- **The first message on a new procedure is a brief.** It runs `build_procedure` with `brief` (the
-  message), `documents` (the draft's `assets/docs/`, where documents dropped on the pane are saved,
-  or nothing) and `out` (the draft's folder, named from the first words of the brief that say
-  something: the folder's name is the procedure's). `--human ask_user` leaves the questions to the
-  person: the run stops there, the pane shows the questions as a form, and the answers go back
-  through `aip resume --answer-with model`. The run then writes the folder, compiles it until it
-  compiles, tries one run, and reviews it against the rules.
-- **Every later message is an instruction.** It runs `edit_procedure` on the draft's folder with the
-  instruction and the same documents.
+- **The first message on a new procedure is a brief.** It runs `aip runah build_procedure --human
+  ask_user` with `brief` (the message), `documents` (the draft's `assets/docs/`, where documents
+  dropped on the pane are saved, or nothing), `out` (the draft's folder, a placeholder,
+  `new_procedure`, until the procedure has a name) and `title` (the name field of the brief box, or
+  empty). With no name given, the model names the procedure in `draft` after the brief's subject,
+  what the procedure handles, not the brief's first words; when the run is done the console's
+  process renames the folder to the `procedure` its result names (Undo puts the old folder back).
+  `--human ask_user` leaves the questions to the person: the run stops there, the pane shows the
+  questions as a form, and the answers go back through `aip runah <run id> --answers`, which puts
+  them into the pause and runs on. The run then writes the folder, compiles it until it compiles,
+  tries one run that runs none of the scripts the model wrote, and reviews it against the rules,
+  ending with a `Scripts:` section that says what each script touches outside the working directory.
+- **Every later message is an instruction.** It runs `aip runah edit_procedure` on the draft's folder
+  with the instruction and the same documents.
 - **What the pane shows.** Each `--progress` line in plain words: a step ("wrote the procedure",
   "compiled it") and each tool call of the model ("reading refund-policy.md", "writing
   procedure.aip", "compiling"); `src/studio/chat.ts` holds the words. When a run ends, the review
@@ -44,8 +49,9 @@ the agent model answering its `Task_Agent` steps (`--answer-with model`, aip's `
 - **Undo, one per run.** The console's process copies the draft's folder aside before each run
   (outside the run's working directory, so the model never sees it); Undo puts the last copy back.
   A form's edit is undone the same way, one at a time, newest first.
-- **The record.** The runs are recorded as agent `studio` in the tab's session, the model's tool
-  calls and tokens with each task, so History shows what the model did and what it cost.
+- **The record.** The runs are recorded as agent `studio` in the tab's session; each task the model
+  answered is `answered_by: {agent: "runah", model: <the id the endpoint reported>}`, marked
+  `observed`, with its tool calls and tokens, so History shows what the model did and what it cost.
 
 ## The graph and the forms
 
@@ -79,13 +85,23 @@ does not have (the compiler's `missing_file`) carries "needs a script" on the gr
 says to ask a developer; the draft does not compile until the file is there. `build_procedure`'s
 review says the same of a stub it wrote, and the pane shows the review.
 
+A script the model wrote is code nobody has read yet, and it runs on the machine that runs the
+procedure. The page keeps the paths of the scripts each run added or changed (`scriptsWritten` in
+`src/studio/chat.ts`) and, while the draft has them, shows them under "scripts the model wrote, read
+before you run or publish", each with its text. The first Save draft or Publish of such a draft asks
+once that they were read ("I have read them" or "Not yet"); it asks again only when a later run
+changes them. `build_procedure`'s trial runs none of them, and its review's `Scripts:` section says
+what each touches outside the working directory.
+
 ## Settings
 
-The agent model (endpoint, key, model name, with a line per provider: Anthropic, OpenAI, Gemini,
-Ollama) and the decision model, written to `aip config` through the console's process
-(`POST /console/settings`). A key is never sent back to the page, only whether one is set. A
-model the environment sets (`AIP_AGENT_MODEL_KEY` ...) says so, since the environment wins over the
-file. With no agent model key the chat is closed and says why; the graph and the forms still work.
+The model `aip runah` runs the chat with (endpoint, key, model name, with a line per provider:
+Anthropic, OpenAI, Gemini, Ollama), written with `aip config runah --model-uri/--model-name/
+--model-key`, and the decision model, written with `aip config`, both through the console's process
+(`POST /console/settings`). A key is never sent back to the page, only whether one is set. A model
+the environment sets (`AIP_RUNAH_MODEL_URI`, `AIP_RUNAH_MODEL_NAME`, `AIP_RUNAH_MODEL_KEY`) says so,
+since the environment wins over the file. With no key for it the chat is closed and says why; the
+graph and the forms still work.
 
 ## Where things are
 
@@ -96,13 +112,13 @@ file. With no agent model key the chat is closed and says why; the graph and the
 | `src/views/StudioChat.tsx` | the chat: a turn per message, the stream of a run, the human form, the review and the diff |
 | `src/views/StudioForm.tsx` | the form of the node picked on the graph |
 | `src/studio/edit.ts` | the field edits as text edits at spans |
-| `src/studio/chat.ts` | the chat's words, a human step's questions, the scripts a draft lacks, a name from a brief |
-| `e2e/agent.mjs` | the stand-in agent model the e2e suite runs the chat against |
+| `src/studio/chat.ts` | the chat's words, a human step's questions, the scripts a draft lacks, the scripts a run wrote |
+| `e2e/agent.mjs` | the stand-in chat model the e2e suite runs `aip runah` against |
 
 ## A seam for another backend
 
 The page asks the console's process to run a message (`studio/build`, `studio/edit`), relays its
-lines, answers a human step (`resume` with `studio: true`) and reads the folder when it stops. That
-is the whole interface; the process implements it with the `aip` CLI and `--answer-with model`. A
+lines, answers a human step (`resume` with `studio: true` and the workspace) and reads the folder when
+it stops. That is the whole interface; the process implements it with the `aip` CLI and `aip runah`. A
 backend that drives the same procedures with another agent (Claude Code, say) implements those
 endpoints and nothing in the page changes.

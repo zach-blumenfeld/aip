@@ -170,10 +170,14 @@ export interface HistoryEntry {
   /** An `Execute`. */
   script?: string;
   stdin?: unknown;
-  /** A `Task_Agent` the agent model answered (`answered_by.agent` is `model`): what it did and spent, and how many
-   *  of its answers were refused before one held. */
-  tool_calls?: { name: string; args: string; seconds?: number; error?: string }[];
-  tokens?: { prompt: number; completion: number; total: number };
+  /** A `Task_Agent` whose answering work is on record: `observed` when runah's model answered it (`answered_by` is
+   *  `{agent: "runah", model}`; its tool calls one by one, its tokens, the model's time, how many of its answers were
+   *  refused before one held), `reported` when the agent that answered said what it spent (`aip resume --work`: the
+   *  tool calls as a count or a list, the tokens as a total or in full, the seconds it worked). */
+  work?: "observed" | "reported";
+  tool_calls?: number | { name: string; args?: string; seconds?: number; error?: string }[];
+  tokens?: { prompt?: number; completion?: number; total: number };
+  work_seconds?: number;
   refusals?: number;
   /** A `Task_Agent`: the task as handed over, and how long the agent took. */
   prompt?: string;
@@ -263,8 +267,9 @@ export interface RunRecord {
   pause: Pause | null;
   error: RunErrorBody | null;
   result: Record<string, unknown> | null;
-  /** What `aip run` was given, on this machine's run file. */
+  /** What `aip run` was given, and the run's working directory, on this machine's run file. */
   target?: string;
+  workdir?: string | null;
   recorded?: boolean;
 }
 

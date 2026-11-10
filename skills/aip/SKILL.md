@@ -69,7 +69,9 @@ A procedure is named three ways, and every command takes any of them: a publishe
    - Inside a loop with a cap a task has `pass_of`, the cap, and `last_pass`: when it is true
      this is the last attempt the loop allows, so make it count.
 
-   Repeat until `"done": true`. The pause's `hint` shows the shape of the answer.
+   Repeat until `"done": true`. The pause's `hint` shows the shape of the answer. You may add
+   `--work '{"model": "<your model id>", "tool_calls": 3, "tokens": 12000}'` to say what the
+   answer took; the record keeps it as reported by you.
 
 5. **On an error**, read `error`, `step`, `message` and `resumable`.
    - `invalid_input`: the inputs do not fit; `missing` and `invalid` name the keys. Fix them and

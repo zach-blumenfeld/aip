@@ -4,7 +4,7 @@ agents that reach tools over the Model Context Protocol.
     aip mcp                  over stdio, the process an MCP client starts
     aip mcp --http 8765      over streamable HTTP, at http://127.0.0.1:8765/mcp
 
-It is `aip.Client` in a process and nothing more: six tools, each one SDK call, each answering
+It is `aip.Client` in a process and nothing more: seven tools, each one SDK call, each answering
 with the object the CLI prints for the same thing (`docs/cli-json.md`).
 
     search    published procedures by what they do          Client.search
@@ -12,6 +12,7 @@ with the object the CLI prints for the same thing (`docs/cli-json.md`).
     compile   check a program directory, write its bundle   Client.compile
     run       run a procedure until it pauses or is done    Client.run
     resume    answer a pause, or retry a failed step        Client.resume
+    runah     run ahead: a chat model answers the tasks     Client.runah
     pull      put a published procedure in the cache        Client.pull, pull_all
 
 A run that pauses, a run that fails and a call that cannot be made all answer with an ordinary
@@ -52,7 +53,7 @@ from aip.sdk import Client, CompileError, RunError
 
 JSON = dict[str, Any]
 MCP_AGENT = "mcp"                  # the record's `agent` when nobody says who is calling
-TOOLS = ("search", "describe", "compile", "run", "resume", "pull")
+TOOLS = ("search", "describe", "compile", "run", "resume", "runah", "pull")
 
 INSTRUCTIONS = """\
 AIP runs procedures: reviewed, step-by-step instructions (a runbook, a workflow, a decision
@@ -298,7 +299,8 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
                                                       agent_version=version_of(ctx)))
 
     @server.tool()
-    def resume(ctx: Context, run_id: str, answers: dict[str, Any] | list[Any] | None = None) -> dict[str, Any]:
+    def resume(ctx: Context, run_id: str, answers: dict[str, Any] | list[Any] | None = None,
+               work: dict[str, Any] | list[Any] | None = None) -> dict[str, Any]:
         """Answer a paused run, or retry a failed one. `run_id` is the one `run` returned.
         `answers` answers every task of the pause at once: for a pause with one task, the answer
         object itself, with exactly the keys of the task's `answer_with` (`{"reply": "..."}`);
@@ -307,8 +309,25 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         `choice` or `score` key one of the task's `labels`. An answer that does not fit is
         refused as `invalid_output` naming what is wrong, and the pause stands: answer again.
         With no `answers`, retry the step a failed run stopped at, once its cause is fixed.
-        Returns what `run` returns."""
-        return driven(ctx, lambda on_step: client.resume(run_id, answers, agent=who(ctx), on_step=on_step))
+        `work`, optional, is what answering cost you, for the record, which keeps it marked
+        `reported`: `{"model": "<your model id>", "tool_calls": 3, "tokens": 12000, "seconds":
+        40}`, any of them (several tasks: keyed by index like `answers`). Returns what `run`
+        returns."""
+        return driven(ctx, lambda on_step: client.resume(run_id, answers, agent=who(ctx), on_step=on_step, work=work))
+
+    @server.tool()
+    def runah(ctx: Context, target: str, inputs: dict[str, Any] | None = None, answers: dict[str, Any] | list[Any] | None = None,
+              human: list[str] | None = None, session: str | None = None, workdir: str | None = None) -> dict[str, Any]:
+        """Run ahead: like `run`, but this server's own chat model (`aip config runah`)
+        answers each `Task_Agent` task and the run keeps going, stopping at a step named in
+        `human` (the run pauses there for you, as `run` would), at the end, at an error, or when
+        the model gives up (`answerer` in the reply says why). Use it when the user wants the
+        procedure carried through without you doing each task. `target` is what `run` takes, or
+        the `run_id` of a run to carry on, with `answers` for its standing pause. Returns what
+        `run` returns; refused when no chat model is configured on this server."""
+        return driven(ctx, lambda on_step: client.runah(target, inputs, answers, human=human, agent=who(ctx),
+                                                        session=session or default_session, workdir=workdir, on_step=on_step,
+                                                        agent_version=version_of(ctx)))
 
     @server.tool()
     def pull(ref: str | None = None) -> dict[str, Any]:

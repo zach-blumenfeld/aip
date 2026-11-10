@@ -106,14 +106,20 @@ For a person who does not code (`docs/studio.md` is the design). It opens on a r
 (`edit in the studio` on its page) or on a new procedure, and is three things on one page:
 
 - **A chat that runs procedures.** The first message on a new procedure is a brief, with the
-  documents it should follow dropped on the pane (saved under the draft's `assets/docs/`); it runs
-  `build_procedure` with the agent model answering (`aip run ... --answer-with model --human
-  ask_user`). The pane shows each step as it runs and the model's tool calls in plain words
-  ("reading refund-policy.md", "compiling"). When the procedure's rules leave something open the run
-  stops at `ask_user` and the questions arrive as a form in the pane; the answers resume it. When it
-  ends the pane shows the review and the diff of `procedure.aip`, and the draft is what it wrote.
-  Every later message runs `edit_procedure` on the draft with the instruction. **Undo** takes a whole
-  run back. The runs are recorded as agent `studio`, so History shows what the model did.
+  documents it should follow dropped on the pane (saved under the draft's `assets/docs/`) and, if
+  the person likes, the procedure's name; it runs `build_procedure` ahead with a chat model answering
+  its tasks (`aip runah build_procedure ... --human ask_user`). With no name given, the model names
+  the procedure after what it handles. The pane shows each step as it runs and the model's tool
+  calls in plain words ("reading refund-policy.md", "compiling"). When the procedure's rules leave
+  something open the run stops at `ask_user` and the questions arrive as a form in the pane; the
+  answers go back through `aip runah <run id> --answers`, which runs on. When it ends the pane shows
+  the review (with what each script touches outside the working directory) and the diff of
+  `procedure.aip`, and the draft is what it wrote. Every later message runs `edit_procedure` on the
+  draft with the instruction. **Undo** takes a whole run back. The runs are recorded as agent
+  `studio`, so History shows what the model did.
+- **The scripts the model wrote, shown before they run.** A draft with scripts a run wrote lists
+  them under "scripts the model wrote, read before you run or publish", with their text; the first
+  Save draft or Publish of it asks once that they were read (again only if a later run changes them).
 - **The graph beside it**, the step graph in control or data flow, drawn again after every run and
   every edit. A step with errors, or one whose script the draft does not have ("needs a script": a
   script is code, so a developer writes it), is marked on the graph.
@@ -126,9 +132,10 @@ For a person who does not code (`docs/studio.md` is the design). It opens on a r
   again, so the compiler is the only rule book. A new step, a loop or a rewire is asked of the chat.
 
 **Source** opens `procedure.aip` in the grammar's colours, with the compiler's diagnostics;
-**Settings** holds the agent model (endpoint, key, model name, a line per provider) and the decision
-model, written to `aip config` through the console's process; a key is never shown, and a model the
-environment sets says so, since the environment wins. With no agent model key the chat is closed and
+**Settings** holds the model `aip runah` runs the chat with (endpoint, key, model name, a line per
+provider; `aip config runah`) and the decision model, written through the console's process; a key
+is never shown, and a model the environment sets (`AIP_RUNAH_MODEL_URI`, `AIP_RUNAH_MODEL_NAME`,
+`AIP_RUNAH_MODEL_KEY`) says so, since the environment wins. With no key for it the chat is closed and
 says why. Only a clean compile is saved: **Save draft** uploads the bundle with no revision (`aip
 publish --draft`), and **Publish** gives that draft the next revision of its name. Form edits that
 are not saved stay in this browser.

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""List the documents, name the procedure, and open an empty record of the person's answers.
+"""List the documents, tidy the name the requester gave, and open an empty record of the person's answers.
 
-stdin:  {"state": {"documents": str, "out": str}, "assets": {}, "expects": {...}}
+stdin:  {"state": {"documents": str, "title": str}, "assets": {}, "expects": {...}}
 stdout: {"files": [str], "name": str, "answers": str}
 
 `documents` is a folder (or one file) relative to the run's working directory (AIP_WORKDIR), or
 an empty string for none; `files` lists the text files under it, relative to the working
-directory, so the agent reads them with the same paths. `name` is the last part of `out`,
-lowercased, with every character a procedure name cannot hold made `_`. A `documents` path that
-does not exist, or an `out` with no name in it, fails the step with the reason on stderr.
+directory, so the agent reads them with the same paths. `name` is `title` lowercased, with
+every character a procedure name cannot hold made `_`, or an empty string when the requester
+gave none (the `draft` step then names the procedure from the brief's subject). A `documents`
+path that does not exist fails the step with the reason on stderr.
 """
 import json
 import os
@@ -40,11 +41,8 @@ def main() -> None:
             relative = path.relative_to(workdir)
             if path.suffix.lower() in TEXT and not any(part.startswith(".") for part in relative.parts):
                 files.append(relative.as_posix())
-    out = str(state.get("out") or "").strip().rstrip("/")
-    name = re.sub(r"[^a-z0-9_]", "_", Path(out).name.lower()).strip("_")
-    if not name:
-        fail(f"out: {out!r} names no folder to write the procedure into")
-    if not name[0].isalpha():
+    name = re.sub(r"[^a-z0-9_]+", "_", str(state.get("title") or "").strip().lower()).strip("_")
+    if name and not name[0].isalpha():
         name = "p_" + name
     json.dump({"files": files, "name": name, "answers": ""}, sys.stdout)
 

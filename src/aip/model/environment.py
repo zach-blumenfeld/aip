@@ -6,7 +6,8 @@ Header). The runtime checks it before the first `Execute` of a run and fails wit
 from "the procedure has a bug". A passing check is remembered for the life of the `Requires`
 object; a failing one is re-run, so a retry after installing the interpreter proceeds.
 
-`default_step_timeout()` is how long a script may run: 60 seconds, or `AIP_STEP_TIMEOUT`."""
+`script_timeout()` is how long one script may run: `AIP_SCRIPT_TIMEOUT`, else the value given
+(the client passes `aip config --script-timeout`), else 300 seconds."""
 
 from __future__ import annotations
 
@@ -26,19 +27,34 @@ PYTHON = "python"
 _PROBE = 'import sys; print("%d.%d.%d" % sys.version_info[:3])'
 
 
-def default_step_timeout() -> float | None:
-    """Seconds a script may run before it is killed: 60, or `AIP_STEP_TIMEOUT` (`0`, `none` or
-    `inf` means wait forever)."""
-    raw = os.environ.get("AIP_STEP_TIMEOUT", "").strip().lower()
-    if not raw:
-        return 60.0
-    if raw in ("0", "none", "inf", "infinite"):
+SCRIPT_TIMEOUT_ENV = "AIP_SCRIPT_TIMEOUT"
+DEFAULT_SCRIPT_TIMEOUT = 300.0
+SCRIPT_TIMEOUT_HINT = "`aip config --script-timeout N` or AIP_SCRIPT_TIMEOUT"
+
+
+def parse_script_timeout(raw: object, source: str = SCRIPT_TIMEOUT_ENV) -> float | None:
+    """A script cap as configured: a number of seconds, or `0`, `none` or `inf` for no cap."""
+    text = str(raw).strip().lower()
+    if text in ("0", "none", "inf", "infinite"):
         return None
     try:
-        value = float(raw)
+        value = float(text)
     except ValueError as err:
-        raise ValueError(f"AIP_STEP_TIMEOUT must be a number of seconds, 0, or none; got {raw!r}") from err
+        raise ValueError(f"{source} must be a number of seconds, 0, or none; got {raw!r}") from err
     return value if value > 0 else None
+
+
+def script_timeout(configured: object = None) -> float | None:
+    """Seconds one script may run before it is killed, wherever a script runs (run, resume,
+    runah): `AIP_SCRIPT_TIMEOUT`, else `configured` (the config file's), else 300. `0`, `none`
+    or `inf` means no cap. It bounds scripts only; runah caps the model's turns by tool calls
+    and tokens per task."""
+    raw = os.environ.get(SCRIPT_TIMEOUT_ENV, "").strip()
+    if raw:
+        return parse_script_timeout(raw)
+    if configured is not None and str(configured).strip():
+        return parse_script_timeout(configured, "script_timeout in the config file")
+    return DEFAULT_SCRIPT_TIMEOUT
 
 
 def _version(text: str) -> tuple[int, ...]:
@@ -110,4 +126,5 @@ class Requires:
         return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-__all__ = ["PYTHON", "Requires", "at_least", "default_step_timeout"]
+__all__ = ["PYTHON", "Requires", "at_least", "script_timeout", "parse_script_timeout", "SCRIPT_TIMEOUT_ENV",
+           "DEFAULT_SCRIPT_TIMEOUT", "SCRIPT_TIMEOUT_HINT"]

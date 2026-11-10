@@ -20,5 +20,5 @@ def _isolated_user_config(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("AIP_LOCAL_DATA", str(home / "local-server"))
     monkeypatch.setenv("AIP_LOCAL_PORT", "1")           # nothing listens there; a test that starts one picks its own
     for var in ("AIP_SERVER", "AIP_SERVER_CONFIG", "AIP_TOKEN", "AIP_BATCH", "AIP_AGENT", "AIP_SESSION", "AIP_LOCAL_IDLE",
-                "AIP_AGENT_MODEL", "AIP_AGENT_MODEL_KEY", "AIP_AGENT_MODEL_NAME", "AIP_ANSWER_WITH", "AIP_HUMAN_STEPS"):
+                "AIP_RUNAH_MODEL_URI", "AIP_RUNAH_MODEL_KEY", "AIP_RUNAH_MODEL_NAME", "AIP_SCRIPT_TIMEOUT"):
         monkeypatch.delenv(var, raising=False)

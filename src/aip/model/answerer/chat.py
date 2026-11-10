@@ -1,4 +1,4 @@
-"""One HTTP client for the agent model: OpenAI Chat Completions with function calling
+"""One HTTP client for runah's model: OpenAI Chat Completions with function calling
 (`POST {url}/chat/completions`), the shape OpenAI, Anthropic (`https://api.anthropic.com/v1`),
 Gemini, Azure's v1 surface, Groq, Mistral, OpenRouter, Ollama and vLLM all serve. No provider
 SDK and no streaming: one request, one JSON reply, its first choice's message and its usage."""
@@ -33,6 +33,12 @@ class Completion:
     @property
     def tool_calls(self) -> list[JSON]:
         return list(self.message.get("tool_calls") or [])
+
+    @property
+    def model(self) -> str | None:
+        """The model id the endpoint says answered, which may name a dated snapshot of the one asked for."""
+        value = self.raw.get("model")
+        return value if isinstance(value, str) and value else None
 
     @property
     def content(self) -> str:

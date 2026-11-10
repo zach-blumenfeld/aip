@@ -278,9 +278,9 @@ RETURN e.seq AS seq, e.step AS first_step, e.loops AS passes, e.until_where AS t
 ORDER BY seq
 ```
 
-The server answers twelve questions of this kind by name, over the last N runs and filtered by
+The server answers thirteen questions of this kind by name, over the last N runs and filtered by
 procedure, agent, session, user, and draft or published: `aip audit` lists them
-(`confidence-fired`, `failing-aggregations`, `model-answers`, `failing-scripts`,
+(`confidence-fired`, `failing-aggregations`, `model-answers`, `agent-work`, `failing-scripts`,
 `untaken-branches`, `repeated-cycles`, `agent-routes`, `missing-fields`, `empty-results`,
 `unused-data`, `cycles`, `lineage`; `src/aip/server/audit.py`, and `docs/server-design.md`, Audit,
 for each one's rows). `aip audit lineage --key K` follows a key through a `For`'s collected list,

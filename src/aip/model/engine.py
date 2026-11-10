@@ -54,8 +54,10 @@ kind: a `Decide` entry `answered_by` (`{"model": name, "endpoint": url}`), `hist
 (`below`, `confidence`, `fired`, and `reason` when it fired: `below` or `absent`), `value` and
 `to`; an `Aggregate` entry `resolutions` per aggregation; an `Execute` entry `script` and
 `stdin`; a `Task_Agent` entry the `prompt` and `references` it was given, `answered_by`
-(`{"agent", "session"}`, or `{"agent": "model", "model"}` when the agent model answered it, which
-adds `tool_calls`, `tokens`, `model_seconds` and `refusals`: `aip.model.answerer`) and
+(`{"agent", "session"}`, or `{"agent": "runah", "model"}` when runah's model answered it, which
+adds `work: "observed"`, `tool_calls`, `tokens`, `model_seconds` and `refusals`:
+`aip.model.answerer`; an outside agent that reports its work adds `work: "reported"` and what it
+reported, `model` in `answered_by`, `tool_calls`, `tokens`, `work_seconds`) and
 `waited_seconds` (pause to resume). The first entry a `Loop` pass
 writes at the loop's level carries `until`, the test at the head that let the pass run
 (`{"where": "head", "holds": false, "resolution"}`). A loop writes one entry when it exits
@@ -76,18 +78,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aip.model import cache, steps
-from aip.model.environment import Requires, default_step_timeout
+from aip.model.environment import Requires, script_timeout
 from aip.model.procedure import Loop, Procedure, Step
 from aip.model.resolver import Resolver
 from aip.model.types import (
-    JSON, ERROR_KINDS, DecisionModelFailed, InvalidOutput, LoopCap, NoDecisionModel, NotPaused, StepError, resumable,
+    JSON, ERROR_KINDS, DecisionModelFailed, InvalidOutput, LoopCap, NoDecisionModel, NotPaused, ScriptNotRun, StepError, resumable,
 )
 
 RUNNING, PAUSED, DONE, FAILED = "running", "paused", "done", "failed"
 STATUSES = (RUNNING, PAUSED, DONE, FAILED)
 
 DEFAULT_BATCH = 10
-DEFAULT_TIMEOUT = object()  # `Engine(timeout=...)` left unsaid: `default_step_timeout()`, read when the engine is made
+DEFAULT_TIMEOUT = object()  # `Engine(timeout=...)` left unsaid: `script_timeout()`, read when the engine is made
 IDENTITY_FIELDS = ("agent", "session", "user")
 
 
@@ -206,16 +208,19 @@ class Engine:
     `workdir` the directory scripts read and write the run's files in (`AIP_WORKDIR`; the
     current directory when None); `batch` how many `For` passes run at once (`--batch`, default
     10); `clock` the source of timestamps and `timer` of durations; `on_entry` is called with
-    every history entry the moment it is written (`--progress`)."""
+    every history entry the moment it is written (`--progress`). With `scripts` False the engine
+    runs no script: an `Execute` fails the run with `script_not_run` before its script starts (a
+    trial: `Decide`, routes and loops run, a `Task_Agent` pauses as usual)."""
 
     def __init__(self, resolver: Resolver | None = None, *, home: Path | None = None, python: str | None = None,
                  timeout: float | None | Any = DEFAULT_TIMEOUT, workdir: Path | None = None, batch: int = DEFAULT_BATCH,
                  clock: Callable[[], str] = utc_now, timer: Callable[[], float] = time.monotonic,
-                 on_entry: Callable[[JSON], None] | None = None):
+                 on_entry: Callable[[JSON], None] | None = None, scripts: bool = True):
         self.resolver = resolver
+        self.scripts = scripts
         self.home = home
         self.python = python
-        self.timeout = default_step_timeout() if timeout is DEFAULT_TIMEOUT else timeout
+        self.timeout = script_timeout() if timeout is DEFAULT_TIMEOUT else timeout
         self.workdir = workdir
         self.batch = batch
         self.clock = clock
@@ -248,8 +253,10 @@ class Engine:
         nothing the pause did not ask for (a key, a task index, a field on an answer). Anything
         else raises `InvalidOutput` naming all of it, nothing is applied, and the pause stands.
         `identity` is who answers (`agent`, `session`), the run's own when not given. `answered`
-        holds, per task index, fields for that task's entry: an `answered_by` of its own (the agent
-        model) and what answering cost (`tool_calls`, `tokens`, `model_seconds`, `refusals`)."""
+        holds, per task index, fields for that task's entry: an `answered_by` of its own (runah's
+        model) or a `model` to add to the identity's (one an outside agent reports), and what
+        answering cost, marked `work`: `observed` (runah: `tool_calls`, `tokens`, `model_seconds`,
+        `refusals`) or `reported` (an outside agent's word: `tool_calls`, `tokens`, `work_seconds`)."""
         if run.status != PAUSED or run.pause is None:
             raise NotPaused(None, f"the run is {run.status}; only a paused run takes an answer")
         began = self.timer()
@@ -291,8 +298,10 @@ class Engine:
             cursor.state.update(produced)
             extra = dict((answered or {}).get(task["index"]) or {})
             spent = (waiting.get("seconds") or 0.0) + (extra.pop("answer_seconds", None) or 0.0)  # a model's chat is the step's own time
+            model = extra.pop("model", None)          # the model an outside agent reports it answered with
+            by = extra.pop("answered_by", None) or {**answered_by, **({"model": model} if model else {})}
             self._record(run, cursor, step, task["state"], produced, began, spent=spent,
-                         answered_by=extra.pop("answered_by", answered_by), waited_seconds=_between(waiting.get("since"), now),
+                         answered_by=by, waited_seconds=_between(waiting.get("since"), now),
                          prompt=task["prompt"], references=task["references"], **extra)
             try:
                 self._after_step(run, cursor, step, set(produced))
@@ -376,6 +385,8 @@ class Engine:
                 self._record(run, cursor, step, steps.project(step, state), produced, began, resolutions=resolutions)
                 self._after_step(run, cursor, step, {key})
             case "Execute":
+                if not self.scripts:
+                    raise ScriptNotRun(step.name, step.file("RUNS").path)
                 self._ensure_requires(run, step)
                 outputs, stdin, _ = steps.execute(procedure, step, state, self._root(procedure), python=self.python,
                                                   timeout=self.timeout, workdir=self.workdir)

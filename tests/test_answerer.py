@@ -1,9 +1,10 @@
-"""The answerer (plan aip-dev#1, A1): the agent model answering `Task_Agent` pauses, one tool-using
-chat per task, against a stand-in Chat Completions server whose replies are scripted.
+"""runah (plan aip-dev#1, A1 and A2): a chat model answering `Task_Agent` pauses, one tool-using
+chat per task, against a stand-in Chat Completions server whose replies are scripted; and what
+goes with it: `run` calls no model, a trial runs no script, an outside agent reports its work.
 
 The stand-in is a real HTTP server on a loopback port, so the requests go through the one HTTP
 client (`aip.model.answerer.ChatClient`) exactly as they would to a provider. When
-`AIP_AGENT_MODEL_KEY` is set in the shell that runs pytest, one run goes to the real configured
+`AIP_RUNAH_MODEL_KEY` is set in the shell that runs pytest, one run goes to the real configured
 model too (the variable is read when this module is imported, before the per-test isolation
 clears it)."""
 
@@ -25,7 +26,8 @@ from aip.compiler import example_dir, relate
 from aip.model.answerer import ChatClient, Tools, parse_answer, task_message
 from aip.server.store import entry_properties
 
-REAL = {k: os.environ.get(k) for k in ("AIP_AGENT_MODEL", "AIP_AGENT_MODEL_KEY", "AIP_AGENT_MODEL_NAME")}
+REAL = {k: os.environ.get(k) for k in ("AIP_RUNAH_MODEL_URI", "AIP_RUNAH_MODEL_KEY", "AIP_RUNAH_MODEL_NAME")}
+REPORTED = "stand-in-1-20261101"       # the id the stand-in says answered, a snapshot of the `stand-in-1` asked for
 
 needs_relate = pytest.mark.skipif(not relate.available(), reason=relate.INSTALL_HINT)
 
@@ -39,13 +41,13 @@ CALM = "Hi, could you explain the second line on my March invoice? Thanks."
 def tool(name: str, call_id: str = "c", **args: Any) -> dict:
     return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
         {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]},
-        "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 100, "completion_tokens": 10}}
+        "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 100, "completion_tokens": 10}, "model": REPORTED}
 
 
 def say(answer: Any) -> dict:
     text = answer if isinstance(answer, str) else json.dumps(answer)
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 120, "completion_tokens": 20}}
+            "usage": {"prompt_tokens": 120, "completion_tokens": 20}, "model": REPORTED}
 
 
 class StandIn:
@@ -92,9 +94,9 @@ def stand_in(monkeypatch):
     def make(replies: list[dict]) -> StandIn:
         server = StandIn(replies)
         servers.append(server)
-        monkeypatch.setenv("AIP_AGENT_MODEL", server.url)
-        monkeypatch.setenv("AIP_AGENT_MODEL_KEY", "test-key")
-        monkeypatch.setenv("AIP_AGENT_MODEL_NAME", "stand-in-1")
+        monkeypatch.setenv("AIP_RUNAH_MODEL_URI", server.url)
+        monkeypatch.setenv("AIP_RUNAH_MODEL_KEY", "test-key")
+        monkeypatch.setenv("AIP_RUNAH_MODEL_NAME", "stand-in-1")
         return server
     yield make
     for server in servers:
@@ -166,6 +168,7 @@ def test_the_task_message_carries_the_prompt_the_state_and_the_shape():
         assert part in text
 
 
+
 # --------------------------------------------------------------------------- runs
 
 
@@ -174,14 +177,14 @@ def client(home: Path) -> aip.Client:
 
 
 @needs_relate
-def test_the_model_answers_every_task_and_the_record_shows_its_work(stand_in, workdir, tmp_path):
+def test_runah_answers_every_task_and_the_record_shows_its_work(stand_in, workdir, tmp_path):
     server = stand_in([
         tool("read_file", path="notes.md"), say({"billing": True, "tone": "calm"}),                     # triage
         tool("read_file", path="bundle:assets/policy.md"), say({"reply": "We will look into the March invoice."}),  # reply
     ])
     lines: list[dict] = []
-    done = client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir,
-                                         answer_with="model", on_step=lines.append)
+    done = client(tmp_path / "home").runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir,
+                                           on_step=lines.append)
     assert isinstance(done, aip.Done) and done.result["reply"] == "We will look into the March invoice."
     assert [r["path"] for r in server.requests] == ["/v1/chat/completions"] * 4
     assert server.requests[0]["auth"] == "Bearer test-key" and server.requests[0]["body"]["model"] == "stand-in-1"
@@ -193,26 +196,40 @@ def test_the_model_answers_every_task_and_the_record_shows_its_work(stand_in, wo
     assert second[-1] == {"role": "tool", "tool_call_id": "c", "content": "Refunds over 100 need a manager.\n"}, "the tool's result went back"
 
     record = client(tmp_path / "home").run_record(done.run_id)
+    assert record.identity["agent"] == "tests", "the run is whoever launched it"
+    assert record.data["workdir"] == str(workdir.resolve())
     tasks = [e for e in record.history if e["kind"] == "Task_Agent"]
     assert [e["step"] for e in tasks] == ["triage", "reply"]
     for entry in tasks:
-        assert entry["answered_by"] == {"agent": "model", "model": "stand-in-1"}
+        assert entry["answered_by"] == {"agent": "runah", "model": REPORTED}, "the id the endpoint reported, not the name asked for"
+        assert entry["work"] == "observed"
         assert entry["tokens"] == {"prompt": 220, "completion": 30, "total": 250} and entry["refusals"] == 0
         assert isinstance(entry["model_seconds"], float)
     assert [(c["name"], c["args"]) for c in tasks[0]["tool_calls"]] == [("read_file", "notes.md")]
     assert [(c["name"], c["args"]) for c in tasks[1]["tool_calls"]] == [("read_file", "bundle:assets/policy.md")]
-    assert "answered by model stand-in-1: 1 tool call (read_file 1), 250 tokens -> billing=true, tone=calm" in record.table()
+    assert (f"answered by runah ({REPORTED}), observed: 1 tool call (read_file 1), 250 tokens -> billing=true, tone=calm"
+            in record.table())
     tools = [l for l in lines if l.get("event") == "tool"]
     assert [(l["step"], l["tool"], l["args"]) for l in tools] == [("triage", "read_file", "notes.md"),
                                                                     ("reply", "read_file", "bundle:assets/policy.md")]
     props = entry_properties(done.run_id, "b", 1, tasks[0])
-    assert (props["agent"], props["model"], props["tool_calls"], props["tokens"]) == ("model", "stand-in-1", 1, 250)
+    assert (props["agent"], props["model"], props["work"], props["tool_calls"], props["tokens"]) == ("runah", REPORTED, "observed", 1, 250)
+
+
+@needs_relate
+def test_run_pauses_at_every_task_whatever_is_configured(stand_in, workdir, tmp_path):
+    server = stand_in([say({"billing": True, "tone": "calm"})])
+    paused = client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
+    assert isinstance(paused, aip.Paused) and paused.step == "triage" and paused.answerer is None
+    assert server.requests == [], "run calls no chat model"
+    with pytest.raises(TypeError):
+        client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, answer_with="model")
 
 
 @needs_relate
 def test_a_refused_answer_goes_back_to_the_model(stand_in, workdir, tmp_path):
     server = stand_in([say({"billing": True, "tone": "furious"}), say("sorry, no idea"), say({"billing": True, "tone": "angry"})])
-    done = client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": ANGRY}, workdir=workdir, answer_with="model")
+    done = client(tmp_path / "home").runah(example_dir("billing-support-agent"), {"message": ANGRY}, workdir=workdir)
     assert isinstance(done, aip.Done) and done.result["queue"]
     refusals = [m["content"] for m in server.requests[2]["body"]["messages"] if m["role"] == "user"][1:]
     assert refusals[0].startswith("That answer was refused: tone: ") and "furious" in refusals[0]
@@ -222,102 +239,234 @@ def test_a_refused_answer_goes_back_to_the_model(stand_in, workdir, tmp_path):
 
 
 @needs_relate
-def test_after_three_refusals_the_run_waits_for_a_person(stand_in, workdir, tmp_path):
+def test_after_three_refusals_the_run_waits_and_run_resume_and_runah_mix(stand_in, workdir, tmp_path):
     stand_in([say({"tone": "calm"})] * 4)
-    paused = client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, answer_with="model")
+    paused = client(tmp_path / "home").runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
     assert isinstance(paused, aip.Paused) and paused.step == "triage"
-    assert paused.answerer["answered"] is False and paused.answerer["reason"].startswith("the agent model's answer was refused 4 times")
+    assert paused.answerer["answered"] is False and paused.answerer["reason"].startswith("runah's model's answer was refused 4 times")
     assert paused.answerer["refusals"] == 3
-    done = client(tmp_path / "home").resume(paused, {"billing": True, "tone": "angry"})
-    assert isinstance(done, aip.Done), "a person answers as before"
+    paused = client(tmp_path / "home").resume(paused, {"billing": True, "tone": "calm"})
+    assert paused.step == "reply", "resume answers as before and stops at the next task: it calls no model"
+    stand_in([say({"reply": "Here it is."})])
+    done = client(tmp_path / "home").runah(paused.run_id)
+    assert isinstance(done, aip.Done) and done.result["reply"] == "Here it is.", "runah carries the run on from its pause"
 
 
 @needs_relate
 def test_the_caps_and_a_failing_endpoint_leave_the_pause_standing(stand_in, workdir, tmp_path, monkeypatch):
     stand_in([tool("list_files")] * 3)
-    monkeypatch.setenv("AIP_CONFIG", str(tmp_path / "config.json"))
-    aip.configure(max_tool_calls=2)
-    paused = client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, answer_with="model")
-    assert paused.answerer["reason"] == "the agent model reached its cap of 2 tool calls without answering"
+    aip.configure_runah(max_tool_calls_per_task=2)
+    paused = client(tmp_path / "home").runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
+    assert paused.answerer["reason"] == ("runah's model reached its cap of 2 tool calls on one task without answering "
+                                         "(`aip config runah --max-tool-calls-per-task N`)")
     assert len(paused.answerer["tool_calls"]) == 2
 
     stand_in([])                                                  # answers 500 to everything
     monkeypatch.setattr("aip.model.answerer.chat.time.sleep", lambda s: None)
-    paused = client(tmp_path / "home").resume(paused, answer_with="model")
-    assert paused.step == "triage" and paused.answerer["reason"].startswith("the agent model failed: ")
+    paused = client(tmp_path / "home").runah(paused.run_id)
+    assert paused.step == "triage" and paused.answerer["reason"].startswith("runah's model failed: ")
 
 
 @needs_relate
-def test_human_steps_pause_and_the_model_goes_on_after_them(stand_in, workdir, tmp_path):
+def test_human_steps_pause_and_runah_goes_on_after_them(stand_in, workdir, tmp_path):
     server = stand_in([say({"reply": "Here is what that line is."})])
     home = tmp_path / "home"
-    paused = client(home).run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, answer_with="model",
-                              human="triage")
-    assert paused.step == "triage" and paused.answerer["reason"].startswith("triage is a human step")
+    paused = client(home).runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, human="triage")
+    assert paused.step == "triage" and paused.answerer["reason"] == (
+        f"triage is a human step: answer it with `aip runah {paused.run_id} --answers JSON`")
     assert server.requests == []
-    done = client(home).resume(paused, {"billing": True, "tone": "calm"}, answer_with="model")
+    done = client(home).runah(paused.run_id, answers={"billing": True, "tone": "calm"})
     assert isinstance(done, aip.Done) and done.result["reply"] == "Here is what that line is."
     history = client(home).run_record(done.run_id).history
-    assert [(e["step"], e["answered_by"]["agent"]) for e in history if e["kind"] == "Task_Agent"] == [("triage", "tests"), ("reply", "model")]
+    assert [(e["step"], e["answered_by"]["agent"]) for e in history if e["kind"] == "Task_Agent"] == [("triage", "tests"), ("reply", "runah")]
     with pytest.raises(aip.InvalidInput, match="--human names nowhere, which is not a Task_Agent of billing_support_agent"):
-        client(home).run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, answer_with="model", human="nowhere")
+        client(home).runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, human="nowhere")
+    with pytest.raises(aip.InvalidInput, match="a run that is already going takes answers, not inputs"):
+        client(home).runah(done.run_id, {"message": CALM})
+    with pytest.raises(aip.InvalidInput, match="answers go to a run that is paused"):
+        client(home).runah(example_dir("billing-support-agent"), {"message": CALM}, {"billing": True})
 
 
 @needs_relate
-def test_no_agent_model_is_refused_before_the_run(workdir, tmp_path):
-    with pytest.raises(aip.InvalidInput, match="--answer-with model needs an agent model: `aip config --agent-model-key KEY`"):
-        client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, answer_with="model")
-    with pytest.raises(aip.InvalidInput, match="--answer-with takes `model`"):
-        client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, answer_with="claude")
+def test_runah_with_no_model_key_is_refused_before_the_run(workdir, tmp_path):
+    with pytest.raises(aip.InvalidInput, match=r"aip runah needs a chat model to answer the tasks: `aip config runah --model-key KEY`"):
+        client(tmp_path / "home").runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
+    assert not list((tmp_path / "home").glob("runs/*.json")), "nothing ran"
 
 
 @needs_relate
 def test_the_command_line(stand_in, workdir, capsys, monkeypatch):
     stand_in([tool("search", pattern="refund"), say({"billing": True, "tone": "calm"}), say({"reply": "ok"})])
     monkeypatch.chdir(workdir)
-    code = main(["run", str(example_dir("billing-support-agent")), "-i", json.dumps({"message": CALM}), "--answer-with", "model",
-                 "--progress"])
+    code = main(["runah", str(example_dir("billing-support-agent")), "-i", json.dumps({"message": CALM}), "--progress"])
     out = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert code == 0 and out[-1]["done"] is True and out[-1]["result"]["reply"] == "ok"
     assert {"event": "tool", "step": "triage", "task": 0, "tool": "search", "args": "pattern=refund"}.items() <= out[1].items()
     assert [l["step"] for l in out if l.get("event") == "step"] == ["start", "triage", "by_tone", "reply", "end"]
 
-    code = main(["config"])
-    assert "agent model: http://127.0.0.1:" in capsys.readouterr().out
+    code = main(["run", str(example_dir("billing-support-agent")), "-i", json.dumps({"message": CALM})])
+    paused = json.loads(capsys.readouterr().out)
+    assert code == 0 and paused["paused"] == "task" and paused["step"] == "triage", "aip run pauses at the first task"
+    with pytest.raises(SystemExit):
+        main(["run", str(example_dir("billing-support-agent")), "--answer-with", "model"])
+    capsys.readouterr()
+
+    stand_in([say({"reply": "fine"})])
+    code = main(["runah", paused["run_id"], "--answers", json.dumps({"billing": True, "tone": "calm"})])
+    assert code == 0 and json.loads(capsys.readouterr().out)["result"]["reply"] == "fine"
+
+
+def test_config_shows_the_runah_block_and_the_script_timeout(capsys, monkeypatch, tmp_path):
+    assert main(["config"]) == 0
+    out = capsys.readouterr().out
+    assert "script timeout: 300 seconds per script" in out
+    assert "runah:\n  model uri:   https://api.anthropic.com/v1\n  model name:  claude-opus-5-5\n  model key:   none" in out
+
+    assert main(["config", "runah", "--model-key", "sk-secret", "--model-name", "gpt-x", "--max-tool-calls-per-task", "12"]) == 0
+    out = capsys.readouterr().out
+    assert "sk-secret" not in out and "model key:   set" in out and "model name:  gpt-x" in out and "at most 12 tool calls" in out
+    saved = json.loads(Path(os.environ["AIP_CONFIG"]).read_text())
+    assert saved["runah"] == {"model_key": "sk-secret", "model_name": "gpt-x", "max_tool_calls_per_task": 12}
+    monkeypatch.setenv("AIP_RUNAH_MODEL_NAME", "from-env")
+    assert aip.settings().runah_model == "from-env", "the environment wins over the file"
+    assert main(["config", "runah", "--model-key", ""]) == 0 and "model key:   none" in capsys.readouterr().out
+
+    assert main(["config", "--script-timeout", "45"]) == 0 and "script timeout: 45 seconds per script" in capsys.readouterr().out
+    monkeypatch.setenv("AIP_SCRIPT_TIMEOUT", "none")
+    assert aip.settings().script_timeout is None
+    monkeypatch.delenv("AIP_SCRIPT_TIMEOUT")
+    assert main(["config", "--script-timeout", ""]) == 0 and aip.settings().script_timeout == 300
+
+
+def test_a_config_from_before_runah_is_read_and_moved(monkeypatch):
+    path = Path(os.environ["AIP_CONFIG"])
+    path.write_text(json.dumps({"agent_model": {"api_key": "old-key", "name": "old-model"}}))
+    s = aip.settings()
+    assert (s.runah_model_key, s.runah_model) == ("old-key", "old-model")
+    aip.configure_runah(max_tokens_per_task=1000)
+    assert json.loads(path.read_text()) == {"runah": {"model_key": "old-key", "model_name": "old-model", "max_tokens_per_task": 1000}}
+
+
+@needs_relate
+def test_an_outside_agent_reports_its_work(workdir, tmp_path, capsys):
+    home = None                     # AIP_HOME, which the command line below uses too
+    paused = client(home).run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
+    with pytest.raises(aip.RunError) as refused:
+        client(home).resume(paused, {"billing": True, "tone": "calm"}, work={"model": "claude-x", "cost": 3})
+    assert refused.value.error["error"] == "invalid_input" and "cost is not reported" in refused.value.error["message"]
+    assert refused.value.resumable, "the pause stands"
+    paused = client(home).resume(paused, {"billing": True, "tone": "calm"},
+                                 work={"model": "claude-x", "tool_calls": 3, "tokens": 1200, "seconds": 4.5})
+    assert paused.step == "reply"
+    [triage] = [e for e in client(home).run_record(paused.run_id).history if e["step"] == "triage"]
+    assert triage["work"] == "reported" and triage["answered_by"]["model"] == "claude-x" and triage["answered_by"]["agent"] == "tests"
+    assert (triage["tool_calls"], triage["tokens"], triage["work_seconds"]) == (3, {"total": 1200}, 4.5)
+    assert "answered by tests (claude-x), reported: 3 tool calls, 1200 tokens, 4.5s -> billing=true, tone=calm" in \
+        client(home).run_record(paused.run_id).table()
+    props = entry_properties(paused.run_id, "b", 1, triage)
+    assert (props["work"], props["model"], props["tool_calls"], props["tokens"]) == ("reported", "claude-x", 3, 1200)
+
+    code = main(["resume", str(paused.run_file), "--answers", json.dumps({"reply": "ok"}), "--work",
+                 json.dumps({"tokens": {"prompt": 10, "completion": 5}})])
+    assert code == 0 and json.loads(capsys.readouterr().out)["done"] is True
+    [reply] = [e for e in client(home).run_record(paused.run_id).history if e["step"] == "reply"]
+    assert reply["work"] == "reported" and reply["tokens"] == {"prompt": 10, "completion": 5, "total": 15}
+
+
+@needs_relate
+def test_the_audit_says_whose_account_the_work_is(stand_in, workdir, tmp_path):
+    from served import Served
+    from aip.client.server import Server
+    from aip.server import audit
+
+    served = Served()
+    stand_in([say({"billing": True, "tone": "calm"}), say({"reply": "ok"})])
+    c = aip.Client(Server("http://testserver", session=served), home=tmp_path / "home", agent="tests")
+    c.runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
+    paused = c.run(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir)
+    c.resume(paused, {"billing": True, "tone": "calm"}, work={"model": "claude-x", "tokens": 900, "tool_calls": 2})
+    rows = audit.run(served.store, "agent-work")
+    assert [(r["step"], r["agent"], r["model"], r["work"], r["tasks"], r["tool_calls"], r["tokens"]) for r in rows] == [
+        ("triage", "tests", "claude-x", "reported", 1, 2, 900), ("reply", "runah", REPORTED, "observed", 1, 0, 140),
+        ("triage", "runah", REPORTED, "observed", 1, 0, 140)]
 
 
 ECHO = 'Procedure echo\n  "Hand back a string."\n\nStart "The string." {\n  a: string\n  Next_Step end\n}\n\nEnd "The string." {\n  Read a\n}\n'
 
+FETCH = '''Procedure fetch_feed
+  "Collect a feed and hand it back."
+  Requires python 3.10
+
+Start "Whose feed." {
+  user: string
+  Next_Step fetch
+}
+
+Execute fetch "Fetch the user's feed." {
+  Read user
+  Run_Script scripts/fetch.py
+  Produce feed: string
+  Next_Step end
+}
+
+End "The feed." {
+  Read feed
+}
+'''
+FETCH_SCRIPT = '"""Fetch the user\'s notifications from GitHub with their own token (GITHUB_TOKEN)."""\nimport os, json, sys\nopen(os.path.join(os.environ["AIP_WORKDIR"], "RAN"), "w").write("x")\njson.dump({"feed": "x"}, sys.stdout)\n'
+
 
 @needs_relate
-def test_build_procedure_runs_with_a_scripted_model_and_a_person(stand_in, workdir, tmp_path):
+def test_build_procedure_runs_ahead_to_a_person_and_on(stand_in, workdir, tmp_path):
     (workdir / "docs").mkdir()
     (workdir / "docs" / "policy.md").write_text("Refunds up to 100 are automatic.\n")
     server = stand_in([
         tool("read_file", path="docs/policy.md"), say({"notes": "policy.md: refunds up to 100 are automatic."}),       # read_documents
         say({"rules": "1. refunds <= 100: a script approves", "questions": ["Who approves above 100?"], "settled": False}),
         say({"rules": "1. refunds <= 100: a script approves. 2. above: a manager", "questions": [], "settled": True}),
-        tool("write_file", path="echo/procedure.aip", content=ECHO.replace("Next_Step end", "Next_Step nowhere")),
-        say({"path": "echo"}),                                                                                          # draft
-        tool("write_file", path="echo/procedure.aip", content=ECHO), say({"path": "echo"}),                             # fix
-        say({"review": "It covers nothing of the policy yet."}),                                                        # review
+        tool("write_file", path="out/procedure.aip", content=ECHO.replace("Next_Step end", "Next_Step nowhere")),
+        say({"path": "out", "procedure": "echo"}),                                                                      # draft
+        tool("write_file", path="out/procedure.aip", content=ECHO), say({"path": "out"}),                               # fix
+        say({"review": "It covers nothing of the policy yet.\nScripts:\n(none)"}),                                      # review
     ])
     home = tmp_path / "home"
-    inputs = {"brief": "Handle refund requests.", "documents": "docs", "out": "echo"}
-    paused = client(home).run(example_dir("build_procedure"), inputs, workdir=workdir, answer_with="model", human="ask_user")
+    inputs = {"brief": "Handle refund requests.", "documents": "docs", "out": "out", "title": ""}
+    paused = client(home).runah(example_dir("build_procedure"), inputs, workdir=workdir, human="ask_user")
     assert paused.step == "ask_user" and paused.task.state["questions"] == ["Who approves above 100?"]
-    done = client(home).resume(paused, {"answers": "1. a manager"}, answer_with="model")
+    done = client(home).runah(paused.run_id, answers={"answers": "1. a manager"})
     assert isinstance(done, aip.Done), getattr(done, "answerer", None)
-    assert done.result["path"] == "echo" and done.result["bundle_id"] and done.result["review"].startswith("It covers")
-    assert "ran to its end" in done.result["test_report"]
+    assert done.result["path"] == "out" and done.result["procedure"] == "echo" and done.result["bundle_id"]
+    assert done.result["review"].startswith("It covers")
+    assert "ran to its end" in done.result["test_report"] and "The draft carries no script." in done.result["test_report"]
     history = client(home).run_record(done.run_id).history
     steps = [e["step"] for e in history if e["kind"] not in ("Loop", "For")]
     assert steps == ["start", "prepare", "read_documents", "extract_rules", "ask_user", "extract_rules", "draft", "compile", "fix",
                      "compile", "test_run", "review", "end"]
     [prepare] = [e for e in history if e["step"] == "prepare"]
-    assert prepare["result"] == {"files": ["docs/policy.md"], "name": "echo", "answers": ""}
+    assert prepare["result"] == {"files": ["docs/policy.md"], "name": "", "answers": ""}
+    draft = [r for r in server.requests if "# Task: draft" in r["body"]["messages"][1]["content"]][0]
+    assert "name it from the brief's" in draft["body"]["messages"][1]["content"]
     second = [r for r in server.requests if "# Task: extract_rules" in r["body"]["messages"][1]["content"]][1]
     assert "1. a manager" in second["body"]["messages"][1]["content"], "the person's answers reach the next round"
+
+
+@needs_relate
+def test_the_trial_runs_none_of_the_scripts_the_model_wrote(stand_in, workdir, tmp_path):
+    stand_in([
+        say({"notes": "none"}), say({"rules": "fetch the feed", "questions": [], "settled": True}),
+        tool("write_file", path="feed/procedure.aip", content=FETCH), tool("write_file", path="feed/scripts/fetch.py", content=FETCH_SCRIPT),
+        say({"path": "feed", "procedure": "fetch_feed"}),
+        say({"review": "Scripts:\nscripts/fetch.py: calls GitHub with GITHUB_TOKEN"}),
+    ])
+    inputs = {"brief": "My GitHub feed.", "documents": "", "out": "feed", "title": "My Feed"}
+    done = client(tmp_path / "home").runah(example_dir("build_procedure"), inputs, workdir=workdir)
+    assert isinstance(done, aip.Done), getattr(done, "answerer", None)
+    report = done.result["test_report"]
+    assert "stopped before fetch, which would run scripts/fetch.py: the trial runs no script." in report
+    assert "- scripts/fetch.py: Fetch the user's notifications from GitHub with their own token (GITHUB_TOKEN)." in report
+    assert not (workdir / "RAN").exists() and not list(workdir.rglob("RAN")), "the model's script did not run"
+    [prepare] = [e for e in client(tmp_path / "home").run_record(done.run_id).history if e["step"] == "prepare"]
+    assert prepare["result"]["name"] == "my_feed", "the name the requester gave, tidied"
 
 
 @needs_relate
@@ -326,8 +475,8 @@ def test_edit_procedure_shows_the_change_as_a_diff(stand_in, workdir, tmp_path):
     (workdir / "echo" / "procedure.aip").write_text(ECHO)
     changed = ECHO.replace('  a: string\n', '  a: string\n  b: string "A second string."\n').replace("Read a", "Read a, b")
     stand_in([tool("write_file", path="echo/procedure.aip", content=changed), say({"changes": "added b"})])
-    done = client(tmp_path / "home").run(example_dir("edit_procedure"), {"folder": "echo", "instruction": "add b", "documents": ""},
-                                         workdir=workdir, answer_with="model")
+    done = client(tmp_path / "home").runah(example_dir("edit_procedure"), {"folder": "echo", "instruction": "add b", "documents": ""},
+                                           workdir=workdir)
     assert isinstance(done, aip.Done), getattr(done, "answerer", None)
     assert done.result["changes"] == "added b" and done.result["bundle_id"]
     assert done.result["diff"].startswith("--- a/procedure.aip\n+++ b/procedure.aip\n")
@@ -335,13 +484,13 @@ def test_edit_procedure_shows_the_change_as_a_diff(stand_in, workdir, tmp_path):
 
 
 @needs_relate
-@pytest.mark.skipif(not REAL["AIP_AGENT_MODEL_KEY"], reason="AIP_AGENT_MODEL_KEY is not set: no real model run")
+@pytest.mark.skipif(not REAL["AIP_RUNAH_MODEL_KEY"], reason="AIP_RUNAH_MODEL_KEY is not set: no real model run")
 def test_a_real_model_answers_billing_support_agent(workdir, tmp_path, monkeypatch):
     for name, value in REAL.items():
         if value:
             monkeypatch.setenv(name, value)
-    done = client(tmp_path / "home").run(example_dir("billing-support-agent"), {"message": ANGRY}, workdir=workdir, answer_with="model")
+    done = client(tmp_path / "home").runah(example_dir("billing-support-agent"), {"message": ANGRY}, workdir=workdir)
     assert isinstance(done, aip.Done), getattr(done, "answerer", None)
     [triage] = [e for e in client(tmp_path / "home").run_record(done.run_id).history if e["step"] == "triage"]
-    assert triage["answered_by"]["agent"] == "model" and triage["tokens"]["total"] > 0
+    assert triage["answered_by"]["agent"] == "runah" and triage["answered_by"]["model"] and triage["tokens"]["total"] > 0
     assert triage["result"]["billing"] == {"value": True} and triage["result"]["tone"] == {"value": "angry"}

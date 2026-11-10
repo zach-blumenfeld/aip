@@ -177,8 +177,9 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 ## What A1 left (2026-11-10)
 
 - **The answerer is `src/aip/model/answerer/`**, driven from `aip.sdk.Client._settle`; `docs/answerer.md`
-  is the design. Its endpoint on this machine comes from the shell (`AIP_AGENT_MODEL`,
-  `AIP_AGENT_MODEL_KEY`, `AIP_AGENT_MODEL_NAME`: Anthropic's OpenAI-compatible
+  was the design (A2 made it `aip runah` and `docs/runah.md`, below). Its endpoint on this machine
+  came from the shell (`AIP_AGENT_MODEL`, `AIP_AGENT_MODEL_KEY`, `AIP_AGENT_MODEL_NAME`; since A2
+  `AIP_RUNAH_MODEL_URI`, `AIP_RUNAH_MODEL_KEY`, `AIP_RUNAH_MODEL_NAME`: Anthropic's OpenAI-compatible
   `https://api.anthropic.com/v1`, `claude-opus-5-5`), not from `aip config`. `tests/conftest.py`
   clears them for every test; `tests/test_answerer.py` reads them at import, so with the key set
   `uv run pytest -q` makes one real call (the angry branch of billing-support-agent, about a second).
@@ -211,6 +212,24 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   whatever this machine's shell sets.
 - **Not done:** the real pass with the configured model is Zach's (the plan's proof says so); the
   page shows a run's tool calls in the pane but not on History's record of it.
+
+## What A2 left (2026-11-10)
+
+- **`aip runah` replaced `--answer-with model`**: `Client.runah` in `src/aip/sdk.py` (the run-or-run-id
+  dispatch is `_names_run`), the CLI verb, the MCP tool, `docs/runah.md`. Config is
+  `aip config runah` / `AIP_RUNAH_MODEL_*`; a file holding A1's `agent_model` is read as the same
+  block (`config._runah_block`). The record's model id is the reply's `model`, not the configured
+  name; Anthropic's endpoint echoes the name asked for.
+- **`scripts=False`** is the engine's `Engine(scripts=...)` and the run file's `scripts`; such a run
+  is never posted (`Client._record`). The script cap is `aip.model.environment.script_timeout`.
+- **`--work`** is `aip.sdk.reported_work`; the store keeps `work` and `work_seconds` on `Entry`, and
+  `agent-work` (`src/aip/server/audit.py`) is the thirteenth audit query.
+- **`build_procedure` takes a fourth input, `title`**, and its result a `procedure`; the console's
+  Studio renames the draft folder to it after the run (`console/bin/aip-console.mjs`). The Studio
+  has no run button, so "asks once" guards Save draft and Publish.
+- **The proof's runs are in the local store** (`aip runs --agent a2-proof`); the folder the model
+  built is `scratch/a2/build/inbox/`, not committed.
+- **Not done:** Zach's Studio pass on a brief that needs a script (the proof's last step).
 
 ## Agent frameworks (track D2)
 

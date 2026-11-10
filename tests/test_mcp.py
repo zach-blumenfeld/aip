@@ -2,7 +2,7 @@
 
 An MCP client drives the server the way a framework does: in process for most tests (the MCP
 SDK connects a client to a server object directly), and once over stdio against the real `aip
-mcp` process. The six tools answer with the CLI's objects; a pause, a refused answer and a
+mcp` process. The seven tools answer with the CLI's objects; a pause, a refused answer and a
 target that cannot be run are ordinary results, never MCP errors; the MCP client's name is the
 run's `agent`. `dynamic-policy` runs end to end by its published name against the real server
 in process with a scripted decision model, answering its pauses with canned text, and the
@@ -81,15 +81,17 @@ def store():
 # ------------------------------------------------------------------------ the tools
 
 
-def test_the_server_offers_six_tools_and_says_how_to_use_them():
+def test_the_server_offers_seven_tools_and_says_how_to_use_them():
     async def script(call, client):
         return (await client.list_tools()).tools, client.server_info, client.instructions
     tools, info, instructions = over(build(aip.Client()), script)
-    assert [t.name for t in tools] == list(TOOLS) == ["search", "describe", "compile", "run", "resume", "pull"]
+    assert [t.name for t in tools] == list(TOOLS) == ["search", "describe", "compile", "run", "resume", "runah", "pull"]
     assert all(t.description and len(t.description) > 80 for t in tools), "the description is what the caller's model reads"
     by_name = {t.name: t.input_schema for t in tools}
     assert by_name["run"]["required"] == ["target"] and set(by_name["run"]["properties"]) == {"target", "inputs", "session", "batch", "workdir"}
-    assert by_name["resume"]["required"] == ["run_id"] and set(by_name["resume"]["properties"]) == {"run_id", "answers"}
+    assert by_name["resume"]["required"] == ["run_id"] and set(by_name["resume"]["properties"]) == {"run_id", "answers", "work"}
+    assert by_name["runah"]["required"] == ["target"] and set(by_name["runah"]["properties"]) == {
+        "target", "inputs", "answers", "human", "session", "workdir"}
     assert (info.name, info.version) == ("aip", aip.__version__)
     assert instructions == INSTRUCTIONS and "`resume`" in instructions
 

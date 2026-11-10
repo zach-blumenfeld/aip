@@ -1,10 +1,10 @@
 # build_procedure/procedure.aip
 #
 # The procedure that builds a procedure from a brief and a folder of documents, meant to be
-# answered by the agent model (`aip run build_procedure ... --answer-with model --human
-# ask_user`): the model reads, writes and reviews; a person answers its questions; scripts list
-# the documents, compile the folder and try it once. It uses no decision model: the loops watch
-# answers the model and the compiler give.
+# run ahead (`aip runah build_procedure ... --human ask_user`): runah's model reads, writes and
+# reviews; a person answers its questions; scripts list the documents, compile the folder and
+# try it once without running any of the scripts the model wrote. It uses no decision model:
+# the loops watch answers the model and the compiler give.
 #
 # Two loops, both in the one shape: the check inside the loop, `Until` watching its answer.
 # `clarify` extracts the rules and asks a person what they leave open; it ends the moment the
@@ -20,7 +20,7 @@ Procedure build_procedure
 
   Use_When
     "A new procedure is to be built from a brief and source documents (a policy, a runbook, a handbook), with a person answering what the documents leave open."
-    "The agent model is to do the writing: run it with `--answer-with model --human ask_user`."
+    "A chat model is to do the writing: run it with `aip runah build_procedure ... --human ask_user`."
   Do_Not_Use_When
     "An existing procedure is to be changed: use edit_procedure."
   Requires python 3.10
@@ -31,15 +31,16 @@ Procedure build_procedure
 Start "What to build, from what, and where to write it." {
   brief: string     "What the procedure should do, in the requester's words."
   documents: string "A folder under the working directory holding the source documents; an empty string when there are none."
-  out: string       "The folder to write the procedure into, under the working directory; its last part names the procedure."
+  out: string       "The folder to write the procedure into, under the working directory."
+  title: string     "The procedure's name if the requester gave one; an empty string lets the model name it from the brief's subject."
   Next_Step prepare
 }
 
-Execute prepare "List the documents, name the procedure, and open an empty record of the person's answers." {
-  Read documents, out
+Execute prepare "List the documents, tidy the name the requester gave, and open an empty record of the person's answers." {
+  Read documents, title
   Run_Script scripts/prepare.py
   Produce files:   list   "The documents' paths, relative to the working directory."
-          name:    string "The procedure's name: the last part of out, lowercase, with underscores."
+          name:    string "The requester's name for the procedure, lowercase, with underscores; empty when they gave none."
           answers: string "The person's answers to the questions so far; none yet."
   Next_Step read_documents
 }
@@ -71,10 +72,11 @@ Loop clarify Until settled, At_Most 2, Else_Exit {
   Next_Step draft
 }
 
-Task_Agent draft "Write the procedure's folder from the rules, and check it with the compiler." {
+Task_Agent draft "Name the procedure, write its folder from the rules, and check it with the compiler." {
   Read brief, notes, rules, answers, out, name
   Prompt assets/draft.md
-  Produce path: string "The procedure's folder as written, relative to the working directory."
+  Produce path:      string "The procedure's folder as written, relative to the working directory."
+          procedure: string "The procedure's name, as its header says."
   Next_Step revise
 }
 
@@ -98,21 +100,21 @@ Loop revise Until compiled, At_Most 5, Else_Fail {
   Next_Step test_run
 }
 
-Execute test_run "Run the new procedure once on example inputs, answering nothing, and report how far it gets." {
+Execute test_run "Try the new procedure once on example inputs, running none of its scripts, answering nothing, and report how far it gets." {
   Read path
   Run_Script scripts/test_run.py
   Produce started:     boolean "Whether the run got past its Start step."
-          test_report: string  "Where the run stopped: its end, the first pause and for what, or the error."
+          test_report: string  "Where the trial stopped (its end, the first pause, the first script it would run, or an error), and what each script says it does."
   Next_Step review
 }
 
 Task_Agent review "Read the procedure once more against the rules and say what it does not cover." {
   Read path, rules, test_report
   Prompt assets/review.md
-  Produce review: string "What the procedure covers, what it does not, and anything a person should check before it is published."
+  Produce review: string "What the procedure covers, what it does not, what each script touches outside the working directory, and what a person should check before it is published."
   Next_Step end
 }
 
-End "The procedure's folder, the bundle it compiles to, how its trial run went, and the review." {
-  Read path, bundle_id, test_report, review
+End "The procedure's folder and name, the bundle it compiles to, how its trial went, and the review." {
+  Read path, procedure, bundle_id, test_report, review
 }

@@ -11,8 +11,11 @@ export const CONSOLE_PORT = Number(process.env.CONSOLE_E2E_PORT ?? 5174);
 export const FOLDER_PORT = Number(process.env.FOLDER_E2E_PORT ?? 5175);
 export const SERVER = `http://localhost:${AIP_PORT}`;
 export const MODEL = `http://127.0.0.1:${MODEL_PORT}`;
-/** The stand-in agent model (e2e/agent.mjs), which answers build_procedure's and edit_procedure's tasks from a script. */
+/** The stand-in chat model `aip runah` uses (e2e/agent.mjs), which answers build_procedure's and edit_procedure's tasks
+ *  from a script: configured as `stand-in-1`, it reports itself as `stand-in-1-snapshot` in each reply. */
 export const AGENT_MODEL = `http://127.0.0.1:${AGENT_MODEL_PORT}/v1`;
+export const AGENT_MODEL_NAME = "stand-in-1";
+export const AGENT_MODEL_REPORTED = "stand-in-1-snapshot";
 
 /** The aip repo this console is run against: the repository it lives in. */
 export const AIP_REPO = path.resolve(process.env.AIP_REPO ?? path.join(import.meta.dirname, "..", ".."));
@@ -44,17 +47,17 @@ export const WORKDIR = path.join(E2E, "work");
 export const FOLDER_WORKDIR = path.join(E2E, "work-folder");
 
 /** The CLI's environment in the e2e run: its own run files and bundle cache, no client config, the e2e decision
- *  model (e2e/model.mjs), which answers from marks in the text it is given, and the stand-in agent model
- *  (e2e/agent.mjs) in place of any this machine's shell names. The server is set per call. */
+ *  model (e2e/model.mjs), which answers from marks in the text it is given, and the stand-in chat model for
+ *  `aip runah` (e2e/agent.mjs) in place of any this machine's shell names. The server is set per call. */
 export const CLI_ENV = {
   PATH: `${BIN}:${process.env.PATH}`,
   AIP_HOME: path.join(E2E, "home"),
   AIP_CONFIG: path.join(E2E, "no-config.json"),
   AIP_DECISION_MODEL: MODEL,
   AIP_DECISION_MODEL_KEY: "e2e",
-  AIP_AGENT_MODEL: AGENT_MODEL,
-  AIP_AGENT_MODEL_KEY: "e2e",
-  AIP_AGENT_MODEL_NAME: "stand-in-1",
+  AIP_RUNAH_MODEL_URI: AGENT_MODEL,
+  AIP_RUNAH_MODEL_KEY: "e2e",
+  AIP_RUNAH_MODEL_NAME: AGENT_MODEL_NAME,
 };
 
 /** `aip <args>` against the e2e server, as the specs' own client (publishing, making runs for history), from the
@@ -81,7 +84,10 @@ export function run(target: string, inputs: Json, who: { agent?: string; session
   return JSON.parse(aip(["run", target, "--inputs", "-", "--workdir", WORKDIR], inputs, who)) as Json;
 }
 
-/** `aip resume <run id>` with the answers on stdin (none: retry the failed step): the one JSON object it prints. */
-export function resume(runId: string, answers?: unknown, who: { agent?: string; session?: string } = {}): Json {
-  return JSON.parse(aip(answers === undefined ? ["resume", runId] : ["resume", runId, "--answers", "-"], answers, who)) as Json;
+/** `aip resume <run id>` with the answers on stdin (none: retry the failed step): the one JSON object it prints. `work`
+ *  is what the answering agent reports it spent (`--work`). */
+export function resume(runId: string, answers?: unknown, who: { agent?: string; session?: string } = {}, work?: Json): Json {
+  const args = answers === undefined ? ["resume", runId] : ["resume", runId, "--answers", "-"];
+  if (work !== undefined) args.push("--work", JSON.stringify(work));
+  return JSON.parse(aip(args, answers, who)) as Json;
 }

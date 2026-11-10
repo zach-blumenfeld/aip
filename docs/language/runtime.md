@@ -72,7 +72,12 @@ procedure means; this page says what running one entails.
   step. An answer-typed key among them is the bare value or an object with `value` and, when the
   script measured them, the `confidence` and `probabilities` a model's answer carries (spec 2.4);
   the value must be among the key's labels, and anything else on the answer fails the step
-  (`invalid_output`). The runtime never performs a script's work by hand.
+  (`invalid_output`). The runtime never performs a script's work by hand. A runtime bounds how
+  long one script may run and fails the step past it (`timeout`, which a retry runs again); this
+  one's cap is `aip config --script-timeout`, 300 seconds by default. A runtime may also run a
+  procedure without executing any script, as a trial of a procedure nobody has read yet: such a
+  run stops at the first `Execute`, before its script starts (`script_not_run`), is not
+  recorded, and is over.
 - `Task_Agent`: the runtime renders the prompt (`{key}` from `Read`, `{assets[stem]}` for
   `Use`) and hands the task to the agent, which produces the `Produce` keys; an answer-typed key
   among them is written as the bare value or `{"value": ...}` and stored as the latter, its value
@@ -213,11 +218,14 @@ reference runtime's field names are in `docs/cli-json.md`, The run file.
   the number a bar reads, whether it held, whether a bar turned it). A script's entry keeps the
   script and what it was given on stdin. An agent task's entry keeps the prompt and references
   it was given, who answered (`agent`, `session`) and how long the run waited for the answer
-  (`waited_seconds`). A runtime that has a model answer the task (the agent model of
-  `docs/answerer.md`) says so in `answered_by` (`{"agent": "model", "model": <name>}`) and keeps
-  what answering took: the tool calls (`name`, a summary of the arguments, `seconds`), the
-  tokens (`prompt`, `completion`, `total`), `model_seconds` and how many answers were refused
-  before one held (`refusals`). The answer itself is checked as any agent's is.
+  (`waited_seconds`). A runtime that has a model answer the task (`aip runah`,
+  `docs/runah.md`) says so in `answered_by` (`{"agent": "runah", "model": <the id the model's
+  endpoint reported>}`) and keeps what answering took, marked `work: "observed"`: the tool calls
+  (`name`, a summary of the arguments, `seconds`), the tokens (`prompt`, `completion`, `total`),
+  `model_seconds` and how many answers were refused before one held (`refusals`). An agent that
+  reports what its own answer took (`aip resume --work`) has it kept marked `work: "reported"`,
+  so the record says which numbers the runtime saw and which it was told. The answer itself is
+  checked as any agent's is.
 - The history is appended, never rewritten (the entries of a batch still open are the one case
   where an entry may yet move, above). A run that fails keeps everything up to the failure
   and the error beside it; the failed step runs again on a retry, from the state before it.

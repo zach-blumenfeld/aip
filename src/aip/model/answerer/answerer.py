@@ -1,4 +1,4 @@
-"""The agent model answering one task: a short, tool-using chat whose last message is the answer.
+"""runah's model answering one task: a short, tool-using chat whose last message is the answer.
 
 The system prompt is the language on one page (`skills/aip/references/language.md`) under the
 rules of the loop; the user message is the task as a pause carries it: the prompt, the state it
@@ -24,6 +24,7 @@ from aip.model.answerer.tools import BUNDLE_PREFIX, DEFINITIONS, Tools, summary
 JSON = dict[str, Any]
 
 MAX_REFUSALS = 3
+AGENT = "runah"               # `answered_by.agent` of every task the model answers
 COMPLETION_TOKENS = 16384
 
 RULES = """You answer one task of a procedure that an AIP runtime is running. The procedure is the plan:
@@ -54,7 +55,8 @@ The AIP procedure language, for tasks that read or write procedures:
 @dataclass
 class Answered:
     """A task the model answered: the answer as checked, and the fields of the record entry
-    (`answered_by`, `tool_calls`, `tokens`, `model_seconds`, `refusals`)."""
+    (`answered_by` `{"agent": "runah", "model": the id the endpoint reported}`, `work`
+    `"observed"`, `tool_calls`, `tokens`, `model_seconds`, `refusals`)."""
     answer: JSON
     record: JSON
 
@@ -147,9 +149,11 @@ class ModelAnswerer:
         spent = {"model_seconds": 0.0}
         refusals = 0
         index = task["index"]
+        reported: list[str] = []
 
         def record() -> JSON:
-            return {"answered_by": {"agent": "model", "model": self.model}, "tool_calls": calls,
+            model = reported[-1] if reported else self.model
+            return {"answered_by": {"agent": AGENT, "model": model}, "work": "observed", "tool_calls": calls,
                     "tokens": {**tokens, "total": tokens["prompt"] + tokens["completion"]},
                     "model_seconds": round(spent["model_seconds"], 3), "refusals": refusals}
 
@@ -158,8 +162,10 @@ class ModelAnswerer:
             try:
                 reply = self.chat.complete(self.model, messages, DEFINITIONS, COMPLETION_TOKENS)
             except ChatError as exc:
-                raise GaveUp(f"the agent model failed: {exc}", record()) from exc
+                raise GaveUp(f"runah's model failed: {exc}", record()) from exc
             spent["model_seconds"] += max(self.timer() - asked, 0.0)
+            if reply.model:
+                reported.append(reply.model)
             tokens["prompt"] += reply.prompt_tokens
             tokens["completion"] += reply.completion_tokens
             message = {"role": "assistant", "content": reply.content or None}
@@ -171,8 +177,8 @@ class ModelAnswerer:
                     function = call.get("function") or {}
                     name, arguments = function.get("name") or "", function.get("arguments")
                     if len(calls) >= self.max_tool_calls:
-                        raise GaveUp(f"the agent model reached its cap of {self.max_tool_calls} tool calls without answering",
-                                     record())
+                        raise GaveUp(f"runah's model reached its cap of {self.max_tool_calls} tool calls on one task without "
+                                     "answering (`aip config runah --max-tool-calls-per-task N`)", record())
                     began = self.timer()
                     result = self.tools.call(name, arguments)
                     entry = {"name": name, "args": summary(name, arguments), "seconds": round(max(self.timer() - began, 0.0), 3)}
@@ -183,10 +189,12 @@ class ModelAnswerer:
                                  "seconds": entry["seconds"], **({"error": entry["error"]} if "error" in entry else {})})
                     messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": result})
                 if tokens["prompt"] + tokens["completion"] >= self.max_tokens:
-                    raise GaveUp(f"the agent model spent its cap of {self.max_tokens} tokens without answering", record())
+                    raise GaveUp(f"runah's model spent its cap of {self.max_tokens} tokens on one task without answering "
+                                 "(`aip config runah --max-tokens-per-task N`)", record())
                 continue
             if tokens["prompt"] + tokens["completion"] >= self.max_tokens:
-                raise GaveUp(f"the agent model spent its cap of {self.max_tokens} tokens", record())
+                raise GaveUp(f"runah's model spent its cap of {self.max_tokens} tokens on one task "
+                             "(`aip config runah --max-tokens-per-task N`)", record())
             try:
                 answer = parse_answer(reply.content)
                 checked = check(answer)
@@ -197,11 +205,11 @@ class ModelAnswerer:
             else:
                 return Answered(answer, record())
             if refusals >= self.max_refusals:
-                raise GaveUp(f"the agent model's answer was refused {refusals + 1} times; the last time: {'; '.join(why)}", record())
+                raise GaveUp(f"runah's model's answer was refused {refusals + 1} times; the last time: {'; '.join(why)}", record())
             refusals += 1
             self._event({"event": "refused", "step": step, "task": index, "errors": why})
             messages.append({"role": "user", "content": "That answer was refused: " + "; ".join(why) + ". Reply with the corrected "
                              "JSON object only."})
 
 
-__all__ = ["Answered", "GaveUp", "ModelAnswerer", "language_page", "parse_answer", "task_message", "MAX_REFUSALS"]
+__all__ = ["AGENT", "Answered", "GaveUp", "ModelAnswerer", "language_page", "parse_answer", "task_message", "MAX_REFUSALS"]

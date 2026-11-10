@@ -2,6 +2,7 @@
 
     aip run <target> --inputs JSON      run a program directory, an .rl bundle or a catalog name; pauses print as JSON
     aip resume <run_id> --answers JSON  answer a pause (or, with no answers, retry a failed run)
+    aip runah <target | run_id>         run ahead: a chat model answers the Task_Agent pauses, a person the --human ones
     aip compile | export | fmt          the language's tooling (aip.compiler)
     aip export runs [name] -o FILE      the server's runs and the procedures they ran, as one Relate file
     aip export <target> --skill DIR     a procedure as a plain Agent Skill, followed by hand with no runtime
@@ -11,15 +12,16 @@
     aip runs                            this machine's runs, or the server's; one run step by step
     aip audit                           the server's audit queries over the runs and the catalog
     aip config                          where the client points: the server (`aip config server local | URL | none`), the token,
-                                        the decision model's endpoint and key, the batch size
+                                        the decision model's endpoint and key, the batch size, the script timeout;
+                                        `aip config runah`: runah's chat model and its caps
     aip server                          serve the catalog and the record of runs
     aip mcp                             the same client as an MCP server, for agent frameworks and coding agents
     aip skill install | list | remove   the `aip` skill, the page an agent reads to run and write procedures
     aip upgrade                         publish the procedures this package ships (`make_procedure`, `build_procedure`, `edit_procedure`) to the server
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
-arguments, calls one SDK method and prints the result. `run` and `resume` print one JSON
-object (`docs/cli-json.md`); the rest print text, or JSON with `--json`. `aip run` with no
+arguments, calls one SDK method and prints the result. `run`, `resume` and `runah` print one
+JSON object (`docs/cli-json.md`); the rest print text, or JSON with `--json`. `aip run` with no
 server configured ends with one line on stderr saying the run is not recorded and how to change
 that; the run's resumes do not repeat it. With `aip config server local` nothing has to be
 started first: the first command that needs the server starts it (`aip.client.local`).
@@ -166,16 +168,10 @@ def info_command(argv: list[str]) -> int:
     return _serving(go)
 
 
-def _run_flags(parser: argparse.ArgumentParser) -> None:
+def _run_flags(parser: argparse.ArgumentParser, runah: bool = False) -> None:
+    more = " (and one per tool call runah's model makes)" if runah else ""
     parser.add_argument("--progress", action="store_true",
-                        help="print one JSON line per history entry as the run writes it (and, with --answer-with model, one "
-                             "per tool call the model makes), then the final object on one line")
-    parser.add_argument("--answer-with", default=None, metavar="model",
-                        help="`model`: the configured agent model answers the Task_Agent pauses, one tool-using chat per task "
-                             "(AIP_ANSWER_WITH; see docs/answerer.md); `none`: they pause for you, as by default")
-    parser.add_argument("--human", default=None, metavar="STEP[,STEP]",
-                        help="with --answer-with model: the Task_Agent steps that pause for a person instead (AIP_HUMAN_STEPS); "
-                             "the run keeps them for its resumes")
+                        help=f"print one JSON line per history entry as the run writes it{more}, then the final object on one line")
     parser.add_argument("--debug", action="store_true", help="print a traceback on stderr when the command fails")
 
 
@@ -255,8 +251,7 @@ def run_command(argv: list[str]) -> int:
         inputs = _read_json(args.inputs, "--inputs")
         return client.run(args.target, {} if inputs is None else inputs, batch=args.batch, agent=args.agent,
                           session=args.session, workdir=args.workdir, on_step=on_step, force=args.force,
-                          on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True),
-                          answer_with=args.answer_with, human=args.human)
+                          on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True))
     return _outcome(go, client, args.progress, args.debug, starting=True)
 
 
@@ -267,14 +262,57 @@ def resume_command(argv: list[str]) -> int:
     parser.add_argument("--answers", "-a", default=None, metavar="JSON",
                         help="the answers to every task of the pause, keyed by task index ({\"0\": {...}}), a list in task "
                              "order, or the one answer object for a single task: JSON inline, @path for a file, or - for stdin")
+    parser.add_argument("--work", default=None, metavar="JSON",
+                        help="what you spent answering, for the record, which keeps it marked `reported` (aip checks none of "
+                             "it): {\"model\": ID, \"tool_calls\": N, \"tokens\": N, \"seconds\": S}, any of them; keyed by "
+                             "task index like --answers when the pause has several tasks")
     _run_flags(parser)
     args = parser.parse_args(argv)
     client = _client()
 
     def go(on_step):
-        return client.resume(args.run, _read_json(args.answers, "--answers"), on_step=on_step, answer_with=args.answer_with,
-                             human=args.human)
+        return client.resume(args.run, _read_json(args.answers, "--answers"), on_step=on_step, work=_read_json(args.work, "--work"))
     return _outcome(go, client, args.progress, args.debug, starting=False)
+
+
+def runah_command(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="aip runah", usage="aip runah folder|bundle.rl|name[@rev] [-i JSON] [--human STEP,STEP] [options]\n"
+                                "       aip runah run_id [--answers JSON] [--human STEP,STEP] [options]",
+        description="Run ahead: run a procedure as `aip run` does and keep going, with a chat model answering each "
+                    "Task_Agent task in one short tool-using chat confined to the working directory (docs/runah.md). "
+                    "Scripts, Decide, routes and loops run exactly as in `aip run`. It stops at a step named in --human, at "
+                    "the end, at an error, or when the model gives up, and prints the same paused, done or error object as "
+                    "`aip run`. Given a run id it carries that run on: --answers go into its pause first (with none, the model "
+                    "answers the pause, or a failed step is retried). `run`, `resume` and `runah` mix on one run. Needs "
+                    "`aip config runah --model-key KEY` (or AIP_RUNAH_MODEL_KEY); aip calls no chat model otherwise.")
+    parser.add_argument("target", metavar="target|run_id", help="a program directory, an .rl bundle, a published name[@rev], or "
+                                                                "the id of a run to carry on")
+    parser.add_argument("--inputs", "-i", default=None, metavar="JSON",
+                        help="a new run's inputs: JSON inline, @path for a file, or - for stdin (default: an empty object)")
+    parser.add_argument("--answers", "-a", default=None, metavar="JSON",
+                        help="for a run id: the answers to its standing pause, as `aip resume --answers` takes them")
+    parser.add_argument("--human", default=None, metavar="STEP[,STEP]",
+                        help="the Task_Agent steps a person answers: the run stops there and prints the paused object. Kept by the "
+                             "run for its later `aip runah`; given again, it replaces them (\"\" for none)")
+    parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once (default 10)")
+    parser.add_argument("--agent", default=None, help="who launched the run, for the record (default AIP_AGENT, else `cli`); each "
+                                                      "task the model answers says `runah` answered it")
+    parser.add_argument("--session", default=None, help="an id grouping this run with others, for the record (default AIP_SESSION)")
+    parser.add_argument("--workdir", type=Path, default=None,
+                        help="the run's working directory: where scripts read and write, and the only place the model's tools "
+                             "read and write (default the current directory)")
+    parser.add_argument("--force", action="store_true", help="run `name@rev` although that revision is retired")
+    _run_flags(parser, runah=True)
+    args = parser.parse_args(argv)
+    client = _client()
+
+    def go(on_step):
+        inputs = _read_json(args.inputs, "--inputs")
+        return client.runah(args.target, inputs, _read_json(args.answers, "--answers"), human=args.human, batch=args.batch,
+                            agent=args.agent, session=args.session, workdir=args.workdir, on_step=on_step, force=args.force,
+                            on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True))
+    return _outcome(go, client, args.progress, args.debug, starting=not client._names_run(args.target))
 
 
 # ------------------------------------------------------------------ the catalog
@@ -550,8 +588,14 @@ def export_runs_command(argv: list[str]) -> int:
     return _serving(go)
 
 
+SCRIPT_TIMEOUT_HELP = ("seconds one script may run, wherever a script runs: run, resume, runah, the client of a served run (the "
+                       "server itself never runs a script); not the model's turns, which runah caps by tool calls and tokens per "
+                       "task. Default 300; 0 or none for no cap; an empty string forgets it. AIP_SCRIPT_TIMEOUT overrides it")
+
+
 def config_command(argv: list[str]) -> int:
-    from aip.client.config import DEFAULT_AGENT_MODEL_NAME, DEFAULT_AGENT_MODEL_URL
+    if argv and argv[0] == "runah":
+        return config_runah_command(argv[1:])
     from aip.model.typesafe import DEFAULT_URL
     from aip.sdk import configure, settings
 
@@ -559,9 +603,10 @@ def config_command(argv: list[str]) -> int:
                                      "show it. `aip config server local` records runs on this machine: a server is started "
                                      "when a command needs one and stops when idle. `aip config server URL` points at a server "
                                      "elsewhere (give its bearer token with --token); `aip config server none` records nothing. "
-                                     "AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY, AIP_AGENT_MODEL, "
-                                     "AIP_AGENT_MODEL_KEY, AIP_AGENT_MODEL_NAME and AIP_BATCH override the file. The decision model is an endpoint with the TypeSafe API shape; without "
-                                     "one a Decide step fails the run (no_decision_model) until one is set and the run is resumed.")
+                                     "AIP_SERVER, AIP_TOKEN, AIP_DECISION_MODEL, AIP_DECISION_MODEL_KEY, AIP_BATCH and "
+                                     "AIP_SCRIPT_TIMEOUT override the file. The decision model is an endpoint with the TypeSafe "
+                                     "API shape; without one a Decide step fails the run (no_decision_model) until one is set and "
+                                     "the run is resumed. `aip config runah --help`: the chat model `aip runah` uses.")
     parser.add_argument("setting", nargs="*", metavar="server local|URL|none", help="where runs are recorded and the catalog is")
     parser.add_argument("--server", default=None, metavar="URL", help="the same as `server URL` (an empty string forgets it)")
     parser.add_argument("--token", default=None, help="the bearer token for the server (an empty string forgets it)")
@@ -570,30 +615,19 @@ def config_command(argv: list[str]) -> int:
     parser.add_argument("--decision-model-key", default=None, metavar="KEY",
                         help="the decision model's API key (an empty string forgets it); never printed")
     parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once by default")
-    parser.add_argument("--agent-model", default=None, metavar="URL",
-                        help=f"the agent model's endpoint, any OpenAI Chat Completions one (default {DEFAULT_AGENT_MODEL_URL}, "
-                             "Anthropic's; an empty string forgets it)")
-    parser.add_argument("--agent-model-key", default=None, metavar="KEY", help="the agent model's API key; never printed")
-    parser.add_argument("--agent-model-name", default=None, metavar="NAME",
-                        help=f"the model the agent model endpoint runs (default {DEFAULT_AGENT_MODEL_NAME})")
-    parser.add_argument("--agent-model-max-tool-calls", type=int, default=None, metavar="N",
-                        help="the most tool calls the agent model makes on one task (default 40)")
-    parser.add_argument("--agent-model-max-tokens", type=int, default=None, metavar="N",
-                        help="the most tokens one task's chat may spend, prompt and completion (default 500000)")
+    parser.add_argument("--script-timeout", default=None, metavar="N", help=SCRIPT_TIMEOUT_HELP)
     parser.add_argument("--clear", action="store_true", help="forget everything")
     args = parser.parse_args(argv)
     if args.setting:
         if len(args.setting) != 2 or args.setting[0] != "server" or args.server is not None:
             parser.error("the one setting given by name is the server: `aip config server local`, `aip config server URL` or "
-                         "`aip config server none`; the rest are flags")
+                         "`aip config server none`; `aip config runah` sets runah's model; the rest are flags")
         args.server = args.setting[1]
-    agent = {"agent_model": args.agent_model, "agent_model_key": args.agent_model_key, "agent_model_name": args.agent_model_name,
-             "max_tool_calls": args.agent_model_max_tool_calls, "max_tokens": args.agent_model_max_tokens}
     writes = args.clear or any(v is not None for v in (args.server, args.token, args.decision_model, args.decision_model_key, args.batch,
-                                                       *agent.values()))
+                                                       args.script_timeout))
     try:
         s = configure(args.server, args.token, args.decision_model, args.decision_model_key, args.batch, clear=args.clear,
-                      **agent) if writes else settings()
+                      script_timeout=args.script_timeout) if writes else settings()
     except ValueError as exc:
         parser.error(str(exc))
     if writes:
@@ -608,8 +642,46 @@ def config_command(argv: list[str]) -> int:
         print(f"server: {s.server}  (from {s.source})")
         print(f"token:  {'set' if s.token_set else 'none'}")
     print(s.decision_model)
-    print(s.agent_model)
     print(f"batch: {s.batch}")
+    print(s.script_cap)
+    print(s.runah)
+    return 0
+
+
+def config_runah_command(argv: list[str]) -> int:
+    from aip.client.config import DEFAULT_RUNAH_MODEL_NAME, DEFAULT_RUNAH_MODEL_URI
+    from aip.sdk import configure_runah, settings
+
+    parser = argparse.ArgumentParser(
+        prog="aip config runah", description="The chat model `aip runah` uses to answer Task_Agent tasks, and its caps. With no "
+        "arguments, show them. aip calls no chat model except in `aip runah`. AIP_RUNAH_MODEL_URI, AIP_RUNAH_MODEL_NAME and "
+        "AIP_RUNAH_MODEL_KEY override the file.")
+    parser.add_argument("--model-uri", default=None, metavar="URL",
+                        help=f"an OpenAI Chat Completions endpoint, POST {{URL}}/chat/completions (default {DEFAULT_RUNAH_MODEL_URI}, "
+                             "Anthropic's; https://api.openai.com/v1, Gemini's, Ollama's and others serve the same shape; an "
+                             "empty string forgets it)")
+    parser.add_argument("--model-name", default=None, metavar="NAME",
+                        help=f"the model to ask for (default {DEFAULT_RUNAH_MODEL_NAME}); the record keeps the id the endpoint "
+                             "reports in its reply")
+    parser.add_argument("--model-key", default=None, metavar="KEY",
+                        help="the endpoint's API key, sent as a bearer token; never printed; an empty string forgets it")
+    parser.add_argument("--max-tool-calls-per-task", type=int, default=None, metavar="N",
+                        help="the most tool calls the model makes on one task before runah gives up on it and the run stops "
+                             "at that pause (default 40)")
+    parser.add_argument("--max-tokens-per-task", type=int, default=None, metavar="N",
+                        help="the most tokens one task's chat may spend, prompt and completion over all its calls, before "
+                             "runah gives up on it (default 500000); scripts are capped by `aip config --script-timeout`")
+    args = parser.parse_args(argv)
+    values = {"model_uri": args.model_uri, "model_name": args.model_name, "model_key": args.model_key,
+              "max_tool_calls_per_task": args.max_tool_calls_per_task, "max_tokens_per_task": args.max_tokens_per_task}
+    writes = any(v is not None for v in values.values())
+    try:
+        s = configure_runah(**values) if writes else settings()
+    except ValueError as exc:
+        parser.error(str(exc))
+    if writes:
+        print(f"wrote {s.path}")
+    print(s.runah)
     return 0
 
 
@@ -695,7 +767,7 @@ def skill_command(argv: list[str]) -> int:
 def mcp_command(argv: list[str]) -> int:
     """`aip mcp`: the SDK as an MCP server (`aip.mcp`, `docs/mcp.md`)."""
     parser = argparse.ArgumentParser(prog="aip mcp", description="Serve this client to an MCP client (an agent framework, a coding "
-                                     "agent): the tools search, describe, compile, run, resume and pull, each answering with the "
+                                     "agent): the tools search, describe, compile, run, resume, runah and pull, each answering with the "
                                      "JSON the command of that name prints (docs/cli-json.md). Over stdio by default, which is "
                                      "how an MCP client starts it: give it the command `aip mcp`. Runs are recorded where `aip "
                                      "config` points, under the MCP client's own name as the agent.")
@@ -885,6 +957,7 @@ def server_command(argv: list[str]) -> int:
 COMMANDS = {
     "run": run_command,
     "resume": resume_command,
+    "runah": runah_command,
     "compile": compile_command,
     "export": export_command,
     "fmt": fmt_command,
@@ -911,6 +984,7 @@ RENAMED = {"governance": "audit"}       # said once, so a 0.8 habit lands somewh
 SUMMARIES = {
     "run": "run a procedure (a folder, an .rl bundle or a published name) until it pauses or is done",
     "resume": "answer a paused run, or retry the step a failed run stopped at",
+    "runah": "run ahead: a chat model answers the Task_Agent pauses and the run keeps going, but at --human steps",
     "compile": "check a program directory and write its .rl bundle",
     "export": "write a bundle's program directory back; `--skill DIR`: as a plain Agent Skill; `export runs`: the server's runs as one Relate file",
     "fmt": "rewrite procedure.aip in the canonical form",
@@ -924,9 +998,10 @@ SUMMARIES = {
     "retire": "stop a revision resolving",
     "runs": "list runs (this machine's, or the server's), or show one run step by step",
     "audit": "the server's audit queries over the runs and the catalog",
-    "config": "where this client points: the server (local, a URL or none), the decision model, the batch size",
+    "config": "where this client points: the server (local, a URL or none), the decision model, the batch size, the script "
+              "timeout; `config runah`: runah's chat model",
     "server": "serve the catalog and the record of runs over HTTP",
-    "mcp": "serve this client to an MCP client: search, describe, compile, run, resume and pull as tools",
+    "mcp": "serve this client to an MCP client: search, describe, compile, run, resume, runah and pull as tools",
     "skill": "install the aip skill, the page an agent reads to run and write procedures, into the agents here",
     "upgrade": "publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) to the server",
 }

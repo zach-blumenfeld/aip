@@ -478,7 +478,7 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     assert isinstance(remote, sdk.RunRecord) and remote.identity["user"] == "zach" and remote.status == "done"
     queries = served.audit()
     assert [q.query for q in queries] == [
-        "confidence-fired", "failing-aggregations", "model-answers", "failing-scripts", "untaken-branches", "repeated-cycles",
+        "confidence-fired", "failing-aggregations", "model-answers", "agent-work", "failing-scripts", "untaken-branches", "repeated-cycles",
         "agent-routes", "missing-fields", "empty-results", "unused-data", "cycles", "lineage"]
     assert all(isinstance(q, sdk.AuditQuery) and q.builtin and q.description for q in queries)
     asked = served.audit("model-answers", name="billing_support", agent="tests")
@@ -535,10 +535,13 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     served.publish(AGENT)                                                 # the command's own client has no model: run the agent one
     first = served.run(AGENT, {"message": CALM})
+    second = served.run(AGENT, {"message": CALM})
+    monkeypatch.setenv("AIP_RUNAH_MODEL_KEY", "unused")                  # runah answers into the pause and stops at a human step
     cases = [
         ("info", "describe", ["billing_support"]),
         ("run", "run", ["billing_support_agent", "--inputs", json.dumps({"message": CALM})]),
         ("resume", "resume", [first.run_id, "--answers", json.dumps({"billing": True, "tone": "calm"})]),
+        ("runah", "runah", [second.run_id, "--answers", json.dumps({"billing": True, "tone": "calm"}), "--human", "triage,reply"]),
         ("search", "search", ["refund"]),
         ("list", "list", []),
         ("pull", "pull", ["billing_support"]),

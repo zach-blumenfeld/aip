@@ -22,4 +22,11 @@ the instruction asks for, and keep everything else as it is, comments included. 
 page in your instructions is the law. Run `compile` on `{path}` and fix what it reports before
 you answer.
 
-Answer with `changes`: what you changed and why, in a few lines.
+A script you write or change opens with a docstring saying what it does and what it touches
+outside the working directory: services and URLs it calls, files elsewhere, commands it runs,
+and the credentials (tokens, logins, keys, environment variables) it uses. A person reads that
+before it runs.
+
+Answer with `changes`: what you changed and why, in a few lines; then, under a line `Scripts:`,
+one line per script you wrote or changed, saying what it touches outside the working directory
+and which credentials it uses, or that it touches nothing outside.

@@ -68,7 +68,8 @@ class RunFile:
     revision: str | None = None            # the catalog revision: the one a name resolved to, or the one the server holds the bundle as
     server: str | None = None              # where the run is recorded
     recorded: bool = False                 # whether the last stop reached the server
-    human: list[str] | None = None         # the steps the agent model leaves to a person (`--human`), for every resume
+    human: list[str] | None = None         # the steps runah leaves to a person (`aip runah --human`), for its later calls
+    scripts: bool = True                   # False for a trial, which executes no script and is not recorded
     created: str = field(default_factory=utc_now)
     updated: str = field(default_factory=utc_now)
 
@@ -110,13 +111,15 @@ class RunFile:
         server's record is the run file's. Its `history` is the record's (`recorded_history`):
         a run paused inside a `For` shows the passes it has made."""
         return {"run_id": self.run_id, **self.run, "history": recorded_history(self.run), "name": self.name,
-                "revision": self.revision, "draft": self.draft, "created": self.created, "updated": self.updated}
+                "revision": self.revision, "draft": self.draft, "workdir": self.workdir, "created": self.created,
+                "updated": self.updated}
 
     def record(self) -> JSON:
         """The run as `aip runs <run id> --json` prints it: the run file, flat, with the history
         as the record shows it (`recorded_history`)."""
         return {"run_id": self.run_id, "name": self.name, "revision": self.revision, "draft": self.draft, "target": self.target,
-                "server": self.server, "recorded": self.recorded, "created": self.created, "updated": self.updated, **self.run,
+                "workdir": self.workdir, "server": self.server, "recorded": self.recorded, "created": self.created,
+                "updated": self.updated, **self.run,
                 "history": recorded_history(self.run)}
 
     def summary(self) -> JSON:
@@ -260,14 +263,21 @@ def _what(entry: JSON) -> str:
         return f"-> {entry.get('to')}  ({entry.get('read')} is {entry.get('value')}{passed})"
     if kind == "Execute":
         return f"{entry.get('script')} -> {_produced(result) or 'nothing'}"
-    if kind == "Task_Agent" and (entry.get("answered_by") or {}).get("agent") == "model":
-        calls = entry.get("tool_calls") or []
-        counts = Counter(c.get("name") for c in calls)
-        tools = f"{len(calls)} tool call{'' if len(calls) == 1 else 's'}" + (f" ({', '.join(f'{n} {c}' for n, c in counts.items())})" if calls else "")
+    if kind == "Task_Agent" and entry.get("work"):
+        # what answering took: `observed` by runah of its own model, or `reported` by an outside agent
+        by = entry.get("answered_by") or {}
+        calls = entry.get("tool_calls")
+        if isinstance(calls, list):
+            counts = Counter(c.get("name") for c in calls)
+            tools = f"{len(calls)} tool call{'' if len(calls) == 1 else 's'}" + (f" ({', '.join(f'{n} {c}' for n, c in counts.items())})" if calls else "")
+        else:
+            tools = f"{calls} tool call{'' if calls == 1 else 's'}" if isinstance(calls, int) else ""
         tokens = (entry.get("tokens") or {}).get("total")
+        seconds = f"{entry['work_seconds']:g}s" if isinstance(entry.get("work_seconds"), (int, float)) else ""
+        spent = ", ".join(s for s in (tools, f"{tokens} tokens" if tokens is not None else "", seconds) if s)
         refused = f", {entry['refusals']} refused" if entry.get("refusals") else ""
-        return (f"answered by model {entry['answered_by'].get('model') or ''}: {tools}" + (f", {tokens} tokens" if tokens is not None else "")
-                + f"{refused} -> {_produced(result)}")
+        model = f" ({by['model']})" if by.get("model") else ""
+        return f"answered by {by.get('agent') or '?'}{model}, {entry['work']}: {spent or 'nothing said'}{refused} -> {_produced(result)}"
     if kind == "Task_Agent":
         by = (entry.get("answered_by") or {}).get("agent") or "?"
         waited = entry.get("waited_seconds")

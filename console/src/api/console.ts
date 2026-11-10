@@ -90,16 +90,16 @@ export interface StepEvent {
   iterations?: number;
 }
 
-/** `--progress` with `--answer-with model`: a tool call the agent model made while answering a task of `step`. `args` is a
- *  summary (a path, a pattern, a written file's size), `error` set when the tool refused. */
+/** `aip runah --progress`: a tool call runah's model made while answering a task of `step`. `args` is a summary (a path,
+ *  a pattern, a written file's size), `error` set when the tool refused. */
 export interface ToolEvent { event: "tool"; step: string; task: number; tool: string; args: string; seconds?: number; error?: string }
 
-/** `--progress` with `--answer-with model`: an answer the agent model gave did not hold and went back to it. */
+/** `aip runah --progress`: an answer runah's model gave did not hold and went back to it. */
 export interface RefusedEvent { event: "refused"; step: string; task: number; errors: unknown }
 
 interface Stop { run_id: string | null; run_file?: string; recorded?: boolean }
 
-/** Why the agent model did not answer a pause it was to answer (`--answer-with model`): a human step, a cap, a refusal. */
+/** Why `aip runah` stopped at a pause its model was to answer: a human step (`--human`), a cap, a refusal. */
 export interface Answerer { answered: false; step?: string; reason: string; refusals?: number }
 
 /** A pause: every `For` pass waiting at the step is one task, answered together. */
@@ -118,7 +118,7 @@ export interface StreamHandlers {
   /** The launcher's id for the process, to cancel it by. */
   onProcess?: (id: string) => void;
   onStep: (e: StepEvent) => void;
-  /** The agent model's work, when it answers the run's tasks. */
+  /** runah's model's work, when it answers the run's tasks. */
   onTool?: (e: ToolEvent | RefusedEvent) => void;
   onOutcome: (o: Outcome) => void;
   /** A line that is not one of the CLI's objects: shown, never parsed further. */
@@ -127,8 +127,8 @@ export interface StreamHandlers {
 
 export type CliCall =
   | { run: { ref: string; inputs: Record<string, unknown> } }
-  | { resume: { run_id: string; answers?: unknown; studio?: boolean } }
-  | { build: { workspace: string; brief: string; name?: string; source?: string; files?: Record<string, string> } }
+  | { resume: { run_id: string; answers?: unknown; studio?: boolean; workspace?: string } }
+  | { build: { workspace: string; brief: string; title?: string; source?: string; files?: Record<string, string> } }
   | { edit: { workspace: string; instruction: string; source?: string; files?: Record<string, string> } };
 
 function callOf(call: CliCall): [string, object] {
@@ -139,7 +139,7 @@ function callOf(call: CliCall): [string, object] {
 }
 
 /** Start `aip run` (a reference and the inputs) or `aip resume` (a run id and the answers, or none to retry), or one
- *  of the Studio's runs (build_procedure, edit_procedure, answered by the agent model), and feed what it prints to
+ *  of the Studio's runs (build_procedure, edit_procedure, run ahead by `aip runah`), and feed what it prints to
  *  `handlers` as it arrives. Resolves with how the process ended. */
 export async function runCli(call: CliCall, handlers: StreamHandlers): Promise<Exit> {
   const [path, body] = callOf(call);
@@ -244,11 +244,12 @@ export function studioDocuments(workspace: string, documents: { name: string; ba
 }
 
 /** One model `aip config` names: where it is, which model, whether a key is set (never the key), and where that came
- *  from (the config file, or the environment, which wins). */
-export interface ModelSetting { endpoint: string; model: string | null; key: boolean; source: string }
-export interface ModelSettings { agent: ModelSetting | null; decision: ModelSetting | null }
+ *  from (the config file, or the environment, which wins; null when nothing is set and the defaults show). */
+export interface ModelSetting { endpoint: string; model: string | null; key: boolean; source: string | null }
+/** `runah` is the chat model `aip runah` answers the Studio's tasks with (`aip config runah`); `decision` the decision model. */
+export interface ModelSettings { runah: ModelSetting | null; decision: ModelSetting | null }
 export interface ModelSettingsChange {
-  agent_model?: string; agent_model_key?: string; agent_model_name?: string; decision_model?: string; decision_model_key?: string;
+  runah_model_uri?: string; runah_model_name?: string; runah_model_key?: string; decision_model?: string; decision_model_key?: string;
 }
 
 export function modelSettings(): Promise<ModelSettings> {

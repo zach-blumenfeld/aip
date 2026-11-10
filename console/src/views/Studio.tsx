@@ -3,13 +3,14 @@
 // console's process keeps in a folder of its own (bin/aip-console.mjs, the Studio's workspaces).
 //
 // - The chat (StudioChat) runs build_procedure on the first brief of a new procedure and edit_procedure
-//   after, with the agent model answering; the folder is what they write, and the page reads it again
-//   when a run stops. Each run can be undone as a whole.
+//   after, run ahead (`aip runah`) with a chat model answering; the folder is what they write, and the
+//   page reads it again when a run stops. Each run can be undone as a whole. The scripts a run wrote are
+//   shown with their text, and saving or publishing a draft that has them asks once that they were read.
 // - The graph is C3's step graph, control or data flow, drawn again after every run and every edit;
 //   clicking a node opens its form (StudioForm). A form's change is a text edit at a span of
 //   procedure.aip (studio/edit.ts), which the console's process formats (`aip fmt --stdin`) and compiles
 //   (`aip compile --partial`) before the graph is drawn again; the compiler is the only rule book.
-// - Source is a toggle, closed by default; Settings holds the agent model and the decision model.
+// - Source is a toggle, closed by default; Settings holds runah's model and the decision model.
 // Only a clean compile is saved: as a draft (the server holds the bundle with no revision), and
 // "publish" gives that bundle the next revision. Unsaved form edits are kept in this browser.
 
@@ -24,7 +25,7 @@ import { dataEdges, dataKeys } from "../graph/dataflow.ts";
 import { stepGraphOf } from "../graph/model.ts";
 import { Code } from "../highlight/Code.tsx";
 import { bundleRef, href } from "../router";
-import { missingScripts, nameFromBrief } from "../studio/chat.ts";
+import { missingScripts } from "../studio/chat.ts";
 import { applyEdits, EditError, renameProcedure, setText, type TextEdit } from "../studio/edit.ts";
 import { DirectionToggle, StepGraph, useDirection } from "./StepGraph";
 import { StudioChat, type ChatHost } from "./StudioChat";
@@ -85,6 +86,11 @@ export function Studio({ reference }: { reference?: string }) {
   const [direction, setDirection] = useDirection();
   const [documents, setDocuments] = useState<string[]>([]);
   const [built, setBuilt] = useState(false);
+  /** The scripts the chat's runs wrote, by path; `read` is the text of those the person said they had read (saving or
+   *  publishing asks once, and again only when a later run changes them); `asking` the action waiting on that. */
+  const [modelScripts, setModelScripts] = useState<string[]>([]);
+  const [readScripts, setReadScripts] = useState<string | null>(null);
+  const [asking, setAsking] = useState<"save" | "publish" | null>(null);
   const checking = useRef(0);
   const current = useRef({ source: "", files: {} as Record<string, string> });
   current.current = { source, files };
@@ -200,6 +206,7 @@ export function Studio({ reference }: { reference?: string }) {
     void runCheck(opened.workspace, source, next);
   };
   const save = async (publish: boolean) => {
+    setAsking(null);
     setBusy(true);
     try {
       const done = await studioSave(opened.workspace, source, changed, publish);
@@ -216,17 +223,20 @@ export function Studio({ reference }: { reference?: string }) {
   const isNew = !reference;
   const next: "build" | "edit" = isNew && !built ? "build" : "edit";
   const host: ChatHost = {
-    start: (text) => {
+    start: (text, title) => {
       const kind = next;
       setUndo((u) => [...u, { kind: "run", what: kind === "build" ? "the build" : "the change" }]);
       setLast(kind === "build" ? "built by the chat" : "changed by the chat");
       setSaved(null);
       setSelected(null);
+      setAsking(null);
       const { source: s } = current.current;
       return kind === "build"
-        ? { kind, call: { build: { workspace: opened.workspace, brief: text, name: nameFromBrief(text), source: s, files: changed } } }
+        ? { kind, call: { build: { workspace: opened.workspace, brief: text, title, source: s, files: changed } } }
         : { kind, call: { edit: { workspace: opened.workspace, instruction: text, source: s, files: changed } } };
     },
+    answer: (runId, answers) => ({ resume: { run_id: runId, answers, studio: true, workspace: opened.workspace } }),
+    wrote: (paths) => { if (paths.length) setModelScripts((had) => [...new Set([...had, ...paths])].sort()); },
     before: () => current.current,
     built: () => setBuilt(true),
     settled: async () => {
@@ -261,6 +271,20 @@ export function Studio({ reference }: { reference?: string }) {
     }
   }
   const blocked = busy || running;
+  // The scripts the model wrote that the draft still has, with their text; what the person confirmed reading is that text.
+  const written = modelScripts.filter((p) => files[p] !== undefined);
+  const writtenText = JSON.stringify(written.map((p) => [p, files[p]]));
+  const unread = written.length > 0 && readScripts !== writtenText;
+  /** Save or publish; the first time a draft with scripts the model wrote goes out, ask whether they were read. */
+  const guarded = (publish: boolean) => {
+    if (unread) return setAsking(publish ? "publish" : "save");
+    void save(publish);
+  };
+  const confirmRead = () => {
+    const action = asking;
+    setReadScripts(writtenText);
+    if (action) void save(action === "publish");
+  };
 
   return (
     <article className="procedure studio" data-testid="studio">
@@ -281,11 +305,11 @@ export function Studio({ reference }: { reference?: string }) {
         {last && <span className="muted small" data-testid="studio-last">last change: {last}</span>}
         <button type="button" onClick={() => void back()} disabled={undo.length === 0 || blocked} data-testid="studio-undo"
                 title={undo.length ? `Undo ${undo.at(-1)!.what}` : "Nothing to undo"}>Undo</button>
-        <button type="button" onClick={() => void save(false)} disabled={!check.ok || blocked} data-testid="studio-save"
+        <button type="button" onClick={() => guarded(false)} disabled={!check.ok || blocked} data-testid="studio-save"
                 title={check.ok ? "Hold it on the server as a draft: out of the catalog, its runs recorded as a draft's" : "Only what compiles is saved"}>
           Save draft
         </button>
-        <button type="button" onClick={() => void save(true)} disabled={!check.ok || blocked || !saved || saved.revision !== null} data-testid="studio-publish"
+        <button type="button" onClick={() => guarded(true)} disabled={!check.ok || blocked || !saved || saved.revision !== null} data-testid="studio-publish"
                 title="Give the saved draft the next revision of its name">
           Publish
         </button>
@@ -304,6 +328,21 @@ export function Studio({ reference }: { reference?: string }) {
                 {saved.draft ? " Publish gives it the next revision." : " That bundle is already published."}</>
             : <>Published <a href={href({ page: "procedure", ref: `${saved.name}@${saved.revision}` })}><code>{saved.name}@{saved.revision}</code></a>.</>}
         </p>
+      )}
+      {asking && (
+        <div className="boundary" role="alertdialog" data-testid="studio-scripts-ask" data-action={asking}>
+          <p>
+            The model wrote {written.length === 1 ? "a script" : `${written.length} scripts`} for this draft ({written.join(", ")}).
+            Once it is {asking === "publish" ? "published" : "saved"}, a run of it runs {written.length === 1 ? "that script" : "them"} on the machine that runs it,
+            with that machine&apos;s files and credentials. Read {written.length === 1 ? "it" : "them"} below first, and what the review says each touches.
+          </p>
+          <div className="actions">
+            <button type="button" onClick={confirmRead} data-testid="studio-scripts-ok">
+              I have read {written.length === 1 ? "it" : "them"}: {asking === "publish" ? "publish" : "save the draft"}
+            </button>
+            <button type="button" onClick={() => setAsking(null)} data-testid="studio-scripts-cancel">Not yet</button>
+          </div>
+        </div>
       )}
       {error && <p className="error" role="alert">{error}</p>}
       {showSettings && <Settings settings={settings} onSaved={setSettings} />}
@@ -344,6 +383,22 @@ export function Studio({ reference }: { reference?: string }) {
           )}
         </section>
       </div>
+
+      {written.length > 0 && (
+        <section className="studio-scripts" data-testid="studio-scripts" data-read={unread ? "false" : "true"}>
+          <h2>scripts the model wrote, read before you run or publish</h2>
+          <p className="muted small">
+            A script runs on the machine that runs the procedure, with what that machine can reach. Its opening lines should say
+            what it touches outside the working directory; the review in the chat lists them too.
+          </p>
+          {written.map((p) => (
+            <details key={p} open data-testid="studio-script" data-path={p}>
+              <summary><code>{p}</code></summary>
+              <Code text={files[p] ?? ""} />
+            </details>
+          ))}
+        </section>
+      )}
 
       <Diagnostics check={check} />
       {showSource && (
@@ -399,7 +454,7 @@ function Diagnostics({ check }: { check: StudioCheck }) {
   );
 }
 
-/** Where to get an agent model's endpoint, one line per provider; any Chat Completions endpoint works. */
+/** Where to get runah's model's endpoint, one line per provider; any Chat Completions endpoint works. */
 const PROVIDERS = [
   ["Anthropic (the default)", "https://api.anthropic.com/v1", "claude-opus-5-5"],
   ["OpenAI", "https://api.openai.com/v1", "a model name from your account"],
@@ -407,14 +462,14 @@ const PROVIDERS = [
   ["Ollama, on this machine", "http://localhost:11434/v1", "a model you have pulled"],
 ];
 
-/** The agent model and the decision model, written through the launcher to `aip config`. A key is never shown: a field
- *  left empty keeps the one set. */
+/** runah's model (`aip config runah`) and the decision model (`aip config`), written through the launcher. A key is
+ *  never shown: a field left empty keeps the one set. */
 function Settings({ settings, onSaved }: { settings: ModelSettings | null; onSaved: (s: ModelSettings) => void }) {
   const [form, setForm] = useState<ModelSettingsChange>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const set = (k: keyof ModelSettingsChange, v: string) => { setForm((f) => ({ ...f, [k]: v })); setDone(false); };
-  const fromEnv = (s: { source: string } | null | undefined) => !!s && /^AIP_/.test(s.source);
+  const fromEnv = (s: { source: string | null } | null | undefined) => !!s?.source && /^AIP_/.test(s.source);
   const go = async () => {
     const change = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== undefined && v !== "")) as ModelSettingsChange;
     try { onSaved(await saveModelSettings(change)); setForm({}); setProblem(null); setDone(true); } catch (e) { setProblem(describe(e)); }
@@ -423,14 +478,14 @@ function Settings({ settings, onSaved }: { settings: ModelSettings | null; onSav
     <section className="studio-settings" data-testid="studio-settings">
       <h2>Settings</h2>
       <fieldset>
-        <legend>agent model <span className="muted small">writes and changes procedures in the chat</span></legend>
-        <p className="small muted" data-testid="settings-agent">
-          {settings?.agent ? <>now: <code>{settings.agent.endpoint}</code>, <code>{settings.agent.model}</code>, key {settings.agent.key ? "set" : "not set"}</> : "none set"}
-          {fromEnv(settings?.agent) && <> — set by the environment ({settings!.agent!.source}), which wins over what is saved here</>}
+        <legend>runah&apos;s model <span className="muted small">writes and changes procedures in the chat (<code>aip runah</code>)</span></legend>
+        <p className="small muted" data-testid="settings-runah">
+          {settings?.runah ? <>now: <code>{settings.runah.endpoint}</code>, <code>{settings.runah.model}</code>, key {settings.runah.key ? "set" : "not set"}</> : "none set"}
+          {fromEnv(settings?.runah) && <> — set by the environment ({settings!.runah!.source}), which wins over what is saved here</>}
         </p>
-        <label className="form-row">endpoint <input type="url" placeholder={settings?.agent?.endpoint ?? PROVIDERS[0][1]} value={form.agent_model ?? ""} onChange={(e) => set("agent_model", e.target.value)} /></label>
-        <label className="form-row">model <input type="text" placeholder={settings?.agent?.model ?? PROVIDERS[0][2]} value={form.agent_model_name ?? ""} onChange={(e) => set("agent_model_name", e.target.value)} /></label>
-        <label className="form-row">key <input type="password" autoComplete="off" placeholder={settings?.agent?.key ? "set; type to replace it" : "the provider's API key"} value={form.agent_model_key ?? ""} onChange={(e) => set("agent_model_key", e.target.value)} data-testid="settings-agent-key" /></label>
+        <label className="form-row">endpoint <input type="url" placeholder={settings?.runah?.endpoint ?? PROVIDERS[0][1]} value={form.runah_model_uri ?? ""} onChange={(e) => set("runah_model_uri", e.target.value)} /></label>
+        <label className="form-row">model <input type="text" placeholder={settings?.runah?.model ?? PROVIDERS[0][2]} value={form.runah_model_name ?? ""} onChange={(e) => set("runah_model_name", e.target.value)} /></label>
+        <label className="form-row">key <input type="password" autoComplete="off" placeholder={settings?.runah?.key ? "set; type to replace it" : "the provider's API key"} value={form.runah_model_key ?? ""} onChange={(e) => set("runah_model_key", e.target.value)} data-testid="settings-runah-key" /></label>
         <ul className="small muted">
           {PROVIDERS.map(([who, url, model]) => <li key={who}>{who}: <code>{url}</code>, {model}</li>)}
         </ul>

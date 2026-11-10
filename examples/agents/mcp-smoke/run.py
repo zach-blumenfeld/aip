@@ -12,7 +12,7 @@ client's name:
     aip runs --agent mcp-smoke
 
 What a framework does differently is only who answers the pauses: its MCP client lists the same
-six tools and its model reads the same objects (`docs/mcp.md`, `docs/cli-json.md`).
+seven tools and its model reads the same objects (`docs/mcp.md`, `docs/cli-json.md`).
 """
 
 from __future__ import annotations

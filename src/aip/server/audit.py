@@ -20,6 +20,10 @@ Over the windowed runs:
   how many of those it did not hold, with how many answers a bar turned.
 - `model-answers`: per (procedure, step, question), how many answers the decision model gave,
   their mean and lowest confidence, and how long the calls took.
+- `agent-work`: per (procedure, `Task_Agent` step, who answered, model, `work`), how many tasks
+  and the tool calls and tokens they took, most tokens first. `work` says whose account it is:
+  `observed` (runah watched its own model's chat) or `reported` (an outside agent said so with
+  `aip resume --work`, unchecked).
 - `failing-scripts`: per (procedure, `Execute` step, error), the runs that stand failed at the
   step (`script_failed`, `timeout`, `requires_unmet`), with the script and the latest message. A
   run that failed there and was resumed past it no longer counts: the record keeps where a run
@@ -103,6 +107,15 @@ MATCH (r)-[:HAS_ENTRY]->(e:Entry {kind: 'Decide'})-[:GAVE]->(a:Answer)
 RETURN r.name AS name, e.step AS step, a.name AS question, e.model AS model, count(a) AS answers,
        avg(a.confidence) AS mean_confidence, min(a.confidence) AS lowest_confidence, avg(e.model_seconds) AS mean_model_seconds
 ORDER BY lowest_confidence, name, step, question
+LIMIT $limit
+"""
+
+AGENT_WORK = WINDOW + """
+MATCH (r)-[:HAS_ENTRY]->(e:Entry {kind: 'Task_Agent'})
+WHERE e.work IS NOT NULL
+RETURN r.name AS name, e.step AS step, e.agent AS agent, e.model AS model, e.work AS work, count(e) AS tasks,
+       sum(e.tool_calls) AS tool_calls, sum(e.tokens) AS tokens
+ORDER BY tokens DESC, name, step, work
 LIMIT $limit
 """
 
@@ -256,6 +269,8 @@ QUERIES: dict[str, tuple[str, Any, tuple[str, ...]]] = {
                          (CONFIDENCE_FIRED,), ()),
     "failing-aggregations": ("Aggregations that did not hold in the last N runs, most failures first.", (FAILING_AGGREGATIONS,), ()),
     "model-answers": ("What the decision model answered in the last N runs, per question, least confident first.", (MODEL_ANSWERS,), ()),
+    "agent-work": ("What answering Task_Agent steps took in the last N runs: tasks, tool calls and tokens per step, agent and "
+                   "model, observed by runah or reported by the agent.", (AGENT_WORK,), ()),
     "failing-scripts": ("Execute steps that runs among the last N stand failed at, most failures first, with the latest message.",
                         (FAILING_SCRIPTS,), ()),
     "untaken-branches": ("Route branches none of the last N runs took.", (UNTAKEN_BRANCHES,), ()),

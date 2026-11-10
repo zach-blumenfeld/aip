@@ -6,9 +6,9 @@
 //
 // The page calls the AIP server directly for the catalog, the runs and the audit queries; nothing is
 // proxied. Runs go through the CLI, next to the data: the page posts to this process, which spawns
-// `aip run --progress` or `aip resume --progress` and relays each JSON line it prints to the page as a
-// server-sent event, so scripts run here, the decision model is the one this machine's `aip config`
-// names, and the run is recorded on the server by the CLI itself. With a FOLDER (a program directory,
+// `aip run --progress` or `aip resume --progress` (the Studio's, `aip runah --progress`) and relays each JSON
+// line it prints to the page as a server-sent event, so scripts run here, the models are the ones this
+// machine's `aip config` names, and the run is recorded on the server by the CLI itself. With a FOLDER (a program directory,
 // one holding procedure.aip) instead of a server, runs are local and unrecorded and the server pages
 // are hidden.
 //
@@ -23,29 +23,35 @@
 //   GET  /console/record?run_id=  `aip runs <run_id> --json`: the run, from this machine's run file or the server
 //   GET  /console/runs            `aip runs --json`; in folder mode, this machine's runs of the folder
 //   POST /console/wake            starts the local server when the console's server is `aip config server local`
-//   POST /console/resume          ... with `studio: true`, a Studio run's: `--answer-with model`, recorded as the studio's
+//   POST /console/resume          ... with `studio: true` (and the run's `workspace`), a Studio run's: `aip runah <run_id>
+//                                 --answers - --progress`, which puts the answers in and runs ahead, recorded as the studio's
 //   POST /console/studio/open     {files: [{path, text | base64, mode}], name?} -> {workspace}: a folder holding a bundle's
-//                                 files (or none, for a new procedure), named `name`, inside a working directory of its own
+//                                 files (or none, for a new procedure: a placeholder folder, `new_procedure`), named `name`,
+//                                 inside a working directory of its own
 //   POST /console/studio/check    {workspace, source, files?} -> writes them into the folder, then `aip fmt --stdin` (when
 //                                 the source parses) and `aip compile --check --json --partial --stdin`: {source (formatted),
 //                                 formatted, ok, bundle_id, diagnostics, graph, partial}. `files` are changed files' text
 //   POST /console/studio/read     {workspace} -> the folder as it is on disk (after a run changed it): the check's object
 //                                 for its procedure.aip, with {name, files: {path: text}} (its text files) and `undo`
 //   POST /console/studio/documents {workspace, documents: [{name, base64}]} -> saved under the folder's assets/docs/
-//   POST /console/studio/build    {workspace, brief, name, session} -> event stream of `aip run build_procedure` with
-//                                 `--answer-with model --human ask_user`, writing the folder (renamed `name` first)
-//   POST /console/studio/edit     {workspace, instruction, session} -> event stream of `aip run edit_procedure
-//                                 --answer-with model` on the folder. Build and edit keep the folder as it was first:
+//   POST /console/studio/build    {workspace, brief, title?, session} -> event stream of `aip runah build_procedure
+//                                 --human ask_user` writing the folder; `title` is the name the person gave, or none for
+//                                 the model to name it from the brief's subject. When the run is done (here or after a
+//                                 resume) the folder is renamed to the `procedure` its result names
+//   POST /console/studio/edit     {workspace, instruction, session} -> event stream of `aip runah edit_procedure` on the
+//                                 folder. Build and edit keep the folder as it was first:
 //   POST /console/studio/undo     {workspace} -> puts back the folder as it was before the last run; the read object
 //   POST /console/studio/save     {workspace, source, files?, publish?} -> writes the folder and runs `aip publish --draft
 //                                 --json` (with `publish`, `aip publish --json`): {name, revision, bundle_id, existed, draft}
-//   GET  /console/settings        the agent model and the decision model `aip config` names: {agent, decision}, each
-//                                 {endpoint, model?, key (whether one is set), source} or null; keys are never sent
-//   POST /console/settings        {agent_model?, agent_model_key?, agent_model_name?, decision_model?, decision_model_key?}
-//                                 -> `aip config` with those flags; the settings as GET answers them
+//   GET  /console/settings        runah's chat model and the decision model `aip config` names: {runah, decision}, each
+//                                 {endpoint, model?, key (whether one is set), source (null: the defaults)} or null; keys
+//                                 are never sent
+//   POST /console/settings        {runah_model_uri?, runah_model_name?, runah_model_key?, decision_model?, decision_model_key?}
+//                                 -> `aip config runah --model-uri/--model-name/--model-key` and `aip config
+//                                 --decision-model/--decision-model-key`; the settings as GET answers them
 //
 // An event stream sends `event: process` (its id, to cancel by) first, then one `data:` event per line
-// the CLI printed (step lines, the agent model's tool lines, then the final paused, done or error
+// the CLI printed (step lines, runah's model's tool lines, then the final paused, done or error
 // object), then `event: exit` with the exit code, signal and stderr. Closing the stream kills the
 // subprocess too. Every run the console starts is recorded with `agent: console` and the page's
 // `session`; the Studio's runs, with `agent: studio`.
@@ -138,13 +144,16 @@ function configuredServer(bin) {
   return parseConfiguredServer(spawnSync(bin, ["config"], { encoding: "utf8" }).stdout);
 }
 
-/** The model lines of `aip config`, read: `{agent, decision}`, each `{endpoint, model, key, source}` or null when none is
- *  configured. `key` says whether one is set; `aip config` never prints a key, so neither does this. */
+/** The models `aip config` names, read: `{runah, decision}`. `runah` is the `runah:` block (the chat model `aip runah`
+ *  answers Task_Agent tasks with: `{endpoint, model, key, source}`, `source` null when nothing is set and the defaults
+ *  show), or null when the block is missing; `decision` the `decision model:` line, or null when none is configured.
+ *  `key` says whether one is set; `aip config` never prints a key, so neither does this. */
 export function parseModels(text) {
-  const agent = /^agent model: (\S+)\s+model: (\S+)\s+key: (set|none)\s+\(from ([^)]*)\)/m.exec(text ?? "");
-  const decision = /^decision model: (\S+)(?:\s+\(TypeSafe's, the default\))?\s+key: (set|none)\s+\(from ([^)]*)\)/m.exec(text ?? "");
+  const t = text ?? "";
+  const runah = /^runah:(?:[ \t]+\(from ([^)\n]*)\))?[ \t]*\n[ \t]+model uri:[ \t]+(\S+)[ \t]*\n[ \t]+model name:[ \t]+(\S+)[ \t]*\n[ \t]+model key:[ \t]+(set|none)/m.exec(t);
+  const decision = /^decision model: (\S+)(?:\s+\(TypeSafe's, the default\))?\s+key: (set|none)\s+\(from ([^)]*)\)/m.exec(t);
   return {
-    agent: agent ? { endpoint: agent[1], model: agent[2], key: agent[3] === "set", source: agent[4] } : null,
+    runah: runah ? { endpoint: runah[2], model: runah[3], key: runah[4] === "set", source: runah[1] ?? null } : null,
     decision: decision ? { endpoint: decision[1], model: null, key: decision[2] === "set", source: decision[3] } : null,
   };
 }
@@ -201,8 +210,10 @@ function envFor(setup, session, agent = AGENT) {
   return env;
 }
 
-/** Spawn `aip <args>` and stream what it prints to `res` as server-sent events. */
-function stream(res, setup, args, input, session, agent = AGENT) {
+/** Spawn `aip <args>` and stream what it prints to `res` as server-sent events. `onDone`, when given, is called with
+ *  the run's `done` object once the process has ended, before the stream's `exit` event (the Studio names the folder
+ *  after the procedure a build wrote). */
+function stream(res, setup, args, input, session, agent = AGENT, onDone = undefined) {
   const id = randomBytes(8).toString("hex");
   res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive" });
   const send = (event, data) => res.write(`${event ? `event: ${event}\n` : ""}data: ${data}\n\n`);
@@ -214,6 +225,14 @@ function stream(res, setup, args, input, session, agent = AGENT) {
   running.set(id, entry);
   let stderr = "";
   let buffered = "";
+  let done = null;
+  const relay = (line) => {
+    if (!line) return;
+    if (onDone && line.startsWith("{") && line.includes('"done"')) {
+      try { const o = JSON.parse(line); if (o && o.done === true) done = o; } catch { /* not the CLI's object */ }
+    }
+    send(null, line);
+  };
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
     buffered += chunk;
@@ -221,7 +240,7 @@ function stream(res, setup, args, input, session, agent = AGENT) {
     while ((nl = buffered.indexOf("\n")) >= 0) {
       const line = buffered.slice(0, nl).trim();
       buffered = buffered.slice(nl + 1);
-      if (line) send(null, line);
+      relay(line);
     }
   });
   child.stderr.setEncoding("utf8");
@@ -230,7 +249,10 @@ function stream(res, setup, args, input, session, agent = AGENT) {
     if (entry.done) return;
     entry.done = true;
     running.delete(id);
-    if (buffered.trim()) send(null, buffered.trim());
+    relay(buffered.trim());
+    if (done && onDone) {
+      try { onDone(done); } catch (e) { stderr += `\naip-console: ${e instanceof Error ? e.message : String(e)}`; }
+    }
     send("exit", JSON.stringify({ code, signal, cancelled: entry.cancelled, stderr: stderr.slice(0, STDERR_LIMIT),
                                   ...(error ? { error } : {}) }));
     res.end();
@@ -264,7 +286,7 @@ function said(out, what) {
 
 /** The Studio's workspaces by id. Each is a working directory of its own (`work`), holding the procedure's folder
  *  (`work/<name>`), which `aip compile --stdin` reads beside the source the page sends, which build_procedure and
- *  edit_procedure write (the agent model's tools reach the working directory and nothing else), and which `aip
+ *  edit_procedure write (runah's model's tools reach the working directory and nothing else), and which `aip
  *  publish` uploads. Before each run the folder is copied aside (`undo`, outside `work` so the model never sees
  *  it), and Undo puts the last copy back. All of it lives under one temporary directory that goes when the console
  *  stops. */
@@ -360,6 +382,17 @@ function keep(ws) {
   ws.undo.push({ name: ws.name, copy });
 }
 
+/** A build is done: the folder takes the name of the procedure it wrote (`result.procedure`, the name in its header),
+ *  so a new procedure's placeholder folder becomes `refund_requests/`. Undo puts the old folder back under its old name
+ *  (`keep` noted it). A name that is not a procedure's, or a folder of that name already there, leaves it as it is. */
+function namedAfter(ws, done) {
+  ws.building = false;
+  const name = done?.result?.procedure;
+  if (typeof name !== "string" || !NAME.test(name) || name === ws.name || existsSync(path.join(ws.work, name))) return;
+  renameSync(folderOf(ws), path.join(ws.work, name));
+  ws.name = name;
+}
+
 /** The documents the person dropped on the chat, as the run's `documents` input: a folder under the working directory. */
 function documentsOf(ws) {
   const docs = path.join(folderOf(ws), ...DOCS.split("/"));
@@ -449,12 +482,15 @@ function handler(setup, port) {
       if (route === "POST /console/resume") {
         const body = await readJson(req);
         if (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)) return problem(res, 400, "invalid_input", "run_id is required");
-        const args = ["resume", body.run_id, "--progress"];
+        const studio = body.studio === true;
+        // A Studio run goes on with runah's model answering (`aip runah <run_id>` puts the answers into the pause and
+        // keeps going, stopping again at the human steps the run was started with), and is recorded as the studio's.
+        const args = [studio ? "runah" : "resume", body.run_id, "--progress"];
         const answered = body.answers !== undefined && body.answers !== null;
         if (answered) args.push("--answers", "-");
-        // A Studio run goes on with the agent model answering, and is recorded as the studio's.
-        if (body.studio === true) args.push("--answer-with", "model");
-        return stream(res, setup, args, answered ? body.answers : undefined, body.session, body.studio === true ? STUDIO_AGENT : AGENT);
+        const ws = studio && typeof body.workspace === "string" && WORKSPACE.test(body.workspace) ? workspaces.get(body.workspace) : undefined;
+        return stream(res, setup, args, answered ? body.answers : undefined, body.session, studio ? STUDIO_AGENT : AGENT,
+                      ws?.building ? (done) => namedAfter(ws, done) : undefined);
       }
       if (route === "POST /console/cancel") {
         const body = await readJson(req);
@@ -513,20 +549,18 @@ function handler(setup, port) {
         const build = route.endsWith("/build");
         const text = `${(build ? body.brief : body.instruction) ?? ""}`.trim();
         if (!text) return problem(res, 400, "invalid_input", build ? "a brief is required: describe the procedure" : "an instruction is required: say what to change");
+        const title = build && typeof body.title === "string" ? body.title.trim() : "";
+        if (/[\0\n]/.test(title) || title.length > 64) return problem(res, 400, "invalid_input", "the name is one short line");
         keep(ws);
-        if (build) {
-          // The folder's last part names the procedure build_procedure writes: the page names it from the brief.
-          const name = typeof body.name === "string" && NAME.test(body.name) ? body.name : ws.name;
-          if (name !== ws.name && !existsSync(path.join(ws.work, name))) {
-            renameSync(folderOf(ws), path.join(ws.work, name));
-            ws.name = name;
-          }
-        }
-        const inputs = build ? { brief: text, documents: documentsOf(ws), out: ws.name }
+        // build_procedure writes into the folder as it is named now (a new procedure's placeholder) and names the
+        // procedure itself: `title` when the person gave one, else from the brief's subject. The folder takes that name
+        // when the run is done (namedAfter), which may be after the person has answered its questions.
+        ws.building = build;
+        const inputs = build ? { brief: text, documents: documentsOf(ws), out: ws.name, title }
                              : { folder: ws.name, instruction: text, documents: documentsOf(ws) };
-        const args = ["run", build ? "build_procedure" : "edit_procedure", "--progress", "--inputs", "-", "--workdir", ws.work,
-                      "--answer-with", "model", ...(build ? ["--human", "ask_user"] : [])];
-        return stream(res, setup, args, inputs, body.session, STUDIO_AGENT);
+        const args = ["runah", build ? "build_procedure" : "edit_procedure", "--progress", "--inputs", "-", "--workdir", ws.work,
+                      ...(build ? ["--human", "ask_user"] : [])];
+        return stream(res, setup, args, inputs, body.session, STUDIO_AGENT, build ? (done) => namedAfter(ws, done) : undefined);
       }
       if (route === "POST /console/studio/undo") {
         const body = await readJson(req);
@@ -535,6 +569,7 @@ function handler(setup, port) {
         if (!last) return problem(res, 409, "conflict", "there is no run to undo");
         rmSync(folderOf(ws), { recursive: true, force: true });
         ws.name = last.name;
+        ws.building = false;
         renameSync(last.copy, folderOf(ws));
         return json(res, 200, studioRead(setup, ws));
       }
@@ -555,18 +590,27 @@ function handler(setup, port) {
       }
       if (route === "POST /console/settings") {
         const body = await readJson(req);
-        const flags = { agent_model: "--agent-model", agent_model_key: "--agent-model-key", agent_model_name: "--agent-model-name",
-                        decision_model: "--decision-model", decision_model_key: "--decision-model-key" };
-        const args = ["config"];
-        for (const [field, flag] of Object.entries(flags)) {
-          const value = body[field];
-          if (value === undefined || value === null) continue;
-          if (typeof value !== "string" || /[\0\n]/.test(value) || value.length > 4096) return problem(res, 400, "invalid_input", `${field} must be one line of text`);
-          args.push(`${flag}=${value.trim()}`);
+        // runah's chat model is `aip config runah`'s; the decision model is `aip config`'s own flags.
+        const commands = [
+          [["config", "runah"], { runah_model_uri: "--model-uri", runah_model_name: "--model-name", runah_model_key: "--model-key" }],
+          [["config"], { decision_model: "--decision-model", decision_model_key: "--decision-model-key" }],
+        ];
+        const runs = [];
+        for (const [command, flags] of commands) {
+          const args = [...command];
+          for (const [field, flag] of Object.entries(flags)) {
+            const value = body[field];
+            if (value === undefined || value === null) continue;
+            if (typeof value !== "string" || /[\0\n]/.test(value) || value.length > 4096) return problem(res, 400, "invalid_input", `${field} must be one line of text`);
+            args.push(`${flag}=${value.trim()}`);
+          }
+          if (args.length > command.length) runs.push([command, args]);
         }
-        const out = aip(setup, args);
-        if (out.status !== 0) return problem(res, 422, "invalid_input", said(out, "aip config"));
-        return json(res, 200, parseModels(out.stdout));
+        for (const [command, args] of runs) {
+          const out = aip(setup, args);
+          if (out.status !== 0) return problem(res, 422, "invalid_input", said(out, `aip ${command.join(" ")}`));
+        }
+        return json(res, 200, parseModels(aip(setup, ["config"]).stdout));
       }
       if (route === "POST /console/wake") {
         if (!setup.local) return problem(res, 404, "not_found", "the console's server is not a local one");

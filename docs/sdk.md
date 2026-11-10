@@ -39,7 +39,7 @@ print(result.result)                                         # aip.Done: the End
 ```
 
 `run(target, inputs, *, batch=None, agent=None, session=None, workdir=None, on_step=None,
-on_pause=None, force=False, agent_version=None, on_warning=None, answer_with=None, human=None)` runs a target until it stops. The target is a program directory (compiled
+on_pause=None, force=False, agent_version=None, on_warning=None, scripts=True)` runs a target until it stops. The target is a program directory (compiled
 here), an `.rl` bundle, or a catalog reference `name[@rev]` (fetched from the server, or from
 the bundle cache when `pull` put it there); every run runs on this machine from the bundle
 cache, and when a server is configured it is recorded there at every stop (a folder or file as
@@ -51,11 +51,13 @@ filtered by `agent` alone). `force` runs a `name@revision` that is retired, whic
 `aip.RetiredRevision`. When the procedure has a `Decide` and no decision model is configured,
 the run is not refused, since it may never reach that step: `on_warning` is called with one
 sentence before the first step runs, and the result (or the `RunError`'s `error`) carries the
-same sentence as `warning`. `answer_with="model"` has the configured agent model answer the
-`Task_Agent` pauses, one tool-using chat per task, except at the steps named in `human` (a list,
-or one comma-separated string), which pause as before (`docs/answerer.md`; default
-`AIP_ANSWER_WITH` and `AIP_HUMAN_STEPS`; `aip.Client(agent_chat=...)` injects the chat client in
-tests). It returns:
+same sentence as `warning`. With `scripts=False` the run executes no script: it stops at the
+first `Execute`, before its script starts, with a `RunError` of kind `script_not_run` (`step`,
+`script`, not resumable), while `Decide`, routes and loops run and a `Task_Agent` pauses as
+usual; such a run is a trial and is not recorded on the server (`build_procedure` tries a draft
+this way). A script that does run may take `aip config --script-timeout N` seconds
+(`AIP_SCRIPT_TIMEOUT`, 300 by default) before the run fails with `timeout`, which `resume`
+retries. It returns:
 
 - `aip.Paused`: `kind` (`task`, the one kind: a `Task_Agent` step waits for the agent; a
   `Decide` never pauses), `step`, `tasks` (a list of `aip.Task`, one per `For` pass waiting at
@@ -64,15 +66,15 @@ tests). It returns:
   `prompt`, `state`, `references`, `answer_with` and `labels` (the values each `choice` or
   `score` in `answer_with` may take), and inside a `Loop` with a cap `last_pass` (whether this
   pass is the last the cap allows) and `pass_of` (the cap); both are `None` elsewhere.
-  `paused.task` is the one task of a pause outside a loop. `answerer` is the object the agent
-  model left when it was asked to answer and did not (a human step, or it gave up), else `None`.
+  `paused.task` is the one task of a pause outside a loop. `answerer` is the object `runah`
+  left when it stopped at a pause it did not answer (a human step, or its model gave up), else
+  `None`.
 - `aip.Done`: `run_id`, `result`, `run_file`, `recorded`.
 
 `recorded` is `True` when the server has this stop, `False` when the post failed
 (`client.recording_error` says why; the next stop tries again), `None` when no server is
 configured. `resume(run, answers=None, *, agent=None, session=None, on_step=None,
-on_pause=None, answer_with=None, human=None)` answers a pause (and with `answer_with="model"`
-the pauses after it; with no answers, the one that stands) (`agent` and `session` say who answers, for the task's
+on_pause=None, work=None)` answers a pause (`agent` and `session` say who answers, for the task's
 `answered_by`; by default they are found as `run` finds them, else they are the run's own); `run` is the `Paused` (or the
 `RunError`), a run id, or a run file's path; `answers` is keyed by task index
 (`{"0": {...}, "1": {...}}`), a list in task order, or the one answer object for a single task,
@@ -82,7 +84,27 @@ did not ask for, or anything on an answer but its value raises a `RunError` (`in
 its `error` naming them under `missing`, `invalid`, `missing_tasks`, `invalid_tasks`), nothing
 is applied, and the pause stands: call `resume` again with the right answers. With no answers
 `resume` retries the step a failed run stopped at; a run that failed at a loop's cap
-(`loop_cap`, `resumable` false) is over and is not retried. `on_step` receives each history
+(`loop_cap`, `resumable` false) or stopped before a script it was not to run (`script_not_run`)
+is over and is not retried. `work` is what the answering agent reports it spent, kept on each
+task's entry marked `work: "reported"` and checked for shape only: an object of `model` (the
+model's id), `tool_calls` (a count, or a list of `{"name", "args", "seconds"}`), `tokens` (a
+total, or `{"prompt", "completion", "total"}`) and `seconds`, any of them; for a pause with
+several tasks, keyed by task index like the answers. A key it does not know is refused as
+`invalid_input` and the pause stands.
+
+`runah(target, inputs=None, answers=None, *, human=None, batch=None, agent=None, session=None,
+workdir=None, on_step=None, force=False, agent_version=None, on_warning=None)` runs ahead
+(`docs/runah.md`): as `run` for a target, or carrying on the run a run id, a run file or a
+result names (`answers` going into its standing pause first; with none, the model answers it,
+or a failed step is retried), with a chat model answering each `Task_Agent` task in one
+tool-using chat confined to the working directory, until a step named in `human` (a list, or
+one comma-separated string; the run keeps them for its later calls), the end, an error, or the
+model giving up. It returns what `run` returns, and a `Paused` says why under `answerer`. Each
+task the model answers is recorded `answered_by: {"agent": "runah", "model": <the id the
+endpoint reported>}` with its tool calls and tokens, marked `work: "observed"`. It raises
+`InvalidInput` before anything runs when no model key is configured (`aip config runah
+--model-key KEY`, `AIP_RUNAH_MODEL_KEY`); `aip.Client(agent_chat=...)` injects the chat client
+in tests. `on_step` receives each history
 entry's progress line the moment the run writes it, inside a batch of `For` passes too;
 `on_pause`, if given, answers pauses in-process: return the answers to go on, or None to stop
 and get the `Paused` back. Each result's `to_json()` is exactly the object the CLI prints
@@ -127,7 +149,8 @@ catalog reference still runs from the bundle cache.
 | `audit(query=None, **params)` | `[AuditQuery]` (`query`, `description`, `builtin`), or the query's rows; `params` are `name`, `agent`, `session`, `user`, `draft`, `window`, `limit`, `repeats`, `key` | `aip audit` |
 | `save_audit(name, cypher, description="")`, `delete_audit(name)` | `AuditQuery`; a query of your own kept on the server and run by name | `aip audit --save`, `--delete` |
 | `export_runs(output, name=None, *, since=None, agent=None, session=None, user=None, draft=None, force=False)` | `Exported`: `path`, `runs`, `procedures`, `bundles` (a procedure's revisions and drafts are a bundle each); the runs that match and the procedures they ran, as one Relate file | `aip export runs` |
-| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server` (the URL), `local` (it is this machine's, started on demand), `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
+| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear, *, script_timeout)` | `Settings`: `server` (the URL), `local` (it is this machine's, started on demand), `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch`, `script_timeout` (seconds, None for no cap), and runah's `runah_model_endpoint`, `runah_model`, `runah_configured`, `max_tool_calls_per_task`, `max_tokens_per_task` (the secrets are on it but never in its text) | `aip config` |
+| `aip.configure_runah(model_uri, model_name, model_key, max_tool_calls_per_task, max_tokens_per_task)` | `Settings`; an argument left None is unchanged, an empty string forgets it | `aip config runah` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under
 `--json`. `aip export <bundle.rl>` and `aip fmt` are the language's tooling, and `aip server` serves: none
@@ -171,5 +194,5 @@ def answer_procedure(run_id: str, answers: dict | None = None) -> str:
 The model sees exactly the CLI's JSON (`docs/cli-json.md`), so the `aip` skill's guidance
 applies unchanged. Pass `tools=[run_procedure, answer_procedure]` to `create_react_agent` or
 bind them to a chat model. `aip mcp` exposes the same calls as an MCP server for frameworks
-that speak it (`docs/mcp.md`): `search`, `describe`, `compile`, `run`, `resume` and `pull` as
+that speak it (`docs/mcp.md`): `search`, `describe`, `compile`, `run`, `resume`, `runah` and `pull` as
 tools, with the MCP client's name as the run's `agent`.

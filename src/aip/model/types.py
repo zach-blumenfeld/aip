@@ -32,12 +32,12 @@ VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "string"}
 ANSWER_FIELDS = {"true_or_false": ("confidence", "noul", "probabilities"), "choice": ("confidence", "probabilities"),
                  "score": ("confidence", "score", "probabilities")}
 
-ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "requires_unmet",
+ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "script_not_run", "requires_unmet",
                "no_decision_model", "decision_model_failed", "loop_cap", "not_paused", "server")
 
 # The failures a retry would only repeat: `aip resume` does not retry them, and their error
 # objects say `resumable: false`.
-NOT_RESUMABLE = ("loop_cap",)
+NOT_RESUMABLE = ("loop_cap", "script_not_run")
 
 DECISION_MODEL_HINT = ("run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other "
                        "than TypeSafe's")
@@ -234,10 +234,25 @@ class ScriptTimeout(StepError):
 
     def __init__(self, step: str, script: str, seconds: float | None):
         self.script, self.seconds = script, seconds
-        super().__init__(step, f"the script {script} did not finish within {seconds} seconds")
+        super().__init__(step, f"the script {script} did not finish within {seconds:g} seconds, the cap on one script "
+                               f"(`aip config --script-timeout N` or AIP_SCRIPT_TIMEOUT raises it); resume the run to try it again")
 
     def fields(self) -> JSON:
         return {"script": self.script, "seconds": self.seconds}
+
+
+class ScriptNotRun(StepError):
+    """A run that executes no script (`Client.run(..., scripts=False)`, a trial) reached an
+    `Execute`: it stops there, before the script, and is over."""
+
+    kind = "script_not_run"
+
+    def __init__(self, step: str, script: str):
+        self.script = script
+        super().__init__(step, f"{step} would run {script}; this run executes no script")
+
+    def fields(self) -> JSON:
+        return {"script": self.script}
 
 
 class RequiresUnmet(StepError):
@@ -306,5 +321,5 @@ def resumable(error: JSON | None) -> bool:
 
 
 __all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "ANSWER_FIELDS", "DECISION_MODEL_HINT", "NOT_RESUMABLE", "resumable", "StepError", "KeysError", "InvalidInput",
-           "InvalidOutput", "NoBranch", "ScriptFailed", "ScriptTimeout", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed",
+           "InvalidOutput", "NoBranch", "ScriptFailed", "ScriptTimeout", "ScriptNotRun", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed",
            "LoopCap", "NotPaused", "is_plain", "normalise", "conforms", "extra_fields", "describe", "branch_key"]

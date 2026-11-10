@@ -1,9 +1,9 @@
 // The Studio's chat in words (src/studio/chat.ts): the `--progress` lines of build_procedure and
 // edit_procedure as aip docs/cli-json.md prints them, the questions of a human step, the scripts a draft
-// lacks, and a new procedure's name.
+// lacks, and the scripts a run wrote.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { missingScripts, nameFromBrief, questionsOf, stepWords, toolWords } from "../src/studio/chat.ts";
+import { missingScripts, questionsOf, scriptsWritten, stepWords, toolWords } from "../src/studio/chat.ts";
 
 const tool = (name: string, args: string, error?: string) => ({ event: "tool" as const, step: "draft", task: 0, tool: name, args, ...(error ? { error } : {}) });
 const step = (name: string, kind: string, extra: Record<string, unknown> = {}) => ({ event: "step" as const, step: name, kind, pass: null, passes: [], ...extra });
@@ -30,7 +30,7 @@ test("the steps of build_procedure and edit_procedure in words; Start and End sa
   assert.equal(stepWords(step("other_step", "Task_Agent")), "other_step");
 });
 
-test("a human step's questions, the scripts a draft lacks, a name from a brief", () => {
+test("a human step's questions, the scripts a draft lacks", () => {
   assert.deepEqual(questionsOf({ questions: ["Who approves above 100?", "Which areas?"], rules: "..." }), ["Who approves above 100?", "Which areas?"]);
   assert.deepEqual(questionsOf({ rules: "..." }), []);
   const missing = missingScripts([
@@ -39,7 +39,11 @@ test("a human step's questions, the scripts a draft lacks, a name from a brief",
     { code: "unreachable_step", severity: "error", message: "reply is unreachable", line: 64, column: 1, step: "reply" },
   ]);
   assert.deepEqual([...missing], [["escalate", "scripts/open_ticket.py"]]);
-  assert.equal(nameFromBrief("A support inbox procedure: refund requests checked against a 100 limit"), "support_inbox_refund");
-  assert.equal(nameFromBrief("!!!"), "new_procedure");
-  assert.equal(nameFromBrief("100 refunds a day"), "p_100_refunds_day");
+});
+
+test("the scripts a run wrote: under scripts/, added or changed, nothing else", () => {
+  const before = { "scripts/keep.py": "same", "scripts/old.py": "v1", "assets/prompt.md": "a" };
+  const after = { "scripts/keep.py": "same", "scripts/old.py": "v2", "scripts/new.py": "new", "assets/prompt.md": "b", "assets/docs/p.md": "doc" };
+  assert.deepEqual(scriptsWritten(before, after), ["scripts/new.py", "scripts/old.py"]);
+  assert.deepEqual(scriptsWritten(after, after), []);
 });

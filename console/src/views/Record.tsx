@@ -101,26 +101,37 @@ function resolutionText(r: Resolution): string {
   return `${name} was ${JSON.stringify(r.value)}${bar}: ${r.holds ? "holds" : "does not hold"}`;
 }
 
-/** A task the agent model answered: which model, the tool calls it made (counted by tool, then one by one), the tokens
- *  it spent and the answers refused before one held. */
-function ModelAnswer({ entry }: { entry: HistoryEntry }) {
-  const calls = entry.tool_calls ?? [];
+/** A task whose answering work is on record: `observed` when runah's model answered it (which model, the tool calls it
+ *  made, counted by tool and then one by one, the tokens it spent and the answers refused before one held), `reported`
+ *  when the agent that answered said what it spent (`aip resume --work`): its model if it gave one, its tool calls as a
+ *  count or a list, its tokens, its time. */
+function WorkAnswer({ entry }: { entry: HistoryEntry }) {
+  const by = entry.answered_by;
+  const listed = Array.isArray(entry.tool_calls) ? entry.tool_calls : [];
+  const count = typeof entry.tool_calls === "number" ? entry.tool_calls : Array.isArray(entry.tool_calls) ? listed.length : null;
   const counts = new Map<string, number>();
-  for (const c of calls) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+  for (const c of listed) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+  const reported = entry.work === "reported";
+  const calls = count === null ? null : <>{count} tool call{count === 1 ? "" : "s"}{counts.size > 0 && <> ({[...counts].map(([n, k]) => `${n} ${k}`).join(", ")})</>}</>;
+  const spent = [
+    calls,
+    entry.tokens ? <>{entry.tokens.total} tokens</> : null,
+    reported && entry.work_seconds !== undefined ? <>{duration(entry.work_seconds) || "0 ms"}</> : null,
+  ].filter((x) => x !== null);
   return (
-    <div data-testid="answered-by" data-agent="model" data-model={entry.answered_by?.model ?? ""} data-tool-calls={calls.length}>
+    <div data-testid="answered-by" data-agent={by?.agent ?? ""} data-session={by?.session ?? ""} data-model={by?.model ?? ""}
+         data-work={entry.work ?? ""} data-tool-calls={count ?? ""}>
       <p>
-        answered by the agent model <code>{entry.answered_by?.model ?? "?"}</code> with {calls.length} tool call{calls.length === 1 ? "" : "s"}
-        {counts.size > 0 && <> ({[...counts].map(([n, k]) => `${n} ${k}`).join(", ")})</>}
-        {entry.tokens && <>, {entry.tokens.total} tokens</>}
+        answered by <code>{by?.agent ?? "?"}</code>{by?.model && <> (<code>{by.model}</code>)</>}, {reported ? "reported" : "observed"}:{" "}
+        {spent.length ? spent.map((s, i) => <span key={i}>{i ? ", " : ""}{s}</span>) : <span className="muted">nothing said</span>}
         {entry.refusals ? <>, after {entry.refusals} refused answer{entry.refusals === 1 ? "" : "s"}</> : null}; it produced {keyList(entry.result)}
       </p>
-      {calls.length > 0 && (
+      {listed.length > 0 && (
         <details className="states">
           <summary>its tool calls</summary>
           <ol className="tool-calls" data-testid="tool-calls">
-            {calls.map((c, i) => (
-              <li key={i} data-tool={c.name}><code>{c.name}</code> {c.args}{c.error && <span className="error small"> · {c.error}</span>}</li>
+            {listed.map((c, i) => (
+              <li key={i} data-tool={c.name}><code>{c.name}</code> {c.args ?? ""}{c.error && <span className="error small"> · {c.error}</span>}</li>
             ))}
           </ol>
         </details>
@@ -264,7 +275,7 @@ function what(entry: HistoryEntry): ReactNode {
       return <>ran <code data-testid="script">{entry.script ?? "?"}</code> on this machine; it produced {keyList(entry.result)}</>;
     case "Task_Agent": {
       const by = entry.answered_by;
-      if (by?.agent === "model") return <ModelAnswer entry={entry} />;
+      if (entry.work) return <WorkAnswer entry={entry} />;
       return (
         <p data-testid="answered-by" data-agent={by?.agent ?? ""} data-session={by?.session ?? ""}>
           answered by agent <code>{by?.agent ?? "?"}</code>{by?.session && <> in session <code>{by.session}</code></>}

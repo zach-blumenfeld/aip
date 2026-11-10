@@ -19,6 +19,10 @@ test.beforeAll(() => {
   paused = resume(paused.run_id as string, { billing: true, tone: "calm" }, claude);
   ids.calm = resume(paused.run_id as string, { reply: "On the 1st." }, claude).run_id as string;
 
+  // codex answers a task and reports what that took (`aip resume --work`): the record keeps it as reported.
+  ids.reported = run(AGENT, { message: "Can I get a refund for last month?" }, codex).run_id as string;
+  resume(ids.reported, { billing: true, tone: "calm" }, codex, { model: "codex-5", tool_calls: 4, tokens: 1200, seconds: 12 });
+
   // codex, from a folder nobody published: a draft, left waiting at its first task.
   ids.draft = run(DRAFT_DIR, { message: "A draft's run." }, codex).run_id as string;
 
@@ -104,6 +108,14 @@ test("who answered each task, and the passes of a loop under the loop", async ({
   await expect(triage).toHaveAttribute("data-agent", "claude");
   await expect(triage).toHaveAttribute("data-session", "history-s1");
   await expect(triage).toContainText("after");
+
+  // A task whose agent reported its work: its model, its tool calls as a count, its tokens.
+  await page.goto(`./#/runs/${ids.reported}`);
+  const reported = entry(page, "triage").getByTestId("answered-by");
+  await expect(reported).toHaveAttribute("data-work", "reported");
+  await expect(reported).toHaveAttribute("data-agent", "codex");
+  await expect(reported).toHaveAttribute("data-tool-calls", "4");
+  await expect(reported).toContainText("answered by codex (codex-5), reported: 4 tool calls, 1200 tokens");
 
   await page.goto(`./#/runs/${ids.loop}`);
   const loop = page.locator('[data-testid="record-loop"][data-loop="revise"]');
