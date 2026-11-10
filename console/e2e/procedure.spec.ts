@@ -38,7 +38,7 @@ test("one card per step: its kind, its description as the title, what it reads a
   await expect(page.getByTestId("inputs")).toContainText("message");
   await expect(page.getByTestId("result")).toContainText("reply");
   await expect(page.getByTestId("requires")).toContainText("python");
-  await expect(page.getByRole("heading", { name: "Use when" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Use when", exact: true })).toBeVisible();
 });
 
 test("the agent's version of the same procedure shows who steers the route", async ({ page }) => {
@@ -91,8 +91,10 @@ test("loops are frames around their cards, and the canvas pans, zooms and fits",
   await page.getByRole("button", { name: "zoom in" }).click();
   await expect(zoom).not.toHaveText(before!);
   const world = page.getByTestId("canvas-world");
+  // The canvas is taller than what is left of the window under the page's header, and the mouse only
+  // reaches what is on screen: bring the whole view there before measuring.
+  await page.locator(".aipc-view").evaluate((el) => el.scrollIntoView({ block: "end" }));
   const moved = (await world.boundingBox())!;
-  await page.mouse.move(moved.x + 5, moved.y + 5);
   // Dragging the background pans; the click that ends the drag opens nothing.
   const view = (await page.locator(".aipc-view").boundingBox())!;
   await page.mouse.move(view.x + view.width - 30, view.y + view.height - 30);

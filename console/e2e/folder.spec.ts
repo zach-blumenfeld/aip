@@ -19,7 +19,7 @@ test("folder mode shows the folder's procedure and hides the server pages", asyn
 
   // The source slice comes from the folder's own file.
   await card(page, "reply").locator(".aipc-title").click();
-  await expect(page.getByTestId("canvas-source")).toContainText("Task_Agent reply");
+  await expect(page.getByTestId("canvas-source")).toContainText("Task_Agent With reply");
 
   for (const hash of ["#/audit", "#/p/billing_support_agent", "#/server"]) {
     await page.goto(`./${hash}`);

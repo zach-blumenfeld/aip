@@ -159,8 +159,9 @@ test("a batch: the passes waiting at one step are one pause, answered together",
   await expect(task(drafts, 1)).toHaveAttribute("data-pass", "2");
   await expect(task(drafts, 1).getByTestId("pause-state")).toContainText("annual plan");
 
-  await fill(task(drafts, 0), "reply", "Your March invoice is attached.");
-  await fill(task(drafts, 1), "reply", "The annual plan starts at your next cycle.");
+  // The check script passes a reply that quotes the policy's first sentence, so neither pass needs a fix.
+  await fill(task(drafts, 0), "reply", "Your March invoice is attached. Duplicate charges are refunded within 5 business days.");
+  await fill(task(drafts, 1), "reply", "The annual plan starts at your next cycle. Duplicate charges are refunded within 5 business days.");
   await drafts.getByRole("button", { name: "Answer all 2" }).click();
 
   await pausedAt(page, "summarize");

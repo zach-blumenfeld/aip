@@ -21,7 +21,7 @@ test("search ranks by what a procedure does", async ({ page }) => {
   await page.getByLabel("search").fill("policies the requester supplies");
   const results = page.getByRole("table", { name: "search results" });
   await expect(results.getByRole("row").nth(1)).toContainText(DYNAMIC);
-  await page.getByLabel("search").fill("zebra crossing");
+  await page.getByLabel("search", { exact: true }).fill("zebra crossing");
   await expect(page.getByText("No procedure matches")).toBeVisible();
 });
 

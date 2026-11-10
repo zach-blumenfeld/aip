@@ -40,9 +40,8 @@ e2e harness runs this checkout's (`AIP_REPO`, default `..`) behind `uv run`.
   (`../scripts/install-relate.sh`; the server it starts stores in it) and a browser (`npx
   playwright install chromium`, or `PLAYWRIGHT_CHANNEL=chrome`).
 - **Keep dependencies few.** Add a library only when a milestone names the need: the canvas
-  layout, the diff and the grammar tokenizer are hand-rolled for that reason. `yaml` and
-  `fflate` are left in `package.json` from the Studio and the skill zips and are no longer
-  imported; `npm uninstall yaml fflate` when next touching the lockfile.
+  layout, the diff and the grammar tokenizer are hand-rolled for that reason. There is no
+  runtime dependency: the launcher is Node's standard library and the page is built.
 - **The modules `test/` imports** (`canvas/model.ts`, `canvas/layout.ts`, `highlight/textmate.ts`,
   `record/model.ts`, `run/answers.ts`) import each other with the `.ts` extension and use only
   syntax node can strip (no enums, no parameter properties), so they run under node unbuilt.
