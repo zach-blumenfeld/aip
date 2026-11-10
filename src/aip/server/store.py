@@ -78,6 +78,34 @@ class InvalidRun(ValueError):
     """A posted run that cannot be stored as one (422 over HTTP)."""
 
 
+class RetiredRevision(ValueError):
+    """A pin asked for a retired revision: retire wins (409 `retired` over HTTP)."""
+
+
+def plain(value: Any) -> Any:
+    """A value a query returned, as JSON can carry it: a node as `{"labels", "properties"}`, a
+    relationship as `{"type", "properties"}`, a path as its `nodes` and `relationships`, maps
+    and lists through and through, and anything else that is not a JSON scalar as its text.
+    Both engines' node and relationship objects are read by what they have in common."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [plain(v) for v in value]
+    if hasattr(value, "nodes") and hasattr(value, "relationships"):
+        return {"nodes": [plain(n) for n in value.nodes], "relationships": [plain(r) for r in value.relationships]}
+    if hasattr(value, "labels") or hasattr(value, "start_node"):
+        properties = getattr(value, "properties", None)
+        if callable(properties):
+            properties = properties()
+        if not isinstance(properties, dict):
+            properties = dict(value.items()) if callable(getattr(value, "items", None)) else {}
+        head = {"labels": sorted(value.labels)} if hasattr(value, "labels") else {"type": value.type}
+        return {**head, "properties": plain(properties)}
+    return str(value)
+
+
 # ------------------------------------------------------------------- the adapter
 
 
@@ -177,6 +205,7 @@ RETURN b.bundle_id AS bundle_id, p.name AS name, p.description AS description, p
 
 SET_PIN = "MATCH (n:Name {name: $name}) SET n.pinned = $revision"
 RETIRE = "MATCH (r:Revision {id: $id}) SET r.retired = true"
+UNPIN_RETIRED = "MATCH (n:Name {name: $name}) WHERE n.pinned = $revision SET n.pinned = null"
 
 UPSERT_RUN = "MERGE (r:Run {run_id: $run_id}) SET r = $props"
 LINK_RUN = """
@@ -239,9 +268,10 @@ WHERE ($name IS NULL OR r.name = $name) AND ($status IS NULL OR r.status = $stat
 """
 LIST_RUNS = RUN_FILTER + """
 RETURN r.run_id AS run_id, r.name AS name, r.revision AS revision, r.bundle_id AS bundle_id, r.status AS status, r.draft AS draft,
-       r.agent AS agent, r.session AS session, r.user AS user, r.started AS started, r.finished AS finished,
+       r.agent AS agent, r.agent_version AS agent_version, r.session AS session, r.user AS user, r.started AS started,
+       r.finished AS finished,
        r.created AS created, r.updated AS updated, r.entries AS entries
-ORDER BY updated DESC, run_id
+ORDER BY coalesce(started, created, updated) DESC, run_id
 LIMIT $limit
 """
 
@@ -294,8 +324,8 @@ def run_properties(run: JSON) -> JSON:
     return _clean({
         "run_id": run["run_id"], "bundle_id": run["bundle_id"], "name": run.get("name"), "revision": run.get("revision"),
         "draft": bool(run.get("draft")), "status": run.get("status"),
-        "agent": identity.get("agent"), "session": identity.get("session"), "user": identity.get("user"),
-        "started": run.get("started"), "finished": run.get("finished"), "created": run.get("created"),
+        "agent": identity.get("agent"), "agent_version": identity.get("agent_version"), "session": identity.get("session"),
+        "user": identity.get("user"), "started": run.get("started"), "finished": run.get("finished"), "created": run.get("created"),
         "updated": run.get("updated") or utc_now(), "position": _scalar(run.get("position")), "batch": run.get("batch"),
         "entries": len(run.get("history") or []),
         "paused_at": pause.get("step"), "paused_since": pause.get("since"), "tasks": len(pause.get("tasks") or []) or None,
@@ -468,8 +498,11 @@ class Store:
         for entry in entries.values():
             live = [r["revision"] for r in entry["revisions"] if not r["retired"]]
             entry["latest"] = live[0] if live else None
+            if entry["pinned"] not in live:          # retire wins over pin: a pin on a retired revision does not hold
+                entry["pinned"] = None
             entry["resolves"] = entry["pinned"] or entry["latest"]
-            entry["description"] = entry.pop("_descriptions").get(entry["resolves"])
+            # a name with every revision retired keeps the description of its newest one
+            entry["description"] = entry.pop("_descriptions").get(entry["resolves"] or entry["revisions"][0]["revision"])
         return [entries[name] for name in sorted(entries)]
 
     def catalog(self) -> list[JSON]:
@@ -478,9 +511,14 @@ class Store:
         return self._entries(self.graph.read(REVISIONS, name=None))
 
     def entry(self, name: str) -> JSON:
+        """One published name. `NotFound` says `no procedure 'x'`, and when the name was written
+        with `-` where the published one has `_` (a folder's spelling, `billing-support`), which
+        one was meant."""
         found = self._entries(self.graph.read(REVISIONS, name=name))
         if not found:
-            raise NotFound(f"no procedure {name!r}")
+            meant = name.replace("-", "_")
+            hint = f"; did you mean `{meant}`?" if meant != name and self.graph.read(REVISIONS, name=meant) else ""
+            raise NotFound(f"no procedure {name!r}{hint}")
         return found[0]
 
     def resolve(self, ref: str) -> tuple[str, str, str]:
@@ -496,7 +534,9 @@ class Store:
         elif revision == "latest":
             revision = entry["latest"]
         if revision is None:
-            raise NotFound(f"{name} has no live revision")
+            count = len(entry["revisions"])
+            raise NotFound(f"{name} has no live revision: {'its one revision is' if count == 1 else f'all {count} are'} retired "
+                           f"(`{name}@<revision>` still names one; publishing it again brings it back)")
         found = next((r for r in entry["revisions"] if r["revision"] == revision), None)
         if found is None:
             raise NotFound(f"no revision {revision} of {name}")
@@ -535,17 +575,27 @@ class Store:
         return hits[:limit]
 
     def pin(self, name: str, revision: str | None) -> None:
-        """Make `name` resolve to `revision`; None clears the pin."""
+        """Make `name` resolve to `revision`; None clears the pin. A retired revision is not
+        pinned (`RetiredRevision`): retire wins."""
         entry = self.entry(name)
-        if revision is not None and not any(r["revision"] == revision for r in entry["revisions"]):
+        found = next((r for r in entry["revisions"] if r["revision"] == revision), None)
+        if revision is not None and found is None:
             raise NotFound(f"no revision {revision} of {name}")
+        if found is not None and found["retired"]:
+            raise RetiredRevision(f"{name}@{revision} is retired, and a retired revision is not pinned; publish it again to bring it "
+                                  "back, or pin a live one")
         self.graph.write(lambda tx: tx.run(SET_PIN, name=name, revision=revision))
 
     def retire(self, name: str, revision: str) -> None:
-        """Stop `name` resolving to `revision`; `name@revision` still does, for the runs that name it."""
+        """Stop `name` resolving to `revision`, a pin on it included; `name@revision` still
+        names it, for the runs that reference it."""
         if not any(r["revision"] == revision for r in self.entry(name)["revisions"]):
             raise NotFound(f"no revision {revision} of {name}")
-        self.graph.write(lambda tx: tx.run(RETIRE, id=f"{name}@{revision}"))
+
+        def tx_fn(tx: Tx) -> None:
+            tx.run(RETIRE, id=f"{name}@{revision}")
+            tx.run(UNPIN_RETIRED, name=name, revision=revision)
+        self.graph.write(tx_fn)
 
     # ------------------------------------------------------------------- runs
 
@@ -615,10 +665,12 @@ class Store:
 
     def runs(self, name: str | None = None, status: str | None = None, agent: str | None = None, session: str | None = None,
              user: str | None = None, draft: bool | None = None, limit: int = 50) -> list[JSON]:
-        """Runs, most recently updated first: one row each, with `identity` as the record has it."""
+        """Runs, most recently started first: one row each, with `identity` as the record has it."""
         rows = self.graph.read(LIST_RUNS, name=name, status=status, agent=agent, session=session, user=user, draft=draft, limit=limit)
         return [{"run_id": r["run_id"], "name": r["name"], "revision": r["revision"], "bundle_id": r["bundle_id"], "status": r["status"],
-                 "draft": bool(r["draft"]), "identity": {"agent": r["agent"], "session": r["session"], "user": r["user"]},
+                 "draft": bool(r["draft"]),
+                 "identity": {"agent": r["agent"], "session": r["session"], "user": r["user"],
+                              **({"agent_version": r["agent_version"]} if r.get("agent_version") else {})},
                  "started": r["started"], "finished": r["finished"], "created": r["created"], "updated": r["updated"],
                  "entries": r["entries"]} for r in rows]
 
@@ -630,7 +682,9 @@ class Store:
         a store of its own, with each run's record, the graph of every bundle among them and
         those bundles' revisions, so the queries of `docs/language/queries.md` answer on it as
         they do here. `since` is a date or a timestamp (ISO 8601) a run started at or after.
-        `{"runs", "bundles"}`, how many of each; `NotFound` when no run matches."""
+        `{"runs", "bundles", "procedures"}`: how many runs, in how many bundles, of how many
+        procedures (names; a procedure's revisions and drafts are a bundle each); `NotFound`
+        when no run matches."""
         from aip.compiler import relate
         from aip.server.backends.relate import ConnectionGraph
 
@@ -638,15 +692,17 @@ class Store:
         if not found:
             raise NotFound("no runs match" + (f" since {since}" if since else ""))
         bundle_ids = list(dict.fromkeys(row["bundle_id"] for row in found))
+        names = set()
         with relate.create(path) as conn:
             target = Store(ConnectionGraph(conn))
             for bundle_id in bundle_ids:
-                target.adopt(bundle_id, self.bundle_graph(bundle_id), self.graph.read(BUNDLE_ROW, bundle=bundle_id)[0],
-                             self.graph.read(REVISIONS_OF, bundle=bundle_id))
+                held = self.graph.read(BUNDLE_ROW, bundle=bundle_id)[0]
+                names.add(held["name"])
+                target.adopt(bundle_id, self.bundle_graph(bundle_id), held, self.graph.read(REVISIONS_OF, bundle=bundle_id))
             for row in found:
                 run = self.run(row["run_id"])
                 target.record(run, user=(run.get("identity") or {}).get("user"), settle=False)
-        return {"runs": len(found), "bundles": len(bundle_ids)}
+        return {"runs": len(found), "bundles": len(bundle_ids), "procedures": len(names)}
 
     def adopt(self, bundle_id: str, graph: BundleGraph, row: JSON, revisions: list[JSON]) -> None:
         """Hold a bundle as another store holds it: its graph, when it was stored, and the
@@ -669,8 +725,14 @@ class Store:
 
     def rows(self, cypher: str, /, **params: Any) -> list[JSON]:
         """Rows of a read query over the store (the audit queries), run in a transaction that
-        is never committed, so a query cannot change the store."""
-        return self.graph.reading(lambda tx: tx.run(cypher, **params))
+        is never committed, so a query cannot change the store. A row may hold whatever the
+        Cypher returns: a node or a relationship comes back as a map (`plain`)."""
+        return self.graph.reading(lambda tx: [plain(row) for row in tx.run(cypher, **params)])
+
+    def parses(self, cypher: str, /, **params: Any) -> None:
+        """Have the engine plan a statement without running it (`EXPLAIN`); whatever it raises
+        for one it cannot parse is the caller's to report."""
+        self.graph.reading(lambda tx: tx.run("EXPLAIN " + cypher, **params))
 
     def stored_queries(self) -> list[JSON]:
         """The queries someone stored: `{"name", "description", "cypher", "stored_at"}`, by name."""
@@ -712,5 +774,5 @@ class Store:
         self.graph.close()
 
 
-__all__ = ["BUNDLE_LABELS", "SERVER_LABELS", "SCHEMA", "Graph", "InvalidRun", "NotFound", "Store", "Tx", "UnknownBundle",
-           "answer_rows", "entry_properties", "run_properties"]
+__all__ = ["BUNDLE_LABELS", "SERVER_LABELS", "SCHEMA", "Graph", "InvalidRun", "NotFound", "RetiredRevision", "Store", "Tx",
+           "UnknownBundle", "answer_rows", "entry_properties", "plain", "run_properties"]

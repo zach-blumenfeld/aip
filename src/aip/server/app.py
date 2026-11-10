@@ -5,7 +5,8 @@
 a procedure: every run is local to its client (`docs/language/runtime.md`), which posts where it
 stopped. So the API is the contract `aip.client.server` lists, and nothing else:
 
-- **catalog**: `GET /catalog` (every published name with its revisions), `GET /catalog/search`,
+- **catalog**: `GET /catalog` (every published name with its revisions; retire wins over pin: a
+  retired revision is not pinned, 409 `retired`, and retiring the pinned one clears the pin), `GET /catalog/search`,
   `GET /catalog/{ref}` (the description as JSON, or with `Accept: application/octet-stream` the
   `.rl` itself, for `aip pull`), `POST /catalog` (the `.rl` bytes: verify the bundle, merge it by
   id, assign the next revision under its procedure's name), `POST /catalog/{name}/pin|retire`.
@@ -24,8 +25,10 @@ stopped. So the API is the contract `aip.client.server` lists, and nothing else:
   `revision` the bundle is published as.
 - **audit**: `GET /audit` lists the named queries of `aip.server.audit` and the ones stored
   here, `GET /audit/{query}?name=&agent=&session=&user=&draft=&window=&limit=&repeats=&key=`
-  answers one, `PUT /audit/{name}` (`{"description", "cypher"}`) stores a query and
-  `DELETE /audit/{name}` removes it.
+  answers one, `PUT /audit/{name}` (`{"description", "cypher"}`) stores a query (422 when it
+  writes or does not parse) and `DELETE /audit/{name}` removes it. A stored query's rows are
+  whatever its Cypher returns; a node or a relationship comes back as a map of its labels or
+  type and its properties.
 - **export**: `GET /export/runs?name=&since=&agent=&session=&user=&draft=` hands back one
   Relate file holding the runs that match and the procedures they ran (`aip export runs`).
 - **health**: `GET /health`, with no token: `{"aip", "language", "backend", "local"}`, which is
@@ -66,7 +69,7 @@ from starlette.concurrency import run_in_threadpool
 
 from aip.compiler.bundle import BUNDLE_SUFFIX, Bundle, BundleError
 from aip.server import audit
-from aip.server.store import InvalidRun, NotFound, UnknownBundle
+from aip.server.store import InvalidRun, NotFound, RetiredRevision, UnknownBundle
 
 JSON = dict[str, Any]
 
@@ -198,6 +201,10 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
     @app.exception_handler(NotFound)
     async def _not_found(_: Request, exc: NotFound):
         return answer(ApiError(404, "not_found", str(exc)))
+
+    @app.exception_handler(RetiredRevision)
+    async def _retired(_: Request, exc: RetiredRevision):
+        return answer(ApiError(409, "retired", str(exc)))
 
     @app.exception_handler(InvalidRun)
     async def _invalid_run(_: Request, exc: InvalidRun):
@@ -368,7 +375,7 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
         except Exception as exc:
             if query in audit.QUERIES:
                 raise
-            raise ApiError(422, "invalid_request", f"the stored query {query} failed: {type(exc).__name__}: {exc}") from exc
+            raise ApiError(422, "invalid_request", f"the stored query {query} failed: {exc}") from exc
 
     @app.put("/audit/{name}", dependencies=[require(PUBLISH)])
     def store_query(name: str, body: QueryBody) -> JSON:
@@ -392,7 +399,8 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
             counted = store.export_runs(path, name=name, since=since_of(since), agent=agent, session=session, user=user, draft=draft)
             return Response(content=path.read_bytes(), media_type=BUNDLE_MEDIA_TYPE,
                             headers={"Content-Disposition": f'attachment; filename="runs{BUNDLE_SUFFIX}"',
-                                     "X-AIP-Runs": str(counted["runs"]), "X-AIP-Bundles": str(counted["bundles"])})
+                                     "X-AIP-Runs": str(counted["runs"]), "X-AIP-Bundles": str(counted["bundles"]),
+                                     "X-AIP-Procedures": str(counted["procedures"])})
 
     app.state.backend = backend
     return app

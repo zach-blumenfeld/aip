@@ -116,11 +116,12 @@ def compile_command(argv: list[str], prog: str = "aip compile") -> int:
     return code
 
 
-def export_command(argv: list[str], prog: str = "aip export") -> int:
+def export_command(argv: list[str], prog: str = "aip export", epilog: str | None = None) -> int:
     """Exit 0 after writing the program directory, 1 when the bundle cannot be opened, is not a
     bundle, or does not verify (`bundle_tampered`), or the target is not empty; 2 when the file
     is missing; 3 when Relate is not installed."""
-    parser = argparse.ArgumentParser(prog=prog, description="Write a bundle's program directory back, byte for byte.")
+    parser = argparse.ArgumentParser(prog=prog, description="Write a bundle's program directory back, byte for byte.",
+                                     epilog=epilog)
     parser.add_argument("bundle", type=Path, metavar="BUNDLE", help=f"a compiled {BUNDLE_SUFFIX} file")
     parser.add_argument("--out", type=Path, required=True, metavar="DIR", help="the directory to write; must not exist or be empty")
     parser.add_argument("--force", action="store_true", help="write into a directory that is not empty")

@@ -295,10 +295,25 @@ def test_a_stored_query_is_listed_run_and_removed(scene, served):
     with pytest.raises(ServerError) as forbidden:
         reader.save_audit("mine", cypher)
     assert forbidden.value.status == 403
-    api.save_audit("broken", "MATCH (r:Run) RETURN r.nope.deeper AS x LIMIT")
-    with pytest.raises(ServerError) as broken:
-        reader.audit("broken")
-    assert (broken.value.status, broken.value.kind) == (422, "invalid_request") and "stored query broken" in broken.value.message
+    with pytest.raises(ServerError) as broken:                # S3: Cypher that does not parse is refused when it is stored
+        api.save_audit("broken", "MATCH (r:Run RETURN r")
+    assert (broken.value.status, broken.value.kind) == (422, "invalid_request") and "does not parse" in broken.value.message
+    assert "broken" not in [row["query"] for row in api.audit()]
+    api.save_audit("fails-when-run", "MATCH (r:Run) RETURN r.entries / 0 AS x")     # it parses; what fails is running it
+    try:
+        assert isinstance(reader.audit("fails-when-run"), list)
+    except ServerError as failed:
+        assert (failed.status, failed.kind) == (422, "invalid_request") and "stored query fails-when-run" in failed.message
+        assert "Error:" not in failed.message, "the engine's exception class is not part of the message"
+    api.delete_audit("fails-when-run")
+
+    # S3: a query that returns a node or a relationship is rows like any other, never a 500
+    api.save_audit("whole-nodes", "MATCH (r:Run)-[of:OF]->(b:Bundle) RETURN r, of, [b] AS held ORDER BY r.run_id LIMIT 1")
+    [row] = reader.audit("whole-nodes")
+    assert row["r"]["labels"] == ["Run"] and row["r"]["properties"]["run_id"] in ids.values()
+    assert row["of"] == {"type": "OF", "properties": {}}
+    assert row["held"][0]["labels"] == ["Bundle"] and row["held"][0]["properties"]["bundle_id"] == row["r"]["properties"]["bundle_id"]
+    api.delete_audit("whole-nodes")
 
     assert api.delete_audit("busiest-steps") == {"query": "busiest-steps", "deleted": True}
     with pytest.raises(ServerError) as gone:

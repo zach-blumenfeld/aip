@@ -4,7 +4,10 @@
 (a URL, or `local` for the server on this machine that is started when needed,
 `aip.client.local`), its bearer token, the decision model (`decision_model: {url, api_key}`) and the default
 batch size. The environment overrides each: `AIP_SERVER`, `AIP_TOKEN`, `AIP_DECISION_MODEL`,
-`AIP_DECISION_MODEL_KEY`, `AIP_BATCH`. The decision model is an endpoint with the TypeSafe API
+`AIP_DECISION_MODEL_KEY`, `AIP_BATCH`. The two decision-model variables override the file even
+when set to nothing: `AIP_DECISION_MODEL_KEY=` is "no key for this command" (and with
+`AIP_DECISION_MODEL=` beside it when the file names an endpoint, no model at all), which is how
+to run without the configured model. The decision model is an endpoint with the TypeSafe API
 shape (plan question 7): the URL defaults to TypeSafe's and the key is the endpoint's; a model
 is configured when either is set, and with none every `Decide` fails the run
 (`no_decision_model`) until one is. With no server, runs work but are not recorded; `AIP_SERVER=none`
@@ -117,8 +120,9 @@ def settings() -> Settings:
         server = None
     token = os.environ.get(TOKEN_ENV) or config.get("token") or None
     model = config.get("decision_model") if isinstance(config.get("decision_model"), dict) else {}
-    url = os.environ.get(DECISION_MODEL_ENV) or model.get("url") or None
-    key = os.environ.get(DECISION_MODEL_KEY_ENV) or model.get("api_key") or None
+    # A variable that is set wins over the file even when it is empty: `AIP_DECISION_MODEL_KEY=` is "no key".
+    url = (os.environ[DECISION_MODEL_ENV] if DECISION_MODEL_ENV in os.environ else model.get("url")) or None
+    key = (os.environ[DECISION_MODEL_KEY_ENV] if DECISION_MODEL_KEY_ENV in os.environ else model.get("api_key")) or None
     from_env = [v for v in (DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV) if os.environ.get(v)]
     model_source = ", ".join(from_env) if from_env else (str(config_path()) if url or key else None)
     batch = _int(os.environ.get(BATCH_ENV)) or _int(config.get("batch")) or DEFAULT_BATCH
@@ -169,11 +173,16 @@ def configure(server: str | None = None, token: str | None = None, decision_mode
     return settings()
 
 
-def identity(agent: str | None = None, session: str | None = None, default_agent: str | None = None) -> JSON:
+def identity(agent: str | None = None, session: str | None = None, default_agent: str | None = None,
+             agent_version: str | None = None) -> JSON:
     """Who runs: `agent` from the argument, `AIP_AGENT` or the caller's default; `session` from
-    the argument or `AIP_SESSION`; `user` left for the server to fill from the token."""
-    return {"agent": agent or os.environ.get(AGENT_ENV) or default_agent, "session": session or os.environ.get(SESSION_ENV) or None,
-            "user": None}
+    the argument or `AIP_SESSION`; `user` left for the server to fill from the token;
+    `agent_version` only when the caller gives one."""
+    who = {"agent": agent or os.environ.get(AGENT_ENV) or default_agent, "session": session or os.environ.get(SESSION_ENV) or None,
+           "user": None}
+    if agent_version:
+        who["agent_version"] = agent_version
+    return who
 
 
 __all__ = ["CONFIG_ENV", "SERVER_ENV", "TOKEN_ENV", "BATCH_ENV", "AGENT_ENV", "SESSION_ENV", "DECISION_MODEL_ENV", "LOCAL", "NONE",

@@ -254,6 +254,12 @@ class Procedure:
         return self.header["name"]
 
     @property
+    def source(self) -> str:
+        """The text of `procedure.aip`, which the bundle holds byte for byte."""
+        row = self._one("MATCH (p:Procedure {bundle_id: $b, id: $id}) RETURN p.source AS source", id=PROCEDURE_ID)
+        return (row or {}).get("source") or ""
+
+    @property
     def requires(self) -> tuple[str, str | None] | None:
         """`Requires <interpreter> <version>`, or None when the header has none."""
         interpreter = self.header.get("requires_interpreter")

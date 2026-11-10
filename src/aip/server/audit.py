@@ -52,8 +52,10 @@ own in the store, `DELETE /audit/{name}` removes it, and `GET /audit` lists them
 built-ins with `builtin: false`. A stored query is run like a built-in one, with the same
 parameters bound (`$name`, `$agent`, `$session`, `$user`, `$draft`, `$window`, `$limit`,
 `$repeats`, `$key`, and `$bundles`, the resolved bundle ids), in a transaction that is never
-committed, and its rows come back as the Cypher shapes them. Its name is kebab-case and not a
-built-in's; Cypher with a writing clause is refused when it is stored.
+committed, and its rows come back as the Cypher shapes them: a node it returns is a map
+`{"labels", "properties"}`, a relationship `{"type", "properties"}`. Its name is kebab-case and
+not a built-in's; Cypher with a writing clause, or that the engine cannot parse (it is planned
+with `EXPLAIN`, not run), is refused when it is stored.
 """
 
 from __future__ import annotations
@@ -286,14 +288,23 @@ def listing(store: Any = None) -> list[JSON]:
     return rows
 
 
+def parameters(store: Any, name: str | None = None, agent: str | None = None, session: str | None = None, user: str | None = None,
+               draft: bool | None = None, window: int = DEFAULT_WINDOW, limit: int = DEFAULT_LIMIT, repeats: int = DEFAULT_REPEATS,
+               key: str | None = None) -> JSON:
+    """Every parameter a query is run with, built-in or stored: the caller's, `$bundles` (the
+    resolved bundle ids) and `$script_errors`."""
+    return dict(name=name, agent=agent, session=session, user=user, draft=draft, window=window, limit=limit, repeats=repeats,
+                key=key, bundles=store.resolved_bundles(name), script_errors=SCRIPT_ERRORS)
+
+
 def run(store: Any, query: str, name: str | None = None, agent: str | None = None, session: str | None = None,
         user: str | None = None, draft: bool | None = None, window: int = DEFAULT_WINDOW, limit: int = DEFAULT_LIMIT,
         repeats: int = DEFAULT_REPEATS, key: str | None = None) -> list[JSON]:
     """Rows of one named query over `store` (an `aip.server.store.Store`): a built-in, else one
     the store keeps. `KeyError` for a name that is neither; `InvalidQuery` when a parameter the
     query needs is missing."""
-    params = dict(name=name, agent=agent, session=session, user=user, draft=draft, window=window, limit=limit, repeats=repeats,
-                  key=key, bundles=store.resolved_bundles(name), script_errors=SCRIPT_ERRORS)
+    params = parameters(store, name=name, agent=agent, session=session, user=user, draft=draft, window=window, limit=limit,
+                        repeats=repeats, key=key)
     if query in QUERIES:
         _, statements, needs = QUERIES[query]
         missing = [p for p in needs if params.get(p) is None]
@@ -320,8 +331,27 @@ def save(store: Any, name: str, cypher: str, description: str = "") -> JSON:
     wrote = WRITES.search(_QUOTED.sub("''", cypher))
     if wrote:
         raise InvalidQuery(f"an audit query only reads; this one has {wrote.group(1).upper()}")
+    try:                                    # planned, not run: Cypher that does not parse is refused now, not when it is asked
+        store.parses(cypher, **parameters(store))
+    except Exception as exc:
+        raise InvalidQuery(f"the query does not parse: {_as_written(str(exc))}") from exc
     store.save_query(name, description or "", cypher)
     return {"query": name, "description": description or "", "builtin": False}
+
+
+def _as_written(message: str) -> str:
+    """The engine's parse error without the `EXPLAIN` the check put before the query: where it
+    quotes the statement, the prefix goes, and the caret under it moves back with it."""
+    prefix = "EXPLAIN "
+    lines = message.splitlines()
+    for i, line in enumerate(lines):
+        at = line.find(prefix)
+        if at < 0:
+            continue
+        lines[i] = line[:at] + line[at + len(prefix):]
+        if i + 1 < len(lines) and lines[i + 1].strip() == "^" and lines[i + 1].startswith(" " * len(prefix)):
+            lines[i + 1] = lines[i + 1][len(prefix):]
+    return "\n".join(lines)
 
 
 def delete(store: Any, name: str) -> None:
@@ -332,4 +362,4 @@ def delete(store: Any, name: str) -> None:
         raise KeyError(name)
 
 
-__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "QUERIES", "InvalidQuery", "delete", "listing", "run", "save"]
+__all__ = ["DEFAULT_LIMIT", "DEFAULT_REPEATS", "DEFAULT_WINDOW", "QUERIES", "InvalidQuery", "delete", "listing", "parameters", "run", "save"]

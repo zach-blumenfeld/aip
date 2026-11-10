@@ -94,10 +94,25 @@ def test_pin_retire_and_what_a_name_resolves_to(served, tmp_path):
     assert (entry["latest"], entry["resolves"]) == ("1", "1") and entry["revisions"][0]["retired"] is True
     assert api.describe("billing_support")["bundle_id"] == first_id
     assert api.describe("billing_support@2")["retired"] is True, "a retired revision still answers by its number"
+    # S3: retire wins over pin. Retiring the pinned revision clears the pin, and a retired revision is not pinned.
+    api.pin("billing_support", "1")
     api.retire("billing_support", "1")
+    entry = api.list()[0]
+    assert (entry["pinned"], entry["latest"], entry["resolves"]) == (None, None, None)
+    assert entry["description"].startswith("Turn an incoming billing message"), "a name with nothing live keeps its newest description"
+    with pytest.raises(ServerError) as pinned:
+        api.pin("billing_support", "2")
+    assert (pinned.value.status, pinned.value.kind) == (409, "retired") and "billing_support@2 is retired" in pinned.value.message
     with pytest.raises(ServerError) as none_live:
         api.describe("billing_support")
-    assert (none_live.value.status, none_live.value.kind) == (404, "not_found") and "no live revision" in str(none_live.value)
+    assert (none_live.value.status, none_live.value.kind) == (404, "not_found")
+    assert none_live.value.message.startswith("billing_support has no live revision: all 2 are retired")
+    with pytest.raises(ServerError) as hyphen:                      # the folder's spelling, with the published one offered
+        api.describe("billing-support")
+    assert hyphen.value.message == "no procedure 'billing-support'; did you mean `billing_support`?"
+    with pytest.raises(ServerError) as unknown:
+        api.describe("nothing-here")
+    assert unknown.value.message == "no procedure 'nothing-here'"
     assert api.search("billing") == [], "search covers what each name resolves to"
     assert api.publish(second)["revision"] == "2" and api.describe("billing_support")["revision"] == "2", \
         "publishing a retired revision's bundle again brings it back"

@@ -30,7 +30,7 @@ A procedure is named three ways, and every command takes any of them: a publishe
    is not a match. `aip list` shows every published name.
 
    ```
-   aip search "<a few words from the task>"      # name@revision  score  description
+   aip search "<a few words from the task>"      # name@revision  score N  description
    ```
 
 2. **Read what it needs.**
@@ -47,7 +47,9 @@ A procedure is named three ways, and every command takes any of them: a publishe
    ```
 
    It prints one JSON object. `"done": true`: finished, `result` is the outcome. `"paused":
-   "task"`: answer it (step 4). `"error"`: step 5. Every object carries `run_id`.
+   "task"`: answer it (step 4). `"error"`: step 5. Every object carries `run_id`, `run_file`
+   (where the run is kept on this machine) and, when `aip config` names a server, `recorded`
+   (whether this stop reached it).
 
 4. **Answer the pause.** A pause has `step` and `tasks`. Each task has `prompt` (what to do),
    `state` (the data for it), `references` (files to load only if the prompt needs them),
@@ -62,8 +64,10 @@ A procedure is named three ways, and every command takes any of them: a publishe
      A `true_or_false` key is `true` or `false`; a `choice` or `score` key is one of its `labels`.
    - **Several tasks** (a loop hands over a batch): answer all of them in one `resume`, keyed by
      each task's `index`: `{"0": {"reply": "..."}, "1": {"reply": "..."}}`. Each task stands on
-     its own; do each from its own `prompt` and `state`.
-   - A task with `"last_pass": true` is the last attempt its loop allows: make it count.
+     its own; do each from its own `prompt` and `state`. A task's `passes` says which pass of
+     which loop it is (`[{"loop": "each_ticket", "pass": 1}]`); `pass` is the innermost one.
+   - Inside a loop with a cap a task has `pass_of`, the cap, and `last_pass`: when it is true
+     this is the last attempt the loop allows, so make it count.
 
    Repeat until `"done": true`. The pause's `hint` shows the shape of the answer.
 
@@ -103,7 +107,7 @@ aip run make_procedure --inputs '{"name": "policy_draft", "description": "<what 
 `materials` is a path to a file or folder of source material, or an empty string. The run hands
 you a task to write the program folder (the prompt carries the language on one page), compiles
 what you wrote, and hands the compiler's diagnostics back until it compiles; its result is the
-folder's path. If `make_procedure` is not in the catalog (`aip list`), write the folder directly
+folder's path. It only checks: your files stay as you wrote them. If `make_procedure` is not in the catalog (`aip list`), write the folder directly
 with the same reference, `references/language.md` beside this file, and check it yourself.
 
 Then, or when editing an existing `procedure.aip`:
@@ -124,7 +128,7 @@ Task: "A customer wrote: I was charged twice! Handle it."
 
 ```
 $ aip search "customer charged twice billing"
-billing_support_agent@1  0.812  Turn an inbound billing message into either a tier-2 ticket or a drafted reply. ...
+billing_support_agent@1  score 0.812  Turn an inbound billing message into either a tier-2 ticket or a drafted reply. ...
 $ aip run billing_support_agent --inputs '{"message": "I was charged twice!"}'
 { "paused": "task", "step": "triage",
   "tasks": [ { "index": 0, "prompt": "Read the customer's message and classify it. ...",

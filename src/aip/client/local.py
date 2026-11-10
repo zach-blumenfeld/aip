@@ -71,6 +71,18 @@ def store_path() -> Path:
     return data_dir() / STORE_FILE
 
 
+def store_file() -> Path:
+    """The store as it is on disk, which is what to show a person: `store_path()` is the name
+    the server is asked for, and the pinned engine keeps a store under its own suffix
+    (`aip.compiler.relate.store_file`). The asked-for name when the engine is not installed."""
+    from aip.compiler import relate
+
+    try:
+        return relate.store_file(store_path())
+    except relate.RelateMissing:
+        return store_path()
+
+
 def log_path() -> Path:
     return data_dir() / LOG_FILE
 
@@ -169,4 +181,4 @@ def stop(wait: float = 10.0) -> int | None:
 
 
 __all__ = ["DATA_ENV", "DEFAULT_IDLE", "DEFAULT_PORT", "HOST", "IDLE_ENV", "LOCAL", "PORT_ENV", "data_dir", "ensure", "health",
-           "idle_seconds", "log_path", "port", "start", "stop", "store_path", "url"]
+           "idle_seconds", "log_path", "port", "start", "stop", "store_file", "store_path", "url"]

@@ -166,6 +166,13 @@ operator setting, not something the procedure says:
   decision that went out with others in one call (below). A runtime that reports progress
   reports each entry as it is written, which inside a batch is the order things happened in,
   not the history's.
+- A run that stops inside a batch (a pass waits for the agent, or failed) shows the work of its
+  open passes in its record: the entries they have written, pass by pass in input order, where
+  the history will hold them once the batch completes. Whoever reads a paused run to decide how
+  to answer sees what the loop has done, not a run that seems to have stopped at the step before
+  the loop. Until the batch completes, a pass that goes on writes its next entries after its
+  own earlier ones, so before those of the passes after it: within an open batch an entry's
+  position is not final. No entry is changed or dropped.
 - A failing pass fails the run. The passes of its batch that finished are recorded, a pass
   waiting for the agent stays where it is, and no further pass starts; a retry runs the failed
   pass's step again and the batch goes on.
@@ -180,6 +187,8 @@ reference runtime's field names are in `docs/cli-json.md`, The run file.
   ran; when it started and when it finished; and who ran it: `agent` (the framework or tool,
   from the MCP client or `--agent` / `AIP_AGENT`), `session` (a caller-supplied id grouping
   runs, `--session` / `AIP_SESSION`) and `user` (the server token's name). Claimed, not verified.
+  A caller with a version of its own may give it (`agent_version`; the MCP client's); it is
+  kept beside `agent` and runs are found by `agent` alone.
 - Every step's outputs are in the history, including every pass of a loop, with the pass number:
   one entry per step run, with the time it was written, the keys the step read (`input`, each
   under the name the step reads it by) and what it produced (`result`), `pass` (the innermost
@@ -204,7 +213,8 @@ reference runtime's field names are in `docs/cli-json.md`, The run file.
   script and what it was given on stdin. An agent task's entry keeps the prompt and references
   it was given, who answered (`agent`, `session`) and how long the run waited for the answer
   (`waited_seconds`).
-- The history is appended, never rewritten. A run that fails keeps everything up to the failure
+- The history is appended, never rewritten (the entries of a batch still open are the one case
+  where an entry may yet move, above). A run that fails keeps everything up to the failure
   and the error beside it; the failed step runs again on a retry, from the state before it.
 
 ## What a runtime may add

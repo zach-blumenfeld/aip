@@ -28,7 +28,20 @@ the only writer of its file); with Neo4j several servers may share a database.
 ## 2. The HTTP API
 
 `ref` is `name` (the pinned revision, else the newest live one), `name@<revision>` (that one,
-retired or not) or `name@latest` (the newest live one, whatever is pinned).
+retired or not) or `name@latest` (the newest live one, whatever is pinned). A reference the
+store does not have is 404 `not_found` in one of three sentences, which every client command
+passes on as it is: `no procedure 'billing-support'; did you mean `billing_support`?` (the
+question when the name with `_` for `-` is published: a folder is `billing-support`, its
+procedure `billing_support`), `no revision 7 of billing_support`, and `billing_support has no
+live revision: all 2 are retired`.
+
+**Retire wins over pin.** A retired revision does not resolve by name, pinned or not: retiring
+the pinned revision clears the pin, and pinning a retired one is refused (409 `retired`). A
+name whose every revision is retired stays in `GET /catalog` with `resolves` null and the
+description of its newest revision (`aip list` prints `@- (retired)`); search, which covers what
+names resolve to, no longer finds it. `name@<revision>` still names a retired revision, for the
+runs that reference it, and its description says `retired: true`; the client refuses to run one
+unless forced (`aip run name@rev --force`). Publishing its bundle again brings it back.
 
 | Call | What it does |
 |---|---|
@@ -37,19 +50,19 @@ retired or not) or `name@latest` (the newest live one, whatever is pinned).
 | `GET /catalog/{ref}` | the description `aip info` prints (header, inputs, result, steps, loops) with `name`, `revision`, `bundle_id`, `draft`, `published_at`, `retired` |
 | `GET /catalog/{ref}` with `Accept: application/octet-stream` | the bundle itself, an `.rl`, for `aip pull` and `aip get` |
 | `POST /catalog` (the `.rl` bytes) | publish: verify the bundle, merge it by id, assign the next revision under its procedure's name. `{"name", "revision", "bundle_id", "existed"}`; a bundle that already has a revision keeps it (and is live again if it was retired); `existed` says the store held the bundle before |
-| `POST /catalog/{name}/pin` `{"revision"}` | make the name resolve to a revision; `null` clears the pin |
-| `POST /catalog/{name}/retire` `{"revision"}` | stop the name resolving to a revision |
+| `POST /catalog/{name}/pin` `{"revision"}` | make the name resolve to a revision; `null` clears the pin; 409 `retired` for a retired one |
+| `POST /catalog/{name}/retire` `{"revision"}` | stop the name resolving to a revision, and clear a pin on it |
 | `POST /bundles` (the `.rl` bytes) | hold a bundle with no revision, a draft: `{"bundle_id", "name", "existed", "draft"}` |
 | `GET /bundles?drafts=` | every bundle held, newest first, each with `draft` and its `revision` if it has one; `drafts=true` for the drafts alone |
 | `GET /bundles/{bundle_id}` | describe a bundle by id, or with `Accept: application/octet-stream` hand it back |
 | `GET /catalog/{ref}/graph`, `GET /bundles/{bundle_id}/graph` | the bundle's own graph as JSON: `name`, `revision`, `draft`, `bundle_id` and `graph`, the `nodes` and `edges` of `docs/language/bundle.md` in the shape `aip compile --json` prints, here with the source (`Procedure.source`) and each file's contents (`File.text`, or `base64`). What a page draws a procedure from and shows as its source, without opening an `.rl` |
 | `POST /runs` (the run as JSON) | record a run where it stopped: the whole run each time, upserted by `run_id`. The bundle it names must be held (404 `unknown_bundle` otherwise). Replies `{"run_id", "user", "draft", "revision"}`: who the token stands for, and what the store holds the bundle as |
-| `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently updated first: `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries` |
+| `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently started first (a run answered later keeps its place): `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries` |
 | `GET /runs/{run_id}` | one run's record, as it was posted |
 | `GET /audit` | the audit queries: the built-ins of `aip.server.audit`, then the ones stored here, each `query`, `description`, `builtin`, `needs` (parameters it cannot run without) and `path` |
 | `GET /audit/{query}?name=&agent=&session=&user=&draft=&window=&limit=&repeats=&key=` | one query's rows (section 4) |
-| `PUT /audit/{name}` `{"description", "cypher"}`, `DELETE /audit/{name}` | store a query of one's own, remove it |
-| `GET /export/runs?name=&since=&agent=&session=&user=&draft=` | one Relate file holding the runs that match and the procedures they ran (`aip export runs`); `X-AIP-Runs` and `X-AIP-Bundles` count them; 404 when no run matches |
+| `PUT /audit/{name}` `{"description", "cypher"}`, `DELETE /audit/{name}` | store a query of one's own (422 when it writes or does not parse), remove it |
+| `GET /export/runs?name=&since=&agent=&session=&user=&draft=` | one Relate file holding the runs that match and the procedures they ran (`aip export runs`); `X-AIP-Runs`, `X-AIP-Procedures` and `X-AIP-Bundles` count them (a procedure's revisions and drafts are a bundle each); 404 when no run matches |
 | `GET /health` | `{"aip", "language", "backend", "local"}`, with no token: how a client tells an aip server from whatever else answers on a port. A local server (section 6) adds its `pid` |
 
 **An upload is read as a bundle is read anywhere** (`aip.compiler.read_bundle`): every file's
@@ -77,6 +90,8 @@ the console runs, and for the origins in `allow_origins`.
 **Identity.** A run says who ran it: `agent` and `session` are the client's claim (`--agent`,
 `AIP_AGENT`, `--session`, `AIP_SESSION`); `user` is the server's, the name of the token the run
 was posted with, written into the record whatever the client sent, and `null` on an open server.
+`agent_version` is beside them when the client gave one (`aip mcp` sends the MCP client's own
+version): it is kept on the run and shown with it, and runs are filtered by `agent` alone.
 
 **Draft or published** is the server's to say as well. A run is a *draft's* when the bundle it
 ran has no revision in the store, and otherwise it is a run of the revision the bundle is
@@ -99,7 +114,7 @@ server writes its own nodes, told from a bundle's by label:
 | `Name` | `name`, `pinned` (a revision, when one is pinned) |
 | `Revision` | `id` (`name@revision`), `name`, `revision` (text), `number`, `bundle_id`, `published_at`, `retired` |
 | `Bundle` | `bundle_id`, `name`, `description`, `stored_at`, `draft` (true until published), `described` (the description `GET /catalog/{ref}` returns, as JSON) |
-| `Run` | `run_id`, `bundle_id`, `name`, `revision`, `draft`, `status`, `agent`, `session`, `user`, `started`, `finished`, `created`, `updated`, `position`, `batch`, `entries` (how many); when paused `paused_at`, `paused_since`, `tasks`; when failed `error` (the kind), `error_step`, `error_message`; `json` (the run without its history) |
+| `Run` | `run_id`, `bundle_id`, `name`, `revision`, `draft`, `status`, `agent`, `agent_version` (when given), `session`, `user`, `started`, `finished`, `created`, `updated`, `position`, `batch`, `entries` (how many); when paused `paused_at`, `paused_since`, `tasks`; when failed `error` (the kind), `error_step`, `error_message`; `json` (the run without its history) |
 | `Entry` | one per history entry: `run_id`, `bundle_id`, `seq`, `step`, `kind`, `pass`, `loop` (the innermost), `loops` (each enclosing loop and pass, `revise 0`), `at`, `seconds`; a `Decide`: `model`, `endpoint`, `model_seconds`, `history_sent`, `batched`, `batch_size`; a `Task_Agent`: `agent`, `session`, `waited_seconds`; a `Route`: `read`, `value`, `to`, `check_fired`, `check_reason`, `check_confidence`, `check_below`; an `Execute`: `script`; a loop's exit: `exit` (`until`, `items`, `times`, `cap`), `exit_where`, `iterations`; the first entry of a `Loop` pass: `until_holds`, `until_where`; `sha` and `json` (the entry as posted) |
 | `Answer` | one per answer object an entry produced: `run_id`, `bundle_id`, `seq`, `step`, `name`, `value`, `source` (`measured`, `scripted`, `agent`, `aggregated`), `confidence`, `score`, `probabilities` (JSON); an aggregation's: `answers` (how many it judged), `held`, `barred` |
 | `Meta` | `key: 'builtins'`, `offered` (the ids of the built-in bundles this store has been offered) |
@@ -121,6 +136,13 @@ A property whose value would be null is left out. A run is upserted whole at eve
 written (each carries the hash of its JSON), so recording a long run is not quadratic in its
 length. `GET /runs/{run_id}` rebuilds the record from `Run.json` and the entries' `json`, so
 what comes back is what was posted, with the server's `user`.
+
+A run paused inside a `For` is posted with the entries its passes have written so far, pass by
+pass in input order, although the engine itself appends a pass's entries to the history only
+when its batch completes (`docs/language/runtime.md`, The record). So a paused loop's work is
+in the store while the run waits: its `Entry` and `Answer` nodes, the run's `entries` count,
+and the audit queries over them. When a pass that was waiting moves on, the entries after it
+shift, and those are the ones rewritten at the next stop.
 
 Search is BM25 with Porter stemming (`aip.server.search`) over the name, description, `Use_When`
 lines and step descriptions of the revision each name resolves to, in the server's memory, the
@@ -192,8 +214,11 @@ them, with the same parameters bound (`$name`, `$agent`, `$session`, `$user`, `$
 `$window`, `$limit`, `$repeats`, `$key`, and `$bundles`, the ids of the resolved revisions). The
 name is kebab-case and not a built-in's. Every audit query runs in a transaction that is never
 committed (Neo4j's read transaction, a rolled-back one on Relate), and Cypher with a writing
-clause is refused when it is stored (422). A stored query that fails answers 422 with the
-database's message.
+clause, or that the database cannot parse (it is planned with `EXPLAIN`, not run), is refused
+when it is stored (422). A stored query's rows are whatever it returns: a node comes back as
+`{"labels", "properties"}`, a relationship as `{"type", "properties"}`, a path as its `nodes`
+and `relationships`, so `RETURN r` answers like any other query. One that fails when it is run
+answers 422 with the database's message.
 
 **Export.** `GET /export/runs` writes the runs that match, the graph of every bundle among them
 and those bundles' revisions into a new Relate file with the statements the store itself uses,

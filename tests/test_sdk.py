@@ -385,15 +385,38 @@ def test_publish_list_search_describe_pull_get(served, fake, tmp_path):
     assert served.pin("billing_support", "1") == sdk.Pinned("billing_support", "1")
     assert served.list()[0].pinned == "1"
     assert served.pin("billing_support", None).revision is None
+    assert served.pin("billing_support", "1").revision == "1"
     assert served.retire("billing_support@1") == sdk.Retired("billing_support", "1")
     assert served.search("billing") == []
     with pytest.raises(aip.InvalidInput):
         served.retire("billing_support")
-    with pytest.raises(aip.NotFound):
-        served.run("nothing_here", {"message": CALM})
-    with pytest.raises(aip.ServerError) as exc:
-        served.describe("nothing_here")
-    assert (exc.value.status, exc.value.kind) == (404, "not_found")
+
+    # S3: retire wins over pin. The pin went with the retire, a retired revision is not pinned, the name keeps its
+    # description in the list, and `name@revision` runs only when forced.
+    [entry] = served.list()
+    assert (entry.pinned, entry.resolves, entry.latest) == (None, None, None) and entry.description.startswith("Turn an inbound billing message")
+    with pytest.raises(aip.ServerError) as pinned:
+        served.pin("billing_support", "1")
+    assert (pinned.value.status, pinned.value.kind) == (409, "retired") and "billing_support@1 is retired" in pinned.value.message
+    with pytest.raises(aip.NotFound) as none_live:
+        served.run("billing_support", {"message": CALM})
+    assert str(none_live.value).startswith("billing_support has no live revision: its one revision is retired")
+    assert served.describe("billing_support@1").data["retired"] is True and "(billing_support@1, retired)" in served.describe("billing_support@1").summary()
+    with pytest.raises(aip.RetiredRevision) as retired:
+        served.run("billing_support@1", {"message": CALM})
+    assert retired.value.kind == "retired" and "billing_support@1 is retired" in str(retired.value)
+    assert isinstance(served.run("billing_support@1", {"message": CALM}, force=True), aip.Paused)
+    # S3: one voice for a name the catalog does not have, whichever call asked, with the hint for a folder's spelling
+    for call in (lambda ref: served.run(ref, {"message": CALM}), served.describe, served.pull, lambda ref: served.get(ref, tmp_path / "no")):
+        with pytest.raises(aip.NotFound) as missing:
+            call("nothing_here")
+        assert str(missing.value) == "no procedure 'nothing_here'"
+        with pytest.raises(aip.NotFound) as hyphen:
+            call("billing-support")
+        assert str(hyphen.value) == "no procedure 'billing-support'; did you mean `billing_support`?"
+        with pytest.raises(aip.NotFound) as revision:
+            call("billing_support@7")
+        assert str(revision.value) == "no revision 7 of billing_support"
 
 
 def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
@@ -505,7 +528,7 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
         ("pull", "pull_all", ["--all"]),
         ("publish", "publish", [str(EXAMPLE)]),
         ("get", "get", ["billing_support", "--out", str(tmp_path / "got")]),
-        ("pin", "pin", ["billing_support", "1"]),
+        ("pin", "pin", ["billing_support@1"]),            # S3: the same shape as retire
         ("runs", "runs", []),
         ("runs", "run_record", [first.run_id]),
         ("audit", "audit", ["confidence-fired", "--published"]),
@@ -564,7 +587,8 @@ def test_config_writes_and_reads_the_file(monkeypatch):
     code, out, _ = _call("config", "server", "local")                    # this machine's server, started when needed
     s = aip.settings()
     assert code == 0 and (s.server, s.local) == (local.url(), True) and json.loads(s.path.read_text()) == {"server": "local"}
-    assert f"server: local  {local.url()}, started when a command needs it; its store is {local.store_path()}" in out and "token" not in out
+    assert local.store_file().name == "store.cl", "S3: the file the pinned engine keeps, which is the one on disk"
+    assert f"server: local  {local.url()}, started when a command needs it; its store is {local.store_file()}" in out and "token" not in out
     code, out, _ = _call("config", "server", "https://aip.example.com/", "--token", "t")
     s = aip.settings()
     assert (s.server, s.local, s.token) == ("https://aip.example.com", False, "t") and "token:  set" in out
@@ -607,3 +631,138 @@ def test_the_docs_tool_example_runs(served, tmp_path, monkeypatch):
     assert (done["result"]["message"], done["result"]["queue"], set(done["result"])) == (CALM, "tier2", {"message", "ticket_id", "queue"})
     error = json.loads(namespace["run_procedure"]("billing_support_agent", {"msg": "wrong"}))
     assert (error["error"], error["resumable"]) == ("invalid_input", False)
+
+
+# ------------------------------------------------- after the second first-use reports (plan S3)
+
+TRIAGE = example_dir("ticket-triage")
+POLICY = "Duplicate charges are refunded in full within 5 business days. Plan changes take effect next cycle."
+
+
+def test_a_run_paused_in_a_for_shows_every_finished_pass_here_and_on_the_server(served, fake, tmp_path):
+    """The milestone's proof: `ticket_triage` paused in its `For` lists the passes it has made,
+    in `aip runs <id>`, in the server's record and in its count of entries; a check that failed
+    says so in the table."""
+    paused = served.run(TRIAGE, {"tickets": ["Where is my invoice?", "How do I change plan?"], "policy": POLICY}, workdir=tmp_path)
+    assert isinstance(paused, aip.Paused) and (paused.step, len(paused.tasks), paused.recorded) == ("draft", 2, True)
+    made = [("start", None), ("classify", 0), ("by_tone", 0), ("classify", 1), ("by_tone", 1)]
+    assert [(e["step"], e["pass"]) for e in served.run_record(paused.run_id).history] == made
+    assert [(e["step"], e["pass"]) for e in fake.runs[paused.run_id]["history"]] == made, "the server's record has them too"
+    [row] = served.runs(name="ticket_triage")
+    assert (row.status, row.data["entries"]) == ("paused", 5)
+    assert [r["answers"] for r in served.audit("model-answers", name="ticket_triage")] == [2, 2], "and so do the audit queries"
+
+    good = POLICY.split(".")[0] + ". The invoice is on its way."
+    paused = served.resume(paused, [{"reply": good}, {"reply": "Next cycle."}])
+    assert (paused.step, len(paused.tasks)) == ("fix", 1), "the second reply does not quote the policy"
+    with mock.patch("aip.client.cli._server", return_value=served.server):
+        code, table, _ = _call("runs", paused.run_id)
+    assert code == 0 and "ticket_triage  draft  paused" in table
+    rows = [line.split() for line in table.splitlines() if line.startswith(("classify", "check", "draft", "revise"))]
+    assert [(r[0], r[2], r[3]) for r in rows] == [("classify", "each_ticket", "0"), ("draft", "each_ticket", "0"), ("check", "each_ticket", "0"),
+                                                 ("revise", "each_ticket", "0"), ("classify", "each_ticket", "1"),
+                                                 ("draft", "each_ticket", "1"), ("check", "each_ticket", "1")]
+    assert table.count("scripts/policy_check.py -> passed=true") == 1 and table.count("scripts/policy_check.py -> passed=false") == 1
+    assert "paused at fix since" in table and len(fake.runs[paused.run_id]["history"]) == 10
+
+    with pytest.raises(aip.RunError) as refused:               # a refused answer changed nothing and sent nothing: recorded false
+        served.resume(paused, {"answer": "x"})
+    assert (refused.value.kind, refused.value.recorded, refused.value.resumable) == ("invalid_output", False, True)
+
+    done = served.resume(paused, {"reply": good}, on_pause=lambda p: {"summary": "Two replies."})
+    assert isinstance(done, aip.Done)
+    stored = fake.runs[done.run_id]["history"]
+    assert stored == served.run_record(done.run_id).history and [e["step"] for e in stored][-3:] == ["each_ticket", "summarize", "end"]
+    kept = fake.store.rows("MATCH (:Run {run_id: $run})-[:HAS_ENTRY]->(e:Entry) RETURN count(e) AS entries", run=done.run_id)
+    assert kept == [{"entries": len(stored)}], "the entries that moved when the batch completed were rewritten, none left behind"
+
+
+def test_the_cli_says_the_same_thing_for_a_name_it_cannot_find_and_hints_at_the_hyphen(served, fake, tmp_path):
+    with mock.patch("aip.client.cli._server", return_value=served.server):
+        code, out, _ = _call("run", "billing-support", "--inputs", json.dumps({"message": CALM}))
+        error = json.loads(out)
+        assert (code, error["error"], error["kind"]) == (1, "invalid_input", "not_found")
+        assert error["message"] == "no procedure 'billing-support'; did you mean `billing_support`?"
+        for command in (["info", "billing-support"], ["pull", "billing-support"], ["get", "billing-support", "--out", str(tmp_path / "x")]):
+            code, _, err = _call(*command)
+            assert (code, err) == (1, "aip: no procedure 'billing-support'; did you mean `billing_support`?\n"), command
+        assert _call("info", "billing_support@7")[2] == "aip: no revision 7 of billing_support\n"
+
+        served.run("billing_support", {"message": CALM}, workdir=tmp_path)
+        assert _call("runs", "--name", "billing-support")[1] == "no runs of `billing-support`; names are `aip list`'s\n"
+        assert _call("runs", "--name", "billing_support", "--status", "failed")[1] == "no runs\n", "the name has runs; the status has none"
+        code, out, err = _call("audit", "model-answers", "--name", "billing-support")
+        assert (code, json.loads(out), err) == (0, [], "aip: no runs of `billing-support`; names are `aip list`'s\n")
+        assert _call("audit", "model-answers", "--name", "billing_support", "--agent", "nobody")[2] == ""
+
+        # pin and retire take one shape, `name@revision`; the old two-word pin is answered with the spelling that works
+        for old in (["pin", "billing_support", "1"], ["retire", "billing_support", "1"]):
+            with pytest.raises(SystemExit) as usage:
+                _call(*old)
+            assert usage.value.code == 2
+        assert _call("pin", "billing_support@1")[1] == "billing_support -> 1\n"
+        assert _call("pin", "billing_support", "--clear")[1] == "billing_support pin cleared\n"
+        assert _call("retire", "billing_support@1")[1] == "retired billing_support@1\n"
+        code, _, err = _call("pin", "billing_support@1")
+        assert code == 1 and "retired: billing_support@1 is retired" in err
+        listed = _call("list")[1]
+        assert listed.startswith("billing_support  @- (retired)  1 revision(s)  Turn an inbound billing message") and "\n " not in listed
+        code, out, _ = _call("run", "billing_support@1", "--inputs", json.dumps({"message": CALM}))
+        assert (code, json.loads(out)["kind"]) == (1, "retired") and "--force" in json.loads(out)["message"]
+        code, out, err = _call("run", "billing_support@1", "--inputs", json.dumps({"message": CALM}), "--force")
+        assert json.loads(out)["error"] == "no_decision_model", "forced, it runs (this command's own client has no model)"
+        assert err.startswith("aip: warning: no decision model is configured, and this procedure asks one at triage")
+        assert "(billing_support@1, retired)" in _call("info", "billing_support@1")[1]
+
+
+def test_an_empty_key_in_the_environment_is_no_model_and_the_run_warns_first(tmp_path, monkeypatch):
+    """The milestone's proof: `AIP_DECISION_MODEL_KEY= aip run ...` warns before the first step,
+    whatever the config file holds."""
+    assert _call("config", "--decision-model-key", "from-the-file")[0] == 0
+    assert aip.settings().decision_model_configured
+    monkeypatch.setenv("AIP_DECISION_MODEL_KEY", "")
+    assert not aip.settings().decision_model_configured and aip.settings().decision_model_key is None
+    assert "decision model: none" in _call("config")[1]
+    info = _call("info", str(EXAMPLE))[1]
+    assert "WARNING  no decision model is configured, and this procedure asks one at triage" in info
+    assert re.search(r"^  reply +string +on some paths$", info, re.MULTILINE) and re.search(r"^  message +string$", info, re.MULTILINE), \
+        "what a result holds depends on the route"
+    assert "WARNING" not in _call("info", str(AGENT))[1]
+    code, out, err = _call("run", str(EXAMPLE), "-i", json.dumps({"message": "x"}), "--progress")
+    lines = [json.loads(line) for line in out.splitlines()]
+    assert code == 1 and [line.get("step") for line in lines] == ["start", "triage"] and lines[-1]["error"] == "no_decision_model"
+    assert err.splitlines()[0].startswith("aip: warning: no decision model is configured") and lines[-1]["warning"] in err
+    code, out, err = _call("run", str(EXAMPLE), "-i", json.dumps({"msg": "x"}))
+    assert (json.loads(out)["error"], err) == ("invalid_input", ""), "a run that does not start has nothing to warn about"
+    monkeypatch.setenv("AIP_DECISION_MODEL", "")
+    monkeypatch.delenv("AIP_DECISION_MODEL_KEY")
+    assert aip.settings().decision_model_configured, "the key in the file still stands; the empty endpoint only unsets an endpoint"
+
+
+def test_the_smaller_things_the_reports_found(served, fake, tmp_path, capsys):
+    with mock.patch("aip.client.cli._server", return_value=served.server):
+        assert re.fullmatch(r"billing_support@1  score \d+\.\d{3}  Turn an inbound billing message.*\n", _call("search", "billing refund")[1])
+        broken = shutil.copytree(AGENT, tmp_path / "broken")
+        (broken / "procedure.aip").write_text((AGENT / "procedure.aip").read_text().replace("Next_Step by_tone", "Next_Step nowhere"))
+        code, _, err = _call("publish", str(broken))
+        assert code == 1 and err.count("unknown_step") == 1 and err.endswith("does not compile (1 error(s))\n"), "the diagnostic is said once"
+
+        first = served.run("billing_support", {"message": CALM}, workdir=tmp_path)           # paused at reply
+        second = served.run(EXAMPLE, {"message": ANGRY}, workdir=tmp_path)
+        served.resume(first, {"reply": REPLY})                                               # the older run is the last one updated
+        assert [r.run_id for r in served.runs()] == [second.run_id, first.run_id], "by when each started, newest first"
+        third = served.run(AGENT, {"message": CALM}, workdir=tmp_path)                       # a draft: a third bundle, a second procedure
+        code, out, _ = _call("export", "runs", "-o", str(tmp_path / "all.rl"))
+        assert out == f"wrote 3 run(s) of 2 procedure(s) to {tmp_path / 'all.rl'}\n"
+        reworded = shutil.copytree(EXAMPLE, tmp_path / "reworded")
+        (reworded / "assets" / "policy.md").write_text("Refunds take ten days.\n")
+        served.run(reworded, {"message": ANGRY}, workdir=tmp_path)                           # the same procedure, another bundle
+        code, out, _ = _call("export", "runs", "billing_support", "-o", str(tmp_path / "one.rl"))
+        assert out == f"wrote 3 run(s) of 1 procedure(s) (2 bundles: each revision and each draft is one) to {tmp_path / 'one.rl'}\n"
+        assert third.run_id not in [r.run_id for r in served.runs(name="billing_support")]
+    with pytest.raises(SystemExit):
+        main(["export", "--help"])
+    assert "aip export runs [name] -o FILE" in capsys.readouterr().out
+    with pytest.raises(aip.InvalidInput) as suffix:
+        local().compile(AGENT, tmp_path / "agent.bundle")
+    assert ".rl" in str(suffix.value) and not (tmp_path / "agent.bundle").exists()

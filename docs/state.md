@@ -206,7 +206,7 @@ checks that confidence, then either a script that opens a ticket (angry, or unsu
 task that drafts a reply (calm). Its decision sets `fallback: true`, so with no decision model
 configured it pauses to you, which is exactly what an agent sees; your answer carries no
 confidence, and the router does not check one for it, so the tone you give picks the branch. With
-a key (`aip config --decision-model KEY`) the model answers and the router checks its confidence.
+a key (`aip config --decision-model-key KEY`) the model answers and the router checks its confidence.
 
 ```sh
 cd "$(mktemp -d)"
@@ -237,7 +237,7 @@ aip resume run2.json --input answer2.json
 echo '{"reply":"Thanks for flagging this; duplicate charges are refunded in full within 5 business days."}' > answer3.json
 aip resume run2.json --input answer3.json
 
-# 4. with a TypeSafe key (aip config --decision-model KEY) the decision does not pause: the model
+# 4. with a TypeSafe key (aip config --decision-model-key KEY) the decision does not pause: the model
 #    answers and writes tone_confidence, and the router checks it; a confident "calm" reaches the
 #    client task as above, an unsure one is escalated.
 aip run "$EX" --input start2.json --run-file run3.json

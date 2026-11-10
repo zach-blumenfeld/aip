@@ -94,6 +94,19 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - Its `compile` step imports `aip.compiler` from the interpreter that runs `aip` (scripts are
   launched with `sys.executable`), so it needs no `aip` on `PATH` and no Relate.
 
+## What S3 left for whoever comes next (2026-11-09)
+
+- **A run's record is not the run file's `history` alone.** The engine appends a `For` pass's
+  entries when its batch completes; `aip.model.engine.recorded_history` adds the entries of the
+  passes still open, and `RunFile.recording()` (what is posted) and `RunFile.record()` (`aip
+  runs <id>`) use it. Read a run through those, not through `run["history"]`.
+- **`tests/server` runs on Neo4j too with `uv run python scratch/s3/neo4j_tests.py`** (scratch is
+  not committed: it reads the test container's password from `docker inspect` and sets
+  `NEO4J_URI` to `bolt://localhost:17687`). S3 ran it: 70 passed.
+- **`aip.mcp.Server`** subclasses the MCP SDK's `MCPServer` to answer argument-validation
+  failures as ordinary results; it reads `self._tool_manager`, a private attribute of the SDK
+  (2.3.0). `tests/test_mcp.py` fails if a new SDK moves it.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

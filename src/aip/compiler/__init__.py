@@ -17,7 +17,7 @@ from aip.compiler.bundle import (
     Bundle, BundleError, bundle_id, compile_folder, compile_source, export_bundle, read_bundle, read_graph, write_bundle,
     write_graph,
 )
-from aip.compiler.checker import CODES, Diagnostic, check, check_path, check_source, has_errors
+from aip.compiler.checker import CODES, Diagnostic, check, check_path, check_source, has_errors, result_on_some_paths
 from aip.compiler.errors import ParseError
 from aip.compiler.formatter import format_program, format_source
 from aip.compiler.graph import FileEntry, Graph, build_graph
@@ -26,6 +26,6 @@ from aip.compiler.parser import parse
 from aip.compiler.resources import example_dir, example_names
 
 __all__ = ["LANGUAGE_VERSION", "ParseError", "Diagnostic", "CODES", "parse", "check", "check_source", "check_path", "has_errors",
-           "format_program", "format_source", "example_dir", "example_names",
+           "result_on_some_paths", "format_program", "format_source", "example_dir", "example_names",
            "Bundle", "BundleError", "FileEntry", "Graph", "build_graph", "bundle_id", "compile_folder", "compile_source",
            "write_bundle", "read_bundle", "export_bundle", "write_graph", "read_graph"]

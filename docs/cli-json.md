@@ -47,7 +47,8 @@ overrides the file with any of the three. A folder or file run is recorded as a 
 bundle, unless the server already holds that very bundle as a published revision: then it is a
 run of that revision. With no server the object has no `recorded` key, the run works, and `aip
 run` ends with one line on stderr, once for the run: its resumes do not repeat it, and a command
-that changed nothing (a refused answer) prints no line about recording at all.
+that changed nothing (a refused answer) prints no line about recording at all; its object says
+`"recorded": false` where a server is configured, since nothing was sent.
 
 ```text
 aip: not recorded: no server is configured; run `aip config server local` to record runs on this machine, or `aip config server URL` for a server elsewhere
@@ -276,7 +277,7 @@ and `run_file` when `resumable` is true.
 
 | kind | when | extra keys |
 |---|---|---|
-| `invalid_input` | the inputs do not fit `Start`; a step's `Read` key is missing or mistyped; a target, run id or JSON argument cannot be used (then `kind` says which: `not_found`, `no_server`, `compile_error`, `not_a_bundle`, `bundle_tampered`, …) | `missing`, `invalid` |
+| `invalid_input` | the inputs do not fit `Start`; a step's `Read` key is missing or mistyped; a target, run id or JSON argument cannot be used (then `kind` says which: `not_found`, `retired`, `no_server`, `compile_error`, `not_a_bundle`, `bundle_tampered`, …). A published name the server does not have reads the same from every command: `no procedure 'billing-support'; did you mean `billing_support`?` (the hint when the name with `_` for `-` is published), `no revision 7 of billing_support`, `billing_support has no live revision`. `retired` is `aip run name@revision` on a retired revision, which `--force` runs anyway | `missing`, `invalid` |
 | `invalid_output` | a result does not match the step's `Produce` keys: a script's (then `script` is set), or an answer to a pause; a key the step does not produce, an answer's value outside the key's labels, or anything on an agent's answer but its value, counts | `missing`, `invalid` (key names); for an answer to a pause also `missing_tasks` (task indexes left unanswered) and `invalid_tasks` (indexes the pause does not have), each present when it names something |
 | `no_branch` | a route read a value none of its branch lines names | `key`, `value`, `branches` |
 | `script_failed` | a script exited non-zero, or did not print one JSON object (then `exit_code` is 0) | `script`, `exit_code`, `stderr` |
@@ -397,9 +398,18 @@ was run on a client with no model:
   "passes": [],
   "run_id": "4f1c9a2e7b3d5068",
   "resumable": true,
-  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json"
+  "run_file": "/home/you/.aip/runs/4f1c9a2e7b3d5068.json",
+  "warning": "no decision model is configured, and this procedure asks one at triage: a run that reaches it fails there with no_decision_model until one is set (run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other than TypeSafe's)"
 }
 ```
+
+**The warning.** `aip run` does not wait for the `Decide` to say so. When the procedure has one
+and no model is configured, it prints `aip: warning: <the sentence>` on stderr before the first
+step runs, and the object that call prints, whichever of the three it is, carries the sentence
+as `warning`. It is a warning and not an error because the run may never reach the step: a
+route may go another way. `aip info` shows the same sentence (`warning` in its `--json`). To run
+one command with no model whatever the config file holds, set `AIP_DECISION_MODEL_KEY=` to
+nothing (and `AIP_DECISION_MODEL=` too, when the file names an endpoint).
 
 A model that fails (nothing answers at the endpoint, the key is refused, the reply is not an
 answer) fails the decision the same way, as `decision_model_failed` with `model`, `endpoint`
@@ -458,9 +468,12 @@ no step paused, so one `run` printed the whole record and the final object.
 
 ## `aip runs`
 
-`aip runs` lists runs, newest first: the server's when one is configured, else this machine's
-run files, so a run id is never lost. `--name`, `--status`, `--agent`, `--session`, `--user`,
-`--draft` or `--published`, and `--limit` filter either list, and `--json` prints it as JSON.
+`aip runs` lists runs, the most recently started first (a run resumed later keeps its place):
+the server's when one is configured, else this machine's run files, so a run id is never lost.
+`--name`, `--status`, `--agent`, `--session`, `--user`, `--draft` or `--published`, and
+`--limit` filter either list, and `--json` prints it as JSON. A `--name` that is no procedure's
+answers `no runs of `x`; names are `aip list`'s` (the published name of the folder
+`billing-support` is `billing_support`).
 
 ```text
 RUN               NAME                           STATUS  AGENT  STARTED                        UPDATED
@@ -496,8 +509,11 @@ result: {"message": "This is the THIRD time you have double charged me. Fix it t
 A decision's row shows each answer's value and confidence and the model; a route's where it
 went and on what (the value, or `check fired` with the confidence and the bound); a task's who
 answered and after how long a wait; a loop's why and where it exited and after how many passes.
-A paused run ends with the step it waits at and since when, a failed one with the error and
-whether a retry can help.
+A script's or an agent's row names what it produced, with the value of an answer-typed key, so
+a check that failed reads `scripts/policy_check.py -> passed=false`. A paused run ends with the
+step it waits at and since when, a failed one with the error and whether a retry can help. A
+run paused inside a `For` lists the passes it has made so far, one row per entry as for a
+finished loop; only the loop's own exit row waits for the loop to end.
 
 ## `aip audit` and `aip export runs`
 
@@ -507,7 +523,11 @@ query's rows). The flags are the queries' parameters: `--name`, `--agent`, `--se
 `--draft` or `--published` (which runs), `--window N` (how many recent runs), `--limit N`,
 `--repeats N` (`repeated-cycles`), `--key K` (`lineage`). `aip audit --save NAME --cypher
 'MATCH ...'` (or `@file`) keeps a query of your own on the server, listed with `(stored)` and
-run by its name; `--delete NAME` removes it.
+run by its name; `--delete NAME` removes it. A query is refused when it is stored if it writes
+or does not parse, and its rows are whatever it returns: a node comes back as `{"labels",
+"properties"}`, a relationship as `{"type", "properties"}`. With `--name x`, when nothing
+matches because there is no run of `x` and no procedure of that name, the rows are `[]` and
+stderr says `no runs of `x`; names are `aip list`'s`.
 
 ```text
 $ aip audit confidence-fired --agent claude
@@ -520,11 +540,14 @@ $ aip audit confidence-fired --agent claude
 --published] -o audit.rl` writes the server's runs that match, and the procedures they ran, as
 one Relate file: each run's record beside the graph of the bundle it ran, which the engine's
 own tools open with no server and the queries of `docs/language/queries.md` answer on. It prints
-`wrote 3 run(s) of 2 procedure(s) to audit.rl`, and refuses a file that exists without `--force`.
+`wrote 7 run(s) of 1 procedure(s) (3 bundles: each revision and each draft is one) to
+audit.rl`, naming the bundles only when there are more of them than procedures, and refuses a
+file that exists without `--force`.
 
 ## The run file
 
-`~/.aip/runs/<run_id>.json` is the run, whole; `aip runs <run_id> --json` prints it flat. At the
+`~/.aip/runs/<run_id>.json` is the run, whole; `aip runs <run_id> --json` prints it flat (with
+the history as the record shows it, below). At the
 top: `run_id`, `bundle_id` (once, here; the bundle is in the cache under that id), `name`,
 `target` and `origin` (what `aip run` was given: a `folder`, a `file` or a `name`), `revision`
 (the one a name resolved to, or the one the server said the bundle is published as; a run with
@@ -537,7 +560,7 @@ none is a draft's),
 | `status` | `paused`, `done` or `failed` |
 | `position` | the node about to run, `step:<name>` or `loop:<name>`: the step a paused run waits at or a failed one stopped at; `null` once done |
 | `started`, `finished` | when the run began, and when it last reached `done` or `failed` (`null` while paused) |
-| `identity` | `agent`, `session`, `user`: who started it |
+| `identity` | `agent`, `session`, `user`: who started it; and `agent_version` when the agent gave one (`aip mcp` records the MCP client's own version). Runs are filtered by `agent` alone |
 | `state` | the procedure's keys as they stand |
 | `loops` | the runtime's loop keys while the run is under way (`index`, `iterations` and each loop's own key, `docs/language/spec.md` 2.6). They are never in `state`, and a run that is over (done, or failed at a cap) has none |
 | `history` | one entry per step run, below |
@@ -554,7 +577,10 @@ included. "Record" means the whole run; its entries are the history. Every entry
 the step read, each under the name the step reads it by: `tone`, not `triage_decision.tone`) and
 `result` (what it produced). A step's entry has `seconds`, the step's own wall time; the time
 between two entries' `at` also holds whatever waiting came between them. Inside a `For` the
-entries are in pass order, not time order. Per kind:
+entries are in pass order, not time order. While a run is paused (or failed) inside a `For`,
+the entries its passes have written are held with those passes under `frames`, and join
+`history` when the batch completes; `aip runs <run_id>`, its `--json` and the server's record
+show them in place already, so a paused loop's work is always in the record. Per kind:
 
 | kind | also |
 |---|---|

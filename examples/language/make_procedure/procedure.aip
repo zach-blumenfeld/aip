@@ -42,7 +42,7 @@ Task_Agent write "Write the program folder: procedure.aip with its assets, refer
   Next_Step compile
 }
 
-Execute compile "Compile the folder; when it compiles, rewrite procedure.aip in the canonical form." {
+Execute compile "Compile the folder and report what the compiler says; the folder is left as it was written." {
   Read path
   Run_Script scripts/compile.py
   Produce compiled:    true_or_false "Whether the folder compiles with no error."
@@ -63,6 +63,6 @@ Loop revise Until compiled, At_Most 5, Else_Fail {
   Next_Step end
 }
 
-End "The folder of a procedure that compiles, with whatever warnings the compiler still has." {
+End "Where the folder of the procedure that compiles is, with whatever warnings the compiler still has." {
   Read path, bundle_id, diagnostics
 }

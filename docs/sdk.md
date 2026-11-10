@@ -39,14 +39,19 @@ print(result.result)                                         # aip.Done: the End
 ```
 
 `run(target, inputs, *, batch=None, agent=None, session=None, workdir=None, on_step=None,
-on_pause=None)` runs a target until it stops. The target is a program directory (compiled
+on_pause=None, force=False, agent_version=None, on_warning=None)` runs a target until it stops. The target is a program directory (compiled
 here), an `.rl` bundle, or a catalog reference `name[@rev]` (fetched from the server, or from
 the bundle cache when `pull` put it there); every run runs on this machine from the bundle
 cache, and when a server is configured it is recorded there at every stop (a folder or file as
 a run of a *draft*, unless the server holds that very bundle as a published revision). `workdir` is where its scripts read and write files (default the current
 directory); `batch` how many `For` passes run at once (default 10, `aip config --batch`);
 `agent` and `session` the run's identity (default `AIP_AGENT` / the client's `agent`, and
-`AIP_SESSION`). It returns:
+`AIP_SESSION`), with `agent_version` beside them when the agent has a version to give (runs are
+filtered by `agent` alone). `force` runs a `name@revision` that is retired, which is otherwise
+`aip.RetiredRevision`. When the procedure has a `Decide` and no decision model is configured,
+the run is not refused, since it may never reach that step: `on_warning` is called with one
+sentence before the first step runs, and the result (or the `RunError`'s `error`) carries the
+same sentence as `warning`. It returns:
 
 - `aip.Paused`: `kind` (`task`, the one kind: a `Task_Agent` step waits for the agent; a
   `Decide` never pauses), `step`, `tasks` (a list of `aip.Task`, one per `For` pass waiting at
@@ -86,7 +91,8 @@ Everything raises a subclass of `aip.AipError`, whose `kind` uses the CLI's voca
 | `aip.RunError` | a run stopped on an error; `error` is the CLI's error object, plus `step`, `run_id`, `resumable`, `run_file`, `recorded`, `cause` (the exception behind it, if any) and `stopped` (False when the call changed nothing: a refused answer, a run with nothing to resume) |
 | `aip.CompileError` | a program directory that does not compile; `diagnostics` are the compiler's |
 | `aip.InvalidBundle` | an `.rl` that is not a usable bundle; `kind` is the bundle error's code (`not_a_bundle`, `bundle_tampered`, `bundle_language_version`) |
-| `aip.NotFound` | a target that is neither a folder, a bundle file, nor a name the server knows |
+| `aip.NotFound` | a target that is neither a folder, a bundle file, nor a name the server knows. For a published name the message is the server's and the same from `run`, `describe`, `pull` and `get`: `no procedure 'billing-support'; did you mean `billing_support`?` (the hint when the name with `_` for `-` is published), `no revision 7 of billing_support`, `billing_support has no live revision` |
+| `aip.RetiredRevision` | `run("name@revision")` on a retired revision (`kind` `retired`); `run(..., force=True)` runs it anyway |
 | `aip.NoServer` | a catalog call, or a reference not in the cache, with no server configured |
 | `aip.InvalidInput` | inputs or answers that are not usable, a run id with no run file, a run that has nothing to resume |
 | `aip.ServerError` | a call to the server failed: `status`, `kind`, `message` from its error envelope (`status` 0, kind `unreachable`, when nothing answered) |
@@ -99,21 +105,21 @@ catalog reference still runs from the bundle cache.
 
 | method | returns | CLI |
 |---|---|---|
-| `compile(folder, output=None)` | `Compiled`: `ok`, `name`, `bundle_id`, `diagnostics`, `errors`, `output` (the `.rl` written when asked) | `aip compile` |
-| `describe(target)` | `Description`: `name`, `bundle_id`, `description`, `inputs`, `result`, `steps`, `revision`, `example_inputs`, `data`, `summary()` | `aip info` |
+| `compile(folder, output=None)` | `Compiled`: `ok`, `name`, `bundle_id`, `diagnostics`, `errors`, `output` (the `.rl` written when asked; an output path that does not end in `.rl` is `InvalidInput`) | `aip compile` |
+| `describe(target)` | `Description`: `name`, `bundle_id`, `description`, `inputs`, `result`, `steps`, `revision`, `example_inputs`, `data`, `summary()`. In `data`: `result_on_some_paths` (the result keys a run has only when its path produced them), `retired` for a retired revision, and `warning` when the procedure has a `Decide` and this client has no decision model | `aip info` |
 | `search(query, limit=10)` | `[Hit]`: `name`, `revision`, `bundle_id`, `score`, `description` | `aip search` |
 | `list()` | `[Entry]`: `name`, `description`, `pinned`, `latest`, `resolves`, `revisions` | `aip list` |
 | `pull(ref)`, `pull_all()` | `Pulled`: `name`, `revision`, `bundle_id`, `path`, `fetched`; the bundle is in the cache, so `run` works offline | `aip pull`, `aip pull --all` |
 | `publish(target)` | `Published`: `name`, `revision`, `bundle_id`, `existed`; a folder is compiled here, an `.rl` taken as is | `aip publish` |
 | `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
-| `pin(name, revision)` | `Pinned` (`revision=None` clears it) | `aip pin` |
-| `retire("name@revision")` | `Retired` | `aip retire` |
-| `runs(name=None, status=None, agent=None, session=None, limit=50, user=None, draft=None)` | `[RunSummary]`: `run_id`, `name`, `revision`, `status`, `draft`, `identity`, `started`, `updated`; the server's runs when one is configured, else this machine's run files | `aip runs` |
-| `run_record(run_id)` | `RunRecord`: `status`, `identity`, `started`, `finished`, `pause`, `error`, `result`, `history` (the entries, one per step run), `table()` (the step table), from this machine's run file or the server; `InvalidInput` when neither has it | `aip runs <run_id>` |
+| `pin(name, revision)` | `Pinned` (`revision=None` clears it); a retired revision is refused (`ServerError`, kind `retired`) | `aip pin name@revision`, `aip pin name --clear` |
+| `retire("name@revision")` | `Retired`; a pin on that revision is cleared with it | `aip retire name@revision` |
+| `runs(name=None, status=None, agent=None, session=None, limit=50, user=None, draft=None)` | `[RunSummary]`, the most recently started first: `run_id`, `name`, `revision`, `status`, `draft`, `identity`, `started`, `updated`; the server's runs when one is configured, else this machine's run files | `aip runs` |
+| `run_record(run_id)` | `RunRecord`: `status`, `identity`, `started`, `finished`, `pause`, `error`, `result`, `history` (the entries, one per step run; for a run paused inside a `For`, the passes it has made so far included), `table()` (the step table), from this machine's run file or the server; `InvalidInput` when neither has it | `aip runs <run_id>` |
 | `audit(query=None, **params)` | `[AuditQuery]` (`query`, `description`, `builtin`), or the query's rows; `params` are `name`, `agent`, `session`, `user`, `draft`, `window`, `limit`, `repeats`, `key` | `aip audit` |
 | `save_audit(name, cypher, description="")`, `delete_audit(name)` | `AuditQuery`; a query of your own kept on the server and run by name | `aip audit --save`, `--delete` |
-| `export_runs(output, name=None, *, since=None, agent=None, session=None, user=None, draft=None, force=False)` | `Exported`: `path`, `runs`, `bundles`; the runs that match and the procedures they ran, as one Relate file | `aip export runs` |
+| `export_runs(output, name=None, *, since=None, agent=None, session=None, user=None, draft=None, force=False)` | `Exported`: `path`, `runs`, `procedures`, `bundles` (a procedure's revisions and drafts are a bundle each); the runs that match and the procedures they ran, as one Relate file | `aip export runs` |
 | `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear)` | `Settings`: `server` (the URL), `local` (it is this machine's, started on demand), `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch` (the secrets are on it but never in its text) | `aip config` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under

@@ -54,7 +54,8 @@ def export_command(argv: list[str]) -> int:
         return export_runs_command(argv[1:])
     from aip.compiler.cli import export_command as compiler_export
 
-    return compiler_export(argv, prog="aip export")
+    return compiler_export(argv, prog="aip export", epilog="`aip export runs [name] -o FILE` is the other export: the server's "
+                           "runs and the procedures they ran, as one file (`aip export runs --help`).")
 
 
 def fmt_command(argv: list[str]) -> int:
@@ -91,7 +92,7 @@ def _serving(call: Callable[[], int]) -> int:
     except CompileError as exc:
         for d in exc.diagnostics:
             print(d, file=sys.stderr)
-        print(f"aip: {exc}", file=sys.stderr)
+        print(f"aip: {exc.summary}", file=sys.stderr)       # the diagnostics are above: none is said twice
         return 1
     except AipError as exc:
         print(f"aip: {exc}", file=sys.stderr)
@@ -211,6 +212,7 @@ def run_command(argv: list[str]) -> int:
     parser.add_argument("--workdir", type=Path, default=None,
                         help="the run's working directory, where its scripts read and write files (AIP_WORKDIR); "
                              "kept in the run file so resume works from anywhere (default the current directory)")
+    parser.add_argument("--force", action="store_true", help="run `name@rev` although that revision is retired")
     _run_flags(parser)
     args = parser.parse_args(argv)
     client = _client()
@@ -218,7 +220,8 @@ def run_command(argv: list[str]) -> int:
     def go(on_step):
         inputs = _read_json(args.inputs, "--inputs")
         return client.run(args.target, {} if inputs is None else inputs, batch=args.batch, agent=args.agent,
-                          session=args.session, workdir=args.workdir, on_step=on_step)
+                          session=args.session, workdir=args.workdir, on_step=on_step, force=args.force,
+                          on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True))
     return _outcome(go, client, args.progress, args.debug, starting=True)
 
 
@@ -242,7 +245,9 @@ def resume_command(argv: list[str]) -> int:
 
 
 def search_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip search", description="Find published procedures by what they do; the ranking is the server's.")
+    parser = argparse.ArgumentParser(prog="aip search", description="Find published procedures by what they do; the ranking is the "
+                                     "server's. The score is BM25's: it orders the hits of one search and means nothing across "
+                                     "searches, and a query that fits nothing still ranks whatever shares a word with it.")
     parser.add_argument("query")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--json", action="store_true")
@@ -255,7 +260,7 @@ def search_command(argv: list[str]) -> int:
         elif not hits:
             print("no matches")
         for h in hits if not args.json else []:
-            print(f"{h.name}@{h.revision}  {h.score:.3f}  {h.description or ''}".rstrip())
+            print(f"{h.name}@{h.revision}  score {h.score:.3f}  {' '.join((h.description or '').split())}".rstrip())
         return 0
     return _serving(go)
 
@@ -276,7 +281,9 @@ def list_command(argv: list[str]) -> int:
         width = max(len(r.name) for r in rows)
         for r in rows:
             flag = "  pinned" if r.pinned else ""
-            print(f"{r.name.ljust(width)}  @{r.resolves or '-'}  {len(r.revisions or [])} revision(s){flag}  {r.description or ''}".rstrip())
+            resolves = f"@{r.resolves}" if r.resolves else "@- (retired)"      # every revision is retired: the name resolves to none
+            print(f"{r.name.ljust(width)}  {resolves}  {len(r.revisions or [])} revision(s){flag}  "
+                  f"{' '.join((r.description or '').split())}".rstrip())
         return 0
     return _serving(go)
 
@@ -326,25 +333,39 @@ def get_command(argv: list[str]) -> int:
 
 
 def pin_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip pin", description="Make a name resolve to one revision; --clear removes the pin.")
-    parser.add_argument("name")
-    parser.add_argument("revision", nargs="?", default=None)
-    parser.add_argument("--clear", action="store_true")
+    parser = argparse.ArgumentParser(prog="aip pin", description="Make a name resolve to one revision: `aip pin name@revision`. "
+                                     "`aip pin name --clear` removes the pin. A retired revision is not pinned.")
+    parser.add_argument("ref", help="`name@revision`; with --clear, the `name`")
+    parser.add_argument("extra", nargs="?", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--clear", action="store_true", help="remove the pin: the name resolves to its newest live revision again")
     args = parser.parse_args(argv)
-    if (args.revision is None) == (not args.clear):
-        parser.error("give a revision, or --clear")
+    name, _, revision = args.ref.partition("@")
+    _one_ref(parser, args, "pin")
+    if bool(revision) == args.clear:
+        parser.error(f"give `{name}@<revision>` to pin one, or `{name} --clear` to remove the pin")
 
     def go() -> int:
-        pinned = _client().pin(args.name, None if args.clear else args.revision)
+        pinned = _client().pin(name, None if args.clear else revision)
         print(f"{pinned.name} pin cleared" if pinned.revision is None else f"{pinned.name} -> {pinned.revision}")
         return 0
     return _serving(go)
 
 
+def _one_ref(parser: argparse.ArgumentParser, args: argparse.Namespace, command: str) -> None:
+    """`pin` and `retire` take one `name@revision`: a revision given as a second word is
+    answered with the spelling that works."""
+    if args.extra is not None:
+        parser.error(f"the revision is part of the reference: aip {command} {args.ref.partition('@')[0]}@{args.extra}")
+
+
 def retire_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip retire", description="Stop a name resolving to a revision (kept for the runs that reference it).")
+    parser = argparse.ArgumentParser(prog="aip retire", description="Stop a name resolving to a revision: `aip retire "
+                                     "name@revision`. The revision is kept for the runs that reference it; `aip run name@revision` "
+                                     "refuses it unless --force, a pin on it is cleared, and publishing its bundle again brings it back.")
     parser.add_argument("ref", help="`name@revision`")
+    parser.add_argument("extra", nargs="?", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    _one_ref(parser, args, "retire")
 
     def go() -> int:
         retired = _client().retire(args.ref)
@@ -354,8 +375,8 @@ def retire_command(argv: list[str]) -> int:
 
 
 def runs_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip runs", description="Runs, newest first: the server's when one is configured, else "
-                                     "this machine's run files. With a run id, that run step by step (this machine's run file "
+    parser = argparse.ArgumentParser(prog="aip runs", description="Runs, the most recently started first: the server's when one "
+                                     "is configured, else this machine's run files. With a run id, that run step by step (this machine's run file "
                                      "when it has one): each step, its pass, when, how long, and who answered or where it went.")
     parser.add_argument("run_id", nargs="?", default=None)
     parser.add_argument("--name", default=None, help="only runs of this procedure")
@@ -379,7 +400,10 @@ def runs_command(argv: list[str]) -> int:
             print(json.dumps([r.data for r in rows], indent=2))
             return 0
         if not rows:
-            print("no runs" if client.server is not None else "no runs on this machine")
+            if args.name and _no_runs_of(client, args.name):
+                print(f"no runs of `{args.name}`; names are `aip list`'s")
+            else:
+                print("no runs" if client.server is not None else "no runs on this machine")
             return 0
         table = [("RUN", "NAME", "STATUS", "AGENT", "STARTED", "UPDATED")]
         for r in rows:
@@ -391,6 +415,14 @@ def runs_command(argv: list[str]) -> int:
             print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
         return 0
     return _serving(go)
+
+
+def _no_runs_of(client: Any, name: str) -> bool:
+    """Whether `--name` itself is why nothing matched: there is no run of that name at all, and
+    it is not a published name either (a name mistyped, or a folder's spelling with `-`)."""
+    if client.runs(name, limit=1):
+        return False
+    return client.server is None or all(entry.name != name for entry in client.list())
 
 
 def _run_filters(parser: argparse.ArgumentParser) -> None:
@@ -419,7 +451,7 @@ def audit_command(argv: list[str]) -> int:
     parser.add_argument("--cypher", default=None, metavar="CYPHER", help="with --save: the query, inline or @path for a file")
     parser.add_argument("--description", default="", help="with --save: one line on what the query answers")
     parser.add_argument("--delete", default=None, metavar="NAME", help="remove a stored query")
-    parser.add_argument("--json", action="store_true", help="the list of queries as JSON")
+    parser.add_argument("--json", action="store_true", help="with no query: the list of queries as JSON (a query's rows always are)")
     args = parser.parse_args(argv)
     if args.save and not args.cypher:
         parser.error("--save needs --cypher")
@@ -439,6 +471,8 @@ def audit_command(argv: list[str]) -> int:
                             window=args.window, limit=args.limit, repeats=args.repeats, key=args.key)
         if args.query is not None:
             print(json.dumps(rows, indent=2))
+            if not rows and args.name and _no_runs_of(client, args.name):
+                print(f"aip: no runs of `{args.name}`; names are `aip list`'s", file=sys.stderr)
         elif args.json:
             print(json.dumps([q.data for q in rows], indent=2))
         else:
@@ -463,7 +497,8 @@ def export_runs_command(argv: list[str]) -> int:
     def go() -> int:
         e = _client().export_runs(args.output, args.name, since=args.since, agent=args.agent, session=args.session, user=args.user,
                                   draft=args.draft, force=args.force)
-        print(f"wrote {e.runs} run(s) of {e.bundles} procedure(s) to {e.path}")
+        bundles = "" if e.bundles == e.procedures else f" ({e.bundles} bundles: each revision and each draft is one)"
+        print(f"wrote {e.runs} run(s) of {e.procedures} procedure(s){bundles} to {e.path}")
         return 0
     return _serving(go)
 
@@ -506,7 +541,7 @@ def config_command(argv: list[str]) -> int:
     elif s.local:
         from aip.client import local
 
-        print(f"server: local  {s.server}, started when a command needs it; its store is {local.store_path()}  (from {s.source})")
+        print(f"server: local  {s.server}, started when a command needs it; its store is {local.store_file()}  (from {s.source})")
     else:
         print(f"server: {s.server}  (from {s.source})")
         print(f"token:  {'set' if s.token_set else 'none'}")

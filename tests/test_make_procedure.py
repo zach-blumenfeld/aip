@@ -105,7 +105,8 @@ def test_a_folder_that_does_not_compile_is_fixed_until_it_does(tmp_path):
     assert isinstance(done, aip.Done)
     compiled, _ = compile_folder(folder)
     assert done.result == {"path": str(folder), "bundle_id": compiled.id, "diagnostics": []}
-    assert (folder / "procedure.aip").read_text() == CANONICAL, "what compiles is left in the canonical form"
+    assert (folder / "procedure.aip").read_text() == WORKING, "S3: the compile step checks and reports; the author's file is left as written"
+    assert CANONICAL != WORKING and compile_folder(write(tmp_path / "canonical", CANONICAL))[0].id != compiled.id
     assert steps(client, done.run_id) == ["start", "write", "compile", "fix", "compile", "fix", "compile", "revise", "end"]
 
 

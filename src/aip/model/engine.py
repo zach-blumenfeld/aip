@@ -23,7 +23,10 @@ mapped back; any other body drives each pass in turn until it pauses or finishes
 carries every pass waiting at the same step. The entries of a pass are buffered and appended
 when its batch completes, pass by pass in input order, so the history is the same at every
 batch size; a pass that fails fails the run, and the passes of its batch that finished are
-recorded. The runtime's loop keys (spec 2.6: `index`, `iterations`, each loop's own key) live
+recorded. While a batch is still open (the run is paused in it) its passes' entries are on
+their cursors, and `recorded_history` reads them in the same order, which is what a run's
+record shows (`aip runs <id>`, the server): a paused loop's work is in the record, not held
+back until the loop exits. The runtime's loop keys (spec 2.6: `index`, `iterations`, each loop's own key) live
 beside the state in `loops`, never in it: a step reads them like any key, and a run that is
 over keeps none.
 
@@ -58,8 +61,8 @@ writes at the loop's level carries `until`, the test at the head that let the pa
 and where (`until` at a step or at the head, `items`, `times`, `cap`) with the `Until` answer's
 resolution; a loop that fails the run at its cap writes it too. The history is appended, never
 rewritten; a failed run keeps everything up to the failure and `error`. The run carries the
-bundle id, `identity` (`agent`, `session` and `user`, as given to `start`), `started` and
-`finished`."""
+bundle id, `identity` (`agent`, `session` and `user`, as given to `start`, and `agent_version`
+when the caller gave one), `started` and `finished`."""
 
 from __future__ import annotations
 
@@ -90,11 +93,29 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-def new_identity(agent: str | None = None, session: str | None = None, user: str | None = None) -> JSON:
+def new_identity(agent: str | None = None, session: str | None = None, user: str | None = None,
+                 agent_version: str | None = None) -> JSON:
     """The identity fields of a run (plan question 14): who ran it, claimed, not verified. The
     CLI fills `agent` from `--agent` or `AIP_AGENT`, `session` from `--session` or `AIP_SESSION`,
-    `user` from the server token's name."""
-    return {"agent": agent, "session": session, "user": user}
+    `user` from the server token's name. `agent_version` is there only when the caller has one
+    to give (`aip mcp`: the MCP client's own version); `agent` alone is what runs are filtered by."""
+    identity = {"agent": agent, "session": session, "user": user}
+    if agent_version:
+        identity["agent_version"] = agent_version
+    return identity
+
+
+def recorded_history(run: JSON) -> list[JSON]:
+    """The history of a run as its record shows it, from `Run.to_dict()`: the entries written so
+    far, then those of the `For` passes still in flight (a run paused, or failed, inside a
+    batch), pass by pass in input order, which is the order they are appended in when the batch
+    completes. For a run that is not inside a `For` it is the history itself."""
+    entries = list(run.get("history") or [])
+    for frame in run.get("frames") or []:
+        if frame.get("kind") == "For":
+            for cursor in sorted(frame.get("cursors") or [], key=lambda c: (c.get("passes") or [{}])[-1].get("pass") or 0):
+                entries.extend(recorded_history(cursor))
+    return entries
 
 
 @dataclass
@@ -734,4 +755,4 @@ def _by_index(pause: JSON, answers: Any) -> dict[int, Any]:
 
 
 __all__ = ["Engine", "Run", "Cursor", "new_identity", "RUNNING", "PAUSED", "DONE", "FAILED", "STATUSES", "ERROR_KINDS",
-           "DEFAULT_BATCH", "IDENTITY_FIELDS", "utc_now", "resumable"]
+           "DEFAULT_BATCH", "IDENTITY_FIELDS", "recorded_history", "utc_now", "resumable"]

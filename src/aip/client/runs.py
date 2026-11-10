@@ -29,7 +29,7 @@ from typing import Any
 
 from aip.compiler.keywords import ANSWER_TYPES
 from aip.model.cache import aip_home
-from aip.model.engine import DONE, FAILED, PAUSED, Run, utc_now
+from aip.model.engine import DONE, FAILED, PAUSED, Run, recorded_history, utc_now
 from aip.model.types import resumable as retry_can_help
 
 JSON = dict[str, Any]
@@ -105,14 +105,17 @@ class RunFile:
 
     def recording(self) -> JSON:
         """What is posted to the server at every stop (`POST /runs`): the whole run, so the
-        server's record is the run file's."""
-        return {"run_id": self.run_id, **self.run, "name": self.name, "revision": self.revision, "draft": self.draft,
-                "created": self.created, "updated": self.updated}
+        server's record is the run file's. Its `history` is the record's (`recorded_history`):
+        a run paused inside a `For` shows the passes it has made."""
+        return {"run_id": self.run_id, **self.run, "history": recorded_history(self.run), "name": self.name,
+                "revision": self.revision, "draft": self.draft, "created": self.created, "updated": self.updated}
 
     def record(self) -> JSON:
-        """The run as `aip runs <run id> --json` prints it: the run file, flat."""
+        """The run as `aip runs <run id> --json` prints it: the run file, flat, with the history
+        as the record shows it (`recorded_history`)."""
         return {"run_id": self.run_id, "name": self.name, "revision": self.revision, "draft": self.draft, "target": self.target,
-                "server": self.server, "recorded": self.recorded, "created": self.created, "updated": self.updated, **self.run}
+                "server": self.server, "recorded": self.recorded, "created": self.created, "updated": self.updated, **self.run,
+                "history": recorded_history(self.run)}
 
     def summary(self) -> JSON:
         """One row of `aip runs`: what the server's list holds for a run, from the run file."""
@@ -122,15 +125,15 @@ class RunFile:
 
 
 def local_runs(home: Path | None = None) -> list[RunFile]:
-    """Every run file on this machine, the most recently updated first. A file that cannot be
-    read as one is skipped."""
+    """Every run file on this machine, the most recently started first (the order the server
+    lists runs in). A file that cannot be read as one is skipped."""
     found = []
     for path in runs_dir(home).glob("*.json"):
         try:
             found.append(RunFile.load(path))
         except (OSError, ValueError, KeyError, TypeError):
             continue
-    return sorted(found, key=lambda r: r.updated, reverse=True)
+    return sorted(found, key=lambda r: r.run.get("started") or r.created, reverse=True)
 
 
 # ------------------------------------------------------------------ outcomes
@@ -229,6 +232,13 @@ def _show(value: Any) -> str:
     return json.dumps(value) if isinstance(value, (bool, int, float)) or value is None else str(value)
 
 
+def _produced(result: JSON) -> str:
+    """What a script or an agent produced, for the table: each key, and for an answer (a
+    `true_or_false`, `choice` or `score` key) its value, so a check that failed reads
+    `passed=false` and not just `passed`."""
+    return ", ".join(f"{k}={_show(v['value'])}" if isinstance(v, dict) and "value" in v else k for k, v in result.items())
+
+
 def _what(entry: JSON) -> str:
     """The last column of the table: who answered, or where it went and why."""
     kind, result = entry["kind"], entry.get("result") or {}
@@ -247,11 +257,11 @@ def _what(entry: JSON) -> str:
         passed = f"; confidence {_show(check['confidence'])} not below {_show(check['below'])}" if check else ""
         return f"-> {entry.get('to')}  ({entry.get('read')} is {entry.get('value')}{passed})"
     if kind == "Execute":
-        return f"{entry.get('script')} -> {', '.join(result) or 'nothing'}"
+        return f"{entry.get('script')} -> {_produced(result) or 'nothing'}"
     if kind == "Task_Agent":
         by = (entry.get("answered_by") or {}).get("agent") or "?"
         waited = entry.get("waited_seconds")
-        return f"answered by {by}" + (f" after {waited:.1f}s" if waited is not None else "") + f" -> {', '.join(result)}"
+        return f"answered by {by}" + (f" after {waited:.1f}s" if waited is not None else "") + f" -> {_produced(result)}"
     if kind in ("For", "Loop"):
         exit = entry.get("exit") or {}
         where = f" at {exit['where']}" if exit.get("where") else ""
@@ -275,7 +285,8 @@ def run_table(record: JSON) -> str:
              f"  bundle    {record.get('bundle_id')}"]
     if record.get("target"):
         lines.append(f"  target    {record['target']}")
-    lines.append(f"  agent     {identity.get('agent') or '-'}   session {identity.get('session') or '-'}   user {identity.get('user') or '-'}")
+    version = f" {identity['agent_version']}" if identity.get("agent") and identity.get("agent_version") else ""
+    lines.append(f"  agent     {identity.get('agent') or '-'}{version}   session {identity.get('session') or '-'}   user {identity.get('user') or '-'}")
     lines.append(f"  started   {record.get('started') or record.get('created') or '-'}   finished {record.get('finished') or '-'}")
     rows = [("STEP", "KIND", "PASS", "WHEN", "+MS", "WHAT")]
     for e in record.get("history") or []:

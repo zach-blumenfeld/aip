@@ -42,6 +42,15 @@ REPLY = "Sorry about that; the duplicate charge is refunded."
 TASK = {"task": "Write a one-line welcome note.", "policies": ["The note is in English.", "The note names no price."]}
 
 
+class TicketModel:
+    """Stands in for `TypeSafeClient` on `ticket-triage`: every ticket is a calm billing question."""
+
+    def system_one(self, state, questions, **_):
+        return {"model": "jev-1", "usage": {"input_tokens": 1, "output_tokens": 1},
+                "answers": {"billing": {"type": "noul", "noul": 0.97},
+                            "tone": {"type": "choice", "choice": "calm", "confidence": 0.9, "probabilities": {"angry": 0.1, "calm": 0.9}}}}
+
+
 def over(server, script, name: str | None = "test-agent"):
     """Run `script(call, client)` as an MCP client connected to `server` (a server object, or
     the parameters of a process to start). `call(tool, **arguments)` is the tool's object."""
@@ -122,13 +131,15 @@ def test_who_ran_it_the_flag_the_client_the_environment_then_mcp(tmp_path, monke
         client = aip.Client()
         return client.run_record(over(build(client, **options), script, name=name)).identity
 
+    # S3: the client's own version rides beside its name as `agent_version`; another name (`--agent`) has no version of ours to give
     assert run_as("langgraph", "s-9", agent="support-bot") == {"agent": "support-bot", "session": "s-9", "user": None}
     assert run_as("langgraph", "s-9", session="s-1")["session"] == "s-9", "the call's session over the server's"
-    assert run_as("langgraph", session="s-1") == {"agent": "langgraph", "session": "s-1", "user": None}
+    assert run_as("langgraph", session="s-1") == {"agent": "langgraph", "session": "s-1", "user": None, "agent_version": "1.0"}
     assert run_as(None)["agent"] == "mcp", "a client that does not say who it is"
     monkeypatch.setenv("AIP_AGENT", "from-env")
     monkeypatch.setenv("AIP_SESSION", "env-session")
-    assert run_as("langgraph") == {"agent": "langgraph", "session": "env-session", "user": None}, "the client's own name over AIP_AGENT"
+    assert run_as("langgraph") == {"agent": "langgraph", "session": "env-session", "user": None, "agent_version": "1.0"}, \
+        "the client's own name over AIP_AGENT"
 
 
 def test_what_cannot_be_done_is_an_error_object_not_an_mcp_error(tmp_path):
@@ -158,6 +169,65 @@ def test_what_cannot_be_done_is_an_error_object_not_an_mcp_error(tmp_path):
         written = await call("compile", folder=str(AGENT), output=str(tmp_path / "agent.rl"))
         assert written["ok"] and written["name"] == "billing_support_agent" and written["output"] == str(tmp_path / "agent.rl")
         assert (await call("describe", target=written["output"]))["bundle_id"] == written["bundle_id"]
+
+        # S3: an output that is not an .rl is refused, and a folder that is not there is a plain not_found
+        other = await call("compile", folder=str(AGENT), output=str(tmp_path / "agent.bundle"))
+        assert other["error"] == "invalid_input" and ".rl" in other["message"] and not (tmp_path / "agent.bundle").exists()
+        nowhere = await call("compile", folder=str(tmp_path / "no-such-folder"))
+        assert (nowhere["error"], nowhere["kind"]) == ("invalid_input", "not_found") and "Errno" not in nowhere["message"]
+
+        # S3: arguments that do not fit a tool are an ordinary result in plain words, not an MCP error with the validator's text
+        no_query = await call("search")
+        assert (no_query["error"], no_query["kind"], no_query["resumable"]) == ("invalid_input", "invalid_arguments", False)
+        assert no_query["message"] == "search was not called: `query` is missing. Its arguments are `query`, `limit`."
+        paused = await call("run", target=str(AGENT), inputs={"message": CALM})
+        text = await call("resume", run_id=paused["run_id"], answers="just a string")
+        assert text["kind"] == "invalid_arguments" and "pydantic" not in text["message"]
+        assert "`answers` is an object or a list, not a string" in text["message"]
+        assert (await call("resume", run_id=paused["run_id"], answers={"billing": True, "tone": "calm"}))["step"] == "reply", \
+            "the pause stood"
+
+    over(build(aip.Client()), script)
+
+
+def test_progress_names_the_loop_and_the_pass_and_ends_with_where_the_run_stopped(tmp_path):
+    """S3: two tasks at one step are two passes, and the notification says which; the last
+    notification of a call says the run paused, finished or failed."""
+    from aip.mcp import step_message, stop_message
+
+    assert step_message({"kind": "Start", "step": "start", "pass": None, "passes": []}) == "Start start"
+    assert step_message({"kind": "Execute", "step": "check", "pass": 2,
+                         "passes": [{"loop": "each_ticket", "pass": 3}, {"loop": "revise", "pass": 2}]}) == \
+        "Execute check: revise pass 2 of each_ticket pass 3"
+    assert stop_message({"done": True, "result": {}}) == "done"
+    assert stop_message({"error": "no_decision_model", "step": "triage"}) == "error no_decision_model at triage"
+    lines = []
+
+    async def script(call, mcp):
+        async def progress(n, total, message):
+            lines.append(message)
+        arguments = {"target": str(example_dir("ticket-triage")), "workdir": str(tmp_path),
+                     "inputs": {"tickets": ["Where is my invoice?", "How do I change plan?"], "policy": "Refunds take 5 days."}}
+        stop = result_object(await mcp.call_tool("run", arguments, progress_callback=progress))
+        return stop
+
+    stop = over(build(aip.Client(decision_client=TicketModel())), script)
+    assert (stop["paused"], stop["step"], len(stop["tasks"])) == ("task", "draft", 2)
+    assert lines == ["Start start", "Decide classify: each_ticket pass 0", "Route by_tone: each_ticket pass 0",
+                     "Decide classify: each_ticket pass 1", "Route by_tone: each_ticket pass 1", "paused at draft: 2 task(s) to answer"]
+    assert "warning" not in stop
+
+
+def test_a_decide_ahead_and_no_model_is_a_warning_before_the_run_and_in_describe(tmp_path):
+    """S3: `describe` and `run` say up front that the procedure asks a decision model and none
+    is configured; it is a warning, since the run may never reach the step."""
+    async def script(call, mcp):
+        described = await call("describe", target=str(example_dir("billing-support")))
+        assert "no decision model is configured, and this procedure asks one at triage" in described["warning"]
+        assert described["result_on_some_paths"] == ["ticket_id", "queue", "reply"], "what a result has depends on the route taken"
+        assert "warning" not in await call("describe", target=str(AGENT))
+        failed = await call("run", target=str(example_dir("billing-support")), inputs={"message": CALM}, workdir=str(tmp_path))
+        assert (failed["error"], failed["step"], failed["warning"]) == ("no_decision_model", "triage", described["warning"])
 
     over(build(aip.Client()), script)
 
@@ -194,11 +264,13 @@ def test_dynamic_policy_by_name_end_to_end_recorded_under_the_client(store, tmp_
         return done["run_id"]
 
     run_id = over(build(client), script, name="mcp-smoke")
-    assert lines == ["Start start"], "each step run is a progress notification for a client that asks"
+    assert lines == ["Start start", "paused at draft: 1 task(s) to answer"], \
+        "each step run is a progress notification for a client that asks, and the last says where the run stopped (S3)"
     assert len(model.calls) == 1, "the two policies went to the model as one batch"
     [row] = client.runs(agent="mcp-smoke")
     assert (row.run_id, row.name, row.status, row.draft) == (run_id, "dynamic_policy", "done", False)
-    assert row.identity == {"agent": "mcp-smoke", "session": "smoke-1", "user": "zach"}
+    assert row.identity == {"agent": "mcp-smoke", "session": "smoke-1", "user": "zach", "agent_version": "1.0"}
+    assert client.runs(agent="mcp-smoke@1.0") == [], "the name alone is the filter"
     assert client.runs(agent="someone-else") == []
     record = store.runs[run_id]
     assert [e["step"] for e in record["history"]] == ["start", "draft", "check", "check", "review", "summarize_check", "revise", "end"]

@@ -167,11 +167,14 @@ class Server:
     def delete_audit(self, name: str) -> JSON:
         return self.request("DELETE", f"/audit/{name}").json()
 
-    def export_runs(self, **filters: Any) -> tuple[bytes, int, int]:
+    def export_runs(self, **filters: Any) -> tuple[bytes, int, int, int]:
         """The runs that match (`name`, `since`, `agent`, `session`, `user`, `draft`) and the
-        procedures they ran, as one Relate file: its bytes, how many runs, how many bundles."""
+        procedures they ran, as one Relate file: its bytes, how many runs, how many bundles,
+        how many procedures (names) those bundles are of."""
         response = self.request("GET", "/export/runs", params={k: v for k, v in filters.items() if v is not None})
-        return response.content, int(response.headers.get("X-AIP-Runs", 0)), int(response.headers.get("X-AIP-Bundles", 0))
+        headers = response.headers
+        return (response.content, int(headers.get("X-AIP-Runs", 0)), int(headers.get("X-AIP-Bundles", 0)),
+                int(headers.get("X-AIP-Procedures", 0)))
 
     def health(self) -> JSON:
         return self.get("/health")

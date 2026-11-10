@@ -17,11 +17,14 @@ with the object the CLI prints for the same thing (`docs/cli-json.md`).
 A run that pauses, a run that fails and a call that cannot be made all answer with an ordinary
 result, not an MCP error: the object's first key says which (`paused`, `done`, `error`), exactly
 as on the command line, so the caller's model reads one contract and a framework that raises on
-a tool error does not lose the pause to an exception. Only a bug in this server is an MCP error.
+a tool error does not lose the pause to an exception. Arguments that do not fit a tool (one
+missing, `answers` given as a string) are answered the same way, in a plain sentence (`Server`).
+Only a bug in this server is an MCP error.
 
 Who ran it (`docs/language/runtime.md`, The record): the run's `agent` is the name the MCP
 client gave for itself when it connected (`claude-code`, `langgraph`, ...), unless `aip mcp
---agent` names one; with neither, `AIP_AGENT`, else `mcp`. Its `session` is the `session` the
+--agent` names one; with neither, `AIP_AGENT`, else `mcp`. The client's own version is kept
+beside it as `agent_version`; runs are filtered by the name alone. Its `session` is the `session` the
 `run` call was given, else `aip mcp --session` or `AIP_SESSION`, else an id made when this
 server started, so the runs of one connection are found together.
 
@@ -38,6 +41,9 @@ import uuid
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types import CallToolResult, TextContent
+from pydantic import ValidationError
 
 from aip.client.config import AGENT_ENV, SESSION_ENV
 from aip.client.runs import error_outcome
@@ -60,7 +66,8 @@ fits the task.
    - `"done": true`: `result` is the outcome.
    - `"paused": "task"`: the procedure needs you. Do what each task's `prompt` asks, using its
      `state`, then call `resume` with the `run_id` and one answer per task: an object with
-     exactly the keys of the task's `answer_with`. Repeat until the run is done.
+     exactly the keys of the task's `answer_with` (several tasks: a list of those objects in
+     task order, all in one call). Repeat until the run is done.
    - `"error": <kind>`: read `message`. When `resumable` is true, fix the cause and call
      `resume` (with no answers to retry a failed step, with corrected answers after a refused
      one).
@@ -81,15 +88,91 @@ def failure(exc: AipError) -> JSON:
     return error_outcome({"error": "invalid_input", "step": None, "message": str(exc), **detail}, None, None, None, False)
 
 
-def client_name(ctx: Context) -> str | None:
-    """The name the MCP client gave for itself (`clientInfo.name`), or None when it gave none."""
+def _client_info(ctx: Context, field: str) -> str | None:
     try:
         params = ctx.session.client_params
     except (AttributeError, ValueError):
         return None
-    info = getattr(params, "client_info", None)
-    name = getattr(info, "name", None)
-    return name.strip() or None if isinstance(name, str) else None
+    value = getattr(getattr(params, "client_info", None), field, None)
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def client_name(ctx: Context) -> str | None:
+    """The name the MCP client gave for itself (`clientInfo.name`), or None when it gave none."""
+    return _client_info(ctx, "name")
+
+
+def client_version(ctx: Context) -> str | None:
+    """The version the MCP client gave for itself (`clientInfo.version`), or None."""
+    return _client_info(ctx, "version")
+
+
+def step_message(line: JSON) -> str:
+    """One progress notification's text for a step: its kind and name, and inside loops which
+    pass of which loop, innermost first (`Execute check: revise pass 1 of each_ticket pass 2`),
+    so two tasks at one step in different passes do not read as one step repeated."""
+    passes = line.get("passes") or []
+    where = ": " + " of ".join(f"{p['loop']} pass {p['pass']}" for p in reversed(passes)) if passes else ""
+    return f"{line.get('kind')} {line.get('step')}{where}"
+
+
+def stop_message(stop: JSON) -> str:
+    """The last progress notification of a call: where the run stopped."""
+    if "paused" in stop:
+        return f"paused at {stop.get('step')}: {len(stop.get('tasks') or [])} task(s) to answer"
+    if stop.get("done"):
+        return "done"
+    return f"error {stop.get('error')}" + (f" at {stop['step']}" if stop.get("step") else "")
+
+
+_A = {"object": "an object", "array": "a list", "string": "a string", "integer": "an integer", "number": "a number",
+      "boolean": "true or false", "null": "nothing"}
+_GOT = {dict: "an object", list: "a list", str: "a string", bool: "a boolean", int: "an integer", float: "a number", type(None): "null"}
+
+
+def _expected(schema: JSON) -> str:
+    """What a tool's argument is, in words, from its JSON schema."""
+    kinds = [s.get("type") for s in schema.get("anyOf") or [schema]]
+    words = list(dict.fromkeys(_A[k] for k in kinds if k in _A and k != "null"))
+    return " or ".join(words) or "another kind of value"
+
+
+def argument_errors(tool: str, schema: JSON, arguments: JSON, errors: list[JSON]) -> str:
+    """One plain sentence for arguments that do not fit a tool: each missing one, each one of
+    the wrong kind with what it should be, each one the tool does not take."""
+    properties = schema.get("properties") or {}
+    said: dict[str, str] = {}
+    for error in errors:
+        name = str(error["loc"][0]) if error.get("loc") else ""
+        if name in said:
+            continue
+        if error.get("type") == "missing":
+            said[name] = f"`{name}` is missing"
+        elif name in properties:
+            said[name] = f"`{name}` is {_expected(properties[name])}, not {_GOT.get(type(arguments.get(name)), 'that')}"
+        else:
+            said[name] = f"`{name}`: {error.get('msg')}" if name else str(error.get("msg"))
+    takes = ", ".join(f"`{p}`" for p in properties)
+    return f"{tool} was not called: " + "; ".join(said.values()) + f". Its arguments are {takes}."
+
+
+class Server(MCPServer):
+    """`MCPServer`, with arguments that do not fit a tool answered as the tools answer everything
+    else: an ordinary result holding the CLI's error object (`invalid_input`, kind
+    `invalid_arguments`) and a plain sentence, where the SDK would answer an MCP error carrying
+    the validator's own text. A model that hands `resume` a string for `answers` reads what
+    `answers` is, and a framework that raises on a tool error does not raise here."""
+
+    async def call_tool(self, name: str, arguments: JSON, context: Any = None) -> Any:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as exc:
+            cause, tool = exc.__cause__, self._tool_manager.get_tool(name)
+            if not isinstance(cause, ValidationError) or tool is None:
+                raise
+            message = argument_errors(name, tool.parameters, arguments or {}, cause.errors())
+            body = failure(AipError(message, "invalid_arguments"))
+            return CallToolResult(content=[TextContent(type="text", text=json.dumps(body, indent=2))], structured_content=body)
 
 
 def build(client: Client | None = None, *, agent: str | None = None, session: str | None = None) -> MCPServer:
@@ -100,43 +183,65 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
 
     client = client if client is not None else Client()
     default_session = session or os.environ.get(SESSION_ENV) or f"mcp-{uuid.uuid4().hex[:8]}"
-    server = MCPServer("aip", title="Agent Instruction Protocol", instructions=INSTRUCTIONS,
-                       version=version_line().split()[1], log_level="WARNING")
+    server = Server("aip", title="Agent Instruction Protocol", instructions=INSTRUCTIONS,
+                    version=version_line().split()[1], log_level="WARNING")
 
     def who(ctx: Context) -> str:
         return agent or client_name(ctx) or os.environ.get(AGENT_ENV) or MCP_AGENT
 
-    def stopped(result: Any) -> JSON:
-        """Where a run stopped, as the CLI's object. A stop the configured server did not take
-        is said on stderr, as the CLI says it; the object's `recorded` is false."""
-        if result.recorded is False:
-            print(f"aip mcp: not recorded: {client.recording_error or 'the server did not take it'}; the next stop will try again",
-                  file=sys.stderr)
-        return result.to_json()
+    def version_of(ctx: Context) -> str | None:
+        """The MCP client's version, recorded as the run's `agent_version` when the run's
+        `agent` is that client's own name."""
+        return client_version(ctx) if who(ctx) == client_name(ctx) else None
 
     def reporter(ctx: Context):
-        """`on_step` for a run: each history entry as an MCP progress notification, for a client
-        that asked for them. The tool runs on a worker thread, so the notification crosses back
-        to the event loop; a client or a transport that takes none ends the reporting, never the run."""
+        """Progress for a run, for a client that asked for it: `on_step` sends each history entry
+        as an MCP progress notification, and `stopped` one last notification saying where the
+        run stopped (paused at a step, done, or an error), so a client that shows progress need
+        not read the result to learn why the stream ended. The tool runs on a worker thread,
+        so a notification crosses back to the event loop; a client or a transport that takes
+        none ends the reporting, never the run."""
         import anyio.from_thread
 
         sent = {"n": 0, "on": True}
 
-        def on_step(line: JSON) -> None:
+        def send(message: str) -> None:
             if not sent["on"]:
                 return
             sent["n"] += 1
-            where = f"{line.get('kind')} {line.get('step')}" + (f" (pass {line['pass']})" if line.get("pass") is not None else "")
             try:
-                anyio.from_thread.run(ctx.report_progress, float(sent["n"]), None, where)
+                anyio.from_thread.run(ctx.report_progress, float(sent["n"]), None, message)
             except Exception:
                 sent["on"] = False
-        return on_step
+
+        def stopped(stop: JSON) -> JSON:
+            send(stop_message(stop))
+            return stop
+        return (lambda line: send(step_message(line))), stopped
+
+    def driven(ctx: Context, call) -> JSON:
+        """One `run` or `resume`: where the run stopped, as the CLI's object. A stop the
+        configured server did not take is said on stderr, as the CLI says it; the object's
+        `recorded` is false."""
+        on_step, stopped = reporter(ctx)
+        try:
+            result = call(on_step)
+        except RunError as exc:
+            return stopped(failure(exc))
+        except AipError as exc:
+            return failure(exc)
+        if result.recorded is False:
+            print(f"aip mcp: not recorded: {client.recording_error or 'the server did not take it'}; the next stop will try again",
+                  file=sys.stderr)
+        return stopped(result.to_json())
 
     @server.tool()
     def search(query: str, limit: int = 10) -> dict[str, Any]:
         """Find published procedures by what they do. Returns `hits`, best first: each has the
-        `name` to give `describe` and `run`, its `revision`, a `score` and its `description`.
+        `name` to give `describe` and `run`, its `revision`, its `bundle_id`, a `score` and its
+        `description`. The `score` orders the hits of this search and nothing more: a query
+        that fits nothing still ranks whatever shares a word with it, so read the first hit's
+        `description` (and `describe` it) before taking it for a match.
         Needs a configured server; a procedure on disk needs no search, give its path to
         `describe` or `run`."""
         try:
@@ -150,7 +255,9 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         `name@revision`), a program directory (the folder holding `procedure.aip`) or an `.rl`
         bundle. Returns its `description`, when to use it (`use_when`, `avoid`), its `inputs`
         (key to type, with `input_descriptions`), `example_inputs` to edit and pass to `run`,
-        its `steps` and the keys of its `result`."""
+        its `steps` and the keys of its `result`; `result_on_some_paths` lists the result keys
+        a run has only when the path it took produced them. A `warning` says so when the
+        procedure asks a decision model and none is configured here."""
         try:
             d = client.describe(target)
             return {**d.data, "example_inputs": d.example_inputs}
@@ -162,13 +269,14 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         """Check a program directory (the folder holding `procedure.aip`). Returns `ok`, the
         procedure's `name`, its `bundle_id` when it compiles, and every diagnostic (`code`,
         `severity`, `message`, `line`, `column`, `step`): fix the errors and compile again.
-        With `output`, a path ending in `.rl`, the bundle is written there."""
+        With `output`, a path ending in `.rl`, the bundle is written there; any other name is
+        refused."""
         try:
             c = client.compile(folder, output)
         except AipError as exc:
             return failure(exc)
         except OSError as exc:
-            return failure(AipError(f"{folder}: {exc}", "not_found"))
+            return failure(AipError(f"{folder} cannot be read as a program directory: {exc.strerror or exc}", "not_found"))
         return {"ok": c.ok, "name": c.name, "bundle_id": c.bundle_id, "diagnostics": [d.to_dict() for d in c.diagnostics],
                 "output": str(c.output) if c.output else None}
 
@@ -182,12 +290,12 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         with `resume`; or `"error": <kind>` with `message` and `resumable`. `session` is an id
         of your choosing that groups this run with others in the record; `workdir` is the
         directory the procedure's scripts read and write files in (default: this server's);
-        `batch` is how many passes of a loop over a list run at once (default 10)."""
-        try:
-            return stopped(client.run(target, inputs or {}, batch=batch, agent=who(ctx), session=session or default_session,
-                                      workdir=workdir, on_step=reporter(ctx)))
-        except AipError as exc:
-            return failure(exc)
+        `batch` is how many passes of a loop over a list run at once (default 10). A `warning`
+        in the reply is something to know before going on (no decision model is configured and
+        the procedure asks one). A retired `name@revision` is refused (`kind: "retired"`)."""
+        return driven(ctx, lambda on_step: client.run(target, inputs or {}, batch=batch, agent=who(ctx),
+                                                      session=session or default_session, workdir=workdir, on_step=on_step,
+                                                      agent_version=version_of(ctx)))
 
     @server.tool()
     def resume(ctx: Context, run_id: str, answers: dict[str, Any] | list[Any] | None = None) -> dict[str, Any]:
@@ -200,10 +308,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         refused as `invalid_output` naming what is wrong, and the pause stands: answer again.
         With no `answers`, retry the step a failed run stopped at, once its cause is fixed.
         Returns what `run` returns."""
-        try:
-            return stopped(client.resume(run_id, answers, agent=who(ctx), on_step=reporter(ctx)))
-        except AipError as exc:
-            return failure(exc)
+        return driven(ctx, lambda on_step: client.resume(run_id, answers, agent=who(ctx), on_step=on_step))
 
     @server.tool()
     def pull(ref: str | None = None) -> dict[str, Any]:
@@ -245,4 +350,5 @@ def result_object(result: Any) -> JSON:
     return json.loads(text)
 
 
-__all__ = ["INSTRUCTIONS", "MCP_AGENT", "TOOLS", "build", "client_name", "failure", "result_object", "serve"]
+__all__ = ["INSTRUCTIONS", "MCP_AGENT", "TOOLS", "Server", "argument_errors", "build", "client_name", "client_version", "failure",
+           "result_object", "serve", "step_message", "stop_message"]

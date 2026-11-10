@@ -14,6 +14,7 @@ from pathlib import Path
 
 from aip.compiler import FileEntry, compile_folder, compile_source, example_dir, relate
 
+from aip.model.engine import recorded_history
 from aip.model.types import resumable
 from aip.model import (
     DONE, FAILED, PAUSED, Engine, InvalidInput, InvalidOutput, NotPaused, Procedure, ScriptedResolver, answers,
@@ -937,6 +938,30 @@ class TicketTriage(EngineCase):
 
     def test_the_record_matches_at_batch_one(self):
         self.assertEqual(without_timestamps(self.drive(1).history), without_timestamps(self.drive(10).history))
+
+    def test_a_run_paused_inside_a_for_shows_the_passes_it_has_made(self):
+        """S3: the passes of an open batch are in the record while the run waits, in the order
+        they will have when the batch completes; the engine's own history joins them then."""
+        engine = Engine(ScriptedResolver({"classify": triage_answers}), home=self.home, workdir=self.tmp, batch=10, clock=CLOCK)
+        run = engine.start(self.load(self.bundle), {"tickets": self.TICKETS, "policy": self.POLICY})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "draft"))
+        self.assertEqual([e["step"] for e in run.history], ["start"], "the engine appends a pass's entries when its batch completes")
+        held = recorded_history(json.loads(json.dumps(run.to_dict())))
+        self.assertEqual([(e["step"], e["pass"]) for e in held], [
+            ("start", None), ("classify", 0), ("by_tone", 0), ("classify", 1), ("by_tone", 1), ("escalate", 1), ("classify", 2), ("by_tone", 2)])
+        run = engine.resume(run, {"0": {"reply": "We refund within 30 days, of course."}, "1": {"reply": "Sure, I will check."}})
+        self.assertEqual((run.status, run.pause["step"]), (PAUSED, "fix"))
+        waiting = recorded_history(run.to_dict())
+        self.assertEqual([(e["step"], e["pass"]) for e in waiting], [
+            ("start", None), ("classify", 0), ("by_tone", 0), ("draft", 0), ("check", 0), ("revise", 0),
+            ("classify", 1), ("by_tone", 1), ("escalate", 1),
+            ("classify", 2), ("by_tone", 2), ("draft", 2), ("check", 2)], "each pass's entries stand together; pass 2 waits in its revise loop")
+        self.assertEqual([e for e in waiting if e in held], held, "what the record showed before is still there, in the same order")
+        run = engine.resume(run, {"reply": "We refund within 30 days. I checked your plan."})
+        run = engine.resume(run, {"summary": "two replies, one escalation"})
+        self.assertEqual(run.status, DONE)
+        self.assertEqual(recorded_history(run.to_dict()), run.history, "outside a For the record's history is the engine's")
+        self.assertEqual([e for e in run.history if e in waiting], waiting, "nothing the record showed was dropped or reordered")
 
     def test_an_answer_that_does_not_fit_is_refused_whole_and_the_pause_stands(self):
         """Answers are as strict as inputs (plan R5): a wrong type, a key or a task the pause did

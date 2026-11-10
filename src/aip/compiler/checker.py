@@ -363,6 +363,7 @@ class Checker:
         self.first_execute: s.Step | None = None
         self.path: tuple[str, ...] = ()
         self.sources: dict[str, str] = {}                 # route name -> the source class of the answer it reads
+        self.some_paths: list[str] = []                   # the End's reads that only some paths produce
         self.loops: set[str] = set()                      # the loops' names: each is the runtime's key for that loop
         self.keyless = False                              # a Decide or Aggregate names no key: its readers' unknown_key is its consequence
         self.broken = False                               # a flow of the region being read did not resolve
@@ -756,6 +757,7 @@ class Checker:
             # The result is what the run produced: End may name a key only some paths produce, and
             # the result carries the ones the path taken did (it must still be produced somewhere).
             self.check_reads(st, y_in, name)
+            self.some_paths = [d.key.path[-1] for d in st.reads if d.key.name in y_in and d.key.name not in m_in]
             return must, may, set()
         self.check_reads(st, m_in, name)
         if st.kind == "Decide":
@@ -1147,17 +1149,36 @@ class Checker:
 # ---------------------------------------------------------------- entry points
 
 def check(program: s.Program, folder: Path | str | None = None, file: str | None = None, *,
-          files: set[str] | None = None, sources: dict[str, str] | None = None) -> list[Diagnostic]:
+          files: set[str] | None = None, sources: dict[str, str] | None = None,
+          some_paths: list[str] | None = None) -> list[Diagnostic]:
     """Every diagnostic for a parsed program, sorted by position. `folder` is the program
     directory, for the checks on files; `files` are the program's file paths when they are in
     hand instead (a bundle's); without either those checks are skipped. A dict passed as
     `sources` is filled with the source class of the answer each route reads (route name to
-    one of `SOURCE_PRECEDENCE`), which the graph writes on the route's `READ_BY` edge."""
+    one of `SOURCE_PRECEDENCE`), which the graph writes on the route's `READ_BY` edge. A list
+    passed as `some_paths` is filled with the keys the `End` reads that only some paths
+    produce (spec 2.2): a result carries those when the path the run took produced them."""
     checker = Checker(program, Path(folder) if folder is not None else None, file, files)
     diagnostics = checker.run()
     if sources is not None:
         sources.update(checker.sources)
+    if some_paths is not None:
+        some_paths.extend(checker.some_paths)
     return diagnostics
+
+
+def result_on_some_paths(source: str, files: set[str] | None = None) -> list[str]:
+    """The keys of a procedure's result that only some paths produce, from its source: what
+    `aip info` marks "on some paths". Empty for a source that does not parse."""
+    from aip.compiler.parser import parse
+
+    try:
+        program = parse(source, None)
+    except ParseError:
+        return []
+    found: list[str] = []
+    check(program, None, None, files=files, some_paths=found)
+    return found
 
 
 def check_source(source: str, file: str | None = None, folder: Path | str | None = None, *,

@@ -40,6 +40,9 @@ TICKETS = ["Can I get a copy of my March invoice?", "You charged me twice, fix i
 POLICY = "Duplicate charges are refunded in full within 5 business days. Plan changes take effect next cycle."
 NOT_RECORDED = ("aip: not recorded: no server is configured; run `aip config server local` to record runs on this machine, "
                 "or `aip config server URL` for a server elsewhere\n")
+NO_MODEL = ("no decision model is configured, and this procedure asks one at triage: a run that reaches it fails there with "
+            "no_decision_model until one is set (run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` "
+            "for an endpoint other than TypeSafe's)")
 # A script that fails until the "ticket service" is up: a marker file in the run's working directory.
 FLAKY = ('import json, os, sys\n'
          'if not os.path.exists(os.path.join(os.environ["AIP_WORKDIR"], "ticket-service-up")):\n'
@@ -234,7 +237,8 @@ class CliJson(unittest.TestCase):
 
     def test_a_decision_without_a_model_fails_until_a_model_answers(self):
         code, [error], err = self.run_(EXAMPLE, {"message": CALM})
-        self.assertEqual((code, err), (1, NOT_RECORDED))
+        self.assertEqual((code, err), (1, f"aip: warning: {NO_MODEL}\n" + NOT_RECORDED), "said before the first step, and in the object")
+        self.assertEqual(error["warning"], NO_MODEL)
         self.assert_documented("error-no-decision-model", error)
         held = RunFile.load(self.run_file)
         self.assertEqual((held.status, held.run["position"]), ("failed", "step:triage"), "the run waits at the decision")

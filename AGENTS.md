@@ -98,7 +98,7 @@ places below and change them in the same commit; the drift tests catch some, not
 
 | Where | What to change |
 |---|---|
-| `src/aip/model/steps.py` | the step's behaviour; `engine.py` drives the loop, writes the pause and the record; `procedure.py` reads the graph and changes only when `docs/language/bundle.md` does |
+| `src/aip/model/steps.py` | the step's behaviour; `engine.py` drives the loop, writes the pause and the record (`recorded_history` is the history a record shows: the engine's, plus the entries of the `For` passes still open in a run that stopped inside one; `aip.client.runs` posts and prints that); `procedure.py` reads the graph and changes only when `docs/language/bundle.md` does |
 | `src/aip/server/store.py` | what the store keeps of the record: `run_properties`, `entry_properties` and `answer_rows` turn a posted run into nodes, so a field added to a history entry is added there, to the tables in `docs/server-design.md`, and to the queries in `docs/language/queries.md` that should see it |
 | `docs/language/spec.md` and `docs/language/runtime.md` | the language and what running it requires: the same rule in words. This is the language: it moves `LANGUAGE_VERSION` unless the release is still unreleased |
 | `skills/aip/SKILL.md` and `skills/aip/references/language.md` | the skill: what an agent is told a pause, an answer and an error look like, including the worked example at the end; and the language page, with its copy under `examples/language/make_procedure/assets/` (then compile `make_procedure` again) |

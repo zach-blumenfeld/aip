@@ -101,8 +101,10 @@ End "Every ticket has a reply or an escalation, and the lead has a summary." {
 - **The order of steps in the file means nothing**; only `Next_Step` and branches do. A step
   nothing points at is an error. There is exactly one `Start` and one `End`, and neither has a name.
 - **A key has one producer on any path.** Two steps may produce the same key only when they are
-  the arms of one route, or when the second is inside a loop body (it then replaces the value
-  each pass). A step may read only keys that every path to it has produced.
+  on different paths, or when the second is inside a loop body (it then replaces the value
+  each pass). A step other than `End` may read only keys that every path to it has produced.
+  `End` may read a key that only some paths produce, and the result carries what the path
+  taken produced.
 - **There are no expressions**: no arithmetic, no `and`/`or`, no string building. Anything
   computed is a script in an `Execute` step.
 
@@ -117,6 +119,8 @@ End "Every ticket has a reply or an escalation, and the lead has a summary." {
 | `Execute <name> "..." { ... }` | a script | `Run_Script scripts/x.py`; optional `Use assets/config.json` |
 | `Task_Agent <name> "..." { ... }` | the agent running the procedure | the description is the prompt, or `Prompt assets/task.md`; optional `Use assets/policy.md` and `Use references/help.md "when to load it"` |
 | `End "..." { Read ... }` | nobody | `Read` names the result keys; nothing else |
+
+A task for a person is a `Task_Agent` whose description says so: the agent takes it to them and answers with what they decided.
 
 Types: `string`, `integer`, `float`, `boolean`, `list`, `object`, and the three answer types
 `true_or_false`, `choice [a, b]` and `score [low, medium, high]` (at least two labels each).
@@ -215,6 +219,8 @@ produces the answer. Two shapes follow from that:
 (a route without a line for some value), `unknown_key` and `unavailable_key` (read but not
 produced on every path), `duplicate_producer` (two producers on one path outside a loop),
 `condition_on_plain_value` (a route or `Until` on a `string` or `boolean`; produce an answer
-type instead), `confidence_on_agent_answer`, `missing_cap`, `missing_loop_exit`, `missing_type`
+type instead), `confidence_on_agent_answer`, `missing_cap`, `missing_loop_exit`,
+`flow_leaves_body` (a step in a loop body with a `Next_Step` to a step outside it, `Next_Step
+end` included; it ends with `Continue` or `Again` and the loop's exit line goes on), `missing_type`
 (a `Produce` of an `Execute` or `Task_Agent` without a type), `missing_requires`, `missing_file`.
 Fix the first error first; one mistake is reported once, and fixing it may reveal the next.

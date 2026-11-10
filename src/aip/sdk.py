@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from aip.compiler import Bundle, BundleError, Diagnostic, compile_folder, export_bundle, has_errors, read_bundle, write_bundle
+from aip.compiler import (Bundle, BundleError, Diagnostic, compile_folder, export_bundle, has_errors, read_bundle,
+                          result_on_some_paths, write_bundle)
 from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 
 from aip.client import bundles, config
@@ -37,6 +38,7 @@ from aip.client.server import Server, ServerError, connect
 from aip.errors import AipError
 from aip.model import DONE, FAILED, PAUSED, Engine, InvalidOutput, NotPaused, Procedure, Run, StepError, TypeSafeResolver
 from aip.model.engine import _where, utc_now
+from aip.model.steps import start as check_inputs
 from aip.model.types import resumable
 
 JSON = dict[str, Any]
@@ -52,8 +54,17 @@ class NoServer(AipError):
 
 
 class NotFound(AipError):
-    """A target that is neither a program directory, a bundle file, nor a reference the client can resolve."""
+    """A target that is neither a program directory, a bundle file, nor a reference the client
+    can resolve. For a catalog reference the message is the server's, the same whichever call
+    asked: `no procedure 'x'` (with `did you mean` when the name with `_` for `-` is published),
+    `no revision 7 of x`, `x has no live revision`."""
     kind = "not_found"
+
+
+class RetiredRevision(AipError):
+    """`name@revision` names a retired revision: it is kept for the runs that reference it, and
+    runs again only when the caller says so (`force`)."""
+    kind = "retired"
 
 
 class InvalidInput(AipError):
@@ -69,7 +80,8 @@ class CompileError(AipError):
         self.diagnostics = list(diagnostics)
         errors = [d for d in diagnostics if d.severity == "error"]
         first = f": {errors[0]}" if errors else ""
-        super().__init__(f"{target} does not compile ({len(errors)} error(s)){first}")
+        self.summary = f"{target} does not compile ({len(errors)} error(s))"   # the message without the first diagnostic
+        super().__init__(self.summary + first)
 
 
 class InvalidBundle(AipError):
@@ -139,7 +151,9 @@ class Paused:
     pause (a `Decide` never pauses; without a model it fails the run); `tasks` has one task per
     pass waiting at `step`, all answered in one `resume`. `hint` is one line on the shape of an
     answer. `recorded` is True when the server has this stop, False when the post failed, None
-    when no server is configured. `to_json()` is the CLI's paused object."""
+    when no server is configured. `warning` is what `run` had to say before the first step (a
+    `Decide` ahead and no decision model configured), else None. `to_json()` is the CLI's
+    paused object."""
     kind: str
     step: str
     tasks: list[Task]
@@ -151,6 +165,10 @@ class Paused:
     @property
     def hint(self) -> str:
         return self.body.get("hint") or ""
+
+    @property
+    def warning(self) -> str | None:
+        return self.body.get("warning")
 
     @property
     def task(self) -> Task:
@@ -165,12 +183,16 @@ class Paused:
 
 @dataclass(frozen=True)
 class Done:
-    """The run reached its `End`; `result` is the End step's keys."""
+    """The run reached its `End`; `result` is the End step's keys, those the path taken produced."""
     run_id: str
     result: JSON
     run_file: Path
     recorded: bool | None
     body: JSON = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def warning(self) -> str | None:
+        return self.body.get("warning")
 
     def to_json(self) -> JSON:
         return dict(self.body)
@@ -199,7 +221,10 @@ class Compiled:
 class Description:
     """What a procedure is and what to give it (`aip info`). `inputs` and `result` map keys to
     types; `steps` lists name, kind and description in source order; `data` is the whole
-    object, the server's for a catalog reference."""
+    object, the server's for a catalog reference. In `data`, `result_on_some_paths` lists the
+    result keys only some paths produce (a result has them when its path did), `retired` is
+    true for a retired revision, and `warning` is there when the procedure has a `Decide` and
+    this client has no decision model configured."""
     name: str
     bundle_id: str
     description: str
@@ -218,7 +243,11 @@ class Description:
         """The `aip info` text."""
         d = self.data
         where = f"{self.name}@{self.revision}" if self.revision else self.target
+        if d.get("retired"):
+            where += ", retired"
         lines = [f"{self.name}  ({where})", f"  bundle {self.bundle_id}", "  " + " ".join(self.description.split()), ""]
+        if d.get("warning"):
+            lines += [f"WARNING  {d['warning']}", ""]
         for heading, key in (("USE WHEN", "use_when"), ("DO NOT USE WHEN", "do_not_use_when"), ("AVOID", "avoid")):
             if d.get(key):
                 lines += [heading] + [f"  - {t}" for t in d[key]] + [""]
@@ -228,7 +257,9 @@ class Description:
         lines += ["INPUTS"] + (_table([(k, t or "", descriptions.get(k) or "") for k, t in self.inputs.items()]) or ["  (none)"])
         lines += ["", f"  run:  aip run {self.target} --inputs '{json.dumps(self.example_inputs)}'", ""]
         lines += ["STEPS"] + _table(_outline(self.steps, d.get("loops") or []))
-        lines += ["", "RESULT"] + (_table([(k, t or "", "") for k, t in self.result.items()]) or ["  (none)"])
+        partial = set(d.get("result_on_some_paths") or [])
+        lines += ["", "RESULT"] + (_table([(k, t or "", "on some paths" if k in partial else "") for k, t in self.result.items()])
+                                   or ["  (none)"])
         return "\n".join(lines) + "\n"
 
 
@@ -389,10 +420,13 @@ class AuditQuery:
 
 @dataclass(frozen=True)
 class Exported:
-    """Runs and the procedures they ran, written as one Relate file (`aip export runs`)."""
+    """Runs and the procedures they ran, written as one Relate file (`aip export runs`):
+    how many runs, of how many procedures (names), in how many bundles (a procedure's
+    revisions and drafts are a bundle each)."""
     path: Path
     runs: int
     bundles: int
+    procedures: int = 0
 
 
 OnStep = Callable[[JSON], None]
@@ -425,6 +459,7 @@ class Client:
         self.agent = agent
         self.recording_error: str | None = None   # why the last stop was not recorded, when a server is configured
         self._uploaded: set[str] = set()
+        self._retired: dict[str, bool] = {}        # catalog reference -> whether the server said its revision is retired
         if isinstance(server, Server):
             self.server: Server | None = server
         elif server is None:
@@ -448,7 +483,13 @@ class Client:
     # ------------------------------------------------------------------ compile
 
     def compile(self, folder: str | Path, output: str | Path | None = None) -> Compiled:
-        """Compile a program directory (or its `procedure.aip`); with `output`, write the bundle there."""
+        """Compile a program directory (or its `procedure.aip`); with `output`, a path ending
+        in `.rl`, write the bundle there."""
+        if output is not None and Path(output).suffix != BUNDLE_SUFFIX:
+            raise InvalidInput(f"a bundle is written as an {BUNDLE_SUFFIX} file, which is how `run` and `describe` know one; "
+                               f"give an output path ending in {BUNDLE_SUFFIX}, not {str(output)!r}")
+        if not Path(folder).exists():
+            raise NotFound(f"no such folder or file {str(folder)!r}")
         bundle, diagnostics = compile_folder(folder)
         if bundle is None or has_errors(diagnostics):
             return Compiled(False, bundle.name if bundle else None, None, list(diagnostics))
@@ -487,11 +528,22 @@ class Client:
         if not bundles.is_ref(text):
             raise NotFound(f"no such folder or file {text!r}")
         bundle, revision, _ = self._fetch(text)
-        return bundle, {"kind": "name", "target": text, "revision": revision}
+        return bundle, {"kind": "name", "target": text, "revision": revision, "retired": self._retired.get(text, False)}
+
+    def _described(self, ref: str) -> JSON:
+        """The server's description of a catalog reference. A reference it does not have is
+        `NotFound` in the server's own words, so every call that names one says the same thing."""
+        try:
+            return self._server().describe(ref)
+        except ServerError as exc:
+            if exc.status == 404 and exc.kind == "not_found":
+                raise NotFound(exc.message) from exc
+            raise
 
     def _fetch(self, ref: str) -> tuple[Bundle, str | None, bool]:
         """A catalog reference's bundle, from the cache or the server: the bundle, its revision,
-        and whether the bytes were fetched now."""
+        and whether the bytes were fetched now. Whether the revision is retired is kept in
+        `_retired` for `run` to ask."""
         cached = bundles.resolve_ref(ref, self.home)
         if self.server is None:
             if cached is None:
@@ -500,14 +552,13 @@ class Client:
             bundle_id, revision = cached
             return bundles.load(bundle_id, self.home), revision, False
         try:
-            info = self.server.describe(ref)
+            info = self._described(ref)
         except ServerError as exc:
             if exc.status == 0 and cached is not None:  # the server is down; the cache is what we have
                 bundle_id, revision = cached
                 return bundles.load(bundle_id, self.home), revision, False
-            if exc.status == 404:
-                raise NotFound(f"{ref!r} is not a folder or a bundle file, and {self.server.url} has no procedure by that name") from exc
             raise
+        self._retired[ref] = bool(info.get("retired"))
         bundle_id, revision = info["bundle_id"], info.get("revision")
         fetched = False
         try:
@@ -525,15 +576,32 @@ class Client:
         """Describe a program directory, an `.rl`, or a catalog reference."""
         text = str(target)
         if not Path(target).exists() and bundles.is_ref(text) and self.server is not None:
-            data = self.server.describe(text)
+            data = self._model_warned(self._described(text))
             return Description(data["name"], data["bundle_id"], data.get("description") or "", data.get("inputs") or {},
                                data.get("result") or {}, data.get("steps") or [], text, data.get("revision"), data)
         bundle, origin = self._open(target, cache=False)
         with Procedure.load(bundle) as procedure:
             data = describe_procedure(procedure)
         data.update(target=origin["target"], revision=origin["revision"], draft=origin["kind"] != "name")
+        data = self._model_warned(data)
         return Description(data["name"], data["bundle_id"], data["description"], data["inputs"], data["result"], data["steps"],
                            text, origin["revision"], data)
+
+    def model_warning(self, steps: list[JSON]) -> str | None:
+        """What to say before running a procedure with these steps: None, unless one is a
+        `Decide` and this client has no decision model, in which case the run fails when it
+        gets there (it may never: a route may go another way), so this is a warning."""
+        decides = [s["name"] for s in steps if s.get("kind") == "Decide"]
+        if not decides or self.decision_client is not None or self.settings.decision_model_configured:
+            return None
+        from aip.model.types import DECISION_MODEL_HINT
+
+        return (f"no decision model is configured, and this procedure asks one at {', '.join(decides)}: a run that reaches "
+                f"{'it' if len(decides) == 1 else 'one of them'} fails there with no_decision_model until one is set ({DECISION_MODEL_HINT})")
+
+    def _model_warned(self, data: JSON) -> JSON:
+        warning = self.model_warning(data.get("steps") or [])
+        return {**data, "warning": warning} if warning else data
 
     # ------------------------------------------------------------------ runs
 
@@ -547,31 +615,43 @@ class Client:
 
     def run(self, target: str | Path, inputs: JSON, *, batch: int | None = None, agent: str | None = None,
             session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
-            on_pause: OnPause | None = None) -> Result:
+            on_pause: OnPause | None = None, force: bool = False, agent_version: str | None = None,
+            on_warning: Callable[[str], None] | None = None) -> Result:
         """Run `target` (a program directory, an `.rl`, or `name[@rev]`) on `inputs`, the Start
         step's object, until it pauses or is done. `workdir` is where its scripts read and write
         files (default the current directory); `batch` how many `For` passes run at once;
-        `agent` and `session` the run's identity. `on_step` gets each history entry's progress
-        line as it is written; `on_pause`, if given, answers each pause in-process (returning
-        None stops there).
+        `agent` and `session` the run's identity, `agent_version` the agent's own version when
+        it has one to give. `on_step` gets each history entry's progress line as it is written;
+        `on_pause`, if given, answers each pause in-process (returning None stops there).
+        A `name@revision` that is retired is refused (`RetiredRevision`) unless `force`. When the
+        procedure has a `Decide` and no decision model is configured, the run is not refused,
+        since it may never reach the step: `on_warning` is told before the first step runs, and
+        the result (or the `RunError`) carries the same sentence as `warning`.
         Raises `RunError` when the run stops on an error, `CompileError`, `InvalidBundle`,
-        `NotFound` or `NoServer` when the target cannot be run."""
+        `NotFound`, `RetiredRevision` or `NoServer` when the target cannot be run."""
         if not isinstance(inputs, dict):
             raise InvalidInput(f"the inputs are a JSON object, got {type(inputs).__name__}")
         if batch is not None and batch < 1:
             raise InvalidInput(f"the batch size is at least 1, not {batch}")
         bundle, origin = self._open(target)
+        if origin.get("retired") and not force:
+            raise RetiredRevision(f"{bundle.name}@{origin['revision']} is retired: it is kept for the runs that reference it and no "
+                          "longer runs by default; run it anyway with force (`aip run ... --force`), or publish it again to bring it back")
         where = Path(workdir if workdir is not None else Path.cwd()).resolve()
         engine = self._engine(where, batch, on_step)
-        identity = config.identity(agent, session, default_agent=self.agent)
+        identity = config.identity(agent, session, default_agent=self.agent, agent_version=agent_version)
         with Procedure.load(bundle) as procedure:
             try:
+                check_inputs(procedure.step(procedure.start), inputs)
+                warning = self.model_warning(procedure.describe()["steps"])
+                if warning and on_warning is not None:   # said before the first step, and only for a run that starts
+                    on_warning(warning)
                 run = engine.start(procedure, inputs, identity=identity)
             except StepError as exc:  # the inputs do not fit: nothing ran, nothing to resume
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc
             handle = RunFile(new_run_id(), bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
                              origin["revision"], server=self.server.url if self.server else None)
-            return self._settle(engine, run, handle, on_pause)
+            return self._settle(engine, run, handle, on_pause, warning)
 
     def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, agent: str | None = None,
                session: str | None = None, on_step: OnStep | None = None, on_pause: OnPause | None = None) -> Result:
@@ -604,8 +684,9 @@ class Client:
     def _apply(self, engine: Engine, run: Run, answers: Any, handle: RunFile, path: Path, agent: str | None = None,
                session: str | None = None) -> Run:
         """The answers into a paused run, or a retry of a failed one. A bad answer is a
-        resumable `RunError` and the pause stands."""
-        recorded = handle.recorded if handle.server else None
+        resumable `RunError` and the pause stands; its object says `recorded: false` where a
+        server is configured, since the refusal changed nothing and nothing was sent."""
+        recorded = False if handle.server else None
 
         def refuse(kind: str, step: str | None, message: str, resumable: bool) -> RunError:
             return RunError(error_outcome({"error": kind, "step": step, "message": message, **_where(run)}, handle.run_id, path,
@@ -630,14 +711,17 @@ class Client:
         except (InvalidOutput, NotPaused) as exc:
             raise RunError(error_outcome({**exc.to_dict(), **_where(run)}, handle.run_id, path, recorded, True), exc, stopped=False) from exc
 
-    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None) -> Result:
+    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None, warning: str | None = None) -> Result:
         """Record the stop (server and run file), and return it as a result or raise it; with
-        `on_pause`, answer pauses in-process and go on."""
+        `on_pause`, answer pauses in-process and go on. `warning` is `run`'s, carried on the
+        object of the stop it leads to."""
         while True:
             handle.run = run.to_dict()
             recorded = self._record(handle)
             path = handle.save(home=self.home)
             block = outcome(run, handle.run_id, path, recorded)
+            if warning:
+                block["warning"] = warning
             if run.status == FAILED:
                 raise RunError(block)
             if run.status == DONE:
@@ -809,10 +893,11 @@ class Client:
         path = Path(output)
         if path.exists() and not force:
             raise InvalidInput(f"{path} exists; give another path, or force")
-        data, runs, exported = self._server().export_runs(name=name, since=since, agent=agent, session=session, user=user, draft=draft)
+        data, runs, exported, procedures = self._server().export_runs(name=name, since=since, agent=agent, session=session, user=user,
+                                                                      draft=draft)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-        return Exported(path, runs, exported)
+        return Exported(path, runs, exported, procedures)
 
 
 # --------------------------------------------------------------------------- describing
@@ -828,12 +913,13 @@ def describe_procedure(procedure: Procedure) -> JSON:
     data["inputs"] = {p.key: p.type for p in start.produces}
     data["input_descriptions"] = {p.key: p.description or "" for p in start.produces}
     data["result"] = {r.name: (r.type or procedure.key_type(r.key)) if r.field is None else None for r in end.declared_reads} if end else {}
+    data["result_on_some_paths"] = [k for k in result_on_some_paths(procedure.source) if k in data["result"]]
     data["example_inputs"] = {k: EXAMPLE_VALUES.get(t or "", None) for k, t in data["inputs"].items()}
     return data
 
 
 __all__ = [
     "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
-    "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired",
+    "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired", "RetiredRevision",
     "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "Task", "configure", "describe_procedure", "settings",
 ]
