@@ -5,11 +5,11 @@ import type { RunRecord } from "../api/types";
 import { Canvas } from "../canvas/Canvas.tsx";
 import { sliceOf, type Graph } from "../canvas/model.ts";
 import { dataEdges, dataKeys, type DataKey } from "../graph/dataflow.ts";
-import type { Direction } from "../graph/layout.ts";
+import { layoutOf, type Direction } from "../graph/layout.ts";
 import { stepGraphOf, type StepGraph as Model } from "../graph/model.ts";
 import { pathOf } from "../graph/traffic.ts";
 import { Code } from "../highlight/Code.tsx";
-import { DirectionToggle, StepGraph, useDirection } from "./StepGraph";
+import { DirectionToggle, SPAN, StepGraph, useDirection } from "./StepGraph";
 import { TrafficSummary, TrafficTable, useTraffic } from "./Traffic";
 
 /** What the Steps section draws: the step graph in one of its three modes, or the card canvas. */
@@ -36,7 +36,8 @@ interface StepsProps {
 }
 
 /** A procedure's steps: the step graph as control flow, data flow or run traffic, or the card canvas; drawn
- *  down or to the right. Drawn to the right it is wide, so the section takes the whole row of its grid. */
+ *  down or to the right. Drawn to the right it is wide, and so is a procedure with loops drawn down (a
+ *  body hangs beside its loop): the section then takes the whole row of its grid. */
 export function Steps({ graph, source, name, bundleId, view: asked, onView }: StepsProps) {
   const [direction, setDirection] = useDirection();
   const [selected, setSelected] = useState<string | null>(null);
@@ -51,7 +52,8 @@ export function Steps({ graph, source, name, bundleId, view: asked, onView }: St
   const flow = useMemo(() => dataEdges(keys), [keys]);
   const traffic = useTraffic(model, name, bundleId, view === "traffic");
   useEffect(() => { setSelected(null); setFocusKey(null); }, [graph]);
-  const wide = direction === "right" || view === "cards";
+  const broad = useMemo(() => layoutOf(model, direction).width > SPAN.medium, [model, direction]);
+  const wide = direction === "right" || view === "cards" || broad;
 
   return (
     <section className={`steps${wide ? " wide" : ""}`} data-testid="steps" data-view={view} data-direction={direction}>
@@ -82,7 +84,7 @@ export function Steps({ graph, source, name, bundleId, view: asked, onView }: St
       )}
       {view === "data" && (
         <>
-          <p className="muted small">Pick a step on the graph, or a key below, to see its arrows alone.</p>
+          <p className="muted small" data-testid="data-hint">Pick a key below, or a step on the graph, to draw its arrows: who produces it and who reads it.</p>
           <DataFlowTable keys={keys} graph={model} focus={focusKey} onFocus={(key) => { setSelected(null); setFocusKey((k) => (k === key ? null : key)); }} />
         </>
       )}
@@ -100,11 +102,11 @@ function StepDetail({ graph, id, source, onClose }: { graph: Model; id: string; 
   return (
     <aside className="step-detail" data-testid="step-detail" data-name={node.name}>
       <h3>
-        <span className={`kind-tag${node.frame ? " loop" : ""}`} style={node.frame ? undefined : { ["--kind" as string]: `var(--${node.kind})` }}>{node.kind}</span>{" "}
+        <span className={`kind-tag${node.loop ? " loop" : ""}`} style={node.loop ? undefined : { ["--kind" as string]: `var(--${node.kind})` }}>{node.kind}</span>{" "}
         <code>{node.name}</code>
         <button type="button" onClick={onClose} aria-label="close">×</button>
       </h3>
-      <p>{node.frame ? <code>{node.title}</code> : node.title}</p>
+      <p>{node.loop ? <code>{node.title}</code> : node.title}</p>
       {card && card.sections.length > 0 && (
         <dl>
           {card.sections.map((s) => (

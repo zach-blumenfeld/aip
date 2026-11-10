@@ -71,8 +71,8 @@ export function pathOf(graph: StepGraph, run: RunLike): RunPath {
       }
     } else if (entry.kind === "Route") {
       const target = entry.to === "Continue"
-        ? ways.find((e) => e.toFrame)
-        : ways.find((e) => !e.toFrame && graph.nodes[e.to]?.name === entry.to) ?? ways.find((e) => graph.nodes[e.to]?.name === entry.to);
+        ? ways.find((e) => e.toLoop)
+        : ways.find((e) => !e.toLoop && graph.nodes[e.to]?.name === entry.to) ?? ways.find((e) => graph.nodes[e.to]?.name === entry.to);
       go(id, target?.to);
     } else if (ways.length === 1) {
       go(id, ways[0].to);
@@ -87,7 +87,7 @@ export function pathOf(graph: StepGraph, run: RunLike): RunPath {
     visited.add(at);
     for (const task of run.pause?.tasks ?? []) enter(task.passes);
     // The loops around where it stands were reached too.
-    for (const id of Object.keys(graph.nodes)) if (graph.nodes[id].frame && inside(graph.nodes, at, id)) visited.add(id);
+    for (const id of Object.keys(graph.nodes)) if (graph.nodes[id].loop && inside(graph.nodes, at, id)) visited.add(id);
   }
   return { visited, taken, waiting: run.status === "paused" ? at : null, failed: run.status === "failed" ? at : null };
 }

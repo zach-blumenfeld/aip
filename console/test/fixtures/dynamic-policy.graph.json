@@ -1,0 +1,856 @@
+{
+ "nodes": [
+  {
+   "id": "procedure",
+   "labels": [
+    "Procedure"
+   ],
+   "properties": {
+    "id": "procedure",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "dynamic_policy",
+    "description": "Do a task the requester describes, checked against the policies the requester supplies.",
+    "language_version": "0.9",
+    "compiler_version": "0.9.0",
+    "use_when": [
+     "A request comes with its own list of policies the result must follow."
+    ],
+    "avoid": [
+     "Checking the policies as one question; each policy gets its own verdict."
+    ],
+    "line": 10,
+    "column": 1,
+    "end_line": 74,
+    "end_column": 1
+   }
+  },
+  {
+   "id": "file:assets/fix.md",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:assets/fix.md",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "path": "assets/fix.md",
+    "size": 679,
+    "mode": 420,
+    "sha256": "8bec62d591bc3d1030fd64d64126e24b3964e976d17f340713a6df06723cc63e"
+   }
+  },
+  {
+   "id": "file:assets/task.md",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:assets/task.md",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "path": "assets/task.md",
+    "size": 180,
+    "mode": 420,
+    "sha256": "7faff0147fa63f61a499a8cbbd825694371ac4340ca8a1919918257c6270b090"
+   }
+  },
+  {
+   "id": "step:start",
+   "labels": [
+    "Step",
+    "Start"
+   ],
+   "properties": {
+    "id": "step:start",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "start",
+    "kind": "Start",
+    "description": "The task and the policies, from the requester.",
+    "line": 25,
+    "column": 1,
+    "end_line": 29,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:task",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:task",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "task",
+    "type": "string",
+    "description": "What to do, as the requester wrote it."
+   }
+  },
+  {
+   "id": "data:policies",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:policies",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "policies",
+    "type": "list",
+    "description": "The policies the work must follow, one string each."
+   }
+  },
+  {
+   "id": "step:draft",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:draft",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "draft",
+    "kind": "Task_Agent",
+    "description": "Do the task, following every policy.",
+    "line": 31,
+    "column": 1,
+    "end_line": 36,
+    "end_column": 2,
+    "prompt": "assets/task.md"
+   }
+  },
+  {
+   "id": "data:work",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:work",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "work",
+    "type": "string",
+    "description": "The result of the task."
+   }
+  },
+  {
+   "id": "loop:revise",
+   "labels": [
+    "Loop"
+   ],
+   "properties": {
+    "id": "loop:revise",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "revise",
+    "kind": "Loop",
+    "mode": "Until",
+    "at_most": 3,
+    "at_cap": "Else_Fail",
+    "until_answer": "check_summary.all_hold",
+    "line": 38,
+    "column": 1,
+    "end_line": 69,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:check_summary",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:check_summary",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "check_summary",
+    "type": "aggregation"
+   }
+  },
+  {
+   "id": "loop:review",
+   "labels": [
+    "Loop",
+    "For"
+   ],
+   "properties": {
+    "id": "loop:review",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "review",
+    "kind": "For",
+    "mode": "Over",
+    "item": "policy",
+    "at_most": 20,
+    "collect_key": "verdict",
+    "collect_into": "verdicts",
+    "line": 39,
+    "column": 3,
+    "end_line": 50,
+    "end_column": 4
+   }
+  },
+  {
+   "id": "data:policy",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:policy",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "policy"
+   }
+  },
+  {
+   "id": "data:verdict",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:verdict",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "verdict",
+    "type": "decision"
+   }
+  },
+  {
+   "id": "data:verdicts",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:verdicts",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "verdicts",
+    "type": "list"
+   }
+  },
+  {
+   "id": "step:check",
+   "labels": [
+    "Step",
+    "Decide"
+   ],
+   "properties": {
+    "id": "step:check",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "check",
+    "kind": "Decide",
+    "description": "Does the work follow this one policy? The policy is written into the question.",
+    "line": 40,
+    "column": 5,
+    "end_line": 47,
+    "end_column": 6,
+    "history": false,
+    "produces": "verdict"
+   }
+  },
+  {
+   "id": "question:check.follows",
+   "labels": [
+    "Question"
+   ],
+   "properties": {
+    "id": "question:check.follows",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "follows",
+    "type": "true_or_false",
+    "instruction": "\nDoes the work follow the policy described below? Read the policy as written; do not infer\npolicies it does not state.\n\n{policy}\n",
+    "order": 0,
+    "line": 43,
+    "column": 9,
+    "end_line": 43,
+    "end_column": 46
+   }
+  },
+  {
+   "id": "step:summarize_check",
+   "labels": [
+    "Step",
+    "Aggregate"
+   ],
+   "properties": {
+    "id": "step:summarize_check",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "summarize_check",
+    "kind": "Aggregate",
+    "description": "Every policy holds, and the model was sure of each.",
+    "line": 52,
+    "column": 3,
+    "end_line": 59,
+    "end_column": 4,
+    "produces": "check_summary"
+   }
+  },
+  {
+   "id": "aggregation:summarize_check.all_hold",
+   "labels": [
+    "Aggregation"
+   ],
+   "properties": {
+    "id": "aggregation:summarize_check.all_hold",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "all_hold",
+    "mode": "All",
+    "confidence_above": 0.7,
+    "order": 0,
+    "line": 55,
+    "column": 7,
+    "end_line": 55,
+    "end_column": 63
+   }
+  },
+  {
+   "id": "step:fix",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:fix",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "fix",
+    "kind": "Task_Agent",
+    "description": "Revise the work so the failed policies pass.",
+    "line": 61,
+    "column": 3,
+    "end_line": 66,
+    "end_column": 4,
+    "prompt": "assets/fix.md"
+   }
+  },
+  {
+   "id": "step:end",
+   "labels": [
+    "Step",
+    "End"
+   ],
+   "properties": {
+    "id": "step:end",
+    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "name": "end",
+    "kind": "End",
+    "description": "The work, and the verdict for every policy.",
+    "line": 71,
+    "column": 1,
+    "end_line": 73,
+    "end_column": 2
+   }
+  }
+ ],
+ "edges": [
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:assets/fix.md",
+   "properties": {}
+  },
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:assets/task.md",
+   "properties": {}
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:start",
+   "properties": {}
+  },
+  {
+   "type": "STARTS_AT",
+   "start": "procedure",
+   "end": "step:start",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:task",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:start",
+   "end": "data:task",
+   "properties": {
+    "line": 26,
+    "column": 3,
+    "end_line": 26,
+    "end_column": 58
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:policies",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:start",
+   "end": "data:policies",
+   "properties": {
+    "line": 27,
+    "column": 3,
+    "end_line": 27,
+    "end_column": 71
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:start",
+   "end": "step:draft",
+   "properties": {
+    "line": 28,
+    "column": 3,
+    "end_line": 28,
+    "end_column": 18
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:draft",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:task",
+   "end": "step:draft",
+   "properties": {
+    "line": 32,
+    "column": 8,
+    "end_line": 32,
+    "end_column": 12
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:policies",
+   "end": "step:draft",
+   "properties": {
+    "line": 32,
+    "column": 14,
+    "end_line": 32,
+    "end_column": 22
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:work",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:draft",
+   "end": "data:work",
+   "properties": {
+    "line": 34,
+    "column": 11,
+    "end_line": 34,
+    "end_column": 49
+   }
+  },
+  {
+   "type": "PROMPTED_BY",
+   "start": "step:draft",
+   "end": "file:assets/task.md",
+   "properties": {}
+  },
+  {
+   "type": "NEXT",
+   "start": "step:draft",
+   "end": "loop:revise",
+   "properties": {
+    "line": 35,
+    "column": 3,
+    "end_line": 35,
+    "end_column": 19
+   }
+  },
+  {
+   "type": "HAS_LOOP",
+   "start": "procedure",
+   "end": "loop:revise",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:check_summary",
+   "properties": {}
+  },
+  {
+   "type": "WATCHES",
+   "start": "loop:revise",
+   "end": "data:check_summary",
+   "properties": {
+    "field": "all_hold",
+    "line": 38,
+    "column": 19,
+    "end_line": 38,
+    "end_column": 41
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:revise",
+   "end": "loop:review",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "ENTERS",
+   "start": "loop:revise",
+   "end": "loop:review",
+   "properties": {}
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:revise",
+   "end": "step:summarize_check",
+   "properties": {
+    "order": 1
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:revise",
+   "end": "step:fix",
+   "properties": {
+    "order": 2
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "loop:revise",
+   "end": "step:end",
+   "properties": {
+    "line": 68,
+    "column": 3,
+    "end_line": 68,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "HAS_LOOP",
+   "start": "procedure",
+   "end": "loop:review",
+   "properties": {}
+  },
+  {
+   "type": "OVER",
+   "start": "loop:review",
+   "end": "data:policies",
+   "properties": {
+    "line": 39,
+    "column": 19,
+    "end_line": 39,
+    "end_column": 27
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:policy",
+   "properties": {}
+  },
+  {
+   "type": "BINDS",
+   "start": "loop:review",
+   "end": "data:policy",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:verdict",
+   "properties": {}
+  },
+  {
+   "type": "COLLECTS",
+   "start": "loop:review",
+   "end": "data:verdict",
+   "properties": {
+    "line": 39,
+    "column": 51,
+    "end_line": 39,
+    "end_column": 80
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:verdicts",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "loop:review",
+   "end": "data:verdicts",
+   "properties": {
+    "line": 39,
+    "column": 51,
+    "end_line": 39,
+    "end_column": 80
+   }
+  },
+  {
+   "type": "CONTAINS",
+   "start": "loop:review",
+   "end": "step:check",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "ENTERS",
+   "start": "loop:review",
+   "end": "step:check",
+   "properties": {}
+  },
+  {
+   "type": "NEXT",
+   "start": "loop:review",
+   "end": "step:summarize_check",
+   "properties": {
+    "line": 49,
+    "column": 5,
+    "end_line": 49,
+    "end_column": 30
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:check",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:work",
+   "end": "step:check",
+   "properties": {
+    "line": 41,
+    "column": 12,
+    "end_line": 41,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:check",
+   "end": "data:verdict",
+   "properties": {
+    "line": 45,
+    "column": 15,
+    "end_line": 45,
+    "end_column": 22
+   }
+  },
+  {
+   "type": "ASKS",
+   "start": "step:check",
+   "end": "question:check.follows",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:policy",
+   "end": "step:check",
+   "properties": {
+    "interpolated": true,
+    "line": 22,
+    "column": 1,
+    "end_line": 22,
+    "end_column": 9
+   }
+  },
+  {
+   "type": "CONTINUES",
+   "start": "step:check",
+   "end": "loop:review",
+   "properties": {
+    "line": 46,
+    "column": 7,
+    "end_line": 46,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:summarize_check",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:verdicts",
+   "end": "step:summarize_check",
+   "properties": {
+    "line": 53,
+    "column": 10,
+    "end_line": 53,
+    "end_column": 18
+   }
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:summarize_check",
+   "end": "data:check_summary",
+   "properties": {
+    "line": 57,
+    "column": 13,
+    "end_line": 57,
+    "end_column": 26
+   }
+  },
+  {
+   "type": "AGGREGATES",
+   "start": "step:summarize_check",
+   "end": "aggregation:summarize_check.all_hold",
+   "properties": {
+    "order": 0
+   }
+  },
+  {
+   "type": "OVER",
+   "start": "aggregation:summarize_check.all_hold",
+   "end": "data:verdicts",
+   "properties": {
+    "field": "follows"
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:summarize_check",
+   "end": "step:fix",
+   "properties": {
+    "line": 58,
+    "column": 5,
+    "end_line": 58,
+    "end_column": 18
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:fix",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:task",
+   "end": "step:fix",
+   "properties": {
+    "line": 62,
+    "column": 10,
+    "end_line": 62,
+    "end_column": 14
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:work",
+   "end": "step:fix",
+   "properties": {
+    "line": 62,
+    "column": 16,
+    "end_line": 62,
+    "end_column": 20
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:policies",
+   "end": "step:fix",
+   "properties": {
+    "line": 62,
+    "column": 22,
+    "end_line": 62,
+    "end_column": 30
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:verdicts",
+   "end": "step:fix",
+   "properties": {
+    "line": 62,
+    "column": 32,
+    "end_line": 62,
+    "end_column": 40
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:check_summary",
+   "end": "step:fix",
+   "properties": {
+    "line": 62,
+    "column": 42,
+    "end_line": 62,
+    "end_column": 55
+   }
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:fix",
+   "end": "data:work",
+   "properties": {
+    "line": 64,
+    "column": 13,
+    "end_line": 64,
+    "end_column": 45
+   }
+  },
+  {
+   "type": "PROMPTED_BY",
+   "start": "step:fix",
+   "end": "file:assets/fix.md",
+   "properties": {}
+  },
+  {
+   "type": "CONTINUES",
+   "start": "step:fix",
+   "end": "loop:revise",
+   "properties": {
+    "line": 65,
+    "column": 5,
+    "end_line": 65,
+    "end_column": 13
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:end",
+   "properties": {}
+  },
+  {
+   "type": "ENDS_AT",
+   "start": "procedure",
+   "end": "step:end",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:work",
+   "end": "step:end",
+   "properties": {
+    "line": 72,
+    "column": 8,
+    "end_line": 72,
+    "end_column": 12
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:verdicts",
+   "end": "step:end",
+   "properties": {
+    "line": 72,
+    "column": 14,
+    "end_line": 72,
+    "end_column": 22
+   }
+  }
+ ]
+}

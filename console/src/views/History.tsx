@@ -160,7 +160,8 @@ export function RunPage({ id }: { id: string }) {
         {!folder && run.revision && <>{" · "}<a href={href({ page: "run", ref })}>new run</a></>}
       </p>
       <RecordSummary record={run} />
-      {/* Drawn to the right the graph is wide: it takes the whole row and the record moves below. */}
+      {/* Drawn to the right the graph is wide: it takes the whole row and the record moves below (as does a graph
+          too wide for the column drawn down: styles.css). */}
       <div className={`path-grid${direction === "right" ? " wide" : ""}`}>
         <section className="run-path">
           <h2>Path</h2>

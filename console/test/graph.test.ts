@@ -19,7 +19,7 @@ const run = (name: string) => { const r = fixture(`${name}.run.json`); return (r
 const EXAMPLES = ["billing-support", "fixed-policy", "ticket-triage"];
 const DIRECTIONS: Direction[] = ["down", "right"];
 
-test("steps are nodes, loops are frames, and the control edges are the arrows", () => {
+test("steps are nodes and the control edges are the arrows", () => {
   const g = stepGraphOf(graph("billing-support"));
   assert.deepEqual(g.top, ["step:start", "step:triage", "step:by_tone", "step:escalate", "step:reply", "step:end"]);
   assert.equal(g.nodes["step:by_tone"].kind, "Route");
@@ -35,58 +35,101 @@ test("steps are nodes, loops are frames, and the control edges are the arrows", 
   assert.deepEqual(g.edges[2].ways.map((w) => w.kind), ["below", "branch"]);
 });
 
-test("a loop's arrows: into its body, Continue back to its head, Again to an earlier step, and its exit", () => {
+test("a loop is a node: ENTERS into its body, Continue back to it, Again to an earlier step, and its exit", () => {
   const g = stepGraphOf(graph("ticket-triage"));
   const edge = (from: string, to: string) => g.edges.find((e) => e.from === from && e.to === to);
   assert.deepEqual(g.nodes["loop:each_ticket"].children, ["step:classify", "step:by_tone", "step:draft", "step:escalate", "step:check", "loop:revise"]);
+  assert.equal(g.nodes["loop:each_ticket"].loop, true);
+  assert.equal(g.nodes["step:classify"].loop, false);
   assert.equal(g.nodes["loop:revise"].parent, "loop:each_ticket");
   assert.equal(g.nodes["loop:revise"].title, "Until passed, At_Most 3, Else_Fail");
+  // The node's one line: what it runs over or until, and its cap. The rest stays in the header.
+  assert.equal(g.nodes["loop:revise"].summary, "Until passed, At_Most 3");
+  assert.equal(g.nodes["loop:each_ticket"].summary, "Over tickets, At_Most 50");
+  assert.equal(stepGraphOf(graph("fixed-policy")).nodes["loop:revise"].summary, "Until check_summary.all_hold, At_Most 3");
 
   assert.equal(edge("loop:each_ticket", "step:classify")?.enter, true);
   assert.equal(edge("loop:revise", "step:fix")?.enter, true);
   // The pass is over: from a step, and from the inner loop's exit line.
-  assert.deepEqual([edge("step:escalate", "loop:each_ticket")?.toFrame, edgeLabel(edge("step:escalate", "loop:each_ticket")!)], [true, "continue"]);
-  assert.equal(edge("loop:revise", "loop:each_ticket")?.toFrame, true);
+  assert.deepEqual([edge("step:escalate", "loop:each_ticket")?.toLoop, edgeLabel(edge("step:escalate", "loop:each_ticket")!)], [true, "continue"]);
+  assert.equal(edge("loop:revise", "loop:each_ticket")?.toLoop, true);
   assert.equal(edgeLabel(edge("step:fix", "step:check")!), "again");
-  assert.equal(edge("step:fix", "step:check")?.toFrame, false);
-  // A step into a loop, and a loop's exit, are arrows to and from the frame.
-  assert.equal(edge("step:check", "loop:revise")?.toFrame, false);
+  assert.equal(edge("step:fix", "step:check")?.toLoop, false);
+  // A step into a loop, and a loop's exit, are arrows to and from the loop node.
+  assert.equal(edge("step:check", "loop:revise")?.toLoop, false);
   assert.ok(edge("loop:each_ticket", "step:summarize"));
   assert.equal(edgeLabel(edge("step:by_tone", "step:escalate")!), "< 0.6 · angry");
+  // Membership draws nothing: no arrow from a loop to a step of its body but the way in.
+  assert.equal(g.edges.filter((e) => e.from === "loop:each_ticket").length, 2);
 });
 
 const within = (inner: Box, outer: Box) =>
   inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
 const apart = (a: Box, b: Box) => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+/** The layout in its own terms: `o` across (x top-down, y left-to-right), `r` along the flow. */
+const along = (box: Box, direction: Direction) => (direction === "down" ? { o: box.x, so: box.w, r: box.y, sr: box.h } : { o: box.y, so: box.h, r: box.x, sr: box.w });
 
-test("the layout, down and right: a body inside its frame, nothing overlapping, every arrow in the picture", () => {
-  for (const name of EXAMPLES) for (const direction of DIRECTIONS) {
+test("the layout, down and right: a body beside its loop node, nothing overlapping, every arrow in the picture", () => {
+  for (const name of [...EXAMPLES, "dynamic-policy"]) for (const direction of DIRECTIONS) {
     const g = stepGraphOf(graph(name));
     const layout = layoutOf(g, direction);
     const where = `${name} ${direction}`;
     const ids = Object.keys(g.nodes);
+    const inside = (id: string, loop: string) => { for (let p = g.nodes[id].parent; p !== null; p = g.nodes[p].parent) if (p === loop) return true; return false; };
     for (const id of ids) {
       const box = layout.boxes[id];
       assert.ok(box, `${where}: ${id} has a box`);
       assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.w <= layout.width && box.y + box.h <= layout.height, `${where}: ${id} is in the picture`);
-      if (!g.nodes[id].frame) assert.deepEqual([box.w, box.h], [SIZE.nodeWidth, SIZE.nodeHeight]);
-      const parent = g.nodes[id].parent;
-      if (parent !== null) {
-        assert.ok(within(box, layout.boxes[parent]), `${where}: ${id} is inside ${parent}`);
-        // Under the frame's header, which runs along its top either way.
-        assert.ok(box.y >= layout.boxes[parent].y + SIZE.head, `${where}: ${id} is under the header of ${parent}`);
+      if (!g.nodes[id].loop) assert.deepEqual([box.w, box.h], [SIZE.nodeWidth, SIZE.nodeHeight]);
+      else assert.ok(box.h === SIZE.loopHeight && box.w >= SIZE.nodeWidth && box.w <= SIZE.loopWidest, `${where}: ${id} is a loop node`);
+    }
+    // No node overlaps another: there are no frames.
+    for (const a of ids) for (const b of ids) if (a < b) assert.ok(apart(layout.boxes[a], layout.boxes[b]), `${where}: ${a} and ${b} do not overlap`);
+
+    for (const loop of ids.filter((id) => g.nodes[id].loop)) {
+      const node = along(layout.boxes[loop], direction);
+      // The whole body is off to the loop node's far side, and starts level with it.
+      for (const id of ids.filter((x) => inside(x, loop))) {
+        const b = along(layout.boxes[id], direction);
+        assert.ok(b.o >= node.o + node.so + SIZE.rail, `${where}: ${id} is beside ${loop}`);
+        assert.ok(b.r >= node.r, `${where}: ${id} is not before ${loop}`);
+      }
+      const first = along(layout.boxes[g.nodes[loop].children[0]], direction);
+      assert.ok(first.r < node.r + node.sr && first.r + first.sr > node.r, `${where}: the body of ${loop} starts beside it`);
+      // The step after the loop is past the whole body, on the loop node's own axis.
+      const exit = g.edges.find((e) => e.from === loop && !e.enter && !e.toLoop);
+      if (exit) {
+        const after = along(layout.boxes[exit.to], direction);
+        for (const id of ids.filter((x) => inside(x, loop))) {
+          const b = along(layout.boxes[id], direction);
+          assert.ok(after.r >= b.r + b.sr, `${where}: ${exit.to} is past ${id}`);
+        }
+        assert.equal(after.o + after.so / 2, node.o + node.so / 2, `${where}: ${exit.to} is straight on from ${loop}`);
       }
     }
-    // Two nodes overlap only when one is a frame that holds the other.
-    for (const a of ids) for (const b of ids) {
-      if (a >= b) continue;
-      const nested = (x: string, y: string) => { for (let p = g.nodes[x].parent; p !== null; p = g.nodes[p].parent) if (p === y) return true; return false; };
-      if (nested(a, b) || nested(b, a)) continue;
-      assert.ok(apart(layout.boxes[a], layout.boxes[b]), `${where}: ${a} and ${b} do not overlap`);
-    }
+
     assert.equal(layout.edges.length, g.edges.length, `${where}: every arrow is drawn`);
     for (const e of layout.edges) {
       for (const [x, y] of e.points) assert.ok(x >= 0 && y >= 0 && x <= layout.width && y <= layout.height, `${where}: ${e.edge.key} is in the picture`);
+      // Arrows run along the axes or straight from box to box; a rail never cuts through a node.
+      if (!e.rail && !e.edge.enter) continue;
+      for (let i = 1; i < e.points.length; i++) {
+        const [x0, y0] = e.points[i - 1], [x1, y1] = e.points[i];
+        assert.ok(x0 === x1 || y0 === y1, `${where}: ${e.edge.key} runs square`);
+        for (const id of ids) {
+          const b = layout.boxes[id];
+          const through = Math.max(x0, x1) > b.x && Math.min(x0, x1) < b.x + b.w && Math.max(y0, y1) > b.y && Math.min(y0, y1) < b.y + b.h;
+          assert.ok(!through, `${where}: ${e.edge.key} does not cross ${id}`);
+        }
+      }
+    }
+    // An arrow's label is not on a node.
+    for (const e of layout.edges) {
+      const text = edgeLabel(e.edge);
+      if (!text) continue;
+      const w = 6 * text.length, [x, y] = e.label;
+      const label = { x: e.anchor === "start" ? x : e.anchor === "end" ? x - w : x - w / 2, y: y - 6, w, h: 12 };
+      for (const id of ids) assert.ok(apart(label, layout.boxes[id]), `${where}: the label of ${e.edge.key} is clear of ${id}`);
     }
     // The flow runs the way it is drawn: a step is past the one before it.
     const start = layout.boxes["step:start"], end = layout.boxes["step:end"];
@@ -94,31 +137,55 @@ test("the layout, down and right: a body inside its frame, nothing overlapping, 
   }
 });
 
-test("the layout: Continue and Again run along rails, a forward arrow from box to box", () => {
+test("the layout: a loop reads as a cycle, in beside the loop node and back along a rail in the gutter", () => {
   const g = stepGraphOf(graph("ticket-triage"));
   const layout = layoutOf(g, "down");
   const placed = (key: string) => layout.edges.find((e) => e.edge.key === key)!;
-  const frame = layout.boxes["loop:each_ticket"];
+  const loop = layout.boxes["loop:each_ticket"], first = layout.boxes["step:classify"];
 
   const next = placed("step:classify->step:by_tone");
   assert.equal(next.rail, false);
   assert.equal(next.points.length, 2);
-  assert.equal(next.points[0][1], layout.boxes["step:classify"].y + SIZE.nodeHeight);
+  assert.equal(next.points[0][1], first.y + SIZE.nodeHeight);
   assert.equal(next.points[1][1], layout.boxes["step:by_tone"].y);
 
-  // Continue: out of the step's side, up a rail inside the frame, to the frame's head.
+  // ENTERS: straight across from the loop node's side to the first step of the body.
+  const enter = placed("loop:each_ticket->step:classify");
+  assert.deepEqual(enter.points, [[loop.x + loop.w, enter.points[0][1]], [first.x, enter.points[0][1]]]);
+
+  // Continue: out of the step, up a rail between the loop node and the body, into the loop node's side under the way in.
   const over = placed("step:escalate->loop:each_ticket");
   assert.equal(over.rail, true);
-  assert.equal(over.points.length, 3);
-  assert.equal(over.points[2][1], frame.y + SIZE.head);
-  assert.ok(over.points[1][0] > frame.x && over.points[1][0] < frame.x + frame.w);
+  const last = over.points[over.points.length - 1], rail = over.points[over.points.length - 2];
+  assert.equal(last[0], loop.x + loop.w);
+  assert.ok(last[1] > enter.points[0][1] && last[1] < loop.y + loop.h);
+  assert.ok(rail[0] > loop.x + loop.w && rail[0] < first.x);
+  // The inner loop's exit is the outer loop's Continue: its rail is further from the body, and arrives lower.
+  const inner = placed("loop:revise->loop:each_ticket");
+  assert.ok(inner.points[inner.points.length - 2][0] < rail[0]);
+  assert.ok(inner.points[inner.points.length - 1][1] > last[1]);
 
-  // Again: from inside the inner loop back up to `check`, which is before it.
+  // The exit carries straight on from the loop node, past the body.
+  const exit = placed("loop:each_ticket->step:summarize");
+  assert.equal(exit.points.length, 2);
+  assert.equal(exit.points[0][0], exit.points[1][0]);
+  assert.deepEqual(exit.points[0], [loop.x + loop.w / 2, loop.y + loop.h]);
+
+  // Again: back to `check`, which is before the loop.
   const again = placed("step:fix->step:check");
   assert.equal(again.rail, true);
-  const last = again.points[again.points.length - 1];
-  assert.equal(last[1], layout.boxes["step:check"].y);
-  assert.ok(last[0] > layout.boxes["step:check"].x && last[0] < layout.boxes["step:check"].x + SIZE.nodeWidth);
+  assert.equal(again.points[again.points.length - 1][0], layout.boxes["step:check"].x + SIZE.nodeWidth);
+});
+
+test("the layout: a For inside a Loop is a cycle hung off the outer loop's body", () => {
+  const g = stepGraphOf(graph("dynamic-policy"));
+  const layout = layoutOf(g, "down");
+  const outer = layout.boxes["loop:revise"], inner = layout.boxes["loop:review"], check = layout.boxes["step:check"];
+  assert.ok(inner.x > outer.x + outer.w && check.x > inner.x + inner.w);
+  // The one-step body goes straight back, under the way in.
+  const back = layout.edges.find((e) => e.edge.key === "step:check->loop:review")!;
+  assert.deepEqual(back.points.map((p) => p[0]), [check.x, inner.x + inner.w]);
+  assert.equal(back.points[0][1], back.points[1][1]);
 });
 
 test("the card canvas draws to the right as one row, bodies inside their frames, wires under it", () => {

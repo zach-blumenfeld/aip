@@ -1,14 +1,20 @@
-// Where the step graph's nodes, frames and arrows go. A small layered (Sugiyama-style) layout, done
-// once per level: the top of the procedure, then the body of each loop, innermost first, so that a
-// loop is a frame of known size by the time the level around it is laid out, and a frame is placed
-// like any other node. Within a level: longest-path layering, one barycentre ordering pass, an edge
-// that skips layers bent through a slot of its own in each layer it crosses, and an edge that goes
-// back (`Again`) run along a rail outside the layers it spans. An edge that ends the pass
-// (`Continue`) runs along a rail inside its loop's frame, back to the frame's head.
+// Where the step graph's nodes and arrows go. A loop is a node, and its body hangs beside it like an
+// indented block: the steps of one level (the top of the procedure, or one loop's body) run straight
+// along that level's axis, a loop's body starts beside the loop node and runs along an axis of its
+// own, and the loop's exit carries on along the axis the loop stands on, past the whole body. So the
+// way in (`ENTERS`) is a short arrow from the loop node across to the first step of its body, and
+// `Continue` comes back to the loop node along a rail in the gutter between the two: the loop reads
+// as a cycle, and a nested loop is a cycle hung off a step of another.
+//
+// Each level is a small layered (Sugiyama-style) layout, innermost first, so that a loop with its
+// body is a block of known size by the time the level around it is laid out: longest-path layering,
+// one barycentre ordering pass, an edge that skips layers bent through a slot of its own in each
+// layer it crosses. An edge back to an earlier step (`Again`) runs along a rail on the far side.
 //
 // Everything is computed along two abstract axes, rank (layer to layer) and order (across a layer),
-// and mapped to the page at the end: top-down or left-to-right. No DOM and no imports but the
-// model: it runs under node as it is (test/graph.test.ts).
+// and mapped to the page at the end: top-down (bodies to the right of their loops) or left-to-right
+// (bodies below them). No DOM and no imports but the model: it runs under node as it is
+// (test/graph.test.ts).
 
 import type { FlowEdge, StepGraph } from "./model.ts";
 
@@ -17,24 +23,26 @@ export type Direction = "down" | "right";
 export const SIZE = {
   nodeWidth: 150,
   nodeHeight: 48,
+  loopHeight: 64,     // a loop node has a third line, its summary
+  loopWidest: 280,    // a loop node is as wide as its summary, up to this
   nodeGap: 36,        // between the nodes of a layer
   dummy: 16,          // the slot an edge that skips a layer takes in each layer it crosses
-  rail: 18,           // from the nodes to the first rail, and between rails
-  head: 24,           // a frame's header
-  pad: 20,            // a frame's body from its sides
+  rail: 20,           // from the nodes to the first rail, and between rails
+  gutter: 44,         // from a loop node to its body's nearest rail or node
 };
 /** Between layers. Left to right an arrow's label sits on the arrow, so the layers stand further apart. */
-const LAYER_GAP: Record<Direction, number> = { down: 64, right: 96 };
+const LAYER_GAP: Record<Direction, number> = { down: 56, right: 88 };
 
 export interface Box { x: number; y: number; w: number; h: number }
 
 export interface PlacedEdge {
   edge: FlowEdge;
   points: [number, number][];
-  /** It runs along a rail: an edge back to an earlier step, or one that ends a loop's pass. */
+  /** It goes back: `Continue` to its loop, or `Again` to an earlier step. */
   rail: boolean;
-  /** Where its label is centred. */
+  /** Where its label goes, and which end of the text that point is. */
   label: [number, number];
+  anchor: "start" | "middle" | "end";
 }
 
 export interface GraphLayout {
@@ -46,40 +54,51 @@ export interface GraphLayout {
 }
 
 interface Rect { o: number; r: number; so: number; sr: number }
-interface Bend { o: number; r0: number; r1: number }
+type Point = [number, number];
+interface Route { edge: FlowEdge; rail: boolean; points: Point[]; label: Point; anchor: PlacedEdge["anchor"] }
 
-/** One level, laid out in its own coordinates. Rails, bends and back edges are keyed by the real edge's key. */
+/** One level, laid out around its own axis (order 0); `settle` puts it, and the levels inside it, on the page. */
 interface Level {
-  ids: string[];
-  at: Map<string, { o: number; r: number }>;
-  size: Map<string, { so: number; sr: number }>;
-  inner: Map<string, Level>;
-  rails: Map<string, { o: number; side: "low" | "high" }>;
-  bends: Map<string, Bend[]>;
-  backs: Set<string>;
-  box: { minO: number; maxO: number; minR: number; maxR: number };
+  minO: number;
+  maxO: number;
+  maxR: number;
+  /** How deep its first step is, so the loop node can stand level with it. */
+  firstSr: number;
+  settle: (originO: number, originR: number) => void;
+}
+
+/** What a level places: a step, a loop with its body, or the slot of an edge passing through. */
+interface Item { so: number; sr: number; anchor: number; body?: Level; bodyO?: number; bodyR?: number }
+
+/** A loop node's width: its summary's, in the monospace it is drawn in. */
+export function loopWidth(summary: string, name: string): number {
+  return Math.min(SIZE.loopWidest, Math.max(SIZE.nodeWidth, 24 + 6.5 * summary.length, 24 + 7.8 * name.length));
 }
 
 export function layoutOf(graph: StepGraph, direction: Direction = "down"): GraphLayout {
   const down = direction === "down";
   const gap = LAYER_GAP[direction];
-  const stepSize = down ? { so: SIZE.nodeWidth, sr: SIZE.nodeHeight } : { so: SIZE.nodeHeight, sr: SIZE.nodeWidth };
-  // A frame's header runs along the top of the page: the start of the rank axis top-down, the low
-  // end of the order axis left-to-right.
-  const pads = down
-    ? { start: SIZE.head + SIZE.pad, end: SIZE.pad, low: SIZE.pad, high: SIZE.pad }
-    : { start: SIZE.pad, end: SIZE.pad, low: SIZE.head + SIZE.pad, high: SIZE.pad };
-  const headR = down ? SIZE.head : 0;
+  const sizeOf = (id: string) => {
+    const node = graph.nodes[id];
+    const w = node.loop ? loopWidth(node.summary, node.name) : SIZE.nodeWidth;
+    const h = node.loop ? SIZE.loopHeight : SIZE.nodeHeight;
+    return down ? { so: w, sr: h } : { so: h, sr: w };
+  };
+
+  const rects = new Map<string, Rect>();
+  const routes: Route[] = [];
+  const mid = (a: Point, b: Point): Point => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 
   const level = (container: string | null): Level => {
     const ids = container === null ? graph.top : graph.nodes[container].children;
-    const inner = new Map<string, Level>();
-    const size = new Map<string, { so: number; sr: number }>();
+    const item = new Map<string, Item>();
     for (const id of ids) {
-      if (!graph.nodes[id].frame) { size.set(id, stepSize); continue; }
+      const s = sizeOf(id);
+      if (!graph.nodes[id].loop) { item.set(id, { ...s, anchor: s.so / 2 }); continue; }
       const body = level(id);
-      inner.set(id, body);
-      size.set(id, { so: body.box.maxO - body.box.minO + pads.low + pads.high, sr: body.box.maxR - body.box.minR + pads.start + pads.end });
+      const bodyO = s.so + SIZE.gutter - body.minO;
+      const bodyR = Math.max(0, (s.sr - body.firstSr) / 2);
+      item.set(id, { so: bodyO + body.maxO, sr: Math.max(s.sr, bodyR + body.maxR), anchor: s.so / 2, body, bodyO, bodyR });
     }
 
     /** The node of this level that is, or holds, `id`. */
@@ -93,219 +112,203 @@ export function layoutOf(graph: StepGraph, direction: Direction = "down"): Graph
       return null;
     };
 
-    const lifted: { edge: FlowEdge; a: string; b: string }[] = [];
-    const ending: { edge: FlowEdge; a: string }[] = [];
+    const forward: FlowEdge[] = [];
+    const ending: FlowEdge[] = [];                                  // Continue, to this level's loop
+    const again: { edge: FlowEdge; a: string; b: string }[] = [];   // back to an earlier node of this level
     for (const edge of graph.edges) {
       if (edge.enter) continue;
-      if (edge.toFrame) {
-        const a = edge.to === container ? childOf(edge.from) : null;
-        if (a) ending.push({ edge, a });
-        continue;
-      }
+      if (edge.toLoop) { if (edge.to === container && ids.includes(edge.from)) ending.push(edge); continue; }
       const a = childOf(edge.from), b = childOf(edge.to);
-      if (a && b && a !== b) lifted.push({ edge, a, b });
+      if (!a || !b || a === b) continue;
+      if (a !== edge.from || edge.ways.some((w) => w.kind === "again")) again.push({ edge, a, b });
+      else forward.push(edge);
     }
-    const pair = (a: string, b: string) => `${a}->${b}`;
 
-    const out = new Map<string, string[]>(ids.map((id) => [id, []]));
-    for (const l of lifted) if (!out.get(l.a)!.includes(l.b)) out.get(l.a)!.push(l.b);
-
-    // Depth-first from the entry (then anything it does not reach) to find the edges that go back.
-    const back = new Set<string>();
-    const state = new Map<string, 1 | 2>();
-    const visit = (id: string) => {
-      state.set(id, 1);
-      for (const to of out.get(id)!) {
-        const s = state.get(to);
-        if (s === 1) back.add(pair(id, to));
-        else if (s === undefined) visit(to);
-      }
-      state.set(id, 2);
-    };
-    const entry = container === null ? ids.find((id) => graph.nodes[id].kind === "Start") : ids[0];
-    for (const id of [entry, ...ids]) if (id !== undefined && !state.has(id)) visit(id);
-
-    // Longest-path layering over the forward edges.
+    // Longest-path layering over the forward edges; an edge that would close a cycle goes back.
+    const preds = new Map<string, string[]>(ids.map((id) => [id, []]));
+    {
+      const out = new Map<string, FlowEdge[]>(ids.map((id) => [id, []]));
+      for (const e of forward) out.get(e.from)!.push(e);
+      const state = new Map<string, 1 | 2>();
+      const cyclic = new Set<FlowEdge>();
+      const visit = (id: string) => {
+        state.set(id, 1);
+        for (const e of out.get(id)!) {
+          const s = state.get(e.to);
+          if (s === 1) cyclic.add(e);
+          else if (s === undefined) visit(e.to);
+        }
+        state.set(id, 2);
+      };
+      for (const id of ids) if (!state.has(id)) visit(id);
+      for (const e of cyclic) { forward.splice(forward.indexOf(e), 1); again.push({ edge: e, a: e.from, b: e.to }); }
+      for (const e of forward) if (!preds.get(e.to)!.includes(e.from)) preds.get(e.to)!.push(e.from);
+    }
     const layerOf = new Map<string, number>();
-    const forwardIn = new Map<string, string[]>(ids.map((id) => [id, []]));
-    for (const l of lifted) if (!back.has(pair(l.a, l.b)) && !forwardIn.get(l.b)!.includes(l.a)) forwardIn.get(l.b)!.push(l.a);
     const depth = (id: string): number => {
       const known = layerOf.get(id);
       if (known !== undefined) return known;
       layerOf.set(id, 0);
-      const d = Math.max(-1, ...forwardIn.get(id)!.map(depth)) + 1;
+      const d = Math.max(-1, ...preds.get(id)!.map(depth)) + 1;
       layerOf.set(id, d);
       return d;
     };
     for (const id of ids) depth(id);
 
     // An edge that skips layers gets a slim slot in each layer it crosses, ordered and placed like a node.
-    const sizeO = new Map<string, number>(ids.map((id) => [id, size.get(id)!.so]));
     const chains = new Map<string, string[]>();
-    for (const l of lifted) {
-      const key = pair(l.a, l.b);
-      if (back.has(key) || chains.has(key)) continue;
-      const span = layerOf.get(l.b)! - layerOf.get(l.a)!;
+    for (const e of forward) {
+      const span = layerOf.get(e.to)! - layerOf.get(e.from)!;
       if (span <= 1) continue;
       const dummies: string[] = [];
-      let previous = l.a;
+      let previous = e.from;
       for (let k = 1; k < span; k++) {
-        const id = `\u0000${key}#${k}`;
+        const id = `\u0000${e.key}#${k}`;
         dummies.push(id);
-        layerOf.set(id, layerOf.get(l.a)! + k);
-        sizeO.set(id, SIZE.dummy);
-        forwardIn.set(id, [previous]);
+        layerOf.set(id, layerOf.get(e.from)! + k);
+        item.set(id, { so: SIZE.dummy, sr: 0, anchor: SIZE.dummy / 2 });
+        preds.set(id, [previous]);
         previous = id;
       }
-      forwardIn.set(l.b, forwardIn.get(l.b)!.map((p) => (p === l.a ? previous : p)));
-      chains.set(key, dummies);
+      preds.set(e.to, preds.get(e.to)!.map((p) => (p === e.from ? previous : p)));
+      chains.set(e.key, dummies);
     }
     const all = [...ids, ...[...chains.values()].flat()];
 
-    // Order within a layer by the mean position of its predecessors, ties in written order.
+    // Order within a layer by the mean position of its predecessors. Ties: a step that ends the pass
+    // stands on the loop's side, so its way back crosses nothing; then written order.
+    const ends = new Set(ending.map((e) => e.from));
     const layers: string[][] = [];
     for (const id of all) (layers[layerOf.get(id)!] ??= []).push(id);
     const position = new Map<string, number>();
     layers.forEach((layer, i) => {
       if (i > 0) {
         const bary = (id: string) => {
-          const preds = forwardIn.get(id)!.map((p) => position.get(p)).filter((v): v is number => v !== undefined);
-          return preds.length ? preds.reduce((a, b) => a + b, 0) / preds.length : Number.POSITIVE_INFINITY;
+          const before = preds.get(id)!.map((p) => position.get(p)).filter((v): v is number => v !== undefined);
+          return before.length ? before.reduce((a, b) => a + b, 0) / before.length : Number.POSITIVE_INFINITY;
         };
-        layer.sort((a, b) => bary(a) - bary(b) || all.indexOf(a) - all.indexOf(b));
+        layer.sort((a, b) => bary(a) - bary(b) || Number(ends.has(b)) - Number(ends.has(a)) || all.indexOf(a) - all.indexOf(b));
       }
       layer.forEach((id, j) => position.set(id, j));
     });
 
-    // Placement: a layer is as deep as its deepest node, and is centred across the widest layer.
-    const layerSize = layers.map((layer) => Math.max(0, ...layer.map((id) => size.get(id)?.sr ?? 0)));
+    // Placement: a layer is as deep as its deepest item. One item stands on the axis (a loop by its
+    // loop node, its body off to the side); several are centred across it.
+    const layerSize = layers.map((layer) => Math.max(0, ...layer.map((id) => item.get(id)!.sr)));
     const layerR: number[] = [];
     layers.forEach((_, i) => { layerR[i] = i === 0 ? 0 : layerR[i - 1] + layerSize[i - 1] + gap; });
-    const rowWidth = (layer: string[]) => layer.reduce((w, id) => w + sizeO.get(id)!, 0) + (layer.length - 1) * SIZE.nodeGap;
-    const extentO = Math.max(0, ...layers.map(rowWidth));
-    const placed = new Map<string, { o: number; r: number; layer: number }>();
+    const at = new Map<string, { o: number; r: number; layer: number }>();
     layers.forEach((layer, i) => {
-      let o = (extentO - rowWidth(layer)) / 2;
+      const width = layer.reduce((w, id) => w + item.get(id)!.so, 0) + (layer.length - 1) * SIZE.nodeGap;
+      let o = layer.length === 1 ? -item.get(layer[0])!.anchor : -width / 2;
       for (const id of layer) {
-        placed.set(id, { o, r: layerR[i], layer: i });
-        o += sizeO.get(id)! + SIZE.nodeGap;
+        at.set(id, { o, r: layerR[i], layer: i });
+        o += item.get(id)!.so + SIZE.nodeGap;
       }
     });
 
-    // Rails: just outside every node and slot of the layers an edge spans; the rails of one side are staggered.
-    const lanes = { low: 0, high: 0 };
-    const railAt = (from: number, to: number, side: "low" | "high") => {
-      const spanned = layers.slice(Math.min(from, to), Math.max(from, to) + 1).flat();
-      return side === "low"
-        ? Math.min(...spanned.map((id) => placed.get(id)!.o)) - SIZE.rail * (1 + lanes.low++)
-        : Math.max(...spanned.map((id) => placed.get(id)!.o + sizeO.get(id)!)) + SIZE.rail * (1 + lanes.high++);
-    };
-    const rails = new Map<string, { o: number; side: "low" | "high" }>();
-    const bends = new Map<string, Bend[]>();
-    const backs = new Set<string>();
-    let minR = 0;
-    for (const l of lifted) {
-      const key = pair(l.a, l.b);
-      if (back.has(key)) {
-        const a = placed.get(l.a)!, b = placed.get(l.b)!;
-        backs.add(l.edge.key);
-        rails.set(l.edge.key, { o: railAt(a.layer, b.layer, "low"), side: "low" });
-        if (b.layer === 0) minR = -gap / 2;
-      } else if (chains.has(key)) {
-        bends.set(l.edge.key, chains.get(key)!.map((d) => {
-          const p = placed.get(d)!;
-          return { o: p.o + SIZE.dummy / 2, r0: p.r, r1: p.r + layerSize[p.layer] };
-        }));
+    // Rails. `Continue` comes back on the loop's side of the body, the step nearest the loop on the
+    // rail nearest the body, so no way back crosses another. `Again` runs on the far side of the
+    // layers it spans.
+    const lowest = Math.min(0, ...all.map((id) => at.get(id)!.o));
+    ending.sort((x, y) => at.get(x.from)!.layer - at.get(y.from)!.layer);
+    const endRail = new Map<string, { o: number; lane: number }>(ending.map((e, lane) => [e.key, { o: lowest - SIZE.rail * (1 + lane), lane }]));
+    again.sort((x, y) => Math.abs(at.get(x.a)!.layer - at.get(x.b)!.layer) - Math.abs(at.get(y.a)!.layer - at.get(y.b)!.layer));
+    const againRail = new Map<string, number>(again.map((g, lane) => {
+      const from = Math.min(at.get(g.a)!.layer, at.get(g.b)!.layer), to = Math.max(at.get(g.a)!.layer, at.get(g.b)!.layer);
+      const spanned = layers.slice(from, to + 1).flat();
+      return [g.edge.key, Math.max(...spanned.map((id) => at.get(id)!.o + item.get(id)!.so)) + SIZE.rail * (1 + lane)];
+    }));
+    const railOs = [...[...endRail.values()].map((r) => r.o), ...againRail.values()];
+
+    const settle = (originO: number, originR: number) => {
+      for (const id of ids) {
+        const p = at.get(id)!, it = item.get(id)!;
+        rects.set(id, { o: originO + p.o, r: originR + p.r, ...sizeOf(id) });
+        if (it.body) it.body.settle(originO + p.o + it.bodyO!, originR + p.r + it.bodyR!);
       }
-    }
-    for (const { edge, a } of ending) {
-      const p = placed.get(a)!;
-      const beside = layers[p.layer].filter((id) => id !== a).map((id) => placed.get(id)!.o);
-      // The side nothing stands on, the high one when both are free or both taken.
-      const side = beside.some((o) => o > p.o) && !beside.some((o) => o < p.o) ? "low" : "high";
-      rails.set(edge.key, { o: railAt(0, p.layer, side), side });
-    }
 
-    const railOs = [...rails.values()].map((r) => r.o);
-    const at = new Map<string, { o: number; r: number }>(ids.map((id) => [id, placed.get(id)!]));
+      for (const e of forward) {
+        const a = rects.get(e.from)!, b = rects.get(e.to)!;
+        const points: Point[] = [[a.o + a.so / 2, a.r + a.sr]];
+        for (const d of chains.get(e.key) ?? []) {
+          const p = at.get(d)!, o = originO + p.o + SIZE.dummy / 2;
+          points.push([o, originR + layerR[p.layer]], [o, originR + layerR[p.layer] + layerSize[p.layer]]);
+        }
+        points.push([b.o + b.so / 2, b.r]);
+        // A bent edge is labelled on its middle segment, which runs through a slot no node occupies.
+        const i = points.length === 2 ? 1 : Math.floor(points.length / 2);
+        routes.push({ edge: e, rail: false, points, label: mid(points[i - 1], points[i]), anchor: "middle" });
+      }
+
+      if (container !== null && ids.length > 0) {
+        // The loop node's far side: the way in near its start, the ways back after it.
+        const loop = rects.get(container)!, first = rects.get(ids[0])!;
+        const side = loop.o + loop.so;
+        const enterR = first.r + first.sr * 0.35;
+        const enter = graph.edges.find((e) => e.enter && e.from === container);
+        if (enter) routes.push({ edge: enter, rail: false, points: [[side, enterR], [first.o, enterR]], label: mid([side, enterR], [first.o, enterR]), anchor: "middle" });
+
+        for (const e of ending) {
+          const rail = endRail.get(e.key)!, s = rects.get(e.from)!, p = at.get(e.from)!;
+          const o = originO + rail.o;
+          const arrive = Math.min(loop.r + loop.sr - 6, enterR + 13 * (rail.lane + 1));
+          const blocked = graph.nodes[e.from].loop || layers[p.layer].some((id) => at.get(id)!.o < p.o);
+          let points: Point[], label: Point, anchor: Route["anchor"] = "middle";
+          if (e.from === ids[0] && !blocked) {
+            // The body's first step: straight back, beside the way in. Its label has the gutter to itself.
+            points = [[s.o, arrive], [side, arrive]];
+            label = down ? [(s.o + side) / 2, arrive + 12] : [s.o + (side - s.o) / 2, arrive + 6];
+            if (!down) anchor = "start";
+          } else if (blocked) {
+            // A loop leaves by its end, and so does a step with another between it and the rail:
+            // out under the layer, across to the rail, back along it.
+            const under = s.r + s.sr + gap / 3, c = s.o + s.so / 2;
+            points = [[c, s.r + s.sr], [c, under], [o, under], [o, arrive], [side, arrive]];
+            label = down ? [(c + o) / 2, under + 11] : mid(points[2], points[3]);
+          } else {
+            const r = s.r + s.sr / 2;
+            points = [[s.o, r], [o, r], [o, arrive], [side, arrive]];
+            // Top-down the label stands beside the rail in the gap above the step's layer, where no node is.
+            label = down ? [o + 5, s.r - gap / 2] : mid(points[1], points[2]);
+            if (down) anchor = "start";
+          }
+          routes.push({ edge: e, rail: true, points, label, anchor });
+        }
+      }
+
+      for (const g of again) {
+        const s = rects.get(g.edge.from)!, t = rects.get(g.edge.to)!, o = originO + againRail.get(g.edge.key)!;
+        const points: Point[] = [[s.o + s.so, s.r + s.sr / 2], [o, s.r + s.sr / 2], [o, t.r + t.sr / 2], [t.o + t.so, t.r + t.sr / 2]];
+        routes.push({ edge: g.edge, rail: true, points, label: mid(points[1], points[2]), anchor: "middle" });
+      }
+    };
+
     return {
-      ids, at, size, inner, rails, bends, backs,
-      box: { minO: Math.min(0, ...railOs), maxO: Math.max(extentO, ...railOs), minR,
-             maxR: layers.length ? layerR[layers.length - 1] + layerSize[layers.length - 1] : 0 },
+      minO: Math.min(lowest, ...railOs),
+      maxO: Math.max(0, ...all.map((id) => at.get(id)!.o + item.get(id)!.so), ...railOs),
+      maxR: layers.length ? layerR[layers.length - 1] + layerSize[layers.length - 1] : 0,
+      firstSr: ids.length ? sizeOf(ids[0]).sr : 0,
+      settle,
     };
   };
 
-  // Every level in the picture's coordinates.
-  const rects = new Map<string, Rect>();
-  const rails = new Map<string, { o: number; side: "low" | "high" }>();
-  const bends = new Map<string, Bend[]>();
-  const backs = new Set<string>();
-  const settle = (lv: Level, originO: number, originR: number) => {
-    for (const id of lv.ids) {
-      const p = lv.at.get(id)!, s = lv.size.get(id)!;
-      rects.set(id, { o: originO + p.o, r: originR + p.r, so: s.so, sr: s.sr });
-      const body = lv.inner.get(id);
-      if (body) settle(body, originO + p.o + pads.low - body.box.minO, originR + p.r + pads.start - body.box.minR);
-    }
-    for (const [key, rail] of lv.rails) rails.set(key, { o: originO + rail.o, side: rail.side });
-    for (const [key, list] of lv.bends) bends.set(key, list.map((b) => ({ o: originO + b.o, r0: originR + b.r0, r1: originR + b.r1 })));
-    for (const key of lv.backs) backs.add(key);
-  };
   const top = level(null);
-  settle(top, -top.box.minO, -top.box.minR);
+  top.settle(-top.minO, 0);
 
-  const page = (o: number, r: number): [number, number] => (down ? [o, r] : [r, o]);
-  const middle = (a: [number, number], b: [number, number]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-
-  const edges: PlacedEdge[] = [];
-  for (const edge of graph.edges) {
-    const a = rects.get(edge.from), b = rects.get(edge.to);
-    if (!a || !b) continue;
-    const rail = rails.get(edge.key);
-    let points: [number, number][];
-    let label: [number, number];
-    if (edge.enter) {
-      // From the frame's head to the first step of its body.
-      const o = b.o + b.so / 2;
-      points = [page(o, a.r + headR), page(o, b.r)];
-      label = middle(points[0], points[1]);
-    } else if (edge.toFrame && rail) {
-      // The pass is over: out of the step's side, along the rail, back to the frame's head.
-      const exit = rail.side === "low" ? a.o : a.o + a.so;
-      points = [page(exit, a.r + a.sr / 2), page(rail.o, a.r + a.sr / 2), page(rail.o, b.r + headR)];
-      label = middle(points[1], points[2]);
-    } else if (backs.has(edge.key) && rail) {
-      const above = b.r - gap / 2;
-      const arrive = b.o + b.so / 4;
-      points = [page(a.o, a.r + a.sr / 2), page(rail.o, a.r + a.sr / 2), page(rail.o, above), page(arrive, above), page(arrive, b.r)];
-      label = middle(points[1], points[2]);
-    } else {
-      points = [page(a.o + a.so / 2, a.r + a.sr)];
-      for (const bend of bends.get(edge.key) ?? []) points.push(page(bend.o, bend.r0), page(bend.o, bend.r1));
-      points.push(page(b.o + b.so / 2, b.r));
-      // A bent edge is labelled on its middle segment, which runs through a slot no node occupies.
-      const i = points.length === 2 ? 1 : Math.floor(points.length / 2);
-      label = middle(points[i - 1], points[i]);
-    }
-    edges.push({ edge, points, rail: rail !== undefined && !edge.enter, label });
-  }
-
+  const page = ([o, r]: Point): Point => (down ? [o, r] : [r, o]);
   const boxes: Record<string, Box> = {};
   for (const [id, rect] of rects) {
-    const [x, y] = page(rect.o, rect.r);
+    const [x, y] = page([rect.o, rect.r]);
     boxes[id] = down ? { x, y, w: rect.so, h: rect.sr } : { x, y, w: rect.sr, h: rect.so };
   }
-  const [width, height] = page(top.box.maxO - top.box.minO, top.box.maxR - top.box.minR);
-  return { direction, boxes, edges, width, height };
-}
-
-/** How deep a node sits: 0 at the top, 1 inside one loop. Frames are drawn outermost first. */
-export function depthOf(graph: StepGraph, id: string): number {
-  let depth = 0;
-  let parent = graph.nodes[id]?.parent ?? null;
-  while (parent !== null && depth < 64) {
-    depth += 1;
-    parent = graph.nodes[parent]?.parent ?? null;
+  // In the order the model lists them, whichever level placed them.
+  const placed = new Map(routes.map((r) => [r.edge.key, r]));
+  const edges: PlacedEdge[] = [];
+  for (const edge of graph.edges) {
+    const r = placed.get(edge.key);
+    if (r) edges.push({ edge, rail: r.rail, points: r.points.map(page), label: page(r.label), anchor: r.anchor });
   }
-  return depth;
+  const [width, height] = page([top.maxO - top.minO, top.maxR]);
+  return { direction, boxes, edges, width, height };
 }

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { BILLING, E2E, TRIAGE, resume, run } from "./aip";
+import { BILLING, DYNAMIC, E2E, FIXED, TRIAGE, resume, run } from "./aip";
 import { card } from "./pages";
 
 // The step graph: the procedure page's main view, in its modes (control flow, data flow, run traffic, and
@@ -39,16 +39,18 @@ test.beforeAll(() => {
 const steps = (page: Page) => page.getByTestId("steps");
 const graph = (page: Page | Locator) => page.getByTestId("step-graph");
 const node = (page: Page | Locator, step: string) => page.locator(`[data-testid="step-node"][data-step="${step}"]`);
-const frame = (page: Page | Locator, loop: string) => page.locator(`[data-testid="graph-frame"][data-loop="${loop}"]`);
+const loopNode = (page: Page | Locator, loop: string) => page.locator(`[data-testid="loop-node"][data-loop="${loop}"]`);
 const edge = (page: Page | Locator, from: string, to: string) => page.locator(`[data-testid="step-edge"][data-from="${from}"][data-to="${to}"]`);
 const mode = (page: Page, name: string) => steps(page).getByRole("radiogroup", { name: "graph" }).getByRole("radio", { name });
 const direction = (page: Page | Locator, name: "down" | "right") => page.getByTestId("direction").getByRole("radio", { name });
 const shot = (target: Locator, name: string) => target.screenshot({ path: path.join(SHOTS, `${name}.png`) });
 
-/** Whether `inner` is drawn inside `outer`. */
-async function inside(inner: Locator, outer: Locator): Promise<boolean> {
-  const i = (await inner.boundingBox())!, o = (await outer.boundingBox())!;
-  return i.x >= o.x && i.y >= o.y && i.x + i.width <= o.x + o.width && i.y + i.height <= o.y + o.height;
+/** A node's box on the page. */
+const box = async (target: Locator) => (await target.boundingBox())!;
+/** Whether two things on the page overlap. */
+async function overlap(a: Locator, b: Locator): Promise<boolean> {
+  const p = await box(a), q = await box(b);
+  return p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height;
 }
 
 test("billing-support: control flow is the page's main view, with the route's branches on its arrows", async ({ page }) => {
@@ -78,16 +80,16 @@ test("billing-support: control flow is the page's main view, with the route's br
   await shot(steps(page), "billing-control-down");
 });
 
-test("billing-support: data flow draws who produces each key and who reads it, and says whose answer steers the route", async ({ page }) => {
+test("billing-support: data flow draws the arrows of the key or the step picked, and says whose answer steers the route", async ({ page }) => {
   await page.goto(`./#/p/${BILLING}`);
   await mode(page, "data flow").check();
   await expect(page).toHaveURL(/\?view=data$/);
   await expect(graph(page)).toHaveAttribute("data-mode", "data");
   const carries = (from: string, to: string) => page.locator(`[data-testid="data-edge"][data-from="${from}"][data-to="${to}"]`);
-  await expect(carries("start", "triage")).toHaveAttribute("data-keys", "message");
-  await expect(carries("triage", "by_tone")).toHaveAttribute("data-keys", "triage_decision");
-  await expect(carries("start", "escalate")).toHaveAttribute("data-keys", "message");
-  await expect(page.getByTestId("step-edge")).toHaveCount(6);         // the control edges stay, faint
+  // Nothing picked: the control edges, faint, and no data arrow. The table is the overview.
+  await expect(page.getByTestId("step-edge")).toHaveCount(6);
+  await expect(page.getByTestId("data-edge")).toHaveCount(0);
+  await expect(page.getByTestId("data-hint")).toBeVisible();
 
   const row = (key: string) => page.locator(`[data-testid="data-flow-row"][data-key="${key}"]`);
   await expect(row("message")).toHaveAttribute("data-from", "start");
@@ -97,16 +99,19 @@ test("billing-support: data flow draws who produces each key and who reads it, a
   await expect(read.getByTestId("source-class")).toHaveText("measured");
   await expect(row("ticket_id")).toHaveAttribute("data-to", "end");
 
-  // A key, or a step, picked: its arrows stand out from the rest.
+  // A key picked: an arrow from its producer to each reader, and no other.
   await row("triage_decision").getByRole("button", { name: "triage_decision" }).click();
-  await expect(carries("triage", "by_tone")).toHaveAttribute("data-lit", "true");
-  await expect(carries("start", "triage")).toHaveAttribute("data-lit", "false");
-  await node(page, "start").click();
-  await expect(carries("start", "triage")).toHaveAttribute("data-lit", "true");
-  await expect(carries("triage", "by_tone")).toHaveAttribute("data-lit", "false");
-  await node(page, "start").click();
-  await expect(carries("start", "triage")).not.toHaveAttribute("data-lit");
+  await expect(carries("triage", "by_tone")).toHaveAttribute("data-keys", "triage_decision");
+  await expect(page.getByTestId("data-edge")).toHaveCount(3);          // by_tone, escalate, reply
+  await expect(carries("start", "triage")).toHaveCount(0);
   await shot(steps(page), "billing-data-down");
+  // A step picked: what it gives and what it takes.
+  await node(page, "start").click();
+  await expect(carries("start", "triage")).toHaveAttribute("data-keys", "message");
+  await expect(carries("start", "escalate")).toHaveAttribute("data-keys", "message");
+  await expect(carries("triage", "by_tone")).toHaveCount(0);
+  await node(page, "start").click();
+  await expect(page.getByTestId("data-edge")).toHaveCount(0);
 });
 
 test("billing-support: run traffic weights the arrows by the runs that took them", async ({ page }) => {
@@ -184,20 +189,33 @@ test("billing-support: the cards are the fourth mode, and every mode draws down 
   await expect(graph(page)).toHaveAttribute("data-direction", "down");
 });
 
-test("ticket-triage: loops are frames around their bodies, with Continue and Again as arrows of their own", async ({ page }) => {
+test("ticket-triage: a loop is a node with its body beside it, a cycle of arrows and no frame", async ({ page }) => {
   await page.goto(`./#/p/${TRIAGE}`);
   await expect(page.getByTestId("step-node")).toHaveCount(9);
-  const outer = frame(page, "each_ticket"), inner = frame(page, "revise");
+  await expect(page.getByTestId("loop-node")).toHaveCount(2);
+  // A body hangs beside its loop, so the picture is wide even drawn down: the steps take the whole row.
+  await expect(graph(page)).toHaveAttribute("data-direction", "down");
+  await expect(steps(page)).toHaveClass(/wide/);
+  await expect(page.getByTestId("graph-frame")).toHaveCount(0);
+  const outer = loopNode(page, "each_ticket"), inner = loopNode(page, "revise");
   await expect(outer).toHaveAttribute("data-kind", "For");
   await expect(inner).toHaveAttribute("data-kind", "Loop");
-  await expect(outer).toContainText("Over tickets As ticket");
-  expect(await inside(inner.locator("rect").first(), outer.locator("rect").first())).toBe(true);
-  for (const step of ["classify", "by_tone", "draft", "escalate", "check", "fix"]) expect(await inside(node(page, step), outer.locator("rect").first())).toBe(true);
-  for (const step of ["start", "summarize", "end"]) expect(await inside(node(page, step), outer.locator("rect").first())).toBe(false);
-  expect(await inside(node(page, "fix"), inner.locator("rect").first())).toBe(true);
-  expect(await inside(node(page, "check"), inner.locator("rect").first())).toBe(false);
+  await expect(outer.getByTestId("loop-summary")).toHaveText("Over tickets, At_Most 50");
+  await expect(inner.getByTestId("loop-summary")).toHaveText("Until passed, At_Most 3");
 
-  // Into the loop and out of it are arrows to and from the frame; the body's first step is entered from its head.
+  // The body hangs to the right of its loop node and starts level with it; the step after the loop is
+  // straight below the loop node, past the whole body.
+  const o = await box(outer);
+  for (const step of ["classify", "by_tone", "draft", "escalate", "check", "fix"]) expect((await box(node(page, step))).x).toBeGreaterThan(o.x + o.width);
+  expect((await box(inner)).x).toBeGreaterThan(o.x + o.width);
+  expect((await box(node(page, "classify"))).y).toBeLessThan(o.y + o.height);
+  expect((await box(node(page, "fix"))).x).toBeGreaterThan((await box(inner)).x + (await box(inner)).width);
+  // (within a few pixels: the start node's dot widens its box)
+  for (const step of ["start", "summarize", "end"]) expect(Math.abs((await box(node(page, step))).x + (await box(node(page, step))).width / 2 - (o.x + o.width / 2))).toBeLessThan(4);
+  expect((await box(node(page, "summarize"))).y).toBeGreaterThan((await box(node(page, "fix"))).y + (await box(node(page, "fix"))).height);
+
+  // The bundle's own edges: ENTERS from the loop to the first step of its body, Continue back to the loop,
+  // the exit from the loop to the step after it.
   await expect(edge(page, "start", "each_ticket")).toHaveCount(1);
   await expect(edge(page, "each_ticket", "classify")).toHaveAttribute("data-kinds", "enter");
   await expect(edge(page, "each_ticket", "summarize")).toHaveAttribute("data-kinds", "next");
@@ -205,25 +223,68 @@ test("ticket-triage: loops are frames around their bodies, with Continue and Aga
   await expect(edge(page, "revise", "each_ticket")).toHaveAttribute("data-kinds", "continue");
   await expect(edge(page, "fix", "check").getByTestId("branch-label")).toHaveText("again");
   await expect(edge(page, "by_tone", "escalate").getByTestId("branch-label")).toHaveText("< 0.6 · angry");
+  // No label sits on a node.
+  for (const label of await page.getByTestId("branch-label").all()) {
+    for (const n of [...await page.getByTestId("step-node").all(), ...await page.getByTestId("loop-node").all()]) expect(await overlap(label, n)).toBe(false);
+  }
   await shot(steps(page), "triage-control-down");
 
-  // A frame's header opens the loop.
-  await outer.locator(".frame-head").click();
+  // A loop node opens the loop.
+  await outer.click();
   await expect(page.getByTestId("step-detail")).toHaveAttribute("data-name", "each_ticket");
   await expect(page.getByTestId("step-detail")).toContainText("Over tickets As ticket, At_Most 50, Collect reply Into replies");
   await expect(page.getByTestId("step-detail").getByTestId("step-source")).toContainText("For each_ticket");
 });
 
+test("fixed-policy and dynamic-policy: a loop's cycle, and a For hung off a Loop's body", async ({ page }) => {
+  await page.goto(`./#/p/${FIXED}`);
+  await expect(loopNode(page, "revise").getByTestId("loop-summary")).toHaveText("Until check_summary.all_hold, At_Most 3");
+  await expect(edge(page, "revise", "check")).toHaveAttribute("data-kinds", "enter");
+  await expect(edge(page, "fix", "revise").getByTestId("branch-label")).toHaveText("continue");
+  await expect(edge(page, "revise", "end")).toHaveAttribute("data-kinds", "next");
+  for (const n of await page.getByTestId("step-node").all()) expect(await overlap(edge(page, "fix", "revise").getByTestId("branch-label"), n)).toBe(false);
+  await shot(steps(page), "fixed-control-down");
+  await direction(page, "right").check();
+  await expect(graph(page)).toHaveAttribute("data-direction", "right");
+  // To the right the body hangs below its loop node.
+  expect((await box(node(page, "check"))).y).toBeGreaterThan((await box(loopNode(page, "revise"))).y + (await box(loopNode(page, "revise"))).height);
+  await shot(steps(page), "fixed-control-right");
+
+  await page.goto(`./#/p/${DYNAMIC}`);
+  await expect(graph(page)).toHaveAttribute("data-direction", "right");
+  await expect(page.getByTestId("loop-node")).toHaveCount(2);
+  await expect(edge(page, "revise", "review")).toHaveAttribute("data-kinds", "enter");
+  await expect(edge(page, "review", "check")).toHaveAttribute("data-kinds", "enter");
+  await expect(edge(page, "check", "review")).toHaveAttribute("data-kinds", "continue");
+  await expect(edge(page, "review", "summarize_check")).toHaveAttribute("data-kinds", "next");
+  await shot(steps(page), "dynamic-control-right");
+  await direction(page, "down").check();
+  await expect(graph(page)).toHaveAttribute("data-direction", "down");
+  // The inner loop is one more step to the right: the outer loop node, the For, then its one step.
+  const outer = await box(loopNode(page, "revise")), inner = await box(loopNode(page, "review"));
+  expect(inner.x).toBeGreaterThan(outer.x + outer.width);
+  expect((await box(node(page, "check"))).x).toBeGreaterThan(inner.x + inner.width);
+  await shot(steps(page), "dynamic-control-down");
+});
+
 test("ticket-triage: every mode, down and to the right", async ({ page }) => {
   await page.goto(`./#/p/${TRIAGE}?view=data`);
   const carries = (from: string, to: string) => page.locator(`[data-testid="data-edge"][data-from="${from}"][data-to="${to}"]`);
-  // The For reads the list, hands each item to the steps of its body, and collects their replies.
-  await expect(carries("start", "each_ticket")).toHaveAttribute("data-keys", "tickets");
-  await expect(carries("each_ticket", "classify")).toHaveAttribute("data-keys", "ticket");
-  await expect(carries("draft", "each_ticket")).toHaveAttribute("data-keys", "reply");
-  await expect(carries("check", "revise")).toHaveAttribute("data-keys", "passed");
-  await expect(carries("each_ticket", "summarize")).toHaveAttribute("data-keys", "replies");
   const row = (key: string) => page.locator(`[data-testid="data-flow-row"][data-key="${key}"]`);
+  const pick = (key: string) => row(key).getByRole("button", { name: key, exact: true }).click();
+  // The For reads the list, hands each item to the steps of its body, and collects their replies: key by key.
+  await pick("tickets");
+  await expect(carries("start", "each_ticket")).toHaveAttribute("data-keys", "tickets");
+  await expect(page.getByTestId("data-edge")).toHaveCount(1);
+  await pick("ticket");
+  await expect(carries("each_ticket", "classify")).toHaveAttribute("data-keys", "ticket");
+  await expect(page.getByTestId("data-edge")).toHaveCount(3);
+  await pick("passed");
+  await expect(carries("check", "revise")).toHaveAttribute("data-keys", "passed");
+  await pick("replies");
+  await expect(carries("each_ticket", "summarize")).toHaveAttribute("data-keys", "replies");
+  await pick("reply");
+  await expect(carries("draft", "each_ticket")).toHaveAttribute("data-keys", "reply");
   await expect(row("reply")).toHaveAttribute("data-from", "draft,escalate,fix");
   await expect(row("reply")).toContainText("on different paths");
   await expect(row("reply").locator('[data-testid="key-read"][data-node="each_ticket"]')).toHaveAttribute("data-how", "collects");
@@ -235,7 +296,7 @@ test("ticket-triage: every mode, down and to the right", async ({ page }) => {
   await expect(summary).toBeVisible({ timeout: 30_000 });
   const runs = Number(await summary.getAttribute("data-runs"));
   expect(runs).toBeGreaterThanOrEqual(2);
-  await expect(frame(page, "each_ticket")).toHaveAttribute("data-runs", String(runs));
+  await expect(loopNode(page, "each_ticket")).toHaveAttribute("data-runs", String(runs));
   // A run counts once on an arrow however many passes took it; both runs wait somewhere.
   await expect(edge(page, "classify", "by_tone")).toHaveAttribute("data-runs", String(runs));
   expect(Number(await edge(page, "fix", "check").getAttribute("data-runs"))).toBeGreaterThanOrEqual(1);
@@ -250,10 +311,12 @@ test("ticket-triage: every mode, down and to the right", async ({ page }) => {
   const x = async (step: string) => (await node(page, step).boundingBox())!.x;
   expect(await x("classify")).toBeGreaterThan(await x("start"));
   expect(await x("summarize")).toBeGreaterThan(await x("fix"));
-  expect(await inside(node(page, "fix"), frame(page, "revise").locator("rect").first())).toBe(true);
+  // To the right a body hangs below its loop node.
+  expect((await box(node(page, "fix"))).y).toBeGreaterThan((await box(loopNode(page, "revise"))).y);
+  expect((await box(node(page, "classify"))).y).toBeGreaterThan((await box(loopNode(page, "each_ticket"))).y);
   await shot(steps(page), "triage-traffic-right");
   await mode(page, "data flow").check();
-  await expect(carries("each_ticket", "classify")).toHaveCount(1);
+  await expect(carries("fix", "check")).toHaveAttribute("data-keys", "reply");      // the key picked above is still picked
   await shot(steps(page), "triage-data-right");
   await mode(page, "control flow").check();
   await expect(page).toHaveURL(new RegExp(`#/p/${TRIAGE}$`));
@@ -295,18 +358,24 @@ test("a run of ticket_triage whose For ran three passes: its path over the graph
   await expect(node(drawn, "summarize").getByTestId("path-mark")).toHaveText("waiting here");
   await expect(node(drawn, "end")).toHaveAttribute("data-visited", "false");
   for (const step of ["start", "classify", "by_tone", "draft", "escalate", "check", "fix"]) await expect(node(drawn, step)).toHaveAttribute("data-visited", "true");
-  await expect(frame(drawn, "each_ticket")).toHaveAttribute("data-visited", "true");
-  await expect(frame(drawn, "revise")).toHaveAttribute("data-visited", "true");
+  // Each loop node says how many passes the run made of it.
+  await expect(loopNode(drawn, "each_ticket")).toHaveAttribute("data-visited", "true");
+  await expect(loopNode(drawn, "each_ticket").getByTestId("loop-passes").locator("text")).toHaveText("3 passes");
+  await expect(loopNode(drawn, "revise")).toHaveAttribute("data-visited", "true");
+  await expect(loopNode(drawn, "revise").getByTestId("loop-passes").locator("text")).toHaveText("1 pass");
 
-  // Beside it, the record as C1 built it: the three passes under the For.
+  // With it, the record as C1 built it: the three passes under the For. A procedure with loops is too wide
+  // for the column beside the record (a body hangs beside its loop), so the graph takes the row and the
+  // record is below it; a procedure without them stands beside its record (the next test).
   const loop = page.locator('[data-testid="record-loop"][data-loop="each_ticket"]');
   await expect(loop.locator(':scope > [data-testid="record-pass"]')).toHaveCount(3);
   await expect(page.getByTestId("run-pause")).toHaveAttribute("data-step", "summarize");
   const beside = async () => (await page.locator(".run-record").boundingBox())!.x > (await drawn.boundingBox())!.x + 100;
-  expect(await beside()).toBe(true);
+  expect(await beside()).toBe(false);
+  expect((await page.locator(".run-record").boundingBox())!.y).toBeGreaterThan((await drawn.boundingBox())!.y);
   await shot(page.locator("article.history-run"), "triage-run-path-down");
 
-  // To the right the graph takes the row and the record moves below it.
+  // To the right it is the same: the graph takes the row.
   await direction(page, "right").check();
   await expect(graph(drawn)).toHaveAttribute("data-direction", "right");
   expect(await beside()).toBe(false);
@@ -330,5 +399,8 @@ test("a run still inside its For waits at a step of the body; a finished one rea
   await expect(edge(drawn, "by_tone", "escalate")).toHaveAttribute("data-taken", "true");
   await expect(edge(drawn, "by_tone", "reply")).toHaveAttribute("data-taken", "false");
   await expect(node(drawn, "reply")).toHaveAttribute("data-visited", "false");
+  // No loop, so the graph is a column: the record stands beside it.
+  await expect(graph(drawn)).toHaveAttribute("data-direction", "down");
+  expect((await page.locator(".run-record").boundingBox())!.x).toBeGreaterThan((await drawn.boundingBox())!.x + 100);
   await expect(drawn.getByTestId("path-mark")).toHaveCount(0);
 });

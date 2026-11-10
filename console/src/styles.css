@@ -97,28 +97,24 @@ strong.run-done { color: var(--good); }
 .step-graph .node .start-dot { fill: var(--kind); stroke: none; }
 .step-graph .node-name { font-weight: 600; font-size: 13px; fill: currentColor; }
 .step-graph .node-kind { font-size: 11px; fill: var(--kind); }
-.step-graph .node[role="button"], .step-graph .frame-head[role="button"] { cursor: pointer; }
-.step-graph .node:focus-visible, .step-graph .frame-head:focus-visible { outline: none; }
+.step-graph .node[role="button"] { cursor: pointer; }
+.step-graph .node:focus-visible { outline: none; }
 .step-graph .node.selected > rect:first-of-type, .step-graph .node:focus-visible > rect:first-of-type { stroke-width: 3.5; fill: color-mix(in srgb, var(--kind) 14%, Canvas); }
-.step-graph .frame > rect { fill: color-mix(in srgb, var(--loop) 4%, transparent); stroke: var(--loop); stroke-width: 1.5; stroke-dasharray: 6 4; }
-.step-graph .frame.selected > rect { stroke-dasharray: none; }
-.step-graph .frame-head { font-size: 12px; fill: currentColor; }
-.step-graph .frame-kind { fill: var(--loop); font-weight: 600; }
-.step-graph .frame-name { font-weight: 600; }
-.step-graph .frame-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; opacity: 0.75; }
+.step-graph .loop-node { --kind: var(--loop); }
+.step-graph .loop-node > rect { fill: color-mix(in srgb, var(--loop) 9%, Canvas); stroke-width: 2; }
+.step-graph .loop-summary { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; fill: currentColor; opacity: 0.8; }
 .step-graph .edge { color: color-mix(in srgb, currentColor 55%, transparent); }
-.step-graph .edge.rail { color: color-mix(in srgb, var(--loop) 70%, transparent); }
+/* The loop's own arrows: into the body, and back from it. */
+.step-graph.control-mode .edge.rail, .step-graph.control-mode .edge.enter { color: var(--loop); }
+.step-graph .loop-arrow { fill: var(--loop); }
 .step-graph .arrow-head { fill: color-mix(in srgb, currentColor 60%, Canvas); }
 .step-graph .branch-label { font-size: 11px; fill: CanvasText; paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
-/* Data flow: the control edges stay, faint, under the dashed arrows that carry the keys. */
+/* Data flow: the control edges stay, faint, under the dashed arrows of the key or the step picked. */
 .step-graph.data-mode .edge { color: color-mix(in srgb, currentColor 22%, transparent); }
 .step-graph.data-mode .branch-label { opacity: 0.5; }
 .step-graph .data-edge { color: var(--data); }
 .step-graph .data-arrow { fill: var(--data); }
-.step-graph .data-edge.dim { opacity: 0.12; }
-.step-graph .data-edge.lit path { stroke-width: 2.25; }
-.step-graph .data-edge.lit .data-label { font-weight: 700; }
-.step-graph .data-label { font-size: 11px; fill: var(--data); paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
+.step-graph .data-label { font-size: 11px; font-weight: 600; fill: var(--data); paint-order: stroke; stroke: Canvas; stroke-width: 3px; }
 /* Run traffic: edges in the accent, thick with use; an edge no run took stays a dashed hairline. */
 .step-graph.traffic-mode .edge { color: color-mix(in srgb, currentColor 28%, transparent); }
 .step-graph.traffic-mode .edge.busy { color: var(--accent); }
@@ -137,9 +133,8 @@ strong.run-done { color: var(--good); }
 .step-graph.path-mode .node:not(.visited) { opacity: 0.45; }
 .step-graph.path-mode .node.visited > rect:first-of-type { stroke-width: 3; fill: color-mix(in srgb, var(--kind) 12%, Canvas); }
 .step-graph.path-mode .node.waiting > rect:first-of-type { stroke: var(--warn); stroke-dasharray: 6 3; }
-.step-graph.path-mode .node.failed > rect:first-of-type, .step-graph.path-mode .frame.failed > rect { stroke: var(--bad); }
-.step-graph.path-mode .frame:not(.visited) { opacity: 0.5; }
-.step-graph.path-mode .frame.visited > rect { fill: color-mix(in srgb, var(--loop) 9%, transparent); stroke-width: 2; }
+.step-graph.path-mode .node.failed > rect:first-of-type { stroke: var(--bad); }
+.step-graph .badge.passes rect { fill: var(--loop); }
 .step-detail { border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.8rem 0.5rem; margin: 0.6rem 0; }
 .step-detail h3 { display: flex; gap: 0.4rem; align-items: baseline; margin-top: 0.3rem; }
 .step-detail h3 button { margin-left: auto; font: inherit; }
@@ -156,7 +151,8 @@ strong.run-done { color: var(--good); }
 /* A run's path beside its record; drawn to the right, above it. */
 .path-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0 1.5rem; align-items: start; }
 .path-grid > * { min-width: 0; }
-.path-grid.wide { grid-template-columns: 1fr; }
+/* So does a graph wider than the column: a loop's body hangs beside its loop. */
+.path-grid.wide, .path-grid:has(.step-graph:not([data-span="narrow"])) { grid-template-columns: 1fr; }
 @media (max-width: 56rem) { .path-grid { grid-template-columns: 1fr; } }
 .governance-box { border: 1px solid var(--line); border-radius: 6px; padding: 0.5rem 0.9rem 0.9rem; margin: 1rem 0; }
 .governance-box h2 { margin-top: 0.25rem; }
