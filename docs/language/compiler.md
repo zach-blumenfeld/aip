@@ -62,7 +62,7 @@ formatter that lost one fails the round trip.
 `checker.check(program, folder, file, files=, sources=, some_paths=)` returns a list of
 `Diagnostic`, sorted by position: `code`, `severity`, `message`, `file`, `line`, `column`,
 `end_line`, `end_column` and `step`, the step or loop the finding is in. `CODES` maps every code
-to its severity, in the order of the spec's 2.2 table, which is the list of codes.
+but `syntax_error`, the parser's, to its severity; the spec's 2.2 table is the list of codes.
 `report()` makes one, dropping an exact repeat; `report_head()` anchors a finding about a whole
 step or loop to its opening keyword. A syntax error becomes a diagnostic one level up:
 `check_source()` catches `ParseError` and returns `Diagnostic(**exc.to_diagnostic())` as the only
