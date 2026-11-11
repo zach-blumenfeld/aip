@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<style>svg text{font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif} svg text.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+.panel{fill:#f6f7f9;stroke:#dfe3e8;stroke-width:1.5}
+.inset{fill:#ffffff;stroke:#e3e7ec;stroke-width:1.5}
+.ink{fill:#1c2530} .muted{fill:#5d6874} .accent{fill:#0A6190} .pill-ink{fill:#ffffff}
+.chip{fill:#ffffff;stroke:#c9d0d8;stroke-width:1.2}
+.chip-kind{fill:#f6f7f9;stroke:#c9d0d8;stroke-width:1.2}
+.pill{fill:#1c2530}
+.pill-ghost{fill:none;stroke:#9aa4af;stroke-width:1.5;stroke-dasharray:5 4}
+.doc{fill:#ffffff;stroke:#1c2530;stroke-width:1.6;stroke-linejoin:round}
+.doc-fold{fill:none;stroke:#1c2530;stroke-width:1.6;stroke-linejoin:round}
+.doc-accent{fill:#e7f1f7;stroke:#0A6190;stroke-width:2;stroke-linejoin:round}
+.doc-accent-fold{fill:none;stroke:#0A6190;stroke-width:2;stroke-linejoin:round}
+.arrow{fill:none;stroke:#9aa4af;stroke-width:2}
+.arrow-accent{fill:none;stroke:#0A6190;stroke-width:3}
+.dashed{stroke-dasharray:6 5}
+.wire{fill:none;stroke:#9aa4af;stroke-width:2}
+.rule{stroke:#dfe3e8;stroke-width:1.5}
+.relate{fill:#002B43}
+.neo-st0{fill:#231F20} .neo-st1{fill:#014063}
+.aura-line{fill:none;stroke:#014063;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.tag{fill:#ffffff;stroke:#c9d0d8;stroke-width:1.2}
+.tag-glyph{fill:none;stroke:#1c2530;stroke-width:1.6}
+.frame{fill:#ffffff;stroke:#c9d0d8;stroke-width:1.5}
+.frame-line{stroke:#e3e7ec;stroke-width:1.5}
+.frame-input{fill:none;stroke:#c9d0d8;stroke-width:1.2}
+.bubble{fill:#e9edf1} .bubble-me{fill:#d6dde4}
+.graph-node{fill:#e9edf1;stroke:#aab3bd;stroke-width:1.2}
+.graph-edge{stroke:#aab3bd;stroke-width:1.5}
+.g-node{fill:#ffffff;stroke:#1c2530;stroke-width:1.6}
+.g-run{fill:#e7f1f7;stroke:#0A6190;stroke-width:2}
+.g-edge{stroke:#9aa4af;stroke-width:1.5}
+.code{fill:#fbfcfd;stroke:#c9d0d8;stroke-width:1.2}
+.c-kw{fill:#1c2530;font-weight:600} .c-id{fill:#5d6874} .c-pn{fill:#5d6874}
+.or{fill:#f6f7f9;stroke:#c9d0d8;stroke-width:1.5}
+.traffic-heavy{stroke:#0A6190;stroke-width:4;stroke-linecap:round}
+.traffic{stroke:#0A6190;stroke-width:1.5;opacity:.6}
+.badge{fill:#e7f1f7;stroke:#0A6190;stroke-width:2}
+.squiggle{fill:none;stroke:#c0392b;stroke-width:1.4}
+#hn path{fill:#9aa4af} #ha path{fill:#0A6190}</style>
+<defs>
+<marker id="hn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+<marker id="ha" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<rect x="48" y="56" width="540" height="968" rx="18" class="panel"/>
+<text x="74" y="102" font-size="28" class="ink" text-anchor="start" font-weight="600">Write</text>
+<text x="72" y="150" font-size="18" class="ink" text-anchor="start" font-weight="600">Human &amp; agentic coding</text>
+<text x="72" y="182" font-size="15" class="muted" text-anchor="start" font-weight="400">editors, with the aip extension</text>
+<rect x="72" y="192" width="88" height="34" rx="8" class="chip"/>
+<text x="116.0" y="214.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">VS Code</text>
+<rect x="168" y="192" width="80" height="34" rx="8" class="chip"/>
+<text x="208.0" y="214.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">Cursor</text>
+<rect x="256" y="192" width="105" height="34" rx="8" class="chip"/>
+<text x="308.5" y="214.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">JetBrains</text>
+<rect x="72" y="238" width="308" height="146" rx="8" class="code"/>
+<text x="82" y="264" font-size="14" class="mono" xml:space="preserve"><tspan style="fill:#C2185B">Route</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#1F1F1F">by_tone</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#A31515">"</tspan><tspan style="fill:#A31515">Who replies</tspan><tspan style="fill:#A31515">"</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#1c2530">{</tspan></text>
+<text x="82" y="286" font-size="14" class="mono" xml:space="preserve"><tspan style="fill:#1c2530">  </tspan><tspan style="fill:#0B5FBE">Read</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#795E26">triage_decision</tspan><tspan style="fill:#1c2530">.</tspan><tspan style="fill:#795E26">tone</tspan></text>
+<text x="82" y="308" font-size="14" class="mono" xml:space="preserve"><tspan style="fill:#1c2530">  </tspan><tspan style="fill:#0B5FBE">Confidence_Below</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#098658">0.9</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#0B5FBE">-&gt;</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#1F1F1F">escalate</tspan></text>
+<text x="82" y="330" font-size="14" class="mono" xml:space="preserve"><tspan style="fill:#1c2530">  </tspan><tspan style="fill:#A31515">angry</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#0B5FBE">-&gt;</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#1F1F1F">escalate</tspan></text>
+<text x="82" y="352" font-size="14" class="mono" xml:space="preserve"><tspan style="fill:#1c2530">  </tspan><tspan style="fill:#A31515">calm</tspan><tspan style="fill:#1c2530">  </tspan><tspan style="fill:#0B5FBE">-&gt;</tspan><tspan style="fill:#1c2530"> </tspan><tspan style="fill:#1F1F1F">reply</tspan></text>
+<text x="82" y="374" font-size="14" class="mono" xml:space="preserve"><tspan style="fill:#1c2530">}</tspan></text>
+<text x="72" y="408" font-size="15" class="muted" text-anchor="start" font-weight="400">syntax colours, the compiler's squiggles,</text>
+<text x="72" y="429" font-size="15" class="muted" text-anchor="start" font-weight="400">a live graph preview</text>
+<text x="72" y="466" font-size="15" class="muted" text-anchor="start" font-weight="400">agents with the aip skill</text>
+<rect x="72" y="476" width="123" height="34" rx="8" class="chip"/>
+<text x="133.5" y="498.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">Claude Code</text>
+<rect x="203" y="476" width="71" height="34" rx="8" class="chip"/>
+<text x="238.5" y="498.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">Codex</text>
+<text x="286" y="498" font-size="20" class="muted" text-anchor="start" font-weight="400">…</text>
+<path d="M72 532H372" class="rule"/>
+<text x="72" y="568" font-size="18" class="ink" text-anchor="start" font-weight="600">Autonomous agent</text>
+<text x="72" y="596" font-size="15" class="muted" text-anchor="start" font-weight="400">built-in procedures that write one</text>
+<rect x="72" y="608" width="252" height="38" rx="19.0" class="pill"/>
+<text x="198.0" y="632.76" font-size="16" class="pill-ink mono" text-anchor="middle" font-weight="500">aip run make_procedure</text>
+<text x="72" y="670" font-size="15" class="ink mono" text-anchor="start" font-weight="400">-i {name, description, materials}</text>
+<text x="72" y="696" font-size="15" class="muted" text-anchor="start" font-weight="400">also build_procedure · edit_procedure</text>
+<path d="M72 716H372" class="rule"/>
+<text x="72" y="748" font-size="18" class="ink" text-anchor="start" font-weight="600">No-code</text>
+<rect x="72" y="762" width="168" height="40" rx="8" class="tag"/><rect x="84" y="772" width="26" height="20" rx="3" class="tag-glyph"/><path d="M84 778h26M89 784h8M89 788h12" class="tag-glyph"/>
+<text x="120" y="788" font-size="17" class="ink" text-anchor="start" font-weight="600">AIP console</text>
+<text x="72" y="822" font-size="15" class="muted" text-anchor="start" font-weight="400">the Studio: a chat over a draft,</text>
+<text x="72" y="843" font-size="15" class="muted" text-anchor="start" font-weight="400">its step graph beside it</text>
+<rect x="72" y="852" width="300" height="160" rx="10" class="frame"/>
+<path d="M72 880H372M222 880V1012" class="frame-line"/>
+<text x="86" y="871" font-size="14" class="muted" text-anchor="start" font-weight="500">Studio</text>
+<rect x="128" y="892" width="82" height="20" rx="10" class="bubble-me"/>
+<rect x="84" y="920" width="118" height="34" rx="10" class="bubble"/>
+<rect x="116" y="954" width="94" height="20" rx="10" class="bubble-me"/>
+<rect x="84" y="982" width="126" height="22" rx="11" class="frame-input"/>
+<path d="M297.0 908L297.0 922" class="graph-edge"/>
+<path d="M297.0 940L261.0 956" class="graph-edge"/>
+<path d="M297.0 940L333.0 956" class="graph-edge"/>
+<path d="M261.0 974L297.0 990" class="graph-edge"/>
+<path d="M333.0 974L297.0 990" class="graph-edge"/>
+<rect x="265" y="890" width="64" height="18" rx="5" class="graph-node"/>
+<rect x="265" y="922" width="64" height="18" rx="5" class="graph-node"/>
+<rect x="235" y="956" width="52" height="18" rx="5" class="graph-node"/>
+<rect x="307" y="956" width="52" height="18" rx="5" class="graph-node"/>
+<rect x="265" y="990" width="64" height="18" rx="5" class="graph-node"/>
+<path d="M402 180V364H570V180H472l-10 -12H410q-8 0 -8 8z" class="doc"/>
+<text x="420" y="214" font-size="18" class="ink mono" text-anchor="start" font-weight="600">proc/</text>
+<text x="420" y="248" font-size="15" class="ink mono" text-anchor="start" font-weight="400">procedure.aip</text>
+<text x="420" y="274" font-size="15" class="ink mono" text-anchor="start" font-weight="400">scripts/</text>
+<text x="420" y="300" font-size="15" class="ink mono" text-anchor="start" font-weight="400">assets/</text>
+<text x="420" y="326" font-size="15" class="ink mono" text-anchor="start" font-weight="400">references/</text>
+<path d="M380 311H388M376 627H388M376 932H388M388 266V932" class="wire"/>
+<path d="M388 266H400" class="arrow" marker-end="url(#hn)"/>
+<rect x="628" y="56" width="640" height="288" rx="18" class="panel"/>
+<text x="654" y="102" font-size="28" class="ink" text-anchor="start" font-weight="600">Compile</text>
+<path d="M570 220H654" class="arrow" marker-end="url(#hn)"/>
+<rect x="658" y="200" width="213" height="40" rx="20.0" class="pill"/>
+<text x="764.5" y="226.12" font-size="17" class="pill-ink mono" text-anchor="middle" font-weight="500">aip compile proc/</text>
+<path d="M871 220H930" class="arrow" marker-end="url(#hn)"/>
+<path d="M934 112h206l16 16v170h-222z" class="doc"/><path d="M1140 112v16h16" class="doc-fold"/>
+<text x="954" y="150" font-size="20" class="ink mono" text-anchor="start" font-weight="600">proc.rl</text>
+<g transform="translate(1112 128) scale(0.1004)" class="relate"><path d="M150.094 0C228.424 0 291.934 63.6447 291.934 142.142V229.849C291.934 234.903 287.837 239 282.783 239H198.854C193.8 239 189.703 234.903 189.703 229.849V142.142C189.703 120.259 171.93 102.449 150.094 102.449V0Z"/><path d="M141.84 0C63.5093 0 0 63.6447 0 142.142L0 229.849C0 234.903 4.09702 239 9.15095 239H93.0801C98.134 239 102.231 234.903 102.231 229.849V142.142C102.231 120.259 120.003 102.449 141.84 102.449V0Z"/></g>
+<text x="954" y="184" font-size="16" class="ink" text-anchor="start" font-weight="400">source</text>
+<text x="954" y="208" font-size="16" class="ink" text-anchor="start" font-weight="400">files</text>
+<text x="954" y="232" font-size="16" class="ink" text-anchor="start" font-weight="400">graph</text>
+<text x="954" y="278" font-size="15" class="muted mono" text-anchor="start" font-weight="400">id 6e98…aad2</text>
+<text x="658" y="276" font-size="15" class="muted" text-anchor="start" font-weight="400">lossless: aip export</text>
+<text x="658" y="297" font-size="15" class="muted" text-anchor="start" font-weight="400">gives proc/ back</text>
+<rect x="628" y="384" width="640" height="640" rx="18" class="panel"/>
+<text x="654" y="430" font-size="28" class="ink" text-anchor="start" font-weight="600">Run</text>
+<path d="M1044 298V466" class="arrow" marker-end="url(#hn)"/>
+<text x="1056" y="372" font-size="14" class="muted" text-anchor="start" font-weight="400">opened in process</text>
+<rect x="652" y="446" width="136" height="32" rx="8" class="chip"/>
+<text x="720.0" y="467.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">Claude Code</text>
+<path d="M788 462H808" class="wire"/>
+<rect x="652" y="486" width="136" height="32" rx="8" class="chip"/>
+<text x="720.0" y="507.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">Codex</text>
+<path d="M788 502H808" class="wire"/>
+<rect x="652" y="526" width="136" height="32" rx="8" class="chip"/>
+<text x="720.0" y="547.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">ADK</text>
+<path d="M788 542H808" class="wire"/>
+<rect x="652" y="566" width="136" height="32" rx="8" class="chip"/>
+<text x="720.0" y="587.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">LangGraph</text>
+<path d="M788 582H808" class="wire"/>
+<rect x="652" y="606" width="136" height="32" rx="8" class="chip"/>
+<text x="720.0" y="627.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">Strands</text>
+<path d="M788 622H808" class="wire"/>
+<rect x="652" y="646" width="136" height="32" rx="8" class="chip"/>
+<text x="720.0" y="667.76" font-size="16" class="ink" text-anchor="middle" font-weight="400">MAF</text>
+<path d="M788 662H808" class="wire"/>
+<text x="720" y="712" font-size="22" class="muted" text-anchor="middle" font-weight="400">…</text>
+<rect x="652" y="736" width="136" height="34" rx="17.0" class="pill-ghost"/>
+<text x="720.0" y="758.76" font-size="16" class="ink mono" text-anchor="middle" font-weight="500">aip runah</text>
+<path d="M788 753H808" class="wire"/>
+<text x="652" y="798" font-size="15" class="muted" text-anchor="start" font-weight="400">the built-in harness:</text>
+<text x="652" y="819" font-size="15" class="muted" text-anchor="start" font-weight="400">a chat model takes</text>
+<text x="652" y="840" font-size="15" class="muted" text-anchor="start" font-weight="400">the agent's turns</text>
+<path d="M808 462V753" class="wire"/>
+<rect x="828" y="446" width="130" height="36" rx="8" class="chip"/>
+<path d="M840 453h11l6 6v16h-17z" class="doc"/><path d="M851 453v6h6" class="doc-fold"/>
+<text x="870" y="470" font-size="16" class="ink" text-anchor="start" font-weight="400">CLI + skill</text>
+<path d="M808 464H828" class="wire"/>
+<path d="M958 464H972" class="wire"/>
+<rect x="828" y="490" width="130" height="36" rx="8" class="chip"/>
+<g transform="translate(838 497) scale(0.9167)" class="ink"><path d="M13.85 0a4.16 4.16 0 0 0-2.95 1.217L1.456 10.66a.835.835 0 0 0 0 1.18.835.835 0 0 0 1.18 0l9.442-9.442a2.49 2.49 0 0 1 3.541 0 2.49 2.49 0 0 1 0 3.541L8.59 12.97l-.1.1a.835.835 0 0 0 0 1.18.835.835 0 0 0 1.18 0l.1-.098 7.03-7.034a2.49 2.49 0 0 1 3.542 0l.049.05a2.49 2.49 0 0 1 0 3.54l-8.54 8.54a1.96 1.96 0 0 0 0 2.755l1.753 1.753a.835.835 0 0 0 1.18 0 .835.835 0 0 0 0-1.18l-1.753-1.753a.266.266 0 0 1 0-.394l8.54-8.54a4.185 4.185 0 0 0 0-5.9l-.05-.05a4.16 4.16 0 0 0-2.95-1.218c-.2 0-.401.02-.6.048a4.17 4.17 0 0 0-1.17-3.552A4.16 4.16 0 0 0 13.85 0m0 3.333a.84.84 0 0 0-.59.245L6.275 10.56a4.186 4.186 0 0 0 0 5.902 4.186 4.186 0 0 0 5.902 0L19.16 9.48a.835.835 0 0 0 0-1.18.835.835 0 0 0-1.18 0l-6.985 6.984a2.49 2.49 0 0 1-3.54 0 2.49 2.49 0 0 1 0-3.54l6.983-6.985a.835.835 0 0 0 0-1.18.84.84 0 0 0-.59-.245"/></g>
+<text x="870" y="514" font-size="16" class="ink" text-anchor="start" font-weight="400">MCP</text>
+<path d="M808 508H828" class="wire"/>
+<path d="M958 508H972" class="wire"/>
+<rect x="828" y="534" width="130" height="36" rx="8" class="chip"/>
+<g transform="translate(838 541) scale(0.9167)" class="ink"><path d="M11.858 0c-.978.005-1.913.088-2.736.234C6.7.662 6.26 1.558 6.26 3.21v2.182h5.725v.727H4.111c-1.664 0-3.121 1-3.577 2.903-.526 2.181-.549 3.542 0 5.82.407 1.694 1.379 2.902 3.043 2.902h1.969v-2.616c0-1.89 1.635-3.557 3.576-3.557h5.72c1.591 0 2.862-1.31 2.862-2.91v-5.45c0-1.553-1.309-2.718-2.863-2.977A18 18 0 0 0 11.858 0M8.762 1.755c.591 0 1.074.491 1.074 1.095 0 .601-.483 1.087-1.074 1.087A1.08 1.08 0 0 1 7.688 2.85c0-.604.48-1.095 1.074-1.095m9.656 4.364v2.543c0 1.971-1.671 3.63-3.577 3.63H9.122c-1.566 0-2.862 1.34-2.862 2.91v5.452c0 1.551 1.349 2.464 2.862 2.91 1.813.532 3.55.628 5.72 0 1.44-.418 2.862-1.258 2.862-2.91V18.47h-5.719v-.727h8.582c1.664 0 2.284-1.16 2.862-2.903.598-1.793.573-3.518 0-5.819-.41-1.656-1.196-2.903-2.862-2.903zm-3.216 13.807a1.08 1.08 0 0 1 1.074 1.088c0 .604-.48 1.094-1.074 1.094-.592 0-1.075-.49-1.075-1.094 0-.601.483-1.088 1.075-1.088"/></g>
+<text x="870" y="558" font-size="16" class="ink" text-anchor="start" font-weight="400">SDK</text>
+<path d="M808 552H828" class="wire"/>
+<path d="M958 552H972" class="wire"/>
+<path d="M972 464V552" class="wire"/>
+<path d="M972 490H994" class="arrow" marker-end="url(#hn)"/>
+<rect x="998" y="470" width="92" height="40" rx="20.0" class="pill"/>
+<text x="1044.0" y="496.12" font-size="17" class="pill-ink mono" text-anchor="middle" font-weight="500">aip run</text>
+<path d="M1090 490H1114" class="arrow-accent" marker-end="url(#ha)"/>
+<path d="M1118 440h84l16 16v84h-100z" class="doc-accent"/><path d="M1202 440v16h16" class="doc-accent-fold"/>
+<text x="1132" y="476" font-size="17" class="accent" text-anchor="start" font-weight="600">run</text>
+<text x="1132" y="498" font-size="17" class="accent" text-anchor="start" font-weight="600">record</text>
+<text x="1132" y="528" font-size="14" class="accent mono" text-anchor="start" font-weight="400">.json</text>
+<rect x="884" y="610" width="360" height="264" rx="12" class="inset"/>
+<text x="902" y="642" font-size="15" class="muted" text-anchor="start" font-weight="400">at each step, on this machine</text>
+<rect x="900" y="662" width="124" height="34" rx="8" class="chip-kind"/>
+<text x="962.0" y="684.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">Execute</text>
+<text x="1040" y="676" font-size="16" class="ink" text-anchor="start" font-weight="400">its script runs</text>
+<text x="1040" y="698" font-size="16" class="ink" text-anchor="start" font-weight="400">next to your data</text>
+<rect x="900" y="732" width="124" height="34" rx="8" class="chip-kind"/>
+<text x="962.0" y="754.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">Decide</text>
+<text x="1040" y="746" font-size="16" class="ink" text-anchor="start" font-weight="400">asks a</text>
+<text x="1040" y="768" font-size="16" class="ink" text-anchor="start" font-weight="400">decision model</text>
+<rect x="900" y="802" width="124" height="34" rx="8" class="chip-kind"/>
+<text x="962.0" y="824.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">Task_Agent</text>
+<text x="1040" y="816" font-size="16" class="ink" text-anchor="start" font-weight="400">pauses; the agent</text>
+<text x="1040" y="838" font-size="16" class="ink" text-anchor="start" font-weight="400">answers with resume</text>
+<text x="884" y="912" font-size="15" class="muted" text-anchor="start" font-weight="400">every stop writes the run file on</text>
+<text x="884" y="933" font-size="15" class="muted" text-anchor="start" font-weight="400">this machine; with a server, it is</text>
+<text x="884" y="954" font-size="15" class="muted" text-anchor="start" font-weight="400">posted there too</text>
+<rect x="1308" y="56" width="564" height="580" rx="18" class="panel"/>
+<text x="1334" y="102" font-size="28" class="ink" text-anchor="start" font-weight="600">Store</text>
+<rect x="1544" y="34" width="300" height="44" rx="22" class="badge"/>
+<text x="1694.0" y="63" font-size="18" class="accent" text-anchor="middle" font-weight="600">Procedural Knowledge Layer</text>
+<path d="M1156 200H1304" class="arrow" marker-end="url(#hn)"/>
+<text x="1232" y="190" font-size="15" class="muted" text-anchor="middle" font-weight="400">publish</text>
+<path d="M1218 490H1304" class="arrow-accent" marker-end="url(#ha)"/>
+<text x="1262" y="480" font-size="15" class="accent" text-anchor="middle" font-weight="600">record</text>
+<path d="M1308 560H1066V514" class="arrow dashed" marker-end="url(#hn)"/>
+<text x="1180" y="580" font-size="15" class="muted" text-anchor="middle" font-weight="400">pull</text>
+<rect x="1332" y="120" width="164" height="468" rx="12" class="inset"/>
+<text x="1346" y="150" font-size="17" class="ink" text-anchor="start" font-weight="600">Local filesystem</text>
+<text x="1346" y="173" font-size="15" class="muted" text-anchor="start" font-weight="400">always</text>
+<path d="M1354 190h31l11 11v43h-42z" class="doc"/><path d="M1385 190v11h11" class="doc-fold"/>
+<path d="M1346 198h31l11 11v43h-42z" class="doc"/><path d="M1377 198v11h11" class="doc-fold"/>
+<g transform="translate(1359 222) scale(0.0669)" class="relate"><path d="M150.094 0C228.424 0 291.934 63.6447 291.934 142.142V229.849C291.934 234.903 287.837 239 282.783 239H198.854C193.8 239 189.703 234.903 189.703 229.849V142.142C189.703 120.259 171.93 102.449 150.094 102.449V0Z"/><path d="M141.84 0C63.5093 0 0 63.6447 0 142.142L0 229.849C0 234.903 4.09702 239 9.15095 239H93.0801C98.134 239 102.231 234.903 102.231 229.849V142.142C102.231 120.259 120.003 102.449 141.84 102.449V0Z"/></g>
+<path d="M1428 198h31l11 11v43h-42z" class="doc-accent"/><path d="M1459 198v11h11" class="doc-accent-fold"/>
+<text x="1367" y="276" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">.rl</text>
+<text x="1449" y="276" font-size="15" class="accent mono" text-anchor="middle" font-weight="400">.json</text>
+<text x="1346" y="306" font-size="15" class="muted" text-anchor="start" font-weight="400">files under ~/.aip</text>
+<text x="1346" y="540" font-size="15" class="muted" text-anchor="start" font-weight="400">alone: runs by path,</text>
+<text x="1346" y="561" font-size="15" class="muted" text-anchor="start" font-weight="400">no catalog, no audit</text>
+<rect x="1508" y="120" width="164" height="220" rx="12" class="inset"/>
+<text x="1522" y="150" font-size="17" class="ink" text-anchor="start" font-weight="600">Local server</text>
+<text x="1522" y="173" font-size="15" class="muted" text-anchor="start" font-weight="400">starts on demand</text>
+<path d="M1538 210L1574 202" class="g-edge"/>
+<path d="M1538 210L1562 242" class="g-edge"/>
+<path d="M1574 202L1604 232" class="g-edge"/>
+<path d="M1562 242L1604 232" class="g-edge"/>
+<path d="M1622 204L1574 202" class="g-edge"/>
+<path d="M1622 204L1642 236" class="g-edge"/>
+<path d="M1642 236L1604 232" class="g-edge"/>
+<path d="M1614 262L1604 232" class="g-edge"/>
+<path d="M1642 236L1614 262" class="g-edge"/>
+<circle cx="1538" cy="210" r="8" class="g-node"/>
+<circle cx="1574" cy="202" r="8" class="g-node"/>
+<circle cx="1562" cy="242" r="8" class="g-node"/>
+<circle cx="1604" cy="232" r="8" class="g-node"/>
+<circle cx="1622" cy="204" r="8" class="g-run"/>
+<circle cx="1642" cy="236" r="8" class="g-run"/>
+<circle cx="1614" cy="262" r="8" class="g-run"/>
+<text x="1522" y="298" font-size="15" class="muted" text-anchor="start" font-weight="400">procedures and runs</text>
+<text x="1522" y="319" font-size="15" class="muted" text-anchor="start" font-weight="400">in one graph</text>
+<rect x="1684" y="120" width="164" height="220" rx="12" class="inset"/>
+<text x="1698" y="150" font-size="17" class="ink" text-anchor="start" font-weight="600">Remote server</text>
+<text x="1698" y="173" font-size="15" class="muted" text-anchor="start" font-weight="400">shared, with a token</text>
+<path d="M1714 210L1750 202" class="g-edge"/>
+<path d="M1714 210L1738 242" class="g-edge"/>
+<path d="M1750 202L1780 232" class="g-edge"/>
+<path d="M1738 242L1780 232" class="g-edge"/>
+<path d="M1798 204L1750 202" class="g-edge"/>
+<path d="M1798 204L1818 236" class="g-edge"/>
+<path d="M1818 236L1780 232" class="g-edge"/>
+<path d="M1790 262L1780 232" class="g-edge"/>
+<path d="M1818 236L1790 262" class="g-edge"/>
+<circle cx="1714" cy="210" r="8" class="g-node"/>
+<circle cx="1750" cy="202" r="8" class="g-node"/>
+<circle cx="1738" cy="242" r="8" class="g-node"/>
+<circle cx="1780" cy="232" r="8" class="g-node"/>
+<circle cx="1798" cy="204" r="8" class="g-run"/>
+<circle cx="1818" cy="236" r="8" class="g-run"/>
+<circle cx="1790" cy="262" r="8" class="g-run"/>
+<text x="1698" y="298" font-size="15" class="muted" text-anchor="start" font-weight="400">procedures and runs</text>
+<text x="1698" y="319" font-size="15" class="muted" text-anchor="start" font-weight="400">in one graph</text>
+<circle cx="1678" cy="236" r="18" class="or"/>
+<text x="1678" y="241" font-size="15" class="ink" text-anchor="middle" font-weight="600">or</text>
+<path d="M1590 340V356M1766 340V356" class="wire"/>
+<rect x="1508" y="356" width="340" height="76" rx="10" class="inset"/>
+<g transform="translate(1522 366) scale(0.0912)" class="relate"><path d="M441.531 280.458V85.3074H480.222V125.319C483.493 115.756 488.023 107.767 493.81 101.35C499.724 94.807 506.581 89.9 514.382 86.6286C522.183 83.2314 530.425 81.5328 539.106 81.5328C541.749 81.5328 544.265 81.7215 546.656 82.099C549.046 82.3506 550.934 82.8539 552.318 83.6088V122.488C550.682 121.733 548.543 121.23 545.901 120.978C543.384 120.726 541.182 120.538 539.295 120.412C530.739 119.783 522.938 120.223 515.892 121.733C508.846 123.243 502.744 125.759 497.585 129.282C492.552 132.805 488.652 137.398 485.884 143.06C483.241 148.722 481.92 155.39 481.92 163.066V280.458H441.531Z"/><path d="M656.546 284.232C638.05 284.232 621.756 280.269 607.664 272.342C593.572 264.29 582.562 252.84 574.635 237.993C566.834 223.146 562.934 205.468 562.934 184.959C562.934 164.701 566.52 146.835 573.692 131.358C580.864 115.756 591.244 103.552 604.833 94.7441C618.422 85.9366 634.778 81.5328 653.903 81.5328C672.651 81.5328 688.505 85.5591 701.464 93.6117C714.424 101.664 724.238 112.988 730.907 127.584C737.575 142.053 740.909 159.165 740.909 178.919V192.319H603.512C603.386 204.021 605.273 214.527 609.174 223.838C613.074 233.023 618.862 240.32 626.537 245.731C634.338 251.015 644.026 253.658 655.602 253.658C667.303 253.658 677.369 251.015 685.799 245.731C694.355 240.446 699.954 232.582 702.597 222.139H739.966C737.701 235.476 732.354 246.8 723.923 256.111C715.493 265.422 705.365 272.468 693.537 277.249C681.71 281.905 669.38 284.232 656.546 284.232ZM603.512 166.085H702.408C702.408 155.894 700.646 146.646 697.123 138.342C693.6 129.911 688.19 123.306 680.892 118.525C673.72 113.617 664.661 111.164 653.715 111.164C642.516 111.164 633.206 113.869 625.782 119.279C618.359 124.69 612.76 131.61 608.985 140.04C605.336 148.47 603.512 157.152 603.512 166.085Z"/><path d="M822.758 283.1C811.182 283.1 801.871 281.59 794.825 278.57C787.905 275.551 782.62 271.524 778.972 266.491C775.323 261.333 772.869 255.545 771.611 249.128C770.479 242.585 769.912 235.854 769.912 228.933V0H809.735V224.781C809.735 233.841 811.497 240.761 815.02 245.542C818.669 250.323 824.205 253.028 831.628 253.658L841.82 254.035V279.703C838.674 280.709 835.403 281.527 832.006 282.156C828.734 282.785 825.652 283.1 822.758 283.1Z"/><path d="M923.612 284.232C911.03 284.232 899.832 281.968 890.018 277.438C880.329 272.908 872.717 266.366 867.181 257.81C861.645 249.254 858.877 238.936 858.877 226.857C858.877 205.216 866.489 189.048 881.713 178.353C897.064 167.658 921.599 161.996 955.319 161.367L987.404 160.423V146.268C987.404 135.07 984.07 126.263 977.401 119.846C970.733 113.429 960.415 110.283 946.449 110.409C936.131 110.409 926.883 112.8 918.705 117.581C910.527 122.362 905.179 130.226 902.663 141.173H867.747C868.502 128.213 872.214 117.329 878.882 108.522C885.677 99.5883 894.988 92.8568 906.815 88.3272C918.642 83.7976 932.483 81.5328 948.336 81.5328C966.203 81.5328 980.861 83.9863 992.311 88.8934C1003.76 93.6746 1012.25 100.721 1017.79 110.032C1023.45 119.342 1026.28 130.666 1026.28 144.004V280.458H991.934L988.914 244.598C981.616 259.571 972.368 269.952 961.17 275.739C949.972 281.401 937.453 284.232 923.612 284.232ZM936.257 256.111C942.423 256.111 948.525 255.042 954.564 252.903C960.604 250.638 966.077 247.618 970.984 243.843C975.891 239.943 979.792 235.602 982.686 230.821C985.705 226.04 987.278 221.133 987.404 216.1V183.826L960.981 184.392C947.518 184.518 936.069 185.902 926.632 188.545C917.321 191.187 910.149 195.276 905.116 200.812C900.209 206.348 897.756 213.709 897.756 222.894C897.756 233.337 901.342 241.516 908.513 247.429C915.811 253.217 925.059 256.111 936.257 256.111Z"/><path d="M1128.25 281.779C1113.78 281.779 1102.58 279.829 1094.65 275.928C1086.73 272.028 1081.19 266.429 1078.05 259.131C1074.9 251.707 1073.33 242.774 1073.33 232.331V114.372H1041.62V85.3074H1074.65L1084.46 27.9325H1113.91V85.1187H1157.69V114.372H1113.91L1114.09 230.821C1114.09 237.238 1114.72 241.956 1115.98 244.976C1117.37 247.87 1119.63 249.757 1122.78 250.638C1126.05 251.393 1130.45 251.77 1135.99 251.77H1158.64V278.004C1156.24 279.011 1152.53 279.891 1147.5 280.646C1142.59 281.401 1136.18 281.779 1128.25 281.779Z"/><path d="M1265.02 284.232C1246.52 284.232 1230.23 280.269 1216.14 272.342C1202.04 264.29 1191.04 252.84 1183.11 237.993C1175.31 223.146 1171.41 205.468 1171.41 184.959C1171.41 164.701 1174.99 146.835 1182.16 131.358C1189.34 115.756 1199.72 103.552 1213.31 94.7441C1226.89 85.9366 1243.25 81.5328 1262.38 81.5328C1281.12 81.5328 1296.98 85.5591 1309.94 93.6117C1322.9 101.664 1332.71 112.988 1339.38 127.584C1346.05 142.053 1349.38 159.165 1349.38 178.919V192.319H1211.98C1211.86 204.021 1213.75 214.527 1217.65 223.838C1221.55 233.023 1227.34 240.32 1235.01 245.731C1242.81 251.015 1252.5 253.658 1264.08 253.658C1275.78 253.658 1285.84 251.015 1294.27 245.731C1302.83 240.446 1308.43 232.582 1311.07 222.139H1348.44C1346.17 235.476 1340.83 246.8 1332.4 256.111C1323.97 265.422 1313.84 272.468 1302.01 277.249C1290.18 281.905 1277.85 284.232 1265.02 284.232ZM1211.98 166.085H1310.88C1310.88 155.894 1309.12 146.646 1305.6 138.342C1302.07 129.911 1296.66 123.306 1289.37 118.525C1282.19 113.617 1273.13 111.164 1262.19 111.164C1250.99 111.164 1241.68 113.869 1234.26 119.279C1226.83 124.69 1221.23 131.61 1217.46 140.04C1213.81 148.47 1211.98 157.152 1211.98 166.085Z"/><path d="M171.04 18.4577C258.16 18.4577 328.796 89.2444 328.796 176.55V274.1C328.796 279.721 324.239 284.277 318.618 284.277H225.271C219.65 284.277 215.093 279.721 215.093 274.1V176.55C215.093 152.212 195.326 132.403 171.04 132.403V18.4577Z"/><path d="M157.757 18.4577C70.6362 18.4577 0 89.2444 0 176.55L0 274.1C0 279.721 4.55677 284.277 10.1778 284.277H103.525C109.146 284.277 113.703 279.721 113.703 274.1V176.55C113.703 152.212 133.47 132.403 157.757 132.403V18.4577Z"/></g>
+<text x="1583.578947368421" y="418" font-size="14" class="muted" text-anchor="middle" font-weight="400">embedded</text>
+<text x="1660" y="386" font-size="15" class="muted" text-anchor="middle" font-weight="400">or</text>
+<g transform="translate(1676 360) scale(0.1403)"><path class="neo-st0" d="M137.8,61.9c-35.3,0-58.9,20.5-58.9,60.4v28.4c3.5-1.7,7.3-2.6,11.4-2.6s8,1,11.5,2.7v-28.5 c0-25.8,14.2-39.1,36-39.1s36,13.3,36,39.1v62.1h22.9v-62.1C196.7,82.2,173,61.9,137.8,61.9L137.8,61.9z"/><path class="neo-st0" d="M209.2,124.7c0-36.2,26.6-62.8,64.2-62.8s63.8,26.6,63.8,62.8v8.5H233.3c3.4,21.3,19.3,33.1,40.1,33.1 c15.5,0,26.3-4.8,33.3-15.2h25.4c-9.2,22.2-30.9,36.5-58.7,36.5C235.7,187.5,209.2,161,209.2,124.7L209.2,124.7z M313,112.7 c-4.6-19.1-20.3-29.5-39.6-29.5s-34.8,10.6-39.4,29.5H313z"/><path class="neo-st0" d="M349.5,124.7c0-36.2,26.6-62.8,64.2-62.8s64.2,26.6,64.2,62.8c0,36.2-26.6,62.8-64.2,62.8 S349.5,161,349.5,124.7z M454.7,124.7c0-24.2-16.4-41.5-41.1-41.5s-41.1,17.4-41.1,41.5c0,24.1,16.4,41.5,41.1,41.5 S454.7,148.9,454.7,124.7z"/><path class="neo-st0" d="M609.1,208.1h2.7c14.7,0,20.3-6.5,20.3-23.4V65.9H655v117.3c0,29.5-11.6,44.7-41.1,44.7h-4.8L609.1,208.1 L609.1,208.1z"/><path class="neo-st0" d="M597.6,195.9h-22.9v-28.3h-58.2c-11.6,0-21.7-5.7-26.3-14.8c-4.3-8.6-3.1-18.7,3.1-27.2L545.6,57 c7.5-10.1,20.2-14.2,32.2-10.2c12,4,19.8,14.7,19.8,27.3v73.1h17.2v20.4h-17.2V195.9L597.6,195.9z M512.6,138.1 c-0.7,0.9-1.1,2.1-1.1,3.4c0,3.2,2.6,5.8,5.8,5.8h57.5V73.6c0-3.8-2.8-5.2-4-5.6c-0.5-0.1-1.2-0.3-2.1-0.3c-1.4,0-3.1,0.5-4.6,2.4 L512.6,138.1L512.6,138.1L512.6,138.1z"/><path class="neo-st1" d="M24.6,125.8c-3,1.5-5.8,4-7.8,7.3c-2,3.3-2.8,6.8-2.5,10.3c0.3,6.3,3.8,12.1,9.5,15.3c5.3,3,11.3,2.3,17,1 c7-1.8,13-2.5,19.3,1.3c0,0,0,0,0.3,0c10.8,6.3,10.8,22.1,0,28.4c0,0,0,0-0.3,0c-6.3,3.8-12.3,3-19.3,1.3c-5.5-1.5-11.5-2.3-17,1 c-5.8,3.3-9,9.3-9.5,15.3c-0.3,3.5,0.5,7,2.5,10.3c2,3.3,4.5,5.8,7.8,7.3c5.5,2.8,12.3,2.8,18-0.5c5.3-3,7.8-8.8,9.3-14.3 c2-7,4.3-12.6,10.8-16.1c6.3-3.8,12.3-3,19.3-1.3c5.5,1.5,11.5,2.3,17-1c5.8-3.3,9-9.3,9.5-15.3c0-0.5,0-0.8,0-1.3 c0-0.5,0-0.8,0-1.3c-0.3-6.3-3.8-12.1-9.5-15.3c-5.3-3-11.3-2.3-17-1c-7,1.8-13,2.5-19.3-1.3c-6.3-3.8-8.8-9.1-10.8-16.1 c-1.5-5.5-4-11.1-9.3-14.3C36.8,123.1,30.1,123.1,24.6,125.8z"/><path class="neo-st1" d="M643.6,17.2c-10.8,0-19.6,8.8-19.6,19.6s8.8,19.6,19.6,19.6c10.8,0,19.6-8.8,19.6-19.6S654.4,17.2,643.6,17.2z "/></g>
+<text x="1779.028877887789" y="386" font-size="19" class="ink" text-anchor="start" font-weight="500">/ Aura</text>
+<text x="1755.5144389438944" y="418" font-size="14" class="muted" text-anchor="middle" font-weight="400">over Bolt</text>
+<path d="M1678 432V456" class="arrow" marker-end="url(#hn)"/>
+<rect x="1508" y="460" width="340" height="128" rx="12" class="inset"/>
+<text x="1524" y="486" font-size="15" class="muted" text-anchor="start" font-weight="400">catalog</text>
+<rect x="1520" y="498" width="158" height="34" rx="8" class="chip"/>
+<text x="1599.0" y="520.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">publish</text>
+<rect x="1682" y="498" width="158" height="34" rx="8" class="chip"/>
+<text x="1761.0" y="520.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">search</text>
+<rect x="1520" y="540" width="158" height="34" rx="8" class="chip"/>
+<text x="1599.0" y="562.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">revisions &amp; pins</text>
+<rect x="1682" y="540" width="158" height="34" rx="8" class="chip"/>
+<text x="1761.0" y="562.4" font-size="15" class="ink mono" text-anchor="middle" font-weight="400">pull / get</text>
+<path d="M1678 588V672" class="arrow" marker-end="url(#hn)"/>
+<rect x="1308" y="676" width="564" height="348" rx="18" class="panel"/>
+<text x="1334" y="722" font-size="28" class="ink" text-anchor="start" font-weight="600">Audit</text>
+<rect x="1332" y="748" width="124" height="36" rx="18.0" class="pill"/>
+<text x="1394.0" y="771.76" font-size="16" class="pill-ink mono" text-anchor="middle" font-weight="500">aip audit</text>
+<text x="1332" y="808" font-size="16" class="ink" text-anchor="start" font-weight="400">named queries,</text>
+<text x="1332" y="830" font-size="16" class="ink" text-anchor="start" font-weight="400">or your own Cypher</text>
+<rect x="1332" y="866" width="183" height="36" rx="18.0" class="pill"/>
+<text x="1423.5" y="889.76" font-size="16" class="pill-ink mono" text-anchor="middle" font-weight="500">aip export runs</text>
+<path d="M1519 884H1545" class="arrow" marker-end="url(#hn)"/>
+<path d="M1549 858h30l10 10v42h-40z" class="doc"/><path d="M1579 858v10h10" class="doc-fold"/>
+<g transform="translate(1559 880) scale(0.0669)" class="relate"><path d="M150.094 0C228.424 0 291.934 63.6447 291.934 142.142V229.849C291.934 234.903 287.837 239 282.783 239H198.854C193.8 239 189.703 234.903 189.703 229.849V142.142C189.703 120.259 171.93 102.449 150.094 102.449V0Z"/><path d="M141.84 0C63.5093 0 0 63.6447 0 142.142L0 229.849C0 234.903 4.09702 239 9.15095 239H93.0801C98.134 239 102.231 234.903 102.231 229.849V142.142C102.231 120.259 120.003 102.449 141.84 102.449V0Z"/></g>
+<text x="1332" y="936" font-size="16" class="ink" text-anchor="start" font-weight="400">one .rl file, queried</text>
+<text x="1332" y="958" font-size="16" class="ink" text-anchor="start" font-weight="400">with no server</text>
+<rect x="1604" y="726" width="168" height="40" rx="8" class="tag"/><rect x="1616" y="736" width="26" height="20" rx="3" class="tag-glyph"/><path d="M1616 742h26M1621 748h8M1621 752h12" class="tag-glyph"/>
+<text x="1652" y="752" font-size="17" class="ink" text-anchor="start" font-weight="600">AIP console</text>
+<text x="1604" y="790" font-size="15" class="muted" text-anchor="start" font-weight="400">step graph with run traffic,</text>
+<text x="1604" y="811" font-size="15" class="muted" text-anchor="start" font-weight="400">history, audit</text>
+<rect x="1604" y="822" width="244" height="182" rx="10" class="frame"/>
+<path d="M1604 850H1848M1726 850V1004" class="frame-line"/>
+<text x="1618" y="841" font-size="14" class="muted" text-anchor="start" font-weight="500">Runs</text>
+<path d="M1665 878L1665 896" class="traffic-heavy"/>
+<path d="M1665 912L1637 932" class="traffic-heavy"/>
+<path d="M1665 912L1693 932" class="traffic"/>
+<path d="M1637 948L1665 968" class="traffic-heavy"/>
+<path d="M1693 948L1665 968" class="traffic"/>
+<rect x="1640" y="862" width="50" height="16" rx="5" class="graph-node"/>
+<rect x="1640" y="896" width="50" height="16" rx="5" class="graph-node"/>
+<rect x="1612" y="932" width="50" height="16" rx="5" class="graph-node"/>
+<rect x="1668" y="932" width="50" height="16" rx="5" class="graph-node"/>
+<rect x="1640" y="968" width="50" height="16" rx="5" class="graph-node"/>
+<circle cx="1744" cy="868" r="4" class="g-run"/>
+<rect x="1756" y="863" width="84" height="10" rx="5" class="bubble"/>
+<circle cx="1744" cy="894" r="4" class="g-run"/>
+<rect x="1756" y="889" width="64" height="10" rx="5" class="bubble"/>
+<circle cx="1744" cy="920" r="4" class="g-run"/>
+<rect x="1756" y="915" width="76" height="10" rx="5" class="bubble"/>
+<circle cx="1744" cy="946" r="4" class="g-node"/>
+<rect x="1756" y="941" width="54" height="10" rx="5" class="bubble"/>
+<circle cx="1744" cy="972" r="4" class="g-run"/>
+<rect x="1756" y="967" width="70" height="10" rx="5" class="bubble"/>
+</svg>
