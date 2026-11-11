@@ -388,7 +388,7 @@ So a step after two nested loops can still read the inner loop's count, and a st
 
 ## 3. Compilation: the bundle
 
-The compiler takes a program directory and produces one file, the bundle:
+The compiler takes a program directory and produces one file, the bundle (how the compiler does this, module by module: `compiler.md`):
 
 1. Parse `procedure.aip`; syntax errors name line and column.
 2. Build the graph and run every check in 2.2.
