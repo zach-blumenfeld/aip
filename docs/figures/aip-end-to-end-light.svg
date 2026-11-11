@@ -6,7 +6,7 @@
 .ink{fill:#1c2530} .muted{fill:#5d6874} .accent{fill:#0A6190} .pill-ink{fill:#ffffff}
 .chip{fill:#ffffff;stroke:#c9d0d8;stroke-width:1.2}
 .chip-kind{fill:#f6f7f9;stroke:#c9d0d8;stroke-width:1.2}
-.pill{fill:#1c2530}
+.pill{fill:#1c2530} .pill-arg{fill:#ffffff;opacity:.72}
 .pill-ghost{fill:none;stroke:#9aa4af;stroke-width:1.5;stroke-dasharray:5 4}
 .doc{fill:#ffffff;stroke:#1c2530;stroke-width:1.6;stroke-linejoin:round}
 .doc-fold{fill:none;stroke:#1c2530;stroke-width:1.6;stroke-linejoin:round}
@@ -72,40 +72,41 @@
 <path d="M72 532H372" class="rule"/>
 <text x="72" y="568" font-size="18" class="ink" text-anchor="start" font-weight="600">Autonomous agent</text>
 <text x="72" y="596" font-size="15" class="muted" text-anchor="start" font-weight="400">built-in procedures that write one</text>
-<rect x="72" y="608" width="252" height="38" rx="19.0" class="pill"/>
-<text x="198.0" y="632.76" font-size="16" class="pill-ink mono" text-anchor="middle" font-weight="500">aip run make_procedure</text>
-<text x="72" y="670" font-size="15" class="ink mono" text-anchor="start" font-weight="400">-i {name, description, materials}</text>
-<text x="72" y="696" font-size="15" class="muted" text-anchor="start" font-weight="400">also build_procedure · edit_procedure</text>
-<path d="M72 716H372" class="rule"/>
-<text x="72" y="748" font-size="18" class="ink" text-anchor="start" font-weight="600">No-code</text>
-<rect x="72" y="762" width="168" height="40" rx="8" class="tag"/><rect x="84" y="772" width="26" height="20" rx="3" class="tag-glyph"/><path d="M84 778h26M89 784h8M89 788h12" class="tag-glyph"/>
-<text x="120" y="788" font-size="17" class="ink" text-anchor="start" font-weight="600">AIP console</text>
-<text x="72" y="822" font-size="15" class="muted" text-anchor="start" font-weight="400">the Studio: a chat over a draft,</text>
-<text x="72" y="843" font-size="15" class="muted" text-anchor="start" font-weight="400">its step graph beside it</text>
-<rect x="72" y="852" width="300" height="160" rx="10" class="frame"/>
-<path d="M72 880H372M222 880V1012" class="frame-line"/>
-<text x="86" y="871" font-size="14" class="muted" text-anchor="start" font-weight="500">Studio</text>
-<rect x="128" y="892" width="82" height="20" rx="10" class="bubble-me"/>
-<rect x="84" y="920" width="118" height="34" rx="10" class="bubble"/>
-<rect x="116" y="954" width="94" height="20" rx="10" class="bubble-me"/>
-<rect x="84" y="982" width="126" height="22" rx="11" class="frame-input"/>
-<path d="M297.0 908L297.0 922" class="graph-edge"/>
-<path d="M297.0 940L261.0 956" class="graph-edge"/>
-<path d="M297.0 940L333.0 956" class="graph-edge"/>
-<path d="M261.0 974L297.0 990" class="graph-edge"/>
-<path d="M333.0 974L297.0 990" class="graph-edge"/>
-<rect x="265" y="890" width="64" height="18" rx="5" class="graph-node"/>
-<rect x="265" y="922" width="64" height="18" rx="5" class="graph-node"/>
-<rect x="235" y="956" width="52" height="18" rx="5" class="graph-node"/>
-<rect x="307" y="956" width="52" height="18" rx="5" class="graph-node"/>
-<rect x="265" y="990" width="64" height="18" rx="5" class="graph-node"/>
+<rect x="72" y="606" width="300" height="104" rx="12" class="pill"/>
+<text x="88" y="631" font-size="16" class="pill-ink mono" font-weight="500" xml:space="preserve">aip run make_procedure</text>
+<text x="88" y="653" font-size="15" class="pill-arg mono" font-weight="400" xml:space="preserve">  -i {name,</text>
+<text x="88" y="675" font-size="15" class="pill-arg mono" font-weight="400" xml:space="preserve">      description,</text>
+<text x="88" y="697" font-size="15" class="pill-arg mono" font-weight="400" xml:space="preserve">      materials}</text>
+<text x="72" y="734" font-size="15" class="muted" text-anchor="start" font-weight="400">also build_procedure · edit_procedure</text>
+<path d="M72 752H372" class="rule"/>
+<text x="72" y="786" font-size="18" class="ink" text-anchor="start" font-weight="600">No-code</text>
+<rect x="72" y="798" width="168" height="40" rx="8" class="tag"/><rect x="84" y="808" width="26" height="20" rx="3" class="tag-glyph"/><path d="M84 814h26M89 820h8M89 824h12" class="tag-glyph"/>
+<text x="120" y="824" font-size="17" class="ink" text-anchor="start" font-weight="600">AIP console</text>
+<text x="72" y="862" font-size="15" class="muted" text-anchor="start" font-weight="400">the Studio: a chat beside its step graph</text>
+<rect x="72" y="876" width="300" height="140" rx="10" class="frame"/>
+<path d="M72 904H372M222 904V1016" class="frame-line"/>
+<text x="86" y="895" font-size="14" class="muted" text-anchor="start" font-weight="500">Studio</text>
+<rect x="128" y="914" width="82" height="18" rx="9" class="bubble-me"/>
+<rect x="84" y="938" width="118" height="26" rx="9" class="bubble"/>
+<rect x="116" y="970" width="94" height="18" rx="9" class="bubble-me"/>
+<rect x="84" y="992" width="126" height="18" rx="9" class="frame-input"/>
+<path d="M297.0 928L297.0 938" class="graph-edge"/>
+<path d="M297.0 954L261.0 966" class="graph-edge"/>
+<path d="M297.0 954L333.0 966" class="graph-edge"/>
+<path d="M261.0 982L297.0 992" class="graph-edge"/>
+<path d="M333.0 982L297.0 992" class="graph-edge"/>
+<rect x="265" y="912" width="64" height="16" rx="5" class="graph-node"/>
+<rect x="265" y="938" width="64" height="16" rx="5" class="graph-node"/>
+<rect x="235" y="966" width="52" height="16" rx="5" class="graph-node"/>
+<rect x="307" y="966" width="52" height="16" rx="5" class="graph-node"/>
+<rect x="265" y="992" width="64" height="16" rx="5" class="graph-node"/>
 <path d="M402 180V364H570V180H472l-10 -12H410q-8 0 -8 8z" class="doc"/>
 <text x="420" y="214" font-size="18" class="ink mono" text-anchor="start" font-weight="600">proc/</text>
 <text x="420" y="248" font-size="15" class="ink mono" text-anchor="start" font-weight="400">procedure.aip</text>
 <text x="420" y="274" font-size="15" class="ink mono" text-anchor="start" font-weight="400">scripts/</text>
 <text x="420" y="300" font-size="15" class="ink mono" text-anchor="start" font-weight="400">assets/</text>
 <text x="420" y="326" font-size="15" class="ink mono" text-anchor="start" font-weight="400">references/</text>
-<path d="M380 311H388M376 627H388M376 932H388M388 266V932" class="wire"/>
+<path d="M380 311H388M376 658H388M376 946H388M388 266V946" class="wire"/>
 <path d="M388 266H400" class="arrow" marker-end="url(#hn)"/>
 <rect x="628" y="56" width="640" height="288" rx="18" class="panel"/>
 <text x="654" y="102" font-size="28" class="ink" text-anchor="start" font-weight="600">Compile</text>
