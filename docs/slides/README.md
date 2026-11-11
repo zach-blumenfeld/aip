@@ -1,0 +1,1 @@
+`aip-technical.html` (open in a browser; light/dark toggle), `aip-technical-{light,dark}.pdf` and `png/NN-{light,dark}.png` (2x, 3840×2160): a 17-slide technical walk through Write, Compile, Run, Store and Audit. Private: it names Relate.
