@@ -1,12 +1,15 @@
+> Snapshot of `docs/limitations.md` from https://github.com/relatedb/relate at tag `v1.0.0` (Relate 1.0.0, released 2026-11-11), taken 2026-11-11.
+> Verbatim copy of the upstream page; nothing below this header is this tree's.
+
 # Limitations
 
-CypherLite is `0.16.1`. It is a lightweight, embeddable, **single-process**
+Relate is `1.0.0`. It is a lightweight, embeddable, **single-process**
 graph database — closer to SQLite than to a clustered graph server or a
 columnar warehouse. Several of these are scope choices, not bugs.
 
 ## Fixed namespaces; one graph per statement (no cross-graph queries)
 
-A CypherLite store holds exactly the three fixed namespaces of ADR-0116 —
+A Relate store holds exactly the three fixed namespaces of ADR-0116 —
 `neo4j` (the user data graph), `system` (no graph data) and
 `system_ontologies` (listed but not queryable, ADR-0229: every statement
 routed to it, reads included, fails with 42N17; only the database
@@ -71,20 +74,20 @@ it), which rolls back its open transaction.
 
 ## Durability: WAL plus one snapshot codec
 
-`cypherlite::Database` appends redo to a WAL, then checkpoints to **one** codec
+`relate::Database` appends redo to a WAL, then checkpoints to **one** codec
 per directory (parquet shards or a full `graph.json` rewrite). The default
 `full` mode barriers before acknowledgement; `everysecond` and `snapshot`
 explicitly accept bounded or checkpoint-sized data loss (ADR-0077).
 Open loads the snapshot and replays WAL. Codecs do not mix in one directory
-([ADR-0050](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0050-snapshot-codecs.md)). GraphStore `--legacy` JSON
-files are withdrawn ([ADR-0052](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0052-graphstore-withdrawn.md)).
+([ADR-0050](https://github.com/relatedb/relate/blob/main/docs/adr/0050-snapshot-codecs.md)). GraphStore `--legacy` JSON
+files are withdrawn ([ADR-0052](https://github.com/relatedb/relate/blob/main/docs/adr/0052-graphstore-withdrawn.md)).
 
 `:memory:` is process-ephemeral.
 
 ## Single-process engine
 
-A directory-backed database is used from **one process**. CypherLite is not a
-multi-process or multi-writer client/server. Bolt (`cypherlite-bolt`) is still
+A directory-backed database is used from **one process**. Relate is not a
+multi-process or multi-writer client/server. Bolt (`relate-bolt`) is still
 one engine. Concurrent **threads** in that process may read together; overlapping
 writers get `write-write conflict` at WAL append (no silent retry).
 
@@ -93,15 +96,15 @@ writers get `write-write conflict` at WAL append (no silent retry).
 Each write statement (and each `CALL { … } IN TRANSACTIONS` batch) checks
 the constraints against its own snapshot plus its own writes, and re-checks
 only the nodes and relationships it touched
-([ADR-0172](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0172-incremental-constraint-validation.md)).
+([ADR-0172](https://github.com/relatedb/relate/blob/main/docs/adr/0172-incremental-constraint-validation.md)).
 A constraint another session commits or changes while a transaction is open
 is still enforced on that transaction at its **next statement** — including
 a read-only one — which re-checks the constraint against the transaction's
 earlier writes
-([ADR-0174](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0174-committed-catalog-constraint-rechecks.md)).
+([ADR-0174](https://github.com/relatedb/relate/blob/main/docs/adr/0174-committed-catalog-constraint-rechecks.md)).
 Commit admission additionally enforces `unique` and `key` at the commit-time
 serialization point
-([ADR-0439](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0439-commit-time-uniqueness.md)):
+([ADR-0439](https://github.com/relatedb/relate/blob/main/docs/adr/0439-commit-time-uniqueness.md)):
 a maintained per-constraint committed-state tuple map rejects the later of
 two concurrent transactions that introduce the same constrained value with
 the retryable `Error::Conflict`, before the WAL append. The loser's ops are
@@ -109,7 +112,7 @@ discarded; on retry its statement-time validator sees the winner and reports
 the precise `ConstraintValidationFailed` violation (a retried `MERGE` may
 instead match the winner). Commit conflicts beyond constrained values still
 look at element ids only (no general write-skew detection,
-[ADR-0015](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0015-optimistic-wal-commits.md)):
+[ADR-0015](https://github.com/relatedb/relate/blob/main/docs/adr/0015-optimistic-wal-commits.md)):
 read/write dependencies that do not touch a constrained tuple still commit.
 
 ## Whole graph held in memory
@@ -117,7 +120,7 @@ read/write dependencies that do not touch a constrained tuple still commit.
 The live graph is **in RAM**. Traversal is typed CSR; persistence is WAL + a
 snapshot. **The working set must fit in memory.** There is no paging, buffer
 pool, or spill-to-disk. An optional logical cap
-([ADR-0042](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0042-graph-memory-limit.md)) fails growing writes with
+([ADR-0042](https://github.com/relatedb/relate/blob/main/docs/adr/0042-graph-memory-limit.md)) fails growing writes with
 `Error::Capacity`.
 
 Size is “whatever fits,” not a fixed node count. This is not an out-of-core
@@ -126,10 +129,10 @@ analytics engine.
 ## Query and value nesting limits
 
 Query text is capped at 4 MiB and static nesting at 500 levels
-([ADR-0257](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0257-query-input-limits.md));
+([ADR-0257](https://github.com/relatedb/relate/blob/main/docs/adr/0257-query-input-limits.md));
 violations are typed errors before lexing/parsing. Runtime values built by
 an expression are independently capped at **500 container levels**
-([ADR-0462](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0462-value-nesting-depth.md)):
+([ADR-0462](https://github.com/relatedb/relate/blob/main/docs/adr/0462-value-nesting-depth.md)):
 a dynamically built list or map nested past that — e.g. a `reduce`
 accumulator that wraps itself in a new list each iteration — fails with the
 typed `ValueDepthExceeded` error instead of building a value that overflows
@@ -144,14 +147,14 @@ An explicit variable-length hop bound (`*1..N`, `*..N`, or the CIP-28
 group form `{1,N}`) is walked recursively, so a large enough `N` would
 abort the process on the native stack. Statement admission rejects a bound
 above the limit with `TraversalDepthExceeded` — a syntax error, before the
-statement is planned or run ([ADR-0466](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0466-traversal-depth-admission-limit.md)).
+statement is planned or run ([ADR-0466](https://github.com/relatedb/relate/blob/main/docs/adr/0466-traversal-depth-admission-limit.md)).
 An unbounded upper bound (`*`, `*1..`, `{1,}`) is exempt: the classic
 walk already stops at 32 hops.
 
 | | |
 |---|---|
 | What it protects | The process from a stack-overflow abort (no error, no recovery). |
-| Knob | `--max-traversal-depth N`, `CYPHERLITE_MAX_TRAVERSAL_DEPTH`, or `OpenOptions::max_traversal_depth`. |
+| Knob | `--max-traversal-depth N`, `RELATE_MAX_TRAVERSAL_DEPTH`, or `OpenOptions::max_traversal_depth`. |
 | Default | 500 hops. Valid values are 1 through 2000. |
 | Action | Lower the path bound, or raise the knob. Above 2000 the recursive walker risks a stack overflow on small-stack platforms (WebAssembly's 16 MiB stack is the tightest supported surface); measured abort bounds are ≈2,700 hops (debug WASM) to ≈11,000 (debug native). |
 
@@ -162,7 +165,7 @@ ported from Neo4j with an explicit bound above 500 needs the knob raised.
 
 ## Memory limits
 
-Every memory limit in CypherLite is a **protective guard rail with a generous
+Every memory limit in Relate is a **protective guard rail with a generous
 default**, never a native database capability limit. Each refusal names the
 mechanism, what it protected, and the knob or workaround that clears it — so
 a human or an agent reading the error does not need to look anything up.
@@ -171,9 +174,9 @@ so one statement cannot exhaust the process.
 
 | Mechanism | What it protects | Knob | Default | What to do when you hit it |
 |---|---|---|---|---|
-| **Graph capacity** ([ADR-0042](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0042-graph-memory-limit.md)) | The live graph + index bytes held in RAM (a growing write is refused at WAL append) | `--logical-graph-size-limit SIZE` / `CYPHERLITE_LOGICAL_GRAPH_SIZE_LIMIT` | unset = unlimited | Delete data, or raise the knob; `0` is unlimited |
-| **Retained workspace** ([ADR-0452](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0452-workspace-limit-enables-admission.md)) | The shared pool of logical workspace held by concurrently executing queries (opt-in admission) | `--concurrent-logical-workspace-limit SIZE` / `CYPHERLITE_CONCURRENT_LOGICAL_WORKSPACE_LIMIT` | unset = admission off | Retry when fewer queries run, reduce concurrency, or raise the pool. The refusal reads: *this query needs more shared workspace than the concurrent-workspace limit allows — this is a safety limit protecting the server from memory exhaustion (not a database limit); retry when fewer queries run, or raise it with `--concurrent-logical-workspace-limit`* |
-| **Expression build** ([ADR-0463](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0463-expression-allocation-budget.md)) | One value an expression builds (`range`, concatenation, `join`, `split`, a comprehension output, an accumulator, a materialized `UNWIND`, a `collect` buffer) | `--expression-memory-limit SIZE` / `CYPHERLITE_EXPRESSION_MEMORY_LIMIT` (also `OpenOptions::expression_memory_limit`) | **256 MiB** | Build the value in smaller pieces (batch the `UNWIND`, `range`, or join), or raise the knob; `none`/`0` disables the cap for known bulk pipelines. A refused statement reads: *This statement tried to build a single value of 24 GB. This is a safety limit protecting against memory exhaustion (not a database limit) — build the value in smaller pieces, or raise it with `--expression-memory-limit`.* |
+| **Graph capacity** ([ADR-0042](https://github.com/relatedb/relate/blob/main/docs/adr/0042-graph-memory-limit.md)) | The live graph + index bytes held in RAM (a growing write is refused at WAL append) | `--logical-graph-size-limit SIZE` / `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` | unset = unlimited | Delete data, or raise the knob; `0` is unlimited |
+| **Retained workspace** ([ADR-0452](https://github.com/relatedb/relate/blob/main/docs/adr/0452-workspace-limit-enables-admission.md)) | The shared pool of logical workspace held by concurrently executing queries (opt-in admission) | `--concurrent-logical-workspace-limit SIZE` / `RELATE_CONCURRENT_LOGICAL_WORKSPACE_LIMIT` | unset = admission off | Retry when fewer queries run, reduce concurrency, or raise the pool. The refusal reads: *this query needs more shared workspace than the concurrent-workspace limit allows — this is a safety limit protecting the server from memory exhaustion (not a database limit); retry when fewer queries run, or raise it with `--concurrent-logical-workspace-limit`* |
+| **Expression build** ([ADR-0463](https://github.com/relatedb/relate/blob/main/docs/adr/0463-expression-allocation-budget.md)) | One value an expression builds (`range`, concatenation, `join`, `split`, a comprehension output, an accumulator, a materialized `UNWIND`, a `collect` buffer) | `--expression-memory-limit SIZE` / `RELATE_EXPRESSION_MEMORY_LIMIT` (also `OpenOptions::expression_memory_limit`) | **256 MiB** | Build the value in smaller pieces (batch the `UNWIND`, `range`, or join), or raise the knob; `none`/`0` disables the cap for known bulk pipelines. A refused statement reads: *This statement tried to build a single value of 24 GB. This is a safety limit protecting against memory exhaustion (not a database limit) — build the value in smaller pieces, or raise it with `--expression-memory-limit`.* |
 
 The expression cap is **per allocation**, not a per-statement total: a long
 streaming load that builds many small values never accumulates against it
@@ -185,7 +188,7 @@ watermarks (a 1M-row `UNWIND` materializes 48 MB in its row buffer).
 
 ## Safe mode
 
-Safe mode ([ADR-0477](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0477-safe-mode.md))
+Safe mode ([ADR-0477](https://github.com/relatedb/relate/blob/main/docs/adr/0477-safe-mode.md))
 is an opt-in policy for agent-driven use. It refuses two statement shapes
 an agent commonly gets wrong, at admission and before anything runs, as the
 syntax error `SafeModeViolation` (CLI exit 6, HTTP 400/`42N06`, Bolt
@@ -199,7 +202,7 @@ syntax error `SafeModeViolation` (CLI exit 6, HTTP 400/`42N06`, Bolt
 | | |
 |---|---|
 | What it protects | An agent from unbounded scans and unlabeled writes. |
-| Knob | `--safe` / `--no-safe`, `CYPHERLITE_SAFE_MODE=1/0`, or `OpenOptions::safe_mode`. |
+| Knob | `--safe` / `--no-safe`, `RELATE_SAFE_MODE=1/0`, or `OpenOptions::safe_mode`. |
 | Default | Off, everywhere. Never auto-detected. |
 | Action | Add the label or the `LIMIT`/aggregate; or reopen without `--safe`. This is a policy, not a database limit. |
 
@@ -212,39 +215,47 @@ needs its own `LIMIT`.
 ## Lance / GraphStore are withdrawn
 
 JSON GraphStore files, Lance directories, and `--legacy` CLI flags are not
-product surfaces ([ADR-0052](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0052-graphstore-withdrawn.md)). Import
+product surfaces ([ADR-0052](https://github.com/relatedb/relate/blob/main/docs/adr/0052-graphstore-withdrawn.md)). Import
 an old `.db` by copying it to `<dir>/graph.json` and opening with
 `--snapshot-format json`.
 
 The JSONL `--server` protocol is withdrawn with GraphStore. Language bindings
 call the engine in-process.
 
-## openCypher TCK: superseded scenarios
+## openCypher TCK: the retired in-repo pin
 
-CypherLite runs the openCypher TCK under a **strict** harness (it checks error
-class, error phase, and side effects, and fails on unknown steps). Of the 3892
-pinned, cucumber-expanded scenarios, **3892 pass and 0 are skipped**. The pin
-is the 2024.3 snapshot minus one superseded outline, with four ORDER BY
-scenarios re-pinned to Neo4j's current Cypher 25 behaviour (ADR-0188,
-ADR-0458, ADR-0472):
+Language coverage is measured by the spec harness (ADR-0482, ADR-0520): the
+openCypher TCK synced from Neo4j's compatibility-spec-suite plus Neo4j's other
+Cypher suites, run against the engine's Python wheel and reported per ready PR
+— reporting-only, never a merge gate. The engine no longer runs the TCK in CI.
 
-| Scenario | Why it is out of the pin |
+Until 2026-11-05 the engine ran openCypher TCK **2024.3** under a strict
+in-repo Rust harness (it checked error class, error phase, and side effects,
+and failed on unknown steps) and published **3892 of 3892** pinned,
+cucumber-expanded scenarios passing with 0 skips. That claim is retired; the
+pin's history is kept in [`docs/tck/compliance.md`](tck/compliance.md). The
+pinned corpus was not unmodified upstream 2024.3 — it carried these
+deviations (ADR-0188, ADR-0458, ADR-0472, ADR-0513):
+
+| Scenario | Why it was out of the pin |
 |----------|--------------------------|
-| `TypeConversion4 [10]` — *"Fail `toString()` on invalid types"* | Superseded by CIP-271 (ADR-0002): Neo4j 2026.09 (verified live under `CYPHER 25`) renders LIST/MAP/NODE/RELATIONSHIP/PATH in `toString()` instead of erroring, an intentional Cypher 25 semantic change over the 2024.3 TCK floor. The scenario can never pass without regressing, so it is removed from the pinned corpus (kept as a `#`-commented reference in the feature file) rather than skipped forever. The current contract is carried by cip-eval's CIP-271 suite. |
+| `TypeConversion4 [10]` — *"Fail `toString()` on invalid types"* | Superseded by CIP-271 (ADR-0002): Neo4j 2026.09 (verified live under `CYPHER 25`) renders LIST/MAP/NODE/RELATIONSHIP/PATH in `toString()` instead of erroring, an intentional Cypher 25 semantic change over the 2024.3 TCK floor. The scenario can never pass without regressing, so it is removed from the pinned corpus (kept as a `#`-commented reference in the feature file) rather than skipped forever. |
 
-Four further scenarios are **in the pin asserting Cypher 25 behaviour** instead
-of the 2024.3 expectation (ADR-0002, ADR-0472):
+Four further scenarios were **in the pin asserting Cypher 25 behaviour**
+instead of the 2024.3 expectation (ADR-0002, ADR-0472):
 
-| Scenario | What it asserts now |
+| Scenario | What it asserted |
 |----------|--------------------|
-| `WithOrderBy4 [13]` — *"Fail on sorting by a non-projected aggregation on a variable"* | The 2024.3 expectation is `UndefinedVariable`; Neo4j's current Cypher 25 behaviour recomputes the aggregation subexpression over the group, and CypherLite follows it: rows `(mod 2, min 7)` and `(mod 1, min 5)`. The acceptance suite's `[13]` (success) and `[13-c5]` (42I24) variants pin both current forms. |
+| `WithOrderBy4 [13]` — *"Fail on sorting by a non-projected aggregation on a variable"* | The 2024.3 expectation is `UndefinedVariable`; Neo4j's current Cypher 25 behaviour recomputes the aggregation subexpression over the group, and Relate follows it: rows `(mod 2, min 7)` and `(mod 1, min 5)`. The acceptance suite's `[13]` (success) and `[13-c5]` (42I24) variants pin both current forms. |
 | `WithOrderBy4 [14]` — *"Fail on sorting by a non-projected aggregation on an expression"* | Same as `[13]`, for a non-projected expression: rows `(mod 2, min 7)` and `(mod 1, min 5)`. Its `[14]`/`[14-c5]` acceptance variants pin both current forms. |
 | `WithOrderBy4 [20]` — *"Fail if more complex expressions, even if projected, are used inside an order by item which contains an aggregation expression"* | The current behaviour raises the unaliased-`WITH`-item error (42N21), which the acceptance suite's `[20]` pins, not `AmbiguousAggregationExpression`. |
 | `ReturnOrderBy6 [5]` — *"Fail if more complex expressions, even if returned, are used inside an order by item which contains an aggregation expression"* | Cypher 25 accepts an ORDER BY key that decomposes a projected expression beside an aggregation; the acceptance suite's `[5]` ("This works in LTS") pins the current behaviour. Over an empty graph the result set is empty, with columns `me.age + you.age` and `cnt`. |
 
-The CIP evaluation suite (Neo4j Cypher beyond the TCK) is tracked separately
-at 5876/5917 (99.3%); its residual is documented in
-`testdata/cip-eval/SWEEP-FOLLOWUP.md`.
+The CIP-derived evaluation suite (Neo4j Cypher beyond the TCK) moved to the
+spec harness with the same change (`features/cip-eval`). It is a stretch
+tracker, not a floor: its landing run reports 4942 passed / 924 left failing /
+51 skipped of 5917 scenarios under the harness's strict TCK grammar,
+reporting-only (ADR-0482 §4).
 
 ## Not in scope for the embedded engine
 

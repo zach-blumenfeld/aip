@@ -1,10 +1,13 @@
+> Snapshot of `docs/reference/storage-formats.md` from https://github.com/relatedb/relate at tag `v1.0.0` (Relate 1.0.0, released 2026-11-11), taken 2026-11-11.
+> Verbatim copy of the upstream page; nothing below this header is this tree's.
+
 # Storage Formats Reference
 
-CypherLite keeps committed state in one of four durable forms. All four share
+Relate keeps committed state in one of four durable forms. All four share
 the same engine — an in-memory graph with a write-ahead log for crash
 recovery; the form only decides what a checkpoint writes to disk
 ([ADR-0050](../adr/0050-snapshot-codecs.md)). Every form opens with the same
-`--database PATH` (or `cypherlite::Database`); the path's shape and the
+`--database PATH` (or `relate::Database`); the path's shape and the
 store's recorded codec pick the form.
 
 | Form | Path shape | Best for | On disk |
@@ -12,7 +15,7 @@ store's recorded codec pick the form.
 | **Parquet** (default) | directory | machine-efficient storage: columnar shards, compact, fast bulk reload | `manifest.json`, `nodes/*.parquet`, `relationships/*.parquet` |
 | **JSON** | directory | human-readable snapshots with no build feature required | `manifest.json`, `graph.json` |
 | **Markdown vault** | directory (the vault) | human-authorable knowledge bases — OKF notes, Obsidian vaults, git-diffable text | `Label/name.md` files + regenerated `index.md`/`log.md` views + `.cypherlite/` engine sidecar |
-| **`.cl` bundle** | any path ending in `.cl` | single-file stores: copy, attach, archive | one file (a zip of the store) |
+| **`.rl` bundle** | any path ending in `.rl` (legacy `.cl` still opens) | single-file stores: copy, attach, archive | one file (a zip of the store) |
 
 ## Choosing
 
@@ -35,27 +38,30 @@ store's recorded codec pick the form.
   ([ADR-0460](../adr/0460-markdown-body-properties.md)); unconfigured,
   the body is the single `body` property. See the
   [Obsidian vault guide](../guides/obsidian-vault.md).
-- **`.cl` bundle** — the whole store compressed into one file
+- **`.rl` bundle** — the whole store compressed into one file
   ([ADR-0074](../adr/0074-single-file-bundle-vfs.md)). Any path ending in
-  `.cl` opens as a bundle; clone into one to ship a self-contained database.
+  `.rl` opens as a bundle; clone into one to ship a self-contained database.
+  `.rl` is the extension Relate writes, and `.cl` bundles from v0.16 and
+  earlier stay accepted as the legacy extension
+  ([ADR-0517 §5](../adr/0517-rename-to-relate.md)).
 
 ## Selecting a form
 
 ```
 # an empty directory becomes that codec's store
-cypherlite --snapshot-format markdown --database ./my-vault "CREATE (:Person {name:'Ada'})"
+relate --snapshot-format markdown --database ./my-vault "CREATE (:Person {name:'Ada'})"
 
 # environment variable, same choice
-CYPHERLITE_SNAPSHOT_FORMAT=markdown cypherlite --database ./my-vault "RETURN 1"
+RELATE_SNAPSHOT_FORMAT=markdown relate --database ./my-vault "RETURN 1"
 
 # an existing directory keeps the codec it was created with; a mismatched
 # --snapshot-format is an error
 
 # copy a database into another form
-cypherlite clone --to-snapshot-format markdown ./friends ./friends-vault
+relate clone --to-snapshot-format markdown ./friends ./friends-vault
 ```
 
-`--snapshot-format` (or `CYPHERLITE_SNAPSHOT_FORMAT`) selects the codec for
+`--snapshot-format` (or `RELATE_SNAPSHOT_FORMAT`) selects the codec for
 an **empty** directory only; existing stores keep their recorded codec.
 `clone --to-snapshot-format json|parquet|markdown` transcodes into a fresh
 copy — the source is never written. `:memory:` keeps its in-process form
@@ -63,3 +69,13 @@ either way.
 
 One codec per directory: mixing forms' files is an error, as is opening a
 directory whose files name a different codec than requested.
+
+## Frozen on-disk names
+
+The rename changes names, not stored bytes. A store's marker files
+(`.cypherlite.lock`, `.cypherlite.writer`), the markdown vault's
+`.cypherlite/` sidecar (with its `.cypherlite/schema/` mirror), and the
+`MDBWAL01` / `MDBWAL02` / `MDBCLB01` magics keep their exact spelling and
+bytes, so every store written by v0.8.0 through v0.16.x opens unchanged
+([ADR-0517 §4](../adr/0517-rename-to-relate.md)). They deliberately carry
+the old product spelling as frozen compatibility markers.

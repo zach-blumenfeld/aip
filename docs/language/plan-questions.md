@@ -18,6 +18,9 @@ Settled items are marked.
 2. **Settled 2026-11-08.** Accept that every runner needs the Relate wheel. The aip package
    pins one Relate version. Revisit with a pure-Python loader only if a real platform turns
    out to have no wheel; the stored source makes that possible later.
+   2026-11-11: Relate is public. The release is `relate-db` 1.0.0 on PyPI (`import relate`; source,
+   CLI binaries and docs at github.com/relatedb/relate and relatedb.ai); milestone R6 moves the pin
+   there from the pre-release 0.16.1 wheel.
 3. **Settled 2026-11-08.** Lossless means the source is stored: the procedure node carries
    `procedure.aip` as text, each file under `assets/`, `references/`, `scripts/` is a node with
    bytes and hash, the step graph is derived beside them. Export is a copy. Consequences assumed:

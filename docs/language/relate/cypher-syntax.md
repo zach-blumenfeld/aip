@@ -1,11 +1,14 @@
+> Snapshot of `docs/reference/cypher-syntax.md` from https://github.com/relatedb/relate at tag `v1.0.0` (Relate 1.0.0, released 2026-11-11), taken 2026-11-11.
+> Verbatim copy of the upstream page; nothing below this header is this tree's.
+
 # Cypher Syntax Reference
 
-CypherLite implements the [openCypher](https://opencypher.org/) query language (3892 of 3892 pinned openCypher TCK scenarios pass under a strict harness, 0 skips — one CIP-271-superseded `toString()` outline is removed from the pin itself, ADR-0188, and four Cypher-25-superseded ORDER BY scenarios are re-pinned to the current behaviour, ADR-0472) plus a large slice of Neo4j's post-standard Cypher (GQL alignment), verified against an evaluation suite derived from ~200 Neo4j CIP documents. This page documents the openCypher base first, then the Neo4j / GQL extensions.
+Relate implements the [openCypher](https://opencypher.org/) query language (measured by the spec harness against the openCypher TCK — reporting-only, ADR-0482, ADR-0520) plus a large slice of Neo4j's post-standard Cypher (GQL alignment), verified against an evaluation suite derived from ~200 Neo4j CIP documents. This page documents the openCypher base first, then the Neo4j / GQL extensions.
 
 For the full language semantics behind the extensions, consult the
 [Neo4j Cypher Manual](https://neo4j.com/docs/cypher-manual/current/introduction/)
 and the [Cypher refcard](https://neo4j.com/docs/cypher-manual/current/cheat-sheet/) --
-CypherLite tracks that surface via the CIP evaluation suite rather than
+Relate tracks that surface via the CIP evaluation suite rather than
 re-documenting every detail here.
 
 ## Identifiers
@@ -93,9 +96,9 @@ An explicit upper bound above the traversal-depth admission limit
 `TraversalDepthExceeded`, a safety limit protecting against a stack
 overflow rather than a database limit. Raise it with
 `--max-traversal-depth N` (1 through 2000) or
-`CYPHERLITE_MAX_TRAVERSAL_DEPTH`; an unbounded upper bound (`*`, `*1..`)
+`RELATE_MAX_TRAVERSAL_DEPTH`; an unbounded upper bound (`*`, `*1..`)
 is exempt because a classic walk already stops at 32 hops. See
-[ADR-0466](https://github.com/neo4j-labs/cypherlite/blob/main/docs/adr/0466-traversal-depth-admission-limit.md)
+[ADR-0466](https://github.com/relatedb/relate/blob/main/docs/adr/0466-traversal-depth-admission-limit.md)
 and [Limitations](../limitations.md#traversal-depth).
 
 #### Named paths
@@ -143,8 +146,8 @@ RETURN p.name;
 #### Chronological comparisons (preview)
 
 Cypher 25's four temporal comparison operators sit behind the
-`CYPHERLITE_PREVIEW=chronological-comparisons` preview gate (ADR-0371 /
-ADR-0467; Neo4j's `internal.cypher.chronological_comparisons_enabled`):
+`RELATE_PREVIEW=chronological-comparisons` preview gate (ADR-0371 /
+ADR-0467; mirrors Neo4j's own toggle):
 
 | Operator | Meaning |
 |----------|---------|
@@ -160,7 +163,7 @@ RETURN datetime('2020-01-01T12:00+01:00') IS SAME INSTANT datetime('2020-01-01T1
 The four words stay ordinary identifiers everywhere else. Without the
 opt-in a statement using one fails closed with
 `preview feature 'chronological-comparisons' is not enabled: set
-CYPHERLITE_PREVIEW=chronological-comparisons`.
+RELATE_PREVIEW=chronological-comparisons`.
 
 #### Boolean operators
 
@@ -217,12 +220,12 @@ Rules, matching Neo4j:
   `AND`. A full-text search with `WHERE` is rejected
 - `SKIP`/`OFFSET` is **full-text only**; on a vector search it is rejected
 - `WITH ANALYZER <expr>` is accepted on full-text searches (analyzers are not
-  differentiated: CypherLite tokenizes lowercase alphanumeric terms)
+  differentiated: Relate tokenizes lowercase alphanumeric terms)
 - the searched `MATCH` pattern is CIP-225 Rule 0's single node or single-hop
   relationship, binding one variable, with predicates only on it. The
-  `CYPHERLITE_PREVIEW=complex-search-patterns` preview gate (ADR-0371 /
-  ADR-0467; Neo4j's
-  `enable_extra_semantic_features=VectorSearchWithComplexPattern`) lifts that
+  `RELATE_PREVIEW=complex-search-patterns` preview gate (ADR-0371 /
+  ADR-0467; mirrors
+  Neo4j's own mode) lifts that
   shape restriction, admitting multi-component, multi-hop, variable-length,
   quantified, selected and multi-variable patterns; without the opt-in the
   Rule 0 rejections stay (`SearchClauseTooComplexPattern`,
@@ -232,7 +235,7 @@ Rules, matching Neo4j:
 
 Two or more index searches can be fused into a single ranking with weighted
 reciprocal rank fusion (Neo4j's CIP-278 `COMBINE`, behind the
-`CYPHERLITE_PREVIEW=hybrid-search` preview gate, ADR-0371 / ADR-0379):
+`RELATE_PREVIEW=hybrid-search` preview gate, ADR-0371 / ADR-0379):
 
 ```cypher
 MATCH (n:Movie)
@@ -389,11 +392,11 @@ UNWIND [1, 2, 3] AS x
 RETURN x;
 ```
 
-#### FOR (preview)
+#### FOR
 
 The GQL-compliant successor spelling of UNWIND, with the binding variable
-*before* the expression (CIP-250, GQ10, behind the
-`CYPHERLITE_PREVIEW=gql-for` preview gate, ADR-0371):
+*before* the expression (CIP-250, GQ10; graduated from the `gql-for`
+preview gate after live verification against Neo4j 2026.09 and 2026.10.1):
 
 ```cypher
 FOR x IN [1, 2, 3]
@@ -411,8 +414,6 @@ Rules:
 - the clause is normalized onto the existing `UNWIND` machinery: the
   query plan shows the same `Unwind` operator, and no new plan operator
   exists
-- while the gate is off, a `FOR x IN ...` clause fails with
-  `preview feature 'gql-for' is not enabled: set CYPHERLITE_PREVIEW=gql-for`
 - the binding variable follows the same scoping rules as the `UNWIND`
   alias (any keyword spelling works unquoted, ADR-0191)
 - malformed shapes are parse errors: a missing `IN`, a missing binding
@@ -651,9 +652,9 @@ RETURN relationship.note, score;
 
 The `db.ontology.*` procedures (ADR-0121, ADR-0226, ADR-0227, ADR-0364 —
 Neo4j's CIP-287 surface) manage the store's single ontology document. They
-require `CYPHERLITE_PREVIEW=ontology` (ADR-0378; ADR-0371's opt-in): with it
+require `RELATE_PREVIEW=ontology` (ADR-0378; ADR-0371's opt-in): with it
 off, every call fails with `SemanticError: preview feature 'ontology' is not
-enabled: set CYPHERLITE_PREVIEW=ontology` and `SHOW PROCEDURES` omits them;
+enabled: set RELATE_PREVIEW=ontology` and `SHOW PROCEDURES` omits them;
 the stored document and the store's open/replay path are unaffected. They
 act on the session or `USE`-target database, which must be `neo4j`:
 
@@ -735,13 +736,13 @@ triple, with multi-label endpoints expanded over every label combination.
 Each virtual node's `indexes` is a sorted list of property names, one per
 non-constraint-backing catalog index on that label (a uniqueness or key
 constraint's backing index is excluded: Neo4j lists it only as `ownedIndex`
-on the constraint string, a field cypherlite omits), and its `constraints`
+on the constraint string, a field relate omits), and its `constraints`
 is a name-sorted list of
 `Constraint( name='<name>', type='<TYPE>', schema=(:<Label> {<props>}) )`
 strings, one per node constraint on that label, with `<TYPE>` in Neo4j's
 space style (`'NODE PROPERTY UNIQUENESS'`, `'NODE KEY'`,
 `'NODE PROPERTY EXISTENCE'`, `'NODE PROPERTY TYPE'`,
-`'NODE LABEL EXISTENCE'`). CypherLite has no schema-rule ids, so the strings
+`'NODE LABEL EXISTENCE'`). Relate has no schema-rule ids, so the strings
 carry no `id`/`ownedIndex` fields, and relationship constraints appear on no
 virtual node. Virtual entities carry negative ids and resolve through
 `startNode()`/`endNode()`; each virtual relationship carries one property,
@@ -856,7 +857,7 @@ MATCH (p:Person {name: $name}) RETURN p.age;
 
 ## Neo4j / GQL extensions
 
-The following are implemented beyond standard openCypher, matching Neo4j's Cypher 25 / GQL-aligned behavior. Where CypherLite is an embedded single-process engine, some server-oriented commands are adapted (see notes).
+The following are implemented beyond standard openCypher, matching Neo4j's Cypher 25 / GQL-aligned behavior. Where Relate is an embedded single-process engine, some server-oriented commands are adapted (see notes).
 
 ### Label expressions
 
@@ -1021,7 +1022,7 @@ CALL { MATCH (n:Row) RETURN n } IN TRANSACTIONS;
 
 `DEFINE PROCEDURE` / `DEFINE FUNCTION` name a query-local callable and
 call it from the same query (Neo4j's CIP-231, behind the
-`CYPHERLITE_PREVIEW=local-callables` preview gate, ADR-0371 / ADR-0382).
+`RELATE_PREVIEW=local-callables` preview gate, ADR-0371 / ADR-0382).
 A definition block heads any statement block — the top level, or a braced
 body (`CALL { … }`, a conditional arm, a `COLLECT { … }` subquery, a NEXT
 stage):
@@ -1125,7 +1126,7 @@ ALTER CURRENT GRAPH TYPE SET GRAPH TYPE SOGraph;
 SHOW CURRENT GRAPH TYPE AS GRAPH;
 ```
 
-Three element-type constructs sit behind `CYPHERLITE_PREVIEW` preview gates
+Three element-type constructs sit behind `RELATE_PREVIEW` preview gates
 (ADR-0371, each independently enableable; ungated, each fails closed with the
 authored `preview feature '<name>' is not enabled` error):
 
@@ -1164,10 +1165,10 @@ CYPHER 5  MATCH (n) RETURN n;
 
 ### Extended functions
 
-Beyond the openCypher function set, CypherLite adds GQL string functions (`trim(BOTH/LEADING/TRAILING x FROM s)`, `normalize(s, NFC)`, `char_length`), IEEE-conformant and hyperbolic math, the `||` string/list concatenation operator, `NULLIF`, `allReduce()`, `elementId()`, `valueType()`, aggregate set-quantifiers (`count(DISTINCT x)`), and many GQL function aliases. See the [Functions reference](./functions.md).
+Beyond the openCypher function set, Relate adds GQL string functions (`trim(BOTH/LEADING/TRAILING x FROM s)`, `normalize(s, NFC)`, `char_length`), IEEE-conformant and hyperbolic math, the `||` string/list concatenation operator, `NULLIF`, `allReduce()`, `elementId()`, `valueType()`, aggregate set-quantifiers (`count(DISTINCT x)`), and many GQL function aliases. See the [Functions reference](./functions.md).
 
-Three function names accepted into a CIP that no reference release ships sit behind `CYPHERLITE_PREVIEW` *name* gates (ADR-0497): `coll.zip` (`coll-zip`), the `coll.hasAnyOf`/`coll.hasAllOf`/`coll.hasNoneOf` family (`coll-has`) and the GQL `stddev_samp`/`stddev_pop` aliases (`gql-stddev-aliases`). They hide a name rather than a syntax, so a gated call while off is the ordinary unknown-function error, and the default dialect lists none of them in `SHOW FUNCTIONS`.
+Three function names accepted into a CIP that no reference release ships sit behind `RELATE_PREVIEW` *name* gates (ADR-0497): `coll.zip` (`coll-zip`), the `coll.hasAnyOf`/`coll.hasAllOf`/`coll.hasNoneOf` family (`coll-has`) and the GQL `stddev_samp`/`stddev_pop` aliases (`gql-stddev-aliases`). They hide a name rather than a syntax, so a gated call while off is the ordinary unknown-function error, and the default dialect lists none of them in `SHOW FUNCTIONS`.
 
 ### Scope note
 
-Server- and multi-user-oriented Cypher (RBAC & privileges, user auth, remote/composite/sharded databases, clustering) is intentionally **not** implemented — CypherLite is a single-process embedded engine. Multi-database surface follows Neo4j Community Edition over three fixed namespaces (`neo4j`, `system`, `system_ontologies`; ADR-0116): `USE` routes a statement to one of them (unknown names fail with 42N00), composite forms (`USE graph.byName`, composite databases) fail with 42N72/51N27, and `SHOW DATABASES` lists the three fixed rows. `SHOW` commands are supported over local metadata with a stable column subset. The full per-feature scope decision lives in `testdata/cip-eval/MANIFEST.md`.
+Server- and multi-user-oriented Cypher (RBAC & privileges, user auth, remote/composite/sharded databases, clustering) is intentionally **not** implemented — Relate is a single-process embedded engine. Multi-database surface follows Neo4j Community Edition over three fixed namespaces (`neo4j`, `system`, `system_ontologies`; ADR-0116): `USE` routes a statement to one of them (unknown names fail with 42N00), composite forms (`USE graph.byName`, composite databases) fail with 42N72/51N27, and `SHOW DATABASES` lists the three fixed rows. `SHOW` commands are supported over local metadata with a stable column subset. The CIP-derived evaluation suite in the spec harness tracks this scope per CIP (`features/cip-eval`, ADR-0482, ADR-0520).

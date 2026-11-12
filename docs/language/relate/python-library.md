@@ -1,8 +1,61 @@
+> Snapshot of `docs/reference/python-library.md` from https://github.com/relatedb/relate at tag `v1.0.0` (Relate 1.0.0, released 2026-11-11), taken 2026-11-11.
+> Verbatim copy of the upstream page, preceded by one section of this tree's own, "Verified in this tree", which records what was checked against the real `relate-db` 1.0.0 wheel and what was only copied.
+
+## Verified in this tree (not part of the upstream page)
+
+Checked on 2026-11-11 against `relate-db` 1.0.0 from PyPI (`relate_db-1.0.0-cp39-abi3-macosx_11_0_arm64.whl`) in a
+Python 3.14 venv, side by side with the `neo4j_cypherlite` 0.16.1 wheel this tree still pins
+(`scripts/install-relate.sh`, until milestone R6). Where 0.16.1 behaves differently it is said.
+
+- `import relate`; `relate.__version__ == "1.0.0"`; `relate.connect(database=":memory:", namespace="neo4j",
+  read_only=False)`; DB-API `paramstyle` is `named`, `apilevel` `2.0`, `threadsafety` `1`.
+- **Single file.** A path ending in `.rl` opens as one file (superblock magic `MDBCLB01`; 36 KiB for a five-node
+  store). A `.cl` path opens the same way (the legacy extension). Any other path is a directory holding
+  `manifest.json`, `nodes/`, `wal/` and the frozen marker names `.cypherlite`, `.cypherlite.lock`,
+  `.cypherlite.writer`. **At 0.16.1 only `.cl` was the single file; an `.rl` path was a directory.**
+- **Cypher this tree relies on**, all through `Connection.execute(query, params)` with map parameters:
+  `UNWIND $rows AS r CREATE (n:Row) SET n = r`, `MERGE (m:M {k: 'a'}) SET m = $map`, `OPTIONAL MATCH`,
+  `collect(DISTINCT ...)`, `CASE`, `properties(n)`, `labels(n)`, `elementId(n)`; list properties and strings
+  carrying tab, newline and NUL round-trip; `CREATE CONSTRAINT ... IF NOT EXISTS ... IS UNIQUE` and a composite
+  `CREATE INDEX ... IF NOT EXISTS` run. A map-valued property is refused (`DataError: type error:
+  InvalidPropertyType`); a `bytes` parameter is stored and read back as a list of ints. Same at 0.16.1.
+- **Rows** are `Record`s: dicts keyed by column name with attribute access, not tuples (`row["p"]`, not
+  `row[0]`). `Node.element_id` reads `4:rl-id:n0` (**0.16.1: `4:cypherlite:n0`**).
+- **Transactions.** `Connection.autocommit` is `True` by default; with it off, `commit()` and `rollback()`
+  behave; a Cypher `BEGIN` is a parse error (the connection owns the transaction). Same at 0.16.1.
+- **Thread affinity.** A connection used from a thread other than the one that opened it raises
+  `ProgrammingError` ("Relate connection used from a thread other than the one that opened it";
+  0.16.1 said "CypherLite connection ...").
+- **`read_only=True`.** A write fails with `OperationalError: semantic error: WriteOnReadOnlyAccessDatabase`.
+  A read-only handle opens beside a writer on a **directory** store; on a single-file bundle held by a writer
+  it is refused with `storage locked` (0.16.1 the same, for `.cl`). A second writer is refused with
+  `storage locked`. A read-only open of a missing path is `OperationalError: storage error: database not
+  found` (0.16.1: "read-only open requires an existing database").
+- **Native API.** `relate.Database(path, namespace, *, read_only=False)` has `execute` (a `QueryResult`),
+  `execute_arrow` (Arrow IPC `bytes`; decoding needs `pip install relate-db[arrow]`, `pyarrow>=14`),
+  `begin_transaction` / `commit_transaction` / `rollback_transaction`, `labels`, `relationship_types`,
+  `node_count`, `relationship_count`. `Cursor` has `fetchone` / `fetchmany` / `fetchall`, `fetch`, `peek`,
+  `single`, `keys`, `data`, `graph`, `stats`, `consume`, `to_arrow`, `to_df` (`relate-db[pandas]`). The wheel
+  declares exactly the extras `arrow` and `pandas`.
+- **No CLI in the wheel**: no console script and no binary. The CLI is the release asset
+  (`relate-{darwin,linux}-{amd64,arm64}`, `relate-windows-amd64.exe`) or `install.sh`.
+- **Store format.** 1.0.0 writes snapshot `format_version` 5; 0.16.1 wrote 3. 1.0.0 opens a 0.16.1 bundle
+  read-only without changing a byte, and **upgrades it on the first writer open, even one that writes
+  nothing**; 0.16.1 then refuses the file with `unsupported snapshot version 5`. So a bundle or store
+  touched by 1.0.0 is 1.0.0's.
+
+Copied, not verified: the Installation section (its "not on an index ... once the PyPI project is
+registered" is stale, `relate-db` 1.0.0 is on PyPI with `Repository: https://github.com/relatedb/relate`),
+the Threading worker pattern, result graph extraction, stats and summary, `executemany`, the vector
+similarity and Arrow pipeline examples.
+
+---
+
 # Python Library Reference
 
-The `cypherlite` Python package embeds `cypherlite::Database` as a native extension
+The `relate` Python package embeds `relate::Database` as a native extension
 module (built with PyO3 and maturin). Queries execute in-process — there is no
-subprocess, server, or network round-trip. Persistent paths are CypherLite
+subprocess, server, or network round-trip. Persistent paths are Relate
 directories containing a WAL and one snapshot codec (Parquet by default, or
 GraphData JSON).
 
@@ -10,8 +63,8 @@ The package offers two API styles:
 
 | API | Entry point | Style |
 |-----|-------------|-------|
-| Connection/Cursor | `cypherlite.connect()` | sqlite3-style (DB-API 2.0 flavored) |
-| Native | `cypherlite.Database` | Direct engine access, Arrow IPC via `execute_arrow()` |
+| Connection/Cursor | `relate.connect()` | sqlite3-style (DB-API 2.0 flavored) |
+| Native | `relate.Database` | Direct engine access, Arrow IPC via `execute_arrow()` |
 
 ## Installation
 
@@ -19,10 +72,10 @@ The package is not on PyPI yet (LABS-17), so there are two routes today.
 
 **From a release wheel** — no Rust toolchain needed. Wheels are published for
 Linux (x86-64, aarch64), macOS (arm64) and Windows (x86-64) beside the CLI
-binaries on the [releases page](https://github.com/neo4j-labs/cypherlite/releases):
+binaries on the [releases page](https://github.com/relatedb/relate/releases):
 
 ```bash
-pip install neo4j_cypherlite-<version>-<platform>.whl
+pip install relate_db-<version>-<platform>.whl
 ```
 
 Because it is not on an index, downstream projects cannot yet declare it as a
@@ -31,7 +84,7 @@ dependency — vendoring the wheel or fetching it in CI is the workaround.
 **From a checkout** — requires the Rust toolchain:
 
 ```bash
-cd surfaces/cypherlite-python
+cd surfaces/relate-python
 pip install maturin
 maturin develop --release
 ```
@@ -43,12 +96,12 @@ make install-python
 ```
 
 Once the PyPI project is registered (trusted publishing on tagged releases) the
-install becomes (`neo4j-cypherlite`; import `cypherlite`):
+install becomes (`relate-db`; import `relate`):
 
 ```bash
-pip install neo4j-cypherlite
+pip install relate-db
 # optional Arrow IPC decoding
-pip install neo4j-cypherlite[arrow]
+pip install relate-db[arrow]
 ```
 
 :::note
@@ -59,10 +112,10 @@ package. Import old JSON explicitly into a JSON-codec directory.
 ## Quick start
 
 ```python
-import cypherlite
+import relate
 
 # Open an in-memory database
-db = cypherlite.connect(":memory:")
+db = relate.connect(":memory:")
 
 # Create nodes
 db.execute("CREATE (p:Person {name: $name, age: $age})", {"name": "Alice", "age": 30})
@@ -87,24 +140,24 @@ db.close()
 ### `connect`
 
 ```python
-cypherlite.connect(database: str = ":memory:") -> Connection
+relate.connect(database: str = ":memory:") -> Connection
 ```
 
-Open a connection to a CypherLite database. Pass a directory path for a
+Open a connection to a Relate database. Pass a directory path for a
 persistent database, or `":memory:"` for an in-memory database.
 Raises `OperationalError` if the database cannot be opened.
 
 ```python
 # In-memory
-db = cypherlite.connect(":memory:")
+db = relate.connect(":memory:")
 
 # Persistent directory (manifest + snapshot + wal/)
-db = cypherlite.connect("mydata")
+db = relate.connect("mydata")
 ```
 
 ## `Connection`
 
-A connection to a CypherLite database backed by the in-process Database engine.
+A connection to a Relate database backed by the in-process Database engine.
 Commits are durable in the WAL before `execute()` returns; `flush()` requests a
 checkpoint.
 
@@ -134,7 +187,7 @@ into a transaction — the first statement opens it, and `commit()` /
 `rollback()` end it:
 
 ```python
-conn = cypherlite.connect("/tmp/mydata")
+conn = relate.connect("/tmp/mydata")
 conn.autocommit = False
 try:
     conn.execute("CREATE (:Person {name: 'Alice'})")
@@ -146,7 +199,7 @@ except Exception:
 ```
 
 - **Bookmarks.** `commit()` returns the transaction's bookmark — the engine's
-  commit sequence, `cypherlite:<n>`, increasing per store (`None` when the
+  commit sequence, `relate:<n>`, increasing per store (`None` when the
   transaction wrote nothing); an auto-commit write's bookmark is
   `cursor.consume().bookmark`.
 - **Implicit rollback on close.** Closing a connection with an open transaction
@@ -158,7 +211,7 @@ except Exception:
   that is later rolled back leaves no trace and no error — the statement
   reported success. To *refuse* writes rather than undo them, check the plan
   classification (`query_type`, below) or open the store read-only
-  (`cypherlite.connect(path, read_only=True)`, which opens a separate handle and
+  (`relate.connect(path, read_only=True)`, which opens a separate handle and
   is therefore not available beside another writer).
 
 
@@ -168,7 +221,7 @@ except Exception:
 `Connection` supports the `with` statement. The connection is closed automatically on exit.
 
 ```python
-with cypherlite.connect(":memory:") as db:
+with relate.connect(":memory:") as db:
     db.execute("CREATE (:Person {name: 'Alice'})")
     cursor = db.execute("MATCH (p:Person) RETURN p.name")
     print(cursor.fetchone())
@@ -192,7 +245,7 @@ cursor = db.execute(
 )
 ```
 
-Supported parameter value types (ADR-0219): `None`, `bool`, `int` (64-bit), `float`, `str`, `datetime.datetime`/`date`/`time`/`timedelta`, `cypherlite.Duration` (lossless months/days/seconds/nanoseconds), a returned `cypherlite.Vector`, `uuid.UUID` (crosses as its canonical string), `bytes`/`bytearray` (as a list of byte values 0–255 — the engine has no binary scalar; the PEP 249 `Binary` constructor is `bytes`), `list`, `tuple`, `dict` (nested values allowed), and `cypherlite.Point`. Dicts are always maps: a dict with `srid`/`x`/`y` keys is **not** reinterpreted as a point — pass `cypherlite.Point(srid, x, y)` or build it in Cypher with `point($coords)`. Returned maps keep the engine's key order.
+Supported parameter value types (ADR-0219): `None`, `bool`, `int` (64-bit), `float`, `str`, `datetime.datetime`/`date`/`time`/`timedelta`, `relate.Duration` (lossless months/days/seconds/nanoseconds), a returned `relate.Vector`, `uuid.UUID` (crosses as its canonical string), `bytes`/`bytearray` (as a list of byte values 0–255 — the engine has no binary scalar; the PEP 249 `Binary` constructor is `bytes`), `list`, `tuple`, `dict` (nested values allowed), and `relate.Point`. Dicts are always maps: a dict with `srid`/`x`/`y` keys is **not** reinterpreted as a point — pass `relate.Point(srid, x, y)` or build it in Cypher with `point($coords)`. Returned maps keep the engine's key order.
 
 Parameter-shape errors raise `ProgrammingError` with explicit wording: a non-dict `params` ("query parameters must be a dict …") or a non-string key at any nesting level ("… keys must be strings …"). An out-of-range `int` raises `DataError`.
 
@@ -256,7 +309,7 @@ print(f"{len(cursor)} rows")
 
 ### Row format
 
-Each row is a `cypherlite.Record` — a `dict` subclass, so every mapping
+Each row is a `relate.Record` — a `dict` subclass, so every mapping
 operation keeps working — with the Neo4j driver's row conveniences on top:
 
 ```python
@@ -279,7 +332,7 @@ rows — it never re-runs the query:
 
 ```python
 cursor = db.execute("MATCH (p:Person) RETURN p.name AS name, p.age AS age")
-df = cursor.to_df()   # pip install neo4j-cypherlite[pandas]
+df = cursor.to_df()   # pip install relate-db[pandas]
 ```
 
 Use `AS` aliases for shorter keys:
@@ -294,14 +347,14 @@ What the *values* in those rows are depends on the column:
 
 | Returned | Python value |
 | --- | --- |
-| `RETURN p` (a node) | `cypherlite.Node` — `id`, `element_id` (exactly `elementId(p)`, e.g. `4:cypherlite:n0`), `labels`, `properties` |
-| `RETURN r` (a relationship) | `cypherlite.Relationship` — `id`, `element_id` (`5:cypherlite:r0`), `type`, `properties`, `start_node`, `end_node`, `start_node_element_id`, `end_node_element_id` |
-| `RETURN p` (a path) | `cypherlite.Path` — `nodes`, `relationships` |
-| `RETURN point(...)` | `cypherlite.Point` — `srid`, `x`, `y` |
+| `RETURN p` (a node) | `relate.Node` — `id`, `element_id` (exactly `elementId(p)`, e.g. `4:rl-id:n0`), `labels`, `properties` |
+| `RETURN r` (a relationship) | `relate.Relationship` — `id`, `element_id` (`5:rl-id:r0`), `type`, `properties`, `start_node`, `end_node`, `start_node_element_id`, `end_node_element_id` |
+| `RETURN p` (a path) | `relate.Path` — `nodes`, `relationships` |
+| `RETURN point(...)` | `relate.Point` — `srid`, `x`, `y` |
 | temporal values stdlib can carry losslessly (microsecond-aligned, offset only) | `datetime.datetime` / `date` / `time` |
-| temporal values with sub-microsecond nanoseconds or an IANA zone name | `cypherlite.Temporal` — the engine's canonical `.text` (also `str()`), `.kind`, `.nanosecond`, `.zone_name`, `.offset_seconds`, and `.to_native()` for the lossy stdlib value |
-| durations (every one) | `cypherlite.Duration` — `.months`, `.days`, `.seconds`, `.nanoseconds` exactly as Cypher keeps them (`PT36H != P1DT12H`), `str()` the ISO text, `.to_timedelta()` the lossy projection |
-| `RETURN vector(...)` | `cypherlite.Vector` — `.coordinate_type`, `.dimension`, `.values` |
+| temporal values with sub-microsecond nanoseconds or an IANA zone name | `relate.Temporal` — the engine's canonical `.text` (also `str()`), `.kind`, `.nanosecond`, `.zone_name`, `.offset_seconds`, and `.to_native()` for the lossy stdlib value |
+| durations (every one) | `relate.Duration` — `.months`, `.days`, `.seconds`, `.nanoseconds` exactly as Cypher keeps them (`PT36H != P1DT12H`), `str()` the ISO text, `.to_timedelta()` the lossy projection |
+| `RETURN vector(...)` | `relate.Vector` — `.coordinate_type`, `.dimension`, `.values` |
 | scalars, lists, maps | the corresponding Python value (maps keep the engine's key order) |
 
 ```python
@@ -345,7 +398,7 @@ G.add_edges_from((r.start_node, r.end_node, {"type": r.type, **r.properties})
 ```
 
 For [neo4j-viz](https://neo4j.com/docs/python-graph-visualization/current/)
-rendering, `cypherlite.viz.to_visualization_graph(result)` builds a
+rendering, `relate.viz.to_visualization_graph(result)` builds a
 `VisualizationGraph` directly from a cursor (needs only `neo4j-viz`).
 
 ### Stats
@@ -395,7 +448,7 @@ is tracked as LABS-692; query timeouts and cancellation as LABS-195.
 
 ## Threading
 
-`cypherlite.threadsafety` is **1**: the module may be shared between threads,
+`relate.threadsafety` is **1**: the module may be shared between threads,
 **a connection may not**. A `Connection` wraps a single-threaded native
 `Database`, and it must be used, and dropped, on the thread that opened it.
 
@@ -412,7 +465,7 @@ The pattern that works: **own the connection on one worker thread** and route
 every call to it.
 
 ```python
-import concurrent.futures, cypherlite
+import concurrent.futures, relate
 
 # One dedicated thread owns the connection; callers submit work to it.
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -420,7 +473,7 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 def query(cypher, params=None):
     """Runs on the owning thread, wherever it is called from."""
     def _run():
-        with cypherlite.connect("/tmp/mydata") as conn:
+        with relate.connect("/tmp/mydata") as conn:
             return conn.execute(cypher, params).fetchall()
     return _executor.submit(_run).result()
 ```
@@ -429,7 +482,7 @@ An in-memory store is cheap to duplicate, so one connection per thread is also
 fine for `:memory:`. A **file-backed store is different**: a second *writable*
 open of the same directory is refused by the writer lease (ADR-0136), so a
 shared file store means one owning connection per process (or a read-only
-handle beside a writer — `cypherlite.connect(path, read_only=True)`).
+handle beside a writer — `relate.connect(path, read_only=True)`).
 
 Two related facts:
 
@@ -442,22 +495,22 @@ Two related facts:
 
 ## Exceptions
 
-All exceptions inherit from `CypherLiteError` and follow PEP 249 (DB-API 2.0) conventions:
+All exceptions inherit from `RelateError` and follow PEP 249 (DB-API 2.0) conventions:
 
 | Exception | Description |
 |-----------|-------------|
-| `CypherLiteError` | Base exception for all CypherLite errors |
+| `RelateError` | Base exception for all Relate errors |
 | `InterfaceError` | Database interface error (native module communication) |
 | `OperationalError` | Query execution or connection error (syntax error, constraint violation, failure to open database) |
 | `ProgrammingError` | Programming mistake (using a closed connection) |
 
 ```python
-import cypherlite
+import relate
 
-db = cypherlite.connect(":memory:")
+db = relate.connect(":memory:")
 try:
     db.execute("INVALID SYNTAX")
-except cypherlite.OperationalError as e:
+except relate.OperationalError as e:
     print(f"Query failed: {e}")
 
 # Connection still works after an error
@@ -471,7 +524,7 @@ print(db.execute("RETURN 42 AS answer").fetchone())  # {"answer": 42}
 For lower-level access — including Arrow interop — use the native `Database` class directly. This is the class `Connection` wraps.
 
 ```python
-from cypherlite import Database
+from relate import Database
 
 db = Database()          # in-memory (same as Database(":memory:"))
 db = Database("graph")   # persistent directory + WAL
@@ -502,7 +555,7 @@ Errors are raised as `RuntimeError` (the `Connection` wrapper translates them in
 | `stats` | `dict[str, int]` | Mutation statistics (only non-zero counters present) |
 
 ```python
-from cypherlite import Database
+from relate import Database
 
 db = Database()
 result = db.execute("CREATE (:Person {name: 'Alice', age: 30})")
@@ -518,7 +571,7 @@ print(result.data)     # [{'name': 'Alice', 'age': 30}]
 `execute_arrow()` returns results as Arrow IPC stream bytes, enabling zero-copy transfer to PyArrow, Pandas, or Polars:
 
 ```python
-from cypherlite import Database
+from relate import Database
 import pyarrow as pa
 
 db = Database()
@@ -548,10 +601,10 @@ df = pl.from_arrow(pa.ipc.open_stream(buf).read_all())
 ### Persistent database
 
 ```python
-import cypherlite
+import relate
 
 # Create and populate
-db = cypherlite.connect("friends")
+db = relate.connect("friends")
 db.execute("CREATE (:Person {name: 'Alice'})")
 db.execute("CREATE (:Person {name: 'Bob'})")
 db.execute(
@@ -561,7 +614,7 @@ db.execute(
 db.close()  # commits were WAL-durable; close checkpoints
 
 # Reopen later
-db = cypherlite.connect("friends")
+db = relate.connect("friends")
 cursor = db.execute("MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name")
 print(cursor.fetchall())
 db.close()
@@ -570,9 +623,9 @@ db.close()
 ### Vector similarity search
 
 ```python
-import cypherlite
+import relate
 
-db = cypherlite.connect(":memory:")
+db = relate.connect(":memory:")
 
 # Create documents with embeddings
 db.execute("""
@@ -610,7 +663,7 @@ db.close()
 ### Arrow analytics pipeline
 
 ```python
-from cypherlite import Database
+from relate import Database
 import pyarrow as pa
 
 db = Database()
@@ -624,4 +677,4 @@ df = pa.ipc.open_stream(buf).read_all().to_pandas()
 print(df.groupby("city")["age"].mean())
 ```
 
-Full contract: [`docs/api/python/spec.md`](https://github.com/neo4j-labs/cypherlite/blob/main/docs/api/python/spec.md).
+Full contract: [`docs/api/python/spec.md`](https://github.com/relatedb/relate/blob/main/docs/api/python/spec.md).
