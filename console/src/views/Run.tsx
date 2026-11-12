@@ -1,23 +1,28 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, describe } from "../api/client";
+import { api, describe, graphOf } from "../api/client";
 import {
-  cancelCli, consoleConfig, describeProcedure, isFolderMode, localRun, runCli, sessionId,
-  type CliCall, type Failed, type Outcome, type StepEvent,
+  cancelCli, consoleConfig, describeProcedure, folderGraph, isFolderMode, localRun, modelSettings, runCli, sessionId,
+  type CliCall, type Failed, type ModelSettings, type Outcome, type Paused, type StepEvent,
 } from "../api/console";
 import type { CatalogEntry, Description, RunRecord, Task } from "../api/types";
-import { answersFor, collect, fieldKind, fieldText, optionsOf, passLabel } from "../run/answers.ts";
+import type { Graph } from "../graph/bundle.ts";
+import { answersFor, candidatesOf, collect, fieldKind, fieldText, optionsOf, passLabel, rowText } from "../run/answers.ts";
+import { agentSteps, type AgentStep } from "../run/human.ts";
 import { duration } from "../record/model.ts";
 import { href } from "../router";
+import { toolWords } from "../studio/chat.ts";
 import { RecordHistory, RecordSummary, ErrorSummary, Json, DraftBadge } from "./Record";
 import { RunPath } from "./Steps";
 
 /** The run console. Runs go through the `aip` CLI on this machine (`aip run --progress`, then `aip resume
- *  --progress` per answer): scripts run here, the decision model is the one this machine's `aip config` names,
- *  and the CLI records the run on the console's server as agent `console` in this tab's session. */
-export function Run({ reference }: { reference?: string }) {
+ *  --progress` per answer; or `aip runah`, runah's model answering every task but the human steps' picked here,
+ *  plan C5): scripts run here, the decision model is the one this machine's `aip config` names, and the CLI records
+ *  the run on the console's server as agent `console` in this tab's session, or `studio` when the Studio's Run
+ *  button opened it (`studio`). */
+export function Run({ reference, studio = false }: { reference?: string; studio?: boolean }) {
   if (isFolderMode()) return <Console key="folder" />;
   if (!reference) return <Picker />;
-  return <Console key={reference} reference={reference} />;
+  return <Console key={reference} reference={reference} studio={studio} />;
 }
 
 function Picker() {
@@ -51,11 +56,14 @@ function Picker() {
 
 type Status = "not started" | "running" | "paused" | "done" | "failed" | "cancelled";
 
-function Console({ reference }: { reference?: string }) {
+/** A line of the trace: a step as `--progress` reports it, or a tool call of runah's model, in words. */
+type TraceLine = StepEvent | { event: "tool"; step: string; words: string };
+
+function Console({ reference, studio = false }: { reference?: string; studio?: boolean }) {
   const folder = isFolderMode();
   const [about, setAbout] = useState<Description | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [steps, setSteps] = useState<StepEvent[]>([]);
+  const [steps, setSteps] = useState<TraceLine[]>([]);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [record, setRecord] = useState<RunRecord | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -63,10 +71,25 @@ function Console({ reference }: { reference?: string }) {
   const [running, setRunning] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /** The procedure's Task_Agent steps (from its graph), runah's model as `aip config` names it, and how to run:
+   *  `ahead` is `aip runah` with `human` the steps a person answers; else `aip run`, every task pausing. */
+  const [agents, setAgents] = useState<AgentStep[] | null>(null);
+  const [settings, setSettings] = useState<ModelSettings | null>(null);
+  const [ahead, setAhead] = useState(studio);
+  const [human, setHuman] = useState<string[]>([]);
+  /** Whether the run on the page was started run ahead: its answers go back through `aip runah <run id>`. */
+  const [ranAhead, setRanAhead] = useState(false);
 
   useEffect(() => {
     describeProcedure(reference).then(setAbout).catch((e: unknown) => setLoadError(describe(e)));
-  }, [reference]);
+    modelSettings().then(setSettings).catch(() => setSettings(null));
+    const graph: Promise<Graph | null> = folder ? folderGraph().then((g) => g.graph) : reference ? graphOf(reference).then((b) => b.graph) : Promise.resolve(null);
+    graph.then((g) => {
+      const found = g ? agentSteps(g) : [];
+      setAgents(found);
+      setHuman(found.filter((s) => s.person).map((s) => s.name));
+    }).catch(() => setAgents([]));
+  }, [reference, folder]);
 
   const call = async (what: CliCall) => {
     setRunning(true);
@@ -79,6 +102,7 @@ function Console({ reference }: { reference?: string }) {
       const exit = await runCli(what, {
         onProcess: setProcess,
         onStep: (e) => setSteps((s) => [...s, e]),
+        onTool: (e) => setSteps((s) => [...s, { event: "tool", step: e.step, words: toolWords(e) }]),
         onOutcome: (o) => { got = o; },
         onOther: (line) => other.push(line),
       });
@@ -109,10 +133,12 @@ function Console({ reference }: { reference?: string }) {
     setSteps([]);
     setRunId(null);
     setRecord(null);
-    void call({ run: { ref: reference ?? "", inputs } });
+    setRanAhead(ahead);
+    void call(ahead ? { runah: { ref: reference ?? "", inputs, human, studio } } : { run: { ref: reference ?? "", inputs } });
   };
+  // A run started ahead goes on ahead: the person's answers in, then runah's model again until the next human step.
   const resume = (answers?: unknown) => {
-    if (runId) void call({ resume: { run_id: runId, answers } });
+    if (runId) void call({ resume: { run_id: runId, answers, ...(ranAhead ? (studio ? { studio: true } : { runah: true }) : {}) } });
   };
   const reset = () => { setSteps([]); setOutcome(null); setRecord(null); setRunId(null); setProblem(null); setCancelled(false); };
 
@@ -136,17 +162,21 @@ function Console({ reference }: { reference?: string }) {
           <><a href={href({ page: "catalog" })}>catalog</a> / <a href={href({ page: "procedure", ref: reference ?? about.name })}><code>{about.name}</code></a> / run</>
         )}
       </nav>
-      <h1>{about.name} <span className="muted rev">{folder ? "local run" : about.revision ? `run @${about.revision}` : "run"}</span> <DraftBadge draft={record?.draft} /></h1>
+      <h1>{about.name} <span className="muted rev">{folder ? "local run" : about.revision ? `run @${about.revision}` : "run"}</span> <DraftBadge draft={record?.draft ?? (!folder && about.draft === true)} /></h1>
       <p className="run-meta">
         <span>status <strong data-testid="run-status" className={`run-${status}`}>{status}</strong></span>
         {runId && <span> · run <a href={href({ page: "run-detail", id: runId })}><code data-testid="run-id">{runId}</code></a></span>}
         {recorded !== undefined && <span data-testid="run-recorded" data-recorded={String(recorded)}> · {recorded ? "recorded" : "not recorded (the server did not take it)"}</span>}
-        <span className="muted"> · aip {consoleConfig().aip.version} on this machine, in <code>{consoleConfig().workdir}</code>, as agent <code>console</code>, session <code data-testid="session-id">{sessionId()}</code></span>
+        <span className="muted"> · aip {consoleConfig().aip.version} on this machine, in <code data-testid="run-workdir">{record?.workdir ?? consoleConfig().workdir}</code>, as agent <code data-testid="run-agent">{studio ? "studio" : "console"}</code>, session <code data-testid="session-id">{sessionId()}</code></span>
         {(steps.length > 0 || outcome) && !running && <> · <button type="button" onClick={reset}>new run</button></>}
       </p>
 
       <div className="run-grid">
         <div>
+          {unstarted && agents !== null && (
+            <HowToRun agents={agents} settings={settings} ahead={ahead} human={human} busy={running}
+                      onAhead={setAhead} onHuman={setHuman} />
+          )}
           {unstarted && (
             <KeysForm title="Inputs" testid="pause-start" submit="Start" busy={running} types={about.inputs}
                       descriptions={about.input_descriptions} initial={about.example_inputs} onSubmit={start}
@@ -167,7 +197,8 @@ function Console({ reference }: { reference?: string }) {
           {!running && failed && runId !== null && <ErrorSummary error={failed} runId={runId} />}
           {!running && record?.status === "paused" && record.pause && (
             <PauseForm key={`${record.history.length}-${record.pause.step}`} step={record.pause.step} tasks={record.pause.tasks}
-                       refused={failed !== null} onAnswer={resume} />
+                       refused={failed !== null} onAnswer={resume}
+                       stopped={outcome !== null && "paused" in outcome ? (outcome as Paused).answerer ?? null : null} />
           )}
           {!running && runId !== null && ((failed && retryable(failed) && record?.status !== "paused") || cancelled) && (
             <div className="actions">
@@ -195,7 +226,9 @@ function Console({ reference }: { reference?: string }) {
           <h2>Steps</h2>
           <p className="muted small">One line per step as the CLI reports it (<code>--progress</code>), in the order things happened.</p>
           <ol className="trace small" data-testid="trace">
-            {steps.map((s, i) => (
+            {steps.map((s, i) => s.event === "tool" ? (
+              <li key={i} data-step={s.step} data-kind="tool" className="muted">runah&apos;s model, at <code>{s.step}</code>: {s.words}</li>
+            ) : (
               <li key={i} data-step={s.step} data-kind={s.kind}>
                 <code>{s.step}</code> <span className="muted">{s.kind}</span>
                 {passLabel(s.passes) && <span className="muted"> · {passLabel(s.passes)}</span>}
@@ -213,6 +246,52 @@ function Console({ reference }: { reference?: string }) {
 }
 
 const retryable = (error: Failed) => error.resumable === true;
+
+/** How the run goes: `aip run`, every task pausing for this page; or `aip runah`, runah's model answering every task
+ *  but those of the steps ticked here, the human steps, which pause for this page. The ticks start on the steps written
+ *  for a person (run/human.ts). */
+function HowToRun({ agents, settings, ahead, human, busy, onAhead, onHuman }: {
+  agents: AgentStep[]; settings: ModelSettings | null; ahead: boolean; human: string[]; busy: boolean;
+  onAhead: (ahead: boolean) => void; onHuman: (human: string[]) => void;
+}) {
+  const model = settings?.runah;
+  const toggle = (name: string, on: boolean) => onHuman(on ? [...new Set([...human, name])] : human.filter((h) => h !== name));
+  return (
+    <section className="pause" data-testid="run-how" data-mode={ahead ? "runah" : "run"}>
+      <h2>How it runs</h2>
+      <div className="options" role="radiogroup" aria-label="how it runs">
+        <label className="option">
+          <input type="radio" name="run-how" checked={ahead} disabled={busy} data-testid="run-how-runah" onChange={() => onAhead(true)} />
+          {" "}run ahead (<code>aip runah</code>): runah&apos;s model answers the tasks, a person answers the steps ticked below
+        </label>
+        <label className="option">
+          <input type="radio" name="run-how" checked={!ahead} disabled={busy} data-testid="run-how-run" onChange={() => onAhead(false)} />
+          {" "}run (<code>aip run</code>): every task pauses here for you
+        </label>
+      </div>
+      {ahead && (
+        <>
+          <p className="muted small" data-testid="run-how-model">
+            {model ? <>runah&apos;s model: <code>{model.model}</code> at <code>{model.endpoint}</code>{model.key ? "" : ", with no key set: set one in the Studio's Settings or with `aip config runah --model-key`"}</> : "runah's model: not known"}
+          </p>
+          {agents.length === 0
+            ? <p className="muted small">It has no Task_Agent step: nothing for a model or a person to answer.</p>
+            : (
+              <fieldset className="human-steps" data-testid="human-steps">
+                <legend>steps a person answers <span className="muted small">(<code>--human</code>): the run stops there for the form</span></legend>
+                {agents.map((s) => (
+                  <label key={s.name} className="option" data-testid="human-step" data-step={s.name} data-person={String(s.person)}>
+                    <input type="checkbox" checked={human.includes(s.name)} disabled={busy} onChange={(e) => toggle(s.name, e.target.checked)} />
+                    {" "}<code>{s.name}</code> <span className="muted small">{s.description.split("\n")[0]}</span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
+        </>
+      )}
+    </section>
+  );
+}
 
 // ------------------------------------------------------------------ the forms
 
@@ -265,18 +344,33 @@ interface FieldsProps {
   problems: Record<string, string>;
   busy: boolean;
   onChange: (key: string, value: string) => void;
+  /** For a `list` key, the rows the task carries to tick from (`candidatesOf`): a checklist instead of JSON. */
+  candidates?: Record<string, unknown[]>;
 }
 
-export function Fields({ prefix, types, labels, descriptions = {}, fields, problems, busy, onChange }: FieldsProps) {
+const isYesNo = (type: string | null) => type === "true_or_false" || type === "boolean";
+
+export function Fields({ prefix, types, labels, descriptions = {}, fields, problems, busy, onChange, candidates = {} }: FieldsProps) {
   return (
     <div className="fields">
       {Object.entries(types).map(([key, type]) => {
-        const kind = fieldKind(type, labels[key]);
+        const rows = candidates[key];
+        const kind = rows ? "checklist" : fieldKind(type, labels[key]);
         const value = fields[key] ?? "";
         return (
           <div key={key} className="field" data-testid="field" data-key={key} data-kind={kind}>
             <span><code>{key}</code> <span className="muted small">{type ?? "any"}{descriptions[key] ? ` · ${descriptions[key]}` : ""}</span></span>
-            {kind === "pick" ? (
+            {rows ? (
+              <Checklist name={key} rows={rows} value={value} busy={busy} onChange={(v) => onChange(key, v)} />
+            ) : kind === "pick" && isYesNo(type) && !(labels[key]?.length) ? (
+              // A true_or_false is two buttons.
+              <span className="options yes-no" role="radiogroup" aria-label={key}>
+                {["true", "false"].map((option) => (
+                  <button key={option} type="button" role="radio" aria-checked={value === option} disabled={busy}
+                          className={value === option ? "chosen" : ""} onClick={() => onChange(key, option)}>{option}</button>
+                ))}
+              </span>
+            ) : kind === "pick" ? (
               <span className="options">
                 {optionsOf(type, labels[key]).map((option) => (
                   <label key={option} className="option">
@@ -301,11 +395,42 @@ export function Fields({ prefix, types, labels, descriptions = {}, fields, probl
   );
 }
 
+/** A list answer ticked from the rows the task carries; the field's text is the JSON list of the rows ticked. */
+function Checklist({ name, rows, value, busy, onChange }: { name: string; rows: unknown[]; value: string; busy: boolean; onChange: (v: string) => void }) {
+  let picked: unknown[] = [];
+  try { const v = JSON.parse(value || "[]"); if (Array.isArray(v)) picked = v; } catch { /* typed by hand: start from none */ }
+  const has = (row: unknown) => picked.some((p) => JSON.stringify(p) === JSON.stringify(row));
+  const set = (row: unknown, on: boolean) =>
+    onChange(JSON.stringify(rows.filter((r) => (r === row ? on : has(r)))));
+  return (
+    <span className="options checklist" role="group" aria-label={name}>
+      {rows.map((row, i) => (
+        <label key={i} className="option" data-testid="checklist-row">
+          <input type="checkbox" checked={has(row)} disabled={busy} onChange={(e) => set(row, e.target.checked)} /> {rowText(row)}
+        </label>
+      ))}
+    </span>
+  );
+}
+
 /** A pause: every task waiting at the step, each with its prompt, the state it reads and a field per key it
- *  answers with. Several tasks (the passes of a `For` batch) are answered together, in one resume. */
-function PauseForm({ step, tasks, refused, onAnswer }: { step: string; tasks: Task[]; refused: boolean; onAnswer: (answers: unknown) => void }) {
-  const [fields, setFields] = useState<Record<number, Record<string, string>>>({});
+ *  answers with. Several tasks (the passes of a `For` batch) are answered together, in one resume. The form is
+ *  built from the step's `Produce` fields; the answer as hand-typed JSON stays behind it. `stopped` says why runah
+ *  stopped here, when it did. */
+function PauseForm({ step, tasks, refused, onAnswer, stopped = null }: {
+  step: string; tasks: Task[]; refused: boolean; onAnswer: (answers: unknown) => void; stopped?: Paused["answerer"] | null;
+}) {
+  const candidates = (task: Task) => Object.fromEntries(Object.entries(task.answer_with)
+    .map(([key, type]) => [key, candidatesOf(type, task.state)] as const).filter(([, rows]) => rows !== null)) as Record<string, unknown[]>;
+  // A checklist starts with nothing ticked: an empty list.
+  const [fields, setFields] = useState<Record<number, Record<string, string>>>(
+    () => Object.fromEntries(tasks.map((t) => [t.index, Object.fromEntries(Object.keys(candidates(t)).map((k) => [k, "[]"]))])));
   const [problems, setProblems] = useState<Record<number, Record<string, string>>>({});
+  const [raw, setRaw] = useState("");
+  const [rawProblem, setRawProblem] = useState<string | null>(null);
+  const answerRaw = () => {
+    try { setRawProblem(null); onAnswer(JSON.parse(raw)); } catch { setRawProblem("not JSON"); }
+  };
 
   const go = () => {
     const byTask: Record<number, Record<string, unknown>> = {};
@@ -326,6 +451,9 @@ function PauseForm({ step, tasks, refused, onAnswer }: { step: string; tasks: Ta
         <p className="muted" data-testid="batched-note">
           These are the passes of a loop that reached this step in one batch. They are answered together: one answer resumes them all.
         </p>
+      )}
+      {stopped && (
+        <p className="muted small" data-testid="pause-why">{/human step/.test(stopped.reason) ? "A step for a person: runah stopped here for you." : `runah stopped here: ${stopped.reason}`}</p>
       )}
       {refused && <p className="error" role="alert" data-testid="answer-refused">The last answer was refused, nothing was applied, and the same tasks wait. Answer again.</p>}
       {tasks.map((task) => (
@@ -348,13 +476,22 @@ function PauseForm({ step, tasks, refused, onAnswer }: { step: string; tasks: Ta
             <Json value={task.state} testid="pause-state" />
           </details>
           <Fields prefix={`task-${task.index}`} types={task.answer_with} labels={task.labels ?? {}} fields={fields[task.index] ?? {}}
-                  problems={problems[task.index] ?? {}} busy={false}
+                  problems={problems[task.index] ?? {}} busy={false} candidates={candidates(task)}
                   onChange={(key, value) => setFields((f) => ({ ...f, [task.index]: { ...(f[task.index] ?? {}), [key]: value } }))} />
         </fieldset>
       ))}
       <div className="actions">
         <button type="button" onClick={go} data-testid="answer">{tasks.length > 1 ? `Answer all ${tasks.length}` : "Answer"}</button>
       </div>
+      <details className="answer-json" data-testid="answer-json">
+        <summary className="small">answer as JSON <span className="muted">(as <code>aip resume --answers</code> takes it)</span></summary>
+        <textarea className="json" rows={4} value={raw} aria-label="answers as JSON" placeholder={tasks.length > 1 ? '{"0": {...}, "1": {...}}' : "{...}"}
+                  onChange={(e) => setRaw(e.target.value)} />
+        <div className="actions">
+          <button type="button" onClick={answerRaw} disabled={!raw.trim()} data-testid="answer-json-submit">Answer with this JSON</button>
+          {rawProblem && <span className="error small" role="alert">{rawProblem}</span>}
+        </div>
+      </details>
     </section>
   );
 }

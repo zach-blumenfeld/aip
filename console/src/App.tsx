@@ -38,7 +38,7 @@ function ServerPage({ route }: { route: Route }) {
     case "procedure": return <Procedure reference={route.ref} view={route.view} />;
     case "source": return <Source reference={route.ref} path={route.path} />;
     case "diff": return <Diff name={route.name} a={route.a} b={route.b} />;
-    case "run": return <Run reference={route.ref} />;
+    case "run": return <Run reference={route.ref} studio={route.studio === true} />;
     case "studio": return <Studio key={route.ref ?? ""} reference={route.ref} />;
     case "runs": return <Runs route={route} />;
     case "run-detail": return <RunPage id={route.id} />;

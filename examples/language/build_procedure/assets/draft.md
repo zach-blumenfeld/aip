@@ -32,6 +32,9 @@ What the documents say:
   (`Task_Agent`) for reading, writing and judgement, a `Route` on an answer for each decision.
   An agent's or a script's decision is an answer type (`true_or_false`, `choice [...]`); no
   `Decide`, so the procedure runs where no decision model is configured.
+- A step the rules give to a person (an approval, a sign-off, a judgement the documents reserve
+  for someone) is a `Task_Agent` whose prompt begins `This is a task for a person, not for
+  you:` and then says what the person decides; the agent running it takes it to them.
 - Something done for each item of a list is a `For`; a check and its fix is a `Loop ... Until`
   with the check inside it. Every loop has a cap.
 - `{out}/scripts/<name>.py` for each `Execute`: real Python that reads the JSON object on stdin

@@ -127,12 +127,16 @@ export interface StreamHandlers {
 
 export type CliCall =
   | { run: { ref: string; inputs: Record<string, unknown> } }
-  | { resume: { run_id: string; answers?: unknown; studio?: boolean; workspace?: string } }
+  /** `aip runah`: runah's model answers every task but the `human` steps', where the run stops (plan C5). */
+  | { runah: { ref: string; inputs: Record<string, unknown>; human: string[]; studio?: boolean } }
+  /** `runah` (or `studio`) carries a runah run on, `aip runah <run_id>`, with `human` replacing its human steps when given. */
+  | { resume: { run_id: string; answers?: unknown; studio?: boolean; workspace?: string; runah?: boolean; human?: string[] } }
   | { build: { workspace: string; brief: string; title?: string; source?: string; files?: Record<string, string> } }
   | { edit: { workspace: string; instruction: string; source?: string; files?: Record<string, string> } };
 
 function callOf(call: CliCall): [string, object] {
   if ("run" in call) return ["/console/run", call.run];
+  if ("runah" in call) return ["/console/runah", call.runah];
   if ("resume" in call) return ["/console/resume", call.resume];
   if ("build" in call) return ["/console/studio/build", call.build];
   return ["/console/studio/edit", call.edit];
@@ -211,7 +215,11 @@ export function folderGraph(): Promise<FolderGraph> {
 export interface StudioCheck { source: string; formatted: boolean; ok: boolean; bundle_id: string | null; diagnostics: Diagnostic[]; graph: Graph | null; partial: boolean }
 
 /** What saving did: `aip publish [--draft] --json`, and the source as saved. */
-export interface StudioSaved { name: string; revision: string | null; bundle_id: string; existed: boolean; draft: boolean; source: string }
+export interface StudioSaved {
+  name: string; revision: string | null; bundle_id: string; existed: boolean; draft: boolean; source: string;
+  /** The console kept the bundle as saved, so the Run button can run it (`bundle:<id>`). */
+  runnable?: boolean;
+}
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await post(path, body);

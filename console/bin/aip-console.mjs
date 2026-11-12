@@ -23,8 +23,14 @@
 //   GET  /console/record?run_id=  `aip runs <run_id> --json`: the run, from this machine's run file or the server
 //   GET  /console/runs            `aip runs --json`; in folder mode, this machine's runs of the folder
 //   POST /console/wake            starts the local server when the console's server is `aip config server local`
-//   POST /console/resume          ... with `studio: true` (and the run's `workspace`), a Studio run's: `aip runah <run_id>
-//                                 --answers - --progress`, which puts the answers in and runs ahead, recorded as the studio's
+//   POST /console/runah           {ref, inputs, human, session, studio?} -> event stream of `aip runah --progress --human
+//                                 STEP,...`: runah's model answers every task but the human steps' (plan C5). With `studio`,
+//                                 recorded as the studio's (the Studio's Run button); else as the console's
+//   POST /console/resume          ... with `runah: true` (and `human`), a runah run's: `aip runah <run_id> --answers -
+//                                 --progress`, which puts the answers in and runs ahead; with `studio: true` (and the run's
+//                                 `workspace`), a Studio run's, recorded as the studio's
+//   A `ref` of `bundle:<id>` names a draft the Studio saved in this process: the bundle `studio/save` compiled, run as
+//   its .rl file (the run is recorded against that draft). /console/procedure and /console/run take it too.
 //   POST /console/studio/open     {files: [{path, text | base64, mode}], name?} -> {workspace}: a folder holding a bundle's
 //                                 files (or none, for a new procedure: a placeholder folder, `new_procedure`), named `name`,
 //                                 inside a working directory of its own
@@ -42,7 +48,8 @@
 //                                 folder. Build and edit keep the folder as it was first:
 //   POST /console/studio/undo     {workspace} -> puts back the folder as it was before the last run; the read object
 //   POST /console/studio/save     {workspace, source, files?, publish?} -> writes the folder and runs `aip publish --draft
-//                                 --json` (with `publish`, `aip publish --json`): {name, revision, bundle_id, existed, draft}
+//                                 --json` (with `publish`, `aip publish --json`): {name, revision, bundle_id, existed, draft};
+//                                 the bundle is kept as an .rl for the Run button (`bundle:<id>`)
 //   GET  /console/settings        runah's chat model and the decision model `aip config` names: {runah, decision}, each
 //                                 {endpoint, model?, key (whether one is set), source (null: the defaults)} or null; keys
 //                                 are never sent
@@ -304,6 +311,28 @@ function studioRoot(setup) {
   return setup.studio;
 }
 
+/** The bundles the Studio saved, by bundle id: the .rl `aip compile` wrote of the folder as it was saved, so a draft
+ *  runs as exactly what the server holds (same id) although the folder changes after. */
+const savedBundles = new Map();
+const BUNDLE_REF = /^bundle:([0-9a-f]{8,128})$/;
+
+/** What `aip` is given for a reference: a saved draft's .rl for `bundle:<id>`, else the reference as it is. */
+function targetOf(ref) {
+  const m = BUNDLE_REF.exec(ref);
+  if (!m) return ref;
+  const file = savedBundles.get(m[1]);
+  if (!file || !existsSync(file)) throw new Error(`${ref} is a draft this console did not save; open it in the Studio and save it there to run it`);
+  return file;
+}
+
+/** The Task_Agent steps a run stops at for a person (`--human`): step names, joined as the flag takes them. */
+function humanArg(human) {
+  if (human === undefined || human === null) return null;
+  const names = Array.isArray(human) ? human : [];
+  for (const n of names) if (typeof n !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(n)) throw new Error(`${JSON.stringify(n)} is not a step name`);
+  return names.join(",");
+}
+
 /** Write a file of the procedure into its folder; a path outside assets/, references/ and scripts/ is refused. */
 function writeInto(folder, file) {
   const rel = `${file.path ?? ""}`;
@@ -461,7 +490,7 @@ function handler(setup, port) {
       if (route === "GET /console/procedure") {
         const ref = setup.folder ?? url.searchParams.get("ref");
         if (!ref) return problem(res, 400, "invalid_input", "ref is required");
-        const out = aip(setup, ["info", ref, "--json"]);
+        const out = aip(setup, ["info", setup.folder ? ref : targetOf(ref), "--json"]);
         return out.status === 0 ? json(res, 200, JSON.parse(out.stdout)) : problem(res, 422, "invalid_input", said(out, "aip info"));
       }
       if (route === "GET /console/graph") {
@@ -477,15 +506,29 @@ function handler(setup, port) {
         const body = await readJson(req);
         const ref = setup.folder ?? body.ref;
         if (typeof ref !== "string" || !ref) return problem(res, 400, "invalid_input", "ref is required");
-        return stream(res, setup, ["run", ref, "--progress", "--inputs", "-", "--workdir", setup.workdir], body.inputs ?? {}, body.session);
+        return stream(res, setup, ["run", setup.folder ? ref : targetOf(ref), "--progress", "--inputs", "-", "--workdir", setup.workdir],
+                      body.inputs ?? {}, body.session);
+      }
+      if (route === "POST /console/runah") {
+        const body = await readJson(req);
+        const ref = setup.folder ?? body.ref;
+        if (typeof ref !== "string" || !ref) return problem(res, 400, "invalid_input", "ref is required");
+        const human = humanArg(body.human ?? []);
+        // runah's model answers every task but those of the human steps, where the run stops for the page's form.
+        return stream(res, setup, ["runah", setup.folder ? ref : targetOf(ref), "--progress", "--inputs", "-", "--workdir", setup.workdir,
+                                   "--human", human], body.inputs ?? {}, body.session, body.studio === true ? STUDIO_AGENT : AGENT);
       }
       if (route === "POST /console/resume") {
         const body = await readJson(req);
         if (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)) return problem(res, 400, "invalid_input", "run_id is required");
         const studio = body.studio === true;
-        // A Studio run goes on with runah's model answering (`aip runah <run_id>` puts the answers into the pause and
-        // keeps going, stopping again at the human steps the run was started with), and is recorded as the studio's.
-        const args = [studio ? "runah" : "resume", body.run_id, "--progress"];
+        // A runah run goes on with runah's model answering (`aip runah <run_id>` puts the answers into the pause and
+        // keeps going, stopping again at the human steps the run was started with, or at `human` when given). A
+        // Studio run is recorded as the studio's.
+        const ahead = studio || body.runah === true;
+        const args = [ahead ? "runah" : "resume", body.run_id, "--progress"];
+        const human = ahead ? humanArg(body.human) : null;
+        if (human !== null) args.push("--human", human);
         const answered = body.answers !== undefined && body.answers !== null;
         if (answered) args.push("--answers", "-");
         const ws = studio && typeof body.workspace === "string" && WORKSPACE.test(body.workspace) ? workspaces.get(body.workspace) : undefined;
@@ -582,8 +625,17 @@ function handler(setup, port) {
         if (!checked.ok) return problem(res, 422, "compile_error", `it does not compile: ${checked.diagnostics.filter((d) => d.severity === "error").map((d) => d.message).join("; ")}`);
         writeFileSync(path.join(folder, "procedure.aip"), checked.source);
         const out = aip(setup, ["publish", folder, "--json", ...(body.publish ? [] : ["--draft"])]);
-        return out.status === 0 ? json(res, 200, { ...JSON.parse(out.stdout), source: checked.source })
-                                : problem(res, 502, "server", said(out, "aip publish"));
+        if (out.status !== 0) return problem(res, 502, "server", said(out, "aip publish"));
+        const published = JSON.parse(out.stdout);
+        // The bundle as saved, for the Run button: the same folder compiles to the same id, and a run of the .rl is
+        // recorded against the draft the server now holds.
+        if (typeof published.bundle_id === "string" && /^[0-9a-f]{8,128}$/.test(published.bundle_id)) {
+          const file = path.join(studioRoot(setup), "bundles", `${published.bundle_id}.rl`);
+          mkdirSync(path.dirname(file), { recursive: true });
+          if (!existsSync(file) && aip(setup, ["compile", folder, "-o", file]).status !== 0) rmSync(file, { force: true });
+          if (existsSync(file)) savedBundles.set(published.bundle_id, file);
+        }
+        return json(res, 200, { ...published, source: checked.source, runnable: savedBundles.has(published.bundle_id) });
       }
       if (route === "GET /console/settings") {
         return json(res, 200, parseModels(aip(setup, ["config"]).stdout));

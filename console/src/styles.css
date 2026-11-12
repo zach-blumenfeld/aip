@@ -160,6 +160,13 @@ table.line-diff tr.fold td { opacity: 0.55; font-style: italic; text-align: cent
 .field textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
 .options { display: flex; gap: 1rem; flex-wrap: wrap; }
 label.option { display: inline-block; }
+.options.yes-no { gap: 0.4rem; }
+.options.yes-no button { font: inherit; padding: 0.3rem 1.1rem; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
+.options.yes-no button[aria-checked="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.options.checklist { flex-direction: column; gap: 0.2rem; }
+fieldset.human-steps { border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 0.25rem; }
+details.answer-json summary { cursor: pointer; opacity: 0.75; margin-top: 0.5rem; }
+details.answer-json textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
 .actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; flex-wrap: wrap; }
 .actions button { font: inherit; padding: 0.35rem 0.9rem; }
 td.actions { margin: 0; }

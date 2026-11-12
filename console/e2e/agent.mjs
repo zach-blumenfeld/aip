@@ -12,7 +12,9 @@
 // compiled once with the compile tool, named as the requester named it (`name` in the draft's state)
 // or, with none, `support_inbox` after what it handles. edit_procedure's `rewrite` reads procedure.aip
 // and adds a step for the `other` messages. The first extraction asks one question; once the person
-// has answered, the second is settled.
+// has answered, the second is settled. A brief that asks for an approval drafts `refund_approval` instead
+// (plan C5): a script, a task the model answers, and a task for a person; any task of a procedure the Studio
+// built is answered with a value of each declared type.
 //
 // Every reply names the model that answered (`model`, as a real endpoint does: a dated snapshot of the
 // name asked for), which aip records as the task's `answered_by.model`.
@@ -78,6 +80,72 @@ json.load(sys.stdin)
 json.dump({"approved": True}, sys.stdout)
 `;
 
+/** What a brief that asks for an approval drafts (plan C5's Run button): a script, a task runah's model answers, and a
+ *  task for a person, marked as the drafter marks one. */
+const APPROVAL = (name) => `Procedure ${name}
+  "Approve a refund request: a script checks it against the limit, the model summarizes it, a person approves it."
+  Requires python 3.10
+
+Start "The refund request, as the customer wrote it." {
+  request: string "The customer's refund request."
+  Next_Step check_limit
+}
+
+Execute check_limit "Check the refund against the limit of 100." {
+  Read request
+  Run_Script scripts/check_limit.py
+  Produce within_limit: boolean "Whether the refund is within the limit."
+  Next_Step summarize
+}
+
+Task_Agent summarize "Summarize the request for the approver in one sentence." {
+  Read request, within_limit
+  Produce summary: string "The request in one sentence, with whether it is within the limit."
+  Next_Step approve
+}
+
+Task_Agent approve "This is a task for a person, not for you: approve the refund or refuse it." {
+  Read summary
+  Produce approved: true_or_false "Whether the person approves the refund."
+  Next_Step end
+}
+
+End "The summary and the person's decision." {
+  Read summary, approved
+}
+`;
+
+const APPROVAL_SCRIPT = `#!/usr/bin/env python3
+"""Check a refund against the limit of 100. A stub: it calls every refund within the limit, and leaves a note
+in the working directory that it ran.
+
+It touches nothing outside the working directory and uses no credentials.
+"""
+import json
+import os
+import pathlib
+import sys
+
+json.load(sys.stdin)
+pathlib.Path(os.environ.get("AIP_WORKDIR", "."), "limit-checked.txt").write_text("checked\\n")
+json.dump({"within_limit": True}, sys.stdout)
+`;
+
+/** The name the stand-in gives the approval procedure. */
+const APPROVAL_NAME = "refund_approval";
+
+/** An answer to a task no script above knows, from its "Answer with" block: each key a value of its type. */
+function typed(task) {
+  const shape = /## Answer with\n```json\n([\s\S]*?)\n```/.exec(task)?.[1];
+  const labels = JSON.parse(/^Labels: (.*)$/m.exec(task)?.[1] ?? "{}");
+  const out = {};
+  for (const [key, type] of Object.entries(shape ? JSON.parse(shape) : {})) {
+    out[key] = labels[key]?.[0] ?? (type === "true_or_false" || type === "boolean" ? true : type === "list" ? []
+      : type === "integer" || type === "float" || type === "number" ? 1 : `the stand-in's ${key}`);
+  }
+  return out;
+}
+
 const OTHER = `Task_Agent answer_other "Answer a message that is neither a refund nor a bug report." {
   Read message
   Produce reply: string "The reply to send."
@@ -117,20 +185,32 @@ function reply(body) {
     }
     case "extract_rules": {
       const answered = typeof state.answers === "string" && state.answers.trim() !== "";
+      if (/\bapproval\b/i.test(state.brief ?? "")) {
+        return answered
+          ? say({ rules: "1. A script checks the refund against the limit of 100. 2. The model summarizes it. 3. A person approves it.", questions: [], settled: true })
+          : say({ rules: "1. A script checks the refund. 2. A person approves it.", questions: ["Who approves a refund?"], settled: false });
+      }
       return answered
         ? say({ rules: "1. A refund of 100 or less is approved by a script. 2. A bug report is tagged by area. 3. Anything else ends.", questions: [], settled: true })
         : say({ rules: "1. Refunds are checked by a script. 2. Bug reports are tagged.", questions: ["What is the refund limit, and who approves above it?"], settled: false });
     }
     case "draft": {
-      const out = state.out, name = state.name || SUBJECT_NAME;
-      if (n === 0) return tool("write_file", { path: `${out}/procedure.aip`, content: PROCEDURE(name) });
-      if (n === 1) return tool("write_file", { path: `${out}/scripts/check_refund.py`, content: SCRIPT });
+      const approval = /\bapproval\b/i.test(state.brief ?? "");
+      const out = state.out, name = state.name || (approval ? APPROVAL_NAME : SUBJECT_NAME);
+      if (n === 0) return tool("write_file", { path: `${out}/procedure.aip`, content: (approval ? APPROVAL : PROCEDURE)(name) });
+      if (n === 1) {
+        return tool("write_file", approval ? { path: `${out}/scripts/check_limit.py`, content: APPROVAL_SCRIPT }
+                                           : { path: `${out}/scripts/check_refund.py`, content: SCRIPT });
+      }
       if (n === 2) return tool("compile", { path: out });
       return say({ path: out, procedure: name });
     }
     case "fix":
       return say(state.path !== undefined && "rules" in state ? { path: state.path } : { fixed: "nothing to fix" });
     case "review":
+      if (/a person approves it/i.test(state.rules ?? "")) {
+        return say({ review: "It checks the limit, summarizes the request and leaves the approval to a person.\nScripts:\nscripts/check_limit.py: writes limit-checked.txt in the working directory; uses no credentials." });
+      }
       return say({ review: "It covers refunds and bug reports. The refund script is a stub that approves everything: a developer should make it read the amount before this is published.\nScripts:\nscripts/check_refund.py: approves every refund; touches nothing outside the working directory, uses no credentials." });
     case "rewrite": {
       if (n === 0) return tool("read_file", { path: `${state.path}/procedure.aip` });
@@ -142,7 +222,8 @@ function reply(body) {
       return say({ changes: "Added answer_other, a step that answers the messages that are neither refunds nor bug reports; the route sends `other` to it.\nScripts:\nnone written or changed." });
     }
     default:
-      return say({});
+      // A task of a procedure the Studio built, run from its Run button: an answer of the declared types.
+      return say(typed(task));
   }
 }
 

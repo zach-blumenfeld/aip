@@ -9,7 +9,8 @@ import { useEffect, useState } from "react";
 //   #/p/<name>/diff[/<a>..<b>]  diff between two revisions of a name
 //   #/studio[/<ref>]            the Studio: the card canvas as an editor of a revision, a draft, or (no ref) a new
 //                               procedure, saving drafts
-//   #/run[/<ref>]               run console: pick a procedure, then drive it through the CLI
+//   #/run[/<ref>][?from=studio] run console: pick a procedure, then drive it through the CLI (`aip run`, or `aip runah`
+//                               with the human steps picked); from the Studio's Run button, recorded as the studio's
 //   #/runs[?name=&status=&agent=&session=&user=&draft=]   history: the runs the server holds
 //   #/runs/<id>                 one run's record
 //   #/audit[?name=]             the audit queries of GET /audit
@@ -22,7 +23,7 @@ export type Route =
   | { page: "procedure"; ref: string; view?: string }
   | { page: "source"; ref: string; path?: string }
   | { page: "diff"; name: string; a?: string; b?: string }
-  | { page: "run"; ref?: string }
+  | { page: "run"; ref?: string; studio?: boolean }
   | { page: "studio"; ref?: string }
   | { page: "runs"; name?: string; status?: string; agent?: string; session?: string; user?: string; draft?: boolean }
   | { page: "run-detail"; id: string }
@@ -51,8 +52,11 @@ export function parseHash(hash: string): Route {
   }
   m = /^studio(?:\/([^/]+))?$/.exec(path);
   if (m) return { page: "studio", ref: m[1] ? decodeURIComponent(m[1]) : undefined };
-  m = /^run(?:\/([^/]+))?$/.exec(path);
-  if (m) return { page: "run", ref: m[1] ? decodeURIComponent(m[1]) : undefined };
+  m = /^run(?:\/([^/?]+))?(?:\?(.*))?$/.exec(path);
+  if (m) {
+    const studio = new URLSearchParams(m[2] ?? "").get("from") === "studio";
+    return { page: "run", ref: m[1] ? decodeURIComponent(m[1]) : undefined, ...(studio ? { studio } : {}) };
+  }
   m = /^runs(?:\?(.*))?$/.exec(path);
   if (m) {
     const q = new URLSearchParams(m[1] ?? "");
@@ -79,7 +83,7 @@ export function href(route: Route): string {
       const pair = route.a && route.b ? `/${encodeURIComponent(route.a)}..${encodeURIComponent(route.b)}` : "";
       return `#/p/${encodeURIComponent(route.name)}/diff${pair}`;
     }
-    case "run": return `#/run${route.ref ? "/" + encodeURIComponent(route.ref) : ""}`;
+    case "run": return `#/run${route.ref ? "/" + encodeURIComponent(route.ref) : ""}${route.studio ? "?from=studio" : ""}`;
     case "studio": return `#/studio${route.ref ? "/" + encodeURIComponent(route.ref) : ""}`;
     case "runs": {
       const q = new URLSearchParams();

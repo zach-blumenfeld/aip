@@ -18,7 +18,9 @@ Read what you need first: the folder's prompts and scripts (`list_files {path}`)
 documents. Then make the change with `write_file`: rewrite `procedure.aip` whole, and write any
 new prompt, asset or script the change needs (a new `Execute` gets a real script under
 `scripts/`; a new `Task_Agent` with a long prompt gets one under `assets/`). Change only what
-the instruction asks for, and keep everything else as it is, comments included. The language
+the instruction asks for, and keep everything else as it is, comments included. A new step for
+a person (an approval, a sign-off) is a `Task_Agent` whose prompt begins `This is a task for a
+person, not for you:` and then says what the person decides. The language
 page in your instructions is the law. Run `compile` on `{path}` and fix what it reports before
 you answer.
 

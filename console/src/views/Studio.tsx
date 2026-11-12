@@ -25,7 +25,7 @@ import { dataEdges, dataKeys } from "../graph/dataflow.ts";
 import { stepGraphOf } from "../graph/model.ts";
 import { Code } from "../highlight/Code.tsx";
 import { bundleRef, href } from "../router";
-import { missingScripts } from "../studio/chat.ts";
+import { missingScripts, scriptNotes } from "../studio/chat.ts";
 import { applyEdits, EditError, renameProcedure, setText, type TextEdit } from "../studio/edit.ts";
 import { DirectionToggle, StepGraph, useDirection } from "./StepGraph";
 import { StudioChat, type ChatHost } from "./StudioChat";
@@ -91,6 +91,11 @@ export function Studio({ reference }: { reference?: string }) {
   const [modelScripts, setModelScripts] = useState<string[]>([]);
   const [readScripts, setReadScripts] = useState<string | null>(null);
   const [asking, setAsking] = useState<"save" | "publish" | null>(null);
+  /** The reviews of the chat's runs (what each script touches), and the text of the scripts the person confirmed reading
+   *  before a real run (plan C5: the first run asks again, a later one only when the scripts changed). */
+  const [reviews, setReviews] = useState<string[]>([]);
+  const [ranScripts, setRanScripts] = useState<string | null>(null);
+  const [askingRun, setAskingRun] = useState(false);
   const checking = useRef(0);
   const current = useRef({ source: "", files: {} as Record<string, string> });
   current.current = { source, files };
@@ -239,6 +244,7 @@ export function Studio({ reference }: { reference?: string }) {
     wrote: (paths) => { if (paths.length) setModelScripts((had) => [...new Set([...had, ...paths])].sort()); },
     before: () => current.current,
     built: () => setBuilt(true),
+    reviewed: (review) => setReviews((r) => [...r, review]),
     settled: async () => {
       try {
         const read = await studioRead(opened.workspace);
@@ -285,6 +291,21 @@ export function Studio({ reference }: { reference?: string }) {
     setReadScripts(writtenText);
     if (action) void save(action === "publish");
   };
+  /** Run the saved draft for real, in the run console (a tab of its own, so the Studio stays as it is). The scripts the
+   *  model wrote execute now: the first run asks once more that they were read, and a later one only if they changed. */
+  const runnable = saved !== null && saved.runnable === true && !blocked;
+  const openRun = () => {
+    if (!saved) return;
+    setAskingRun(false);
+    setRanScripts(writtenText);
+    const ref = saved.revision === null ? bundleRef(saved.bundle_id) : `${saved.name}@${saved.revision}`;
+    window.open(href({ page: "run", ref, studio: true }), "_blank");
+  };
+  const runIt = () => {
+    if (written.length > 0 && ranScripts !== writtenText) return setAskingRun(true);
+    openRun();
+  };
+  const scriptSays = scriptNotes(reviews, written);
 
   return (
     <article className="procedure studio" data-testid="studio">
@@ -312,6 +333,10 @@ export function Studio({ reference }: { reference?: string }) {
         <button type="button" onClick={() => guarded(true)} disabled={!check.ok || blocked || !saved || saved.revision !== null} data-testid="studio-publish"
                 title="Give the saved draft the next revision of its name">
           Publish
+        </button>
+        <button type="button" onClick={runIt} disabled={!runnable} data-testid="studio-run"
+                title={runnable ? "Run what was saved, for real, in the run console: its scripts run on this machine" : "Save the draft first: the run console runs what was saved"}>
+          Run
         </button>
         <label className="small"><input type="checkbox" data-testid="studio-view-source" checked={showSource} onChange={(e) => setShowSource(e.target.checked)} /> Source</label>
         <label className="small"><input type="checkbox" data-testid="studio-view-settings" checked={showSettings} onChange={(e) => setShowSettings(e.target.checked)} /> Settings</label>
@@ -341,6 +366,25 @@ export function Studio({ reference }: { reference?: string }) {
               I have read {written.length === 1 ? "it" : "them"}: {asking === "publish" ? "publish" : "save the draft"}
             </button>
             <button type="button" onClick={() => setAsking(null)} data-testid="studio-scripts-cancel">Not yet</button>
+          </div>
+        </div>
+      )}
+      {askingRun && (
+        <div className="boundary" role="alertdialog" data-testid="studio-run-ask">
+          <p>
+            This run executes {written.length === 1 ? "the script" : `the ${written.length} scripts`} the model wrote, now, on this machine,
+            with its files and credentials:
+          </p>
+          <ul>
+            {written.map((p) => (
+              <li key={p} data-testid="studio-run-script" data-path={p}>
+                <code>{p}</code>{scriptSays[p] ? <>: the review says it {scriptSays[p].replace(/^\w/, (c) => c.toLowerCase())}</> : <span className="muted">: no review names it; read it below</span>}
+              </li>
+            ))}
+          </ul>
+          <div className="actions">
+            <button type="button" onClick={openRun} data-testid="studio-run-ok">I have read {written.length === 1 ? "it" : "them"}: run it</button>
+            <button type="button" onClick={() => setAskingRun(false)} data-testid="studio-run-cancel">Not yet</button>
           </div>
         </div>
       )}

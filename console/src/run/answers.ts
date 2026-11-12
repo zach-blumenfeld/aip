@@ -68,6 +68,24 @@ export function answersFor(tasks: Task[], byTask: Record<number, Record<string, 
   return Object.fromEntries(tasks.map((t) => [String(t.index), byTask[t.index] ?? {}]));
 }
 
+/** The rows a `list` answer is picked from, when the task carries them: the one list in the state it reads (as
+ *  make_procedure's `approve` reads `folders`). Null when there is none, or more than one to choose between. */
+export function candidatesOf(type: string | null | undefined, state: Record<string, unknown>): unknown[] | null {
+  if (type !== "list" && type !== "array") return null;
+  const lists = Object.values(state).filter((v) => Array.isArray(v) && v.length > 0) as unknown[][];
+  return lists.length === 1 ? lists[0] : null;
+}
+
+/** A row of a checklist in words: a string as it is, an object by its name, path or title, else as JSON. */
+export function rowText(row: unknown): string {
+  if (typeof row === "string") return row;
+  if (row && typeof row === "object") {
+    const o = row as Record<string, unknown>;
+    for (const k of ["name", "path", "title", "id"]) if (typeof o[k] === "string") return o[k] as string;
+  }
+  return JSON.stringify(row);
+}
+
 /** `revise 1 / review 0`: every enclosing loop and which pass of it; empty outside loops. */
 export function passLabel(passes: { loop: string; pass: number }[] | undefined): string {
   return (passes ?? []).map((p) => `${p.loop} ${p.pass}`).join(" / ");

@@ -50,6 +50,8 @@ export interface ChatHost {
   before: () => { source: string; files: Record<string, string> };
   /** A build ran to its end: later messages change what it built. */
   built: () => void;
+  /** What a run said at its end (its review or its changes): the page keeps what it says each script touches. */
+  reviewed?: (review: string) => void;
   onDocuments: (files: File[]) => Promise<string[]>;
 }
 
@@ -103,6 +105,7 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
         const r = o.result;
         const review = typeof r.review === "string" ? r.review : typeof r.changes === "string" ? r.changes : null;
         update(id, (t) => ({ ...t, status: "done", runId: o.run_id, review, diff, files }));
+        if (review) host.reviewed?.(review);
         if (kind === "build") host.built();
       } else {
         update(id, (t) => ({ ...t, status: "failed", runId: o.run_id, error: `${o.error}: ${o.message}`, diff, files }));

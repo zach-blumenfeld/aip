@@ -93,6 +93,38 @@ once that they were read ("I have read them" or "Not yet"); it asks again only w
 changes them. `build_procedure`'s trial runs none of them, and its review's `Scripts:` section says
 what each touches outside the working directory.
 
+## Run
+
+A saved draft runs for real from the Studio (plan C5). **Run** sits beside Save draft and comes on
+once the save has returned the draft's `bundle_id`; any edit after that turns it off until the next
+save, so what runs is what the server holds. Saving keeps the bundle as an `.rl` in the console's
+process (`aip compile -o`, the same id), and Run opens the run console on it, `#/run/bundle:<id>?from=studio`,
+in a tab of its own, so the Studio stays as it is. The process runs that file, so the run is recorded
+against the draft.
+
+The run console asks how to run. **Run ahead** (`aip runah`, the default from the Studio) has runah's
+model answer the tasks and stops at the steps ticked as **human steps** (`--human`); the picker lists
+the procedure's `Task_Agent` steps and ticks the ones written for a person: a prompt that begins with
+the drafter's marker, "This is a task for a person, not for you" (build_procedure's `draft` and
+edit_procedure's `rewrite` write it), or a description that says a person does it
+(`src/run/human.ts`). **Run** (`aip run`) pauses at every task instead. The Start step's inputs are a
+form, typed from `aip info --json`.
+
+A pause is answered through a form built from the step's `Produce` fields: a `true_or_false` is two
+buttons, a string a text box, a choice or a score its labels, and a `list` whose rows the task carries
+(the one list in the state it reads, as `make_procedure`'s `approve` reads `folders`) a checklist.
+The answer as hand-typed JSON stays behind the form. The person's answers go back through `aip runah
+<run id> --answers`, which runs on to the next human step or the end.
+
+The scripts gate, once more: the scripts the model wrote execute at this moment, so the first Run of
+a draft that has them asks again that they were read, naming each with what the chat's review said it
+touches. A later Run asks only if they changed.
+
+Runs started this way are recorded as agent `studio` in the page's session, and show in History and on
+the procedure's page like any other. The record says which answers were the person's (answered by
+`studio`) and which runah's (`runah`, with the model the endpoint reported); the run console shows the
+run's working directory.
+
 ## Settings
 
 The model `aip runah` runs the chat with (endpoint, key, model name, with a line per provider:
@@ -107,13 +139,15 @@ graph and the forms still work.
 
 | | |
 |---|---|
-| `bin/aip-console.mjs` | the Studio's workspaces (a working directory per open Studio, the draft's folder in it, the copies Undo puts back) and its endpoints: `studio/open`, `check`, `read`, `documents`, `build`, `edit`, `undo`, `save`, and `settings` |
-| `src/views/Studio.tsx` | the page: opening, checks, Undo, save and publish, the graph, Source, Settings |
+| `bin/aip-console.mjs` | the Studio's workspaces (a working directory per open Studio, the draft's folder in it, the copies Undo puts back) and its endpoints: `studio/open`, `check`, `read`, `documents`, `build`, `edit`, `undo`, `save` (which keeps the saved bundle for Run), and `settings`; `runah`, the run console's run ahead |
+| `src/views/Studio.tsx` | the page: opening, checks, Undo, save and publish, Run and its scripts gate, the graph, Source, Settings |
+| `src/views/Run.tsx` | the run console: run or run ahead, the human-step picker, the pause forms |
+| `src/run/human.ts` | the Task_Agent steps of a graph, and which are a person's |
 | `src/views/StudioChat.tsx` | the chat: a turn per message, the stream of a run, the human form, the review and the diff |
 | `src/views/StudioForm.tsx` | the form of the node picked on the graph |
 | `src/studio/edit.ts` | the field edits as text edits at spans |
-| `src/studio/chat.ts` | the chat's words, a human step's questions, the scripts a draft lacks, the scripts a run wrote |
-| `e2e/agent.mjs` | the stand-in chat model the e2e suite runs `aip runah` against |
+| `src/studio/chat.ts` | the chat's words, a human step's questions, the scripts a draft lacks, the scripts a run wrote, what the reviews say each touches |
+| `e2e/agent.mjs` | the stand-in chat model the e2e suite runs `aip runah` against; `e2e/studio-run.spec.ts` runs a draft from the Studio |
 
 ## A seam for another backend
 

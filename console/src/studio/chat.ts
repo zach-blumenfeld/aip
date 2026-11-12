@@ -71,6 +71,21 @@ export function missingScripts(diagnostics: Diagnostic[]): Map<string, string> {
   return out;
 }
 
+/** What the reviews of the chat's runs say each script touches: for each path, the last line of a review that names it
+ *  (build_procedure's review and edit_procedure's changes list the scripts under `Scripts:`, one line each). A script
+ *  no review names is left out. */
+export function scriptNotes(reviews: string[], paths: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const review of reviews) {
+    for (const line of review.split("\n").map((l) => l.trim())) {
+      for (const p of paths) {
+        if (line.startsWith(p) || line.startsWith(base(p))) out[p] = line.slice(line.startsWith(p) ? p.length : base(p).length).replace(/^[:\s-]+/, "");
+      }
+    }
+  }
+  return out;
+}
+
 /** The scripts a run wrote: the files under `scripts/` it added or changed, from the draft's text files before the run
  *  and after it, sorted. The Studio shows them, with their text, before the draft can be run or published. */
 export function scriptsWritten(before: Record<string, string>, after: Record<string, string>): string[] {
