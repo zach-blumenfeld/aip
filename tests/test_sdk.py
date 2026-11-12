@@ -1,4 +1,4 @@
-"""The SDK (`aip.Client`, `docs/sdk.md`) and the `aip` command over it (plan aip-dev#1, R3).
+"""The SDK (`aip.Client`, `docs/sdk.md`) and the `aip` command over it (plan aip#29, R3).
 
 `billing-support` runs end to end from a folder, from an `.rl` and by catalog name, with the
 agent answering, with a fake decision model, and with `on_pause`; a failed script is a resumable

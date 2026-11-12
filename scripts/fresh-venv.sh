@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A fresh virtual environment installs this package and Relate and compiles a program: the proof
-# of the plan's L3 (aip-dev#1), kept by L5 for the one package, run by CI when it has a token for
+# of the plan's L3 (aip#29), kept by L5 for the one package, run by CI when it has a token for
 # Relate's release.
 #
 #   scripts/fresh-venv.sh [PROGRAM]      default: examples/language/billing-support

@@ -1,4 +1,4 @@
-"""runah (plan aip-dev#1, A1 and A2): a chat model answering `Task_Agent` pauses, one tool-using
+"""runah (plan aip#29, A1 and A2): a chat model answering `Task_Agent` pauses, one tool-using
 chat per task, against a stand-in Chat Completions server whose replies are scripted; and what
 goes with it: `run` calls no model, a trial runs no script, an outside agent reports its work.
 

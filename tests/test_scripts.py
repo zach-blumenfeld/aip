@@ -1,4 +1,4 @@
-"""What bounds a script (plan aip-dev#1, A2): a trial runs none (`Client.run(..., scripts=False)`),
+"""What bounds a script (plan aip#29, A2): a trial runs none (`Client.run(..., scripts=False)`),
 and one script may run `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`, 300 by default)."""
 
 from __future__ import annotations

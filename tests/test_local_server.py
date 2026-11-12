@@ -1,4 +1,4 @@
-"""The local server, started on demand (plan aip-dev#1, S2, open item 3).
+"""The local server, started on demand (plan aip#29, S2, open item 3).
 
 With `aip config server local` nothing is started by hand: the first command that needs the
 server starts `aip server --local` as a process of its own, later commands reuse it, it stops

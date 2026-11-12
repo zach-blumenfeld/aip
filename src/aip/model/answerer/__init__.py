@@ -1,4 +1,4 @@
-"""runah's answerer: an agent made of Chat Completions and AIP (plan aip-dev#1, A1 and A2; `docs/runah.md`).
+"""runah's answerer: an agent made of Chat Completions and AIP (plan aip#29, A1 and A2; `docs/runah.md`).
 
 In a run started or carried on with `aip runah`, the `Task_Agent` pauses are answered by a chat
 model, one short tool-using chat per task, with the procedure as the plan and the run as the

@@ -1,4 +1,4 @@
-"""The cache of bundles every run runs from (plan aip-dev#1, R3): `~/.aip/bundles/` (`AIP_HOME`).
+"""The cache of bundles every run runs from (plan aip#29, R3): `~/.aip/bundles/` (`AIP_HOME`).
 
 Whatever `aip run` is given lands here first as a verified `.rl` under its bundle id:
 

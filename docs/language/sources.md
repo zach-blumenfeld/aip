@@ -1,13 +1,14 @@
 # Where everything is
 
-For the agent implementing a milestone of the 0.9 plan (issue #1 on `zach-blumenfeld/aip-dev`).
+For the agent implementing a milestone of the 0.9 plan (issue #29 on `zach-blumenfeld/aip`).
 Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the same commit.
 
 ## This repository
 
-- You are in a **private mirror** of the public `zach-blumenfeld/aip`. The worktree is
-  `~/dev/aip-0.9` on branch `release-0.9.0`; its push remote is `dev` (the mirror). `origin` is
-  the public repo: never push there (AGENTS.md, "This is the private 0.9 mirror").
+- The worktree is `~/dev/aip-0.9` on branch `release-0.9.0` of the public `zach-blumenfeld/aip`;
+  push to `origin`. Until 2026-11-11 it was the private mirror `zach-blumenfeld/aip-dev`, archived
+  the day Relate was announced (AGENTS.md, "The 0.9 branch"); the checkout may still carry a `dev`
+  remote pointing at it.
 - **The 0.8 code you are replacing is in this same tree**: the runtime under `src/aip/`, the server
   under `src/aip/server/`, the Neo4j backend at `src/aip/server/backends/neo4j.py`, the skills
   under `skills/`, the examples under `examples/`. The language is `src/aip/compiler/` (until L5,
@@ -19,7 +20,7 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
   backends, described in `docs/server-design.md`. Since S2 a client set to `aip config server local`
   starts one for itself (`src/aip/client/local.py`: port 8247, the default store file, stops when
   idle; `aip server --local --stop` stops it, and `AIP_LOCAL_PORT`, `AIP_LOCAL_DATA` move it for a
-  proof that must not touch the real store). The branch `cypherlite-backend` on the mirror was
+  proof that must not touch the real store). The old `cypherlite-backend` branch was
   the 0.8 attempt at a Relate backend and is only history now. The server's tests want a Neo4j to run their
   second half: on this machine the container `aip-test-neo4j` (bolt `localhost:17687`, user
   `neo4j`; the password is in its `NEO4J_AUTH`) is kept for that, and the suite deletes every node
@@ -35,7 +36,7 @@ Every pointer here was checked on 2026-11-09. If one is dead, fix it here in the
 
 **It is `console/` in this repository since C1** (2026-11-09, plan open item 13): `git subtree
 add --prefix=console dev-console console-0.9.0` brought it with its history from
-`zach-blumenfeld/aip-console-dev` (the private mirror of `zach-blumenfeld/aip-console`; this
+`zach-blumenfeld/aip-console-dev` (the private mirror of `zach-blumenfeld/aip-console`, archived 2026-11-11; this
 checkout's remote `dev-console`, and the local checkout `~/dev/aip-inspector`), whose commit
 f30ed95 is the last there. That mirror is the archive now: nothing newer is in it, and console
 work happens here. `console/AGENTS.md` describes the launcher, the step graph, the Studio, the API client
@@ -58,12 +59,15 @@ next one.
 
 ## Relate (formerly CypherLite)
 
-Embedded property-graph engine with Cypher, Neo4j Labs, Apache 2.0. **Unreleased and private;
-nothing mentioning it leaves the mirrors.**
+Embedded property-graph engine with Cypher, Neo4j Labs, Apache 2.0. **Announced 2026-11-11**
+(https://neo4j.com/press-releases/announcing-relate-by-neo4j/): `relate-db` 1.0.0 is on PyPI (`pip install relate-db`,
+`import relate`, CLI `relate`, bundles `.rl`, docs https://relatedb.ai/). This tree still pins the
+pre-release wheel 0.16.1 under the old name until milestone R6 moves it to the PyPI release; the
+rows below describe that pinned release.
 
 | What | Where | Note |
 |---|---|---|
-| Source and releases | `github.com/neo4j-labs/cypherlite` | visibility is *internal*: web fetches 404; `gh api repos/neo4j-labs/cypherlite/...` works with Zach's login. Moving to `github.com/relatedb/relate` (404 today). |
+| Source and releases | `github.com/neo4j-labs/cypherlite` (pre-release home) | was internal while the 0.16.1 wheels were pinned, which is why `scripts/install-relate.sh` fetches them through the GitHub API with a token; the public release is `relate-db` on PyPI and https://relatedb.ai/. |
 | Pinned release | **v0.16.1**, 2026-11-04 | the last release under the old name. Wheels: `neo4j_cypherlite-0.16.1-cp39-abi3-{macosx_10_12_x86_64, macosx_11_0_arm64, manylinux2014_x86_64, manylinux2014_aarch64, win_amd64}.whl` on the release's assets. **Install with `scripts/install-relate.sh`** (into `.venv`, or into the environment it is given): it fetches the platform's wheel through the GitHub API (`gh` logged in or `GH_TOKEN`; the plain download URL answers 404 while the repository is internal), checks its sha256 against the five pinned in the script (the release's `SHA256SUMS` covers only the CLI binaries), caches it under `~/.cache/aip/relate/`, and runs `uv pip install`. Not declared in any `pyproject.toml`: `uv lock` would have to fetch it and cannot (L3's note on open item 2). **Import name `cypherlite`.** CI installs it only when the secret `RELATE_GH_TOKEN` is set; otherwise the bundle tests skip. |
 | The rename | main branch | `surfaces/relate-python/pyproject.toml` is already `relate-db`, module `relate`; the CLI is `relate`; bundles are `.rl`. The next release ships under those names. `aip/compiler/relate.py` is the one module that imports the engine (`relate`, else `cypherlite`) and names bundles `.rl`; since v0.16.1 recognises its single-file form by the `.cl` suffix alone, it writes beside the target as `<name>.rl.tmp.cl` and renames, and opens an `.rl` through a temporary `.cl` link. Both go when the rename ships. |
 | The CLI binary | release assets `cypherlite-{darwin,linux}-{arm64,amd64}`, `cypherlite-windows-amd64.exe` | in `SHA256SUMS`. `cypherlite query --database x.rl "..."` does not open an `.rl` at v0.16.1 (it is read as a directory); copy or link the file to `x.cl` first, or use `aip.compiler.relate.open` from Python. |
@@ -248,9 +252,9 @@ files.
 
 ## Process
 
-- Plan: https://github.com/zach-blumenfeld/aip-dev/issues/1. Tick, comment, commit, push to `dev`.
+- Plan: https://github.com/zach-blumenfeld/aip/issues/29. Tick, comment, commit, push to `origin`.
 - Public plan issues for context on how 0.7 and 0.8 were run: `gh issue view 18 -R
-  zach-blumenfeld/aip` and `19` (19 is superseded by this plan; do not edit it).
+  zach-blumenfeld/aip` and `19` (closed 2026-11-11, superseded by this plan).
 - Zach's constraints that are not in code: the design conversation stays in his `~/Documents` and
   never enters a repo; keyword lists are maintained only in the spec's glossary (the console
   colours `procedure.aip` from the extension's grammar for that reason, and keeps no list of its

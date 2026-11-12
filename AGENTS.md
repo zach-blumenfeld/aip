@@ -19,28 +19,24 @@ repository [aip-console](https://github.com/zach-blumenfeld/aip-console) through
 history came with it): its own npm version, changelog and release workflow, and nothing of it in
 the Python build. `console/AGENTS.md` says what differs there.
 
-## This is the private 0.9 mirror
+## The 0.9 branch
 
-`zach-blumenfeld/aip-dev` is a private copy of the public `zach-blumenfeld/aip` repository, made on
-2026-11-08 so that 0.9 can be built before one of its dependencies is public. Rules:
+0.9 is built on branch `release-0.9.0` of this repository. From 2026-11-08 to 2026-11-11 it was
+built in the private mirror `zach-blumenfeld/aip-dev` (now archived) because Relate, the engine a
+bundle is written in, was unannounced; Relate was announced on 2026-11-11 (https://neo4j.com/press-releases/announcing-relate-by-neo4j/)
+and the branch moved here with its history. Rules:
 
-- **Relate (formerly CypherLite) is unreleased.** Nothing that mentions it, in code, docs, commit
-  messages, issues or PR text, goes to the public `aip` or `aip-console` repositories until Zach
-  explicitly gives the go-ahead. Push 0.9 work to the `dev` remote only. The `release-0.9.0`
-  branch's `pushRemote` is set to `dev`; keep it so.
-- **The 0.9 plan is issue #1 on this repository** (https://github.com/zach-blumenfeld/aip-dev/issues/1), in the format the 0.7 and 0.8 plans used on the
-  public repo. One milestone per session, run its proof, tick it, comment, commit.
+- **The 0.9 plan is issue #29 on this repository** (https://github.com/zach-blumenfeld/aip/issues/29), in the format the 0.7 and 0.8 plans used.
+  One milestone per session, run its proof, tick it, comment, commit, push `release-0.9.0` to `origin`.
 - **Start with `docs/language/sources.md`**: where the old code, the console, Relate's docs and wheels, and the
   decision model live, with what is stale. Then the plan issue.
 - **The language lives under `docs/language/`** (the spec, runtime requirements, limitations, why
   there are no expressions, the end-to-end scenes, the settled plan questions), its programs under
   `examples/language/`, the VS Code extension under `editors/vscode`. They came from the private
-  `aip-lang` repository on 2026-11-08 (its commit 9845671); that repository is now the design
-  archive. Final paths are decided by the compiler milestone.
-- **Public `main` keeps moving** with 0.8 fixes. Merge `origin/main` into `release-0.9.0` when it
-  does; never the other way until the go-ahead.
-- When Zach clears it: push `release-0.9.0` to the public repo, open the release PR there, transfer
-  the plan issue with `gh issue transfer`, archive this mirror.
+  `aip-lang` repository on 2026-11-08 (its commit 9845671); that repository is the design
+  archive.
+- **`main` keeps moving** with 0.8 fixes. Merge `main` into `release-0.9.0` when it does; the
+  release PR (D4) merges the other way.
 
 ## Repo map
 

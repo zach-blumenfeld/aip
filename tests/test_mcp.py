@@ -1,4 +1,4 @@
-"""`aip mcp`, the SDK as an MCP server (`aip.mcp`, `docs/mcp.md`; plan aip-dev#1, M1).
+"""`aip mcp`, the SDK as an MCP server (`aip.mcp`, `docs/mcp.md`; plan aip#29, M1).
 
 An MCP client drives the server the way a framework does: in process for most tests (the MCP
 SDK connects a client to a server object directly), and once over stdio against the real `aip

@@ -1,4 +1,4 @@
-"""`make_procedure` (plan aip-dev#1, K1): the procedure that writes procedures, an example
+"""`make_procedure` (plan aip#29, K1): the procedure that writes procedures, an example
 under `examples/language/make_procedure/` and the one bundle that ships inside the package.
 
 The shipped `.rl` is the folder's bundle; a server's fresh store has it as `make_procedure@1`

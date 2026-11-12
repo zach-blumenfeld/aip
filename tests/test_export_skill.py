@@ -1,4 +1,4 @@
-"""`aip export <target> --skill DIR` (plan aip-dev#1, K2): a procedure as a plain Agent Skill.
+"""`aip export <target> --skill DIR` (plan aip#29, K2): a procedure as a plain Agent Skill.
 
 The page is rendered from the graph alone, so every example is rendered and held to the Agent
 Skills format (frontmatter `name` and `description` within their limits) and to the walk: every

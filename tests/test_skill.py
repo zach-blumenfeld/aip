@@ -1,4 +1,4 @@
-"""The `aip` skill (`skills/aip/`, plan aip-dev#1, K1): the one page an agent reads to run and
+"""The `aip` skill (`skills/aip/`, plan aip#29, K1): the one page an agent reads to run and
 to write procedures, with the language on one page beside it. It is a plain Agent Skill, so its
 frontmatter must pass the Agent Skills rules; every `aip <command>` it shows must exist; the
 example program on the language page must compile; and `aip skill install` must write it, take
