@@ -299,9 +299,14 @@ and `run_file` when `resumable` is true.
 | `requires_unmet` | the machine lacks what the procedure's `Requires` names, checked before the first script runs | `missing` |
 | `no_decision_model` | a `Decide` step and this client has no decision model configured | |
 | `decision_model_failed` | the decision model failed on a `Decide` step (unreachable, refused the key, a bad reply) | `model`, `endpoint`, `cause` |
+| `budget_exhausted` | a runah run with a token budget (`aip runah --budget-tokens N`) has spent it, its children's tokens included; checked before each step and each task's chat, so `step` is the one it would have run next. Resumable: `aip runah <run_id> --budget-tokens M` with a larger M carries it on | `budget`, `spent` |
 | `loop_cap` | a `For` (or fold) given more items than `At_Most`, or an `Until` loop at its cap with `Else_Fail`; `step` is `null` and `loop` names the loop; never resumable | `loop`, `cap` (the most passes, or items, allowed), `count` (the passes run, or the items given) |
 | `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done or that failed in a way a retry would only repeat (`loop_cap`, `script_not_run`) | |
 | `server` | anything else: a bug, an unreachable server | |
+
+`aip runah` refuses before anything runs, with `depth_exceeded` (no `run_id`), a run that would
+start deeper than `aip config runah --max-depth` (2): one started from a script of a run that was
+itself started from a script, and so on (`docs/runah.md`, The orchestrator).
 
 A step that failed while running leaves the run at the state before it, so
 `aip resume <run_id>` with no answers retries it once the cause is fixed. The retry runs the
@@ -533,6 +538,18 @@ a check that failed reads `scripts/policy_check.py -> passed=false`. A paused ru
 step it waits at and since when, a failed one with the error and whether a retry can help. A
 run paused inside a `For` lists the passes it has made so far, one row per entry as for a
 finished loop; only the loop's own exit row waits for the loop to end.
+
+A run started from a script of another run (the orchestrator, `docs/runah.md`) says so under its
+header, `parent    run 9ec32cfa18da40e3 at act pass 0   depth 1`, and a run whose scripts started
+runs lists each under the `Execute` row that started it, `  -> run 6ac661845f4944aa  slow  done`,
+with the tokens it spent when runah's model spent any. A run with a token budget, or whose
+model spent tokens, has a `tokens` line: the total, what was spent in the run and in its children,
+and the budget. In `--json` the same are `parent` (`{run_id, step, pass}`) and `depth`,
+`children` (`[{run_id, name, status, draft, step, pass, tokens, started}]`, absent when there are
+none), `tokens` (`{own, children, total}`) and `budget_tokens`. A script that starts a run and
+must not outlive its own cap waits on the child's run file, or on a file the child's process
+writes when it stops, rather than on the call: `Client.runah` blocks until the run stops, and a
+child can take longer than the cap (`assist`'s `act` does this).
 
 ## `aip audit` and `aip export runs`
 

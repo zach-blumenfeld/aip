@@ -478,7 +478,7 @@ def test_runs_are_recorded_by_name_and_as_drafts(served, fake, tmp_path):
     assert isinstance(remote, sdk.RunRecord) and remote.identity["user"] == "zach" and remote.status == "done"
     queries = served.audit()
     assert [q.query for q in queries] == [
-        "confidence-fired", "failing-aggregations", "model-answers", "agent-work", "failing-scripts", "untaken-branches", "repeated-cycles",
+        "confidence-fired", "failing-aggregations", "model-answers", "agent-work", "spawned-runs", "failing-scripts", "untaken-branches", "repeated-cycles",
         "agent-routes", "missing-fields", "empty-results", "unused-data", "cycles", "lineage"]
     assert all(isinstance(q, sdk.AuditQuery) and q.builtin and q.description for q in queries)
     asked = served.audit("model-answers", name="billing_support", agent="tests")

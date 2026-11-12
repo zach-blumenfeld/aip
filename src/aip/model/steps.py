@@ -30,8 +30,14 @@ from aip.model.types import (
     ANSWER_FIELDS, JSON, InvalidInput, InvalidOutput, LoopCap, NoBranch, ScriptFailed, ScriptTimeout, branch_key,
     conforms, describe, extra_fields, normalise,
 )
+from aip.model.environment import SCRIPT_TIMEOUT_ENV
 
 WORKDIR = "AIP_WORKDIR"
+# What a script is told about where it runs (runtime.md, Scripts), so a run it starts knows its
+# parent: the run, the step and its innermost pass; and what that run inherits: its depth among
+# nested runah runs and the tokens left of the parent's budget.
+RUN_ENV, STEP_ENV, PASS_ENV = "AIP_RUN_ID", "AIP_STEP", "AIP_PASS"
+DEPTH_ENV, BUDGET_ENV = "AIP_RUNAH_DEPTH", "AIP_RUNAH_BUDGET_TOKENS"
 PYTHON = "python"
 INDEX, ITERATIONS = "index", "iterations"   # the runtime's keys (spec 2.6)
 PASS_SUFFIX = "__"                           # `follows__3`: question `follows` of pass 3 in a batched call (runtime.md)
@@ -450,10 +456,14 @@ def launch(command: str | None, script: Path, python: str) -> list[str]:
 
 
 def run_script(step: str, script: str, argv: list[str], stdin: JSON, cwd: Path, timeout: float | None,
-               workdir: Path | None) -> JSON:
+               workdir: Path | None, env: JSON | None = None) -> JSON:
     """Run one script under the stdin/stdout contract and return the JSON object it printed.
-    `ScriptTimeout`, or `ScriptFailed` on a non-zero exit or output that is not one JSON object."""
-    env = {**os.environ, WORKDIR: str(Path(workdir or Path.cwd()).resolve())}
+    `ScriptTimeout`, or `ScriptFailed` on a non-zero exit or output that is not one JSON object.
+    The script sees this process's environment, `env` over it, `AIP_WORKDIR`, and
+    `AIP_SCRIPT_TIMEOUT`, the cap it runs under (`0` for none), so a script that waits on
+    something can stop waiting in time."""
+    env = {**os.environ, **(env or {}), WORKDIR: str(Path(workdir or Path.cwd()).resolve()),
+           SCRIPT_TIMEOUT_ENV: "0" if timeout is None else f"{timeout:g}"}
     try:
         proc = subprocess.run(argv, input=json.dumps(stdin), capture_output=True, text=True, cwd=cwd, timeout=timeout, env=env)
     except subprocess.TimeoutExpired as err:
@@ -474,7 +484,7 @@ def run_script(step: str, script: str, argv: list[str], stdin: JSON, cwd: Path, 
 
 
 def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python: str | None, timeout: float | None,
-            workdir: Path | None) -> tuple[JSON, JSON, float]:
+            workdir: Path | None, env: JSON | None = None) -> tuple[JSON, JSON, float]:
     """Run the step's script from the unpacked bundle at `root`: stdin is `{"state": the Read
     keys, "assets": the Use files by stem, "expects": the step's own Produce keys with their types}`, stdout the
     `Produce` keys. Returns the checked outputs, the stdin sent, and the seconds taken."""
@@ -485,7 +495,7 @@ def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python
     stdin = {"state": project(step, state), "assets": assets_of(procedure, step, root), "expects": expects(procedure, step)}
     argv = launch(step.properties.get("command"), path, python or sys.executable)
     began = time.monotonic()
-    raw = run_script(step.name, script.path, argv, stdin, root, timeout, workdir)
+    raw = run_script(step.name, script.path, argv, stdin, root, timeout, workdir, env)
     seconds = round(time.monotonic() - began, 3)
     try:
         outputs = check_outputs(procedure, step, raw, source="script")

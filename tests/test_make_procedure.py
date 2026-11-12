@@ -26,7 +26,7 @@ INPUTS = {"name": "echo", "description": "Hand back the one string it is given."
 BROKEN = 'procedure echo "Hand back a string."\nstart "The string." {\n  a: string\n  next nowhere\n}\nend "The string." {\n  read a\n}\n'
 WORKING = BROKEN.replace("nowhere", "end")
 CANONICAL = 'Procedure echo\n  "Hand back a string."\n\nStart "The string." {\n  a: string\n  Next_Step end\n}\n\nEnd "The string." {\n  Read a\n}\n'
-SHIPPED = ["build_procedure", "edit_procedure", "make_procedure"]           # A1 added the first two
+SHIPPED = ["assist", "build_procedure", "edit_procedure", "make_procedure"]  # A1 added build and edit, R7 assist
 REBUILD = "uv run aip compile examples/language/{0} -o src/aip/server/bundles/{0}.rl"
 
 
@@ -54,7 +54,7 @@ def test_a_fresh_store_has_it_and_upgrade_offers_it_to_one_that_does_not():
     fresh = Served(builtins=True)
     client = aip.Client(Server("http://testserver", session=fresh), agent="tests")
     assert [(e.name, e.resolves) for e in client.list()] == [(name, "1") for name in SHIPPED]
-    entry = client.list()[2]
+    entry = client.list()[3]
     assert entry.description.startswith("Build an AIP procedure from a description")
     again = client.upgrade()
     assert [(p.name, p.revision, p.existed) for p in again] == [(name, "1", True) for name in SHIPPED], "the server had them: nothing changes"

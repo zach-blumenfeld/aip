@@ -24,6 +24,10 @@ Over the windowed runs:
   and the tool calls and tokens they took, most tokens first. `work` says whose account it is:
   `observed` (runah watched its own model's chat) or `reported` (an outside agent said so with
   `aip resume --work`, unchecked).
+- `spawned-runs`: per (orchestrator, `Execute` step, procedure it started), how many runs its
+  scripts started (the `SPAWNED` edges: `docs/runah.md`, The orchestrator), how many of them are
+  done, paused and failed, and the model tokens they spent, children's included; most runs first.
+  The windowed runs are the orchestrators, so `name` is the orchestrator's.
 - `failing-scripts`: per (procedure, `Execute` step, error), the runs that stand failed at the
   step (`script_failed`, `timeout`, `requires_unmet`), with the script and the latest message. A
   run that failed there and was resumed past it no longer counts: the record keeps where a run
@@ -116,6 +120,17 @@ WHERE e.work IS NOT NULL
 RETURN r.name AS name, e.step AS step, e.agent AS agent, e.model AS model, e.work AS work, count(e) AS tasks,
        sum(e.tool_calls) AS tool_calls, sum(e.tokens) AS tokens
 ORDER BY tokens DESC, name, step, work
+LIMIT $limit
+"""
+
+SPAWNED_RUNS = WINDOW + """
+MATCH (r)-[:HAS_ENTRY]->(e:Entry {kind: 'Execute'})-[:SPAWNED]->(c:Run)
+RETURN r.name AS name, e.step AS step, c.name AS procedure, count(c) AS runs,
+       sum(CASE WHEN c.status = 'done' THEN 1 ELSE 0 END) AS done,
+       sum(CASE WHEN c.status = 'paused' THEN 1 ELSE 0 END) AS paused,
+       sum(CASE WHEN c.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+       sum(coalesce(c.tokens, 0)) AS tokens, collect(c.run_id) AS run_ids
+ORDER BY runs DESC, name, step, procedure
 LIMIT $limit
 """
 
@@ -271,6 +286,8 @@ QUERIES: dict[str, tuple[str, Any, tuple[str, ...]]] = {
     "model-answers": ("What the decision model answered in the last N runs, per question, least confident first.", (MODEL_ANSWERS,), ()),
     "agent-work": ("What answering Task_Agent steps took in the last N runs: tasks, tool calls and tokens per step, agent and "
                    "model, observed by runah or reported by the agent.", (AGENT_WORK,), ()),
+    "spawned-runs": ("The procedures the last N runs started from their scripts (an orchestrator's children): how many, how "
+                     "they stand, and the tokens they spent.", (SPAWNED_RUNS,), ()),
     "failing-scripts": ("Execute steps that runs among the last N stand failed at, most failures first, with the latest message.",
                         (FAILING_SCRIPTS,), ()),
     "untaken-branches": ("Route branches none of the last N runs took.", (UNTAKEN_BRANCHES,), ()),

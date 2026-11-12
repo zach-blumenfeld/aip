@@ -28,9 +28,9 @@ test("search ranks by what a procedure does", async ({ page }) => {
 test("a draft is not in the catalog; the toggle lists it apart, with its runs", async ({ page }) => {
   run(DRAFT_DIR, { message: "A folder nobody published." });
   await page.goto("./");
-  // The five the harness published, and the three built-ins every server publishes when it first starts.
-  await expect(page.locator('[data-testid="catalog-row"]')).toHaveCount(8);
-  for (const builtin of ["make_procedure", "build_procedure", "edit_procedure"]) {
+  // The five the harness published, and the four built-ins every server publishes when it first starts.
+  await expect(page.locator('[data-testid="catalog-row"]')).toHaveCount(9);
+  for (const builtin of ["make_procedure", "build_procedure", "edit_procedure", "assist"]) {
     await expect(page.locator(row(builtin))).toContainText("@1");
   }
   await expect(page.getByTestId("drafts")).toHaveCount(0);

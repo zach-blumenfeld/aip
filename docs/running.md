@@ -251,6 +251,19 @@ the arguments, seconds), its tokens, and `work: "observed"`. The run's own `agen
 launched it. The model's endpoint is any that serves OpenAI Chat Completions; the details are in
 [`docs/runah.md`](runah.md).
 
+Two bounds matter when runs start other runs, as the orchestrator `assist` does (`aip runah
+assist -i '{"task": "...", "outcome": ""}'`; `docs/runah.md`, The orchestrator):
+
+- **Depth.** A run started from a script of another run is that run's child, one level deeper;
+  `aip runah` refuses to start one deeper than `aip config runah --max-depth N` (default 2) with
+  `depth_exceeded`. `aip run` is not bounded by it.
+- **Budget.** `aip runah ... --budget-tokens N` (or `aip config runah --budget-tokens N`, or
+  `AIP_RUNAH_BUDGET_TOKENS`) bounds the model tokens the run may spend, its children's included.
+  Past it the run fails with `budget_exhausted` before its next step; `aip runah <run_id>
+  --budget-tokens M` with a larger M carries it on. `aip runs <run_id>` shows what was spent,
+  `tokens  420 (own 0, children 420)   budget 400`, and lists each child under the step that
+  started it.
+
 ## Where runs are kept, and how to look at them
 
 Every stop writes the run file, `~/.aip/runs/<run_id>.json`: the whole run, its state, its

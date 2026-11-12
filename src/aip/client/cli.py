@@ -17,7 +17,7 @@
     aip server                          serve the catalog and the record of runs
     aip mcp                             the same client as an MCP server, for agent frameworks and coding agents
     aip skill install | list | remove   the `aip` skill, the page an agent reads to run and write procedures
-    aip upgrade                         publish the procedures this package ships (`make_procedure`, `build_procedure`, `edit_procedure`) to the server
+    aip upgrade                         publish the procedures this package ships (`make_procedure`, `build_procedure`, `edit_procedure`, `assist`) to the server
 
 Every client command is a wrapper over the SDK (`aip.Client`, `docs/sdk.md`): it parses its
 arguments, calls one SDK method and prints the result. `run`, `resume` and `runah` print one
@@ -303,6 +303,11 @@ def runah_command(argv: list[str]) -> int:
                         help="the run's working directory: where scripts read and write, and the only place the model's tools "
                              "read and write (default the current directory)")
     parser.add_argument("--force", action="store_true", help="run `name@rev` although that revision is retired")
+    parser.add_argument("--budget-tokens", type=int, default=None, metavar="N",
+                        help="the most model tokens this runah run may spend, its children's included (runs its scripts start, "
+                             "the orchestrator's); past it the run fails with budget_exhausted before its next step. For a run id it "
+                             "replaces the run's budget, so a larger one carries it on (default `aip config runah --budget-tokens`, "
+                             "AIP_RUNAH_BUDGET_TOKENS, else none). Not the per-task cap, --max-tokens-per-task")
     _run_flags(parser, runah=True)
     args = parser.parse_args(argv)
     client = _client()
@@ -311,7 +316,8 @@ def runah_command(argv: list[str]) -> int:
         inputs = _read_json(args.inputs, "--inputs")
         return client.runah(args.target, inputs, _read_json(args.answers, "--answers"), human=args.human, batch=args.batch,
                             agent=args.agent, session=args.session, workdir=args.workdir, on_step=on_step, force=args.force,
-                            on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True))
+                            on_warning=lambda text: print(f"aip: warning: {text}", file=sys.stderr, flush=True),
+                            budget_tokens=args.budget_tokens)
     return _outcome(go, client, args.progress, args.debug, starting=not client._names_run(args.target))
 
 
@@ -671,9 +677,18 @@ def config_runah_command(argv: list[str]) -> int:
     parser.add_argument("--max-tokens-per-task", type=int, default=None, metavar="N",
                         help="the most tokens one task's chat may spend, prompt and completion over all its calls, before "
                              "runah gives up on it (default 500000); scripts are capped by `aip config --script-timeout`")
+    parser.add_argument("--max-depth", type=int, default=None, metavar="N",
+                        help="how deep runah runs may nest: a run started from a script (or the SDK in a script) of another run is "
+                             "one deeper than it, and `aip runah` refuses to start one deeper than N (default 2; 0: none inside "
+                             "another run). Bounds nested runah runs only, not `aip run`, not loops")
+    parser.add_argument("--budget-tokens", type=int, default=None, metavar="N",
+                        help="the most model tokens one runah run may spend, its children's included, unless `aip runah "
+                             "--budget-tokens` says otherwise; past it the run fails with budget_exhausted (default none; 0 "
+                             "forgets it; AIP_RUNAH_BUDGET_TOKENS overrides, and is what a run's scripts are given as what is left)")
     args = parser.parse_args(argv)
     values = {"model_uri": args.model_uri, "model_name": args.model_name, "model_key": args.model_key,
-              "max_tool_calls_per_task": args.max_tool_calls_per_task, "max_tokens_per_task": args.max_tokens_per_task}
+              "max_tool_calls_per_task": args.max_tool_calls_per_task, "max_tokens_per_task": args.max_tokens_per_task,
+              "max_depth": args.max_depth, "budget_tokens": args.budget_tokens}
     writes = any(v is not None for v in values.values())
     try:
         s = configure_runah(**values) if writes else settings()
@@ -686,7 +701,7 @@ def config_runah_command(argv: list[str]) -> int:
 
 
 def upgrade_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) "
+    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (make_procedure, build_procedure, edit_procedure, assist) "
                                      "to the configured server. A server publishes them itself when it first starts; this is "
                                      "for a server that runs an older aip than this one. A bundle the server already holds "
                                      "is left as it is.")
@@ -1003,7 +1018,7 @@ SUMMARIES = {
     "server": "serve the catalog and the record of runs over HTTP",
     "mcp": "serve this client to an MCP client: search, describe, compile, run, resume, runah and pull as tools",
     "skill": "install the aip skill, the page an agent reads to run and write procedures, into the agents here",
-    "upgrade": "publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) to the server",
+    "upgrade": "publish the procedures this package ships (make_procedure, build_procedure, edit_procedure, assist) to the server",
 }
 
 

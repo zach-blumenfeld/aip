@@ -25,6 +25,7 @@ method returns a typed value and raises an `AipError` subclass.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,13 +37,15 @@ from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 
 from aip.client import bundles, config
 from aip.client.config import CONFIGURE_HINT, Settings, configure, configure_runah, settings
-from aip.client.runs import RunFile, answer_hint, error_outcome, local_runs, new_run_id, outcome, progress_line, run_path, RUN_ID
+from aip.client.runs import (RunFile, add_child, answer_hint, children_tokens, error_outcome, local_runs, new_run_id, outcome,
+                             own_tokens, progress_line, run_path, RUN_ID)
 from aip.client.server import Server, ServerError, connect
 from aip.errors import AipError
 from aip.model import DONE, FAILED, PAUSED, Engine, InvalidOutput, NotPaused, Procedure, Run, StepError, TypeSafeResolver
 from aip.model.engine import _where, utc_now
+from aip.model.steps import BUDGET_ENV, DEPTH_ENV, PASS_ENV, RUN_ENV, STEP_ENV
 from aip.model.steps import start as check_inputs
-from aip.model.types import resumable
+from aip.model.types import BudgetExhausted, StepError as _StepError, resumable
 
 JSON = dict[str, Any]
 EXAMPLE_VALUES = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "list": [], "object": {}}
@@ -93,6 +96,13 @@ class InvalidBundle(AipError):
 
     def __init__(self, error: BundleError):
         super().__init__(error.message, error.code)
+
+
+class DepthExceeded(AipError):
+    """A runah run that would start deeper than `aip config runah --max-depth` allows: started
+    from a script of a run that was itself started from a script, and so on (`AIP_RUNAH_DEPTH`).
+    Refused before anything runs."""
+    kind = "depth_exceeded"
 
 
 class RunError(AipError):
@@ -454,6 +464,55 @@ OnStep = Callable[[JSON], None]
 OnPause = Callable[[Paused], Any]
 
 
+@dataclass
+class _Lineage:
+    """A run among the runs around it (`docs/runah.md`, The orchestrator): its id, its depth, its
+    token budget, who runs it. It gives the engine what a script of the run is started with
+    (`env`), so a run the script starts knows its parent, is one deeper, inherits who runs it
+    and what is left of the budget; and checks the budget before every step (`guard`)."""
+    run_id: str
+    depth: int
+    budget: int | None
+    identity: JSON
+    home: Path | None
+
+    def spent(self, run: Run) -> tuple[int, int]:
+        """The tokens runah's model spent in this run, and those of the runs started from it."""
+        return own_tokens(run.to_dict()), children_tokens(self.run_id, self.home)
+
+    def env(self, run: Run) -> JSON:
+        env = {RUN_ENV: self.run_id, DEPTH_ENV: str(self.depth + 1)}
+        if self.home is not None:
+            env["AIP_HOME"] = str(Path(self.home).absolute())
+        for key, var in (("agent", config.AGENT_ENV), ("session", config.SESSION_ENV)):
+            if self.identity.get(key):
+                env[var] = str(self.identity[key])
+        if self.budget is not None:
+            env[BUDGET_ENV] = str(max(self.budget - sum(self.spent(run)), 1))
+        return env
+
+    def guard(self, run: Run, step: str | None) -> None:
+        if self.budget is None:
+            return
+        spent = sum(self.spent(run))
+        if spent > self.budget:
+            raise BudgetExhausted(step, self.budget, spent)
+
+
+def _parent_from_environment() -> tuple[JSON | None, int]:
+    """The parent a new run has when a script of another run starts it (the engine sets
+    `AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS` and `AIP_RUNAH_DEPTH` for its scripts), and its depth."""
+    parent_id = os.environ.get(RUN_ENV, "").strip()
+    parent = None
+    if parent_id and RUN_ID.fullmatch(parent_id):
+        raw_pass = os.environ.get(PASS_ENV, "").strip()
+        parent = {"run_id": parent_id, "step": os.environ.get(STEP_ENV) or None,
+                  "pass": int(raw_pass) if raw_pass.isdigit() else None}
+    raw_depth = os.environ.get(DEPTH_ENV, "").strip()
+    depth = int(raw_depth) if raw_depth.isdigit() else (1 if parent else 0)
+    return parent, depth
+
+
 # --------------------------------------------------------------------------- client
 
 
@@ -629,20 +688,26 @@ class Client:
 
     # ------------------------------------------------------------------ runs
 
-    def _engine(self, workdir: Path, batch: int | None, on_step: OnStep | None = None, scripts: bool = True) -> Engine:
+    def _engine(self, workdir: Path, batch: int | None, on_step: OnStep | None = None, scripts: bool = True,
+                lineage: _Lineage | None = None) -> Engine:
         """The engine for one call. `on_step` gets each history entry's progress line the
         moment the entry is written, so a batch of `For` passes reports as it goes. A script
-        may run `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`; 300 by default)."""
+        may run `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`; 300 by default).
+        `lineage` is the run's place among others: the variables its scripts get, its budget."""
         s = self.settings
         resolver = TypeSafeResolver.from_environment(client=self.decision_client, api_key=s.decision_model_key, url=s.decision_model_url)
         on_entry = (lambda entry: on_step(progress_line(entry))) if on_step is not None else None
         return Engine(resolver, home=self.home, workdir=workdir, batch=batch or s.batch, on_entry=on_entry, timeout=s.script_timeout,
-                      scripts=scripts)
+                      scripts=scripts, script_env=lineage.env if lineage else None,
+                      guard=lineage.guard if lineage and lineage.budget is not None else None)
+
+    def _lineage(self, handle: RunFile) -> _Lineage:
+        return _Lineage(handle.run_id, handle.depth, handle.budget_tokens, dict(handle.run.get("identity") or {}), self.home)
 
     def run(self, target: str | Path, inputs: JSON, *, batch: int | None = None, agent: str | None = None,
             session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
             on_pause: OnPause | None = None, force: bool = False, agent_version: str | None = None,
-            on_warning: Callable[[str], None] | None = None, scripts: bool = True) -> Result:
+            on_warning: Callable[[str], None] | None = None, scripts: bool = True, run_id: str | None = None) -> Result:
         """Run `target` (a program directory, an `.rl`, or `name[@rev]`) on `inputs`, the Start
         step's object, until it pauses or is done. `workdir` is where its scripts read and write
         files (default the current directory); `batch` how many `For` passes run at once;
@@ -656,27 +721,47 @@ class Client:
         False the run executes no script: it stops at the first `Execute`, before its script
         starts, with the error `script_not_run` (not resumable), while `Decide`, routes and
         loops run and a `Task_Agent` pauses as usual; such a run is a trial and is not recorded
-        on the server. Raises `RunError` when the run stops on an error, `CompileError`,
-        `InvalidBundle`, `NotFound`, `RetiredRevision` or `NoServer` when the target cannot be run."""
+        on the server. `run_id` is the id to give the new run, for a caller that must know it before
+        the call returns (a script that starts a run in another process and waits on its run
+        file); a fresh one by default. A run started from a script of another run is its child:
+        it carries `parent` and `depth` (`docs/runah.md`, The orchestrator). Raises `RunError` when
+        the run stops on an error, `CompileError`, `InvalidBundle`, `NotFound`, `RetiredRevision`
+        or `NoServer` when the target cannot be run."""
         return self._start(target, inputs, batch=batch, agent=agent, session=session, workdir=workdir, on_step=on_step,
-                           on_pause=on_pause, force=force, agent_version=agent_version, on_warning=on_warning, scripts=scripts)
+                           on_pause=on_pause, force=force, agent_version=agent_version, on_warning=on_warning, scripts=scripts,
+                           run_id=run_id)
 
     def _start(self, target: str | Path, inputs: JSON, *, batch: int | None, agent: str | None, session: str | None,
                workdir: str | Path | None, on_step: OnStep | None, on_pause: OnPause | None, force: bool,
                agent_version: str | None, on_warning: Callable[[str], None] | None, scripts: bool = True,
-               human: list[str] | None = None, runah: bool = False) -> Result:
+               human: list[str] | None = None, runah: bool = False, run_id: str | None = None,
+               budget_tokens: int | None = None) -> Result:
         """`run` and `runah` from a target: open it, start the run, settle it."""
         if not isinstance(inputs, dict):
             raise InvalidInput(f"the inputs are a JSON object, got {type(inputs).__name__}")
         if batch is not None and batch < 1:
             raise InvalidInput(f"the batch size is at least 1, not {batch}")
+        if run_id is not None and (not RUN_ID.fullmatch(run_id) or run_path(run_id, self.home).exists()):
+            raise InvalidInput(f"{run_id!r} cannot be a new run's id: it is 4 to 64 letters, digits, - or _, and no run here has it")
+        parent, depth = _parent_from_environment()
+        if runah and depth > self.settings.max_depth:
+            raise DepthExceeded(f"this runah run would be {depth} deep (started from a script of run {(parent or {}).get('run_id')}, "
+                                f"itself {depth - 1} deep), past the max depth of {self.settings.max_depth}; "
+                                "`aip config runah --max-depth N` bounds runah runs started inside other runs")
+        if budget_tokens is not None and budget_tokens < 1:
+            raise InvalidInput(f"the token budget is at least 1, not {budget_tokens}")
+        budget = (budget_tokens if budget_tokens is not None else self.settings.budget_tokens) if runah else None
         bundle, origin = self._open(target)
         if origin.get("retired") and not force:
             raise RetiredRevision(f"{bundle.name}@{origin['revision']} is retired: it is kept for the runs that reference it and no "
                           "longer runs by default; run it anyway with force (`aip run ... --force`), or publish it again to bring it back")
         where = Path(workdir if workdir is not None else Path.cwd()).resolve()
-        engine = self._engine(where, batch, on_step, scripts=scripts)
         identity = config.identity(agent, session, default_agent=self.agent, agent_version=agent_version)
+        run_id = run_id or new_run_id()
+        lineage = _Lineage(run_id, depth, budget, identity, self.home)
+        engine = self._engine(where, batch, on_step, scripts=scripts, lineage=lineage)
+        if parent:
+            add_child(parent["run_id"], run_id, self.home)
         with Procedure.load(bundle) as procedure:
             if runah:
                 self._check_human(procedure, human or [])
@@ -688,10 +773,10 @@ class Client:
                 run = engine.start(procedure, inputs, identity=identity)
             except StepError as exc:  # the inputs do not fit: nothing ran, nothing to resume
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc
-            handle = RunFile(new_run_id(), bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
+            handle = RunFile(run_id, bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
                              origin["revision"], server=self.server.url if self.server and scripts else None,
-                             human=human or None, scripts=scripts)
-            answerer = self._answerer(engine, procedure, where, on_step) if runah else None
+                             human=human or None, scripts=scripts, parent=parent, depth=depth, budget_tokens=budget)
+            answerer = self._answerer(engine, procedure, where, on_step, lineage) if runah else None
             return self._settle(engine, run, handle, on_pause, warning, answerer)
 
     def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, agent: str | None = None,
@@ -711,7 +796,8 @@ class Client:
         answers, kept on each task's entry marked `reported` (`model`, `tool_calls`, `tokens`,
         `seconds`; one object for a one-task pause, else keyed by task index like the answers)."""
         handle, path, bundle = self._reopen(run)
-        engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts)
+        engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts,
+                              lineage=self._lineage(handle))
         with Procedure.load(bundle) as procedure:
             state = Run.from_dict(procedure, handle.run)
             state = self._apply(engine, state, answers, handle, path, agent, session, work=work)
@@ -721,7 +807,8 @@ class Client:
               human: list[str] | str | None = None, batch: int | None = None, agent: str | None = None,
               session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
               force: bool = False, agent_version: str | None = None,
-              on_warning: Callable[[str], None] | None = None) -> Result:
+              on_warning: Callable[[str], None] | None = None, budget_tokens: int | None = None,
+              run_id: str | None = None) -> Result:
         """Run ahead: run `target` as `run` does, or carry on the run a run id, a run file or a
         result names, and keep going. Scripts, `Decide`, routes and loops run exactly as in
         `run`; at a `Task_Agent` pause runah's chat model answers each task in one tool-using
@@ -736,20 +823,34 @@ class Client:
         "runah", "model": <the id the endpoint reported>}` with its tool calls and tokens,
         marked `observed`; the run's own identity stays whoever launched it (`agent`, `session`).
         Refused before anything runs when runah has no model key (`aip config runah
-        --model-key KEY`, `AIP_RUNAH_MODEL_KEY`)."""
+        --model-key KEY`, `AIP_RUNAH_MODEL_KEY`).
+
+        `budget_tokens` bounds the model tokens the run may spend, its children's included (the
+        runs its scripts start; default `aip config runah --budget-tokens`, `AIP_RUNAH_BUDGET_TOKENS`,
+        else none): past it the run fails with `budget_exhausted` before its next step, and a
+        later call with a larger budget carries it on. A run started from a script of another run
+        is one deeper than it, and one deeper than `aip config runah --max-depth` (2) is refused
+        (`DepthExceeded`). `run_id` names a new run, as for `run`."""
         if self.agent_chat is None and not self.settings.runah_configured:
             raise InvalidInput(f"aip runah needs a chat model to answer the tasks: {config.RUNAH_HINT}")
         if self._names_run(target):
             if inputs is not None:
                 raise InvalidInput("inputs start a run; a run that is already going takes answers, not inputs")
+            if run_id is not None:
+                raise InvalidInput("run_id names a new run; this one has its id")
             handle, path, bundle = self._reopen(target)
             if human is not None:
                 handle.human = _human(human) or None
-            engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts)
+            if budget_tokens is not None:
+                if budget_tokens < 1:
+                    raise InvalidInput(f"the token budget is at least 1, not {budget_tokens}")
+                handle.budget_tokens = budget_tokens
+            engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts,
+                                  lineage=self._lineage(handle))
             with Procedure.load(bundle) as procedure:
                 self._check_human(procedure, handle.human or [])
                 state = Run.from_dict(procedure, handle.run)
-                answerer = self._answerer(engine, procedure, Path(handle.workdir), on_step)
+                answerer = self._answerer(engine, procedure, Path(handle.workdir), on_step, self._lineage(handle))
                 if answers is None and state.status == PAUSED:
                     return self._settle(engine, state, handle, None, None, answerer, ask=True)  # the model answers the pause that stands
                 state = self._apply(engine, state, answers, handle, path, agent, session)
@@ -758,7 +859,7 @@ class Client:
             raise InvalidInput("answers go to a run that is paused: give its run id, not a procedure")
         return self._start(target, {} if inputs is None else inputs, batch=batch, agent=agent, session=session, workdir=workdir,
                            on_step=on_step, on_pause=None, force=force, agent_version=agent_version, on_warning=on_warning,
-                           human=_human(human), runah=True)
+                           human=_human(human), runah=True, run_id=run_id, budget_tokens=budget_tokens)
 
     def _names_run(self, target: Any) -> bool:
         """Whether a `runah` target is a run (a result, a run id with a run file here, or a run
@@ -835,6 +936,8 @@ class Client:
         stopped: JSON | None = None
         while True:
             handle.run = run.to_dict()
+            own, children = own_tokens(handle.run), children_tokens(handle.run_id, self.home)
+            handle.tokens = {"own": own, "children": children, "total": own + children} if own or children else None
             recorded = self._record(handle)
             path = handle.save(home=self.home)
             block = outcome(run, handle.run_id, path, recorded)
@@ -868,13 +971,16 @@ class Client:
 
     # ------------------------------------------------------------------ runah's model
 
-    def _answerer(self, engine: Engine, procedure: Procedure, workdir: Path, on_step: OnStep | None) -> Any:
+    def _answerer(self, engine: Engine, procedure: Procedure, workdir: Path, on_step: OnStep | None,
+                  lineage: _Lineage | None = None) -> Any:
         from aip.model.answerer import ChatClient, ModelAnswerer
 
         s = self.settings
         chat = self.agent_chat if self.agent_chat is not None else ChatClient(s.runah_model_endpoint, s.runah_model_key)
-        return ModelAnswerer(chat, s.runah_model, workdir, engine.files(procedure), max_tool_calls=s.max_tool_calls_per_task,
-                             max_tokens=s.max_tokens_per_task, on_event=on_step)
+        answerer = ModelAnswerer(chat, s.runah_model, workdir, engine.files(procedure), max_tool_calls=s.max_tool_calls_per_task,
+                                 max_tokens=s.max_tokens_per_task, on_event=on_step)
+        answerer.lineage = lineage
+        return answerer
 
     def _check_human(self, procedure: Procedure, human: list[str]) -> None:
         """Every human step names a `Task_Agent` of the procedure."""
@@ -893,7 +999,14 @@ class Client:
         pause = run.pause
         answers: JSON = {}
         details: dict[int, JSON] = {}
+        lineage: _Lineage | None = getattr(answerer, "lineage", None)
         for task in pause["tasks"]:
+            if lineage is not None:
+                try:
+                    lineage.guard(run, pause["step"])       # the budget, before each chat
+                except _StepError as err:
+                    run.status, run.error = FAILED, {**err.to_dict(), **_where(run)}
+                    return run, None
             began = time.monotonic()
             try:
                 done = answerer.answer(pause["step"], task, len(pause["tasks"]), answer_hint([task]),
@@ -964,7 +1077,7 @@ class Client:
         """One run: the local run file when this machine has it, else the server's record."""
         known = RUN_ID.fullmatch(run_id) is not None
         if known and run_path(run_id, self.home).is_file():
-            return _record(RunRecord, RunFile.load(run_path(run_id, self.home)).record())
+            return _record(RunRecord, RunFile.load(run_path(run_id, self.home)).record(self.home))
         if self.server is None:
             raise InvalidInput(f"no run {run_id} on this machine" + (f" (looked for {run_path(run_id, self.home)})" if known else ""))
         return _record(RunRecord, self.server.run(run_id))
@@ -1010,7 +1123,7 @@ class Client:
         return Published(reply["name"], str(reply["revision"]), reply["bundle_id"], bool(reply.get("existed")))
 
     def upgrade(self) -> list[Published]:
-        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`, `build_procedure`, `edit_procedure`) to
+        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`, `build_procedure`, `edit_procedure`, `assist`) to
         the server, as `publish` would: a bundle the server already holds keeps its revision. A
         server does this for itself when it first starts; this is for one that runs an older
         package than this client."""
@@ -1182,7 +1295,7 @@ def describe_procedure(procedure: Procedure) -> JSON:
 
 
 __all__ = [
-    "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
+    "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "DepthExceeded", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
     "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired", "RetiredRevision",
     "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "SkillExported", "Task", "configure", "configure_runah",
     "describe_procedure", "reported_work", "settings",

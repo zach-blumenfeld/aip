@@ -15,6 +15,7 @@ and a bundle in an `.rl` are the same nodes and edges), and beside it the server
     (:Run)-[:HAS_ENTRY]->(:Entry {run_id, seq, step, kind, pass, at, seconds, ...})-[:THEN]->(:Entry)
     (:Entry)-[:AT]->(:Step | :Loop)                      the node of the bundle's graph the entry ran
     (:Entry)-[:GAVE]->(:Answer {name, value, confidence, source, ...})-[:ANSWERS]->(:Question | :Aggregation)
+    (:Entry {kind: 'Execute'})-[:SPAWNED]->(:Run)       a run the entry's script started (its child: `parent_run`, ...)
     (:AuditQuery {name, description, cypher, stored_at})   a query someone stored (`aip.server.audit`)
 
 A bundle is merged by its id: storing one the store holds is a no-op. A `Bundle` with no
@@ -28,7 +29,10 @@ run's own fields on the `Run` node, one `Entry` per history entry (only the entr
 new or changed are written), and one `Answer` per answer an entry produced. Each node keeps
 the fields an audit asks about as properties (who, when, how long, where a route went and
 whether its check fired, why a loop exited) and the entry itself as JSON, so `run(run_id)`
-returns the record as it was posted. Two fields are the server's to say, whatever the client
+returns the record as it was posted. A run started from another run's script carries `parent`
+(`{run_id, step, pass}`); its `Run` node keeps `parent_run`, `parent_step`, `parent_pass` and
+`depth`, and the parent's entry for that step and pass is linked to it by `SPAWNED`, made by
+whichever of the two is posted second (`run` lists a run's children). Two fields are the server's to say, whatever the client
 claimed: `user`, the name of the token the run was posted with, and `draft`, whether the bundle
 the run ran has a revision, with the `revision` it is published as (a folder whose bundle is
 published is a run of that revision; a bundle with none is a draft whatever the client said).
@@ -257,6 +261,25 @@ MATCH (a:Answer {run_id: $run_id, seq: row.seq, name: row.name}), (q:Aggregation
 CREATE (a)-[:ANSWERS]->(q)
 """
 
+# A child posted after its parent's entry, or a parent's entries posted after its children: either
+# way the entry of the step and pass that started the child gets its SPAWNED edge once.
+LINK_TO_PARENT = """
+MATCH (c:Run {run_id: $run_id}), (e:Entry {run_id: $parent, step: $step, kind: 'Execute'})
+WHERE coalesce(e.pass, -1) = coalesce($pass, -1) AND NOT (e)-[:SPAWNED]->(c)
+CREATE (e)-[:SPAWNED]->(c)
+"""
+LINK_TO_CHILDREN = """
+MATCH (c:Run {parent_run: $run_id}), (e:Entry {run_id: $run_id, kind: 'Execute'})
+WHERE e.step = c.parent_step AND coalesce(e.pass, -1) = coalesce(c.parent_pass, -1) AND NOT (e)-[:SPAWNED]->(c)
+CREATE (e)-[:SPAWNED]->(c)
+"""
+FETCH_CHILDREN = """
+MATCH (c:Run {parent_run: $run_id})
+RETURN c.run_id AS run_id, c.name AS name, c.status AS status, c.draft AS draft, c.parent_step AS step, c.parent_pass AS pass,
+       c.tokens AS tokens, c.started AS started
+ORDER BY coalesce(c.started, c.created), run_id
+"""
+
 FETCH_RUN = "MATCH (r:Run {run_id: $run_id}) RETURN r.json AS json"
 FETCH_ENTRIES = "MATCH (e:Entry {run_id: $run_id}) RETURN e.json AS json ORDER BY e.seq"
 
@@ -320,7 +343,9 @@ def run_properties(run: JSON) -> JSON:
     the run without its history as JSON (the history is the `Entry` nodes)."""
     identity = run.get("identity") or {}
     pause, error = run.get("pause") or {}, run.get("error") or {}
-    head = {k: v for k, v in run.items() if k != "history"}
+    parent = run.get("parent") if isinstance(run.get("parent"), dict) else {}
+    tokens = run.get("tokens") or {}
+    head = {k: v for k, v in run.items() if k not in ("history", "children")}
     return _clean({
         "run_id": run["run_id"], "bundle_id": run["bundle_id"], "name": run.get("name"), "revision": run.get("revision"),
         "draft": bool(run.get("draft")), "status": run.get("status"),
@@ -330,6 +355,9 @@ def run_properties(run: JSON) -> JSON:
         "entries": len(run.get("history") or []),
         "paused_at": pause.get("step"), "paused_since": pause.get("since"), "tasks": len(pause.get("tasks") or []) or None,
         "error": error.get("error"), "error_step": error.get("step") or error.get("loop"), "error_message": error.get("message"),
+        "parent_run": parent.get("run_id"), "parent_step": parent.get("step"), "parent_pass": parent.get("pass"),
+        "depth": run.get("depth") if parent else None, "budget_tokens": run.get("budget_tokens"),
+        "tokens": tokens.get("total") if isinstance(tokens, dict) else None,
         "json": json.dumps(head, sort_keys=True),
     })
 
@@ -631,8 +659,12 @@ class Store:
                 run["draft"] = not published
                 run["revision"] = published[0]["revision"] if published else None
             reply = {"run_id": run_id, "user": user, "draft": bool(run.get("draft")), "revision": run.get("revision")}
-            tx.run(UPSERT_RUN, run_id=run_id, props=run_properties(run))
+            props = run_properties(run)
+            tx.run(UPSERT_RUN, run_id=run_id, props=props)
             tx.run(LINK_RUN, run_id=run_id, bundle=bundle_id)
+            if props.get("parent_run") and props.get("parent_step"):
+                tx.run(LINK_TO_PARENT, run_id=run_id, parent=props["parent_run"], step=props["parent_step"],
+                       **{"pass": props.get("parent_pass")})
             have = {row["seq"]: row["sha"] for row in tx.run(ENTRY_HASHES, run_id=run_id)}
             stale = sorted(seq for seq, sha in have.items() if seq >= len(entries) or entries[seq]["sha"] != sha)
             new = [e for e in entries if have.get(e["seq"]) != e["sha"]]
@@ -648,6 +680,7 @@ class Store:
             pairs = {(seq - 1, seq) for seq in written if seq > 0}
             pairs |= {(seq, seq + 1) for seq in written if seq + 1 < len(entries) and seq + 1 not in written}
             tx.run(LINK_THEN, run_id=run_id, pairs=[list(p) for p in sorted(pairs)])
+            tx.run(LINK_TO_CHILDREN, run_id=run_id)
             answers = [row for seq in sorted(written) for row in answer_rows(run_id, bundle_id, seq, history[seq])]
             if answers:
                 tx.run(CREATE_ANSWERS, run_id=run_id, rows=[{"seq": a["seq"], "properties": a["properties"]} for a in answers])
@@ -659,12 +692,16 @@ class Store:
         return self.graph.write(tx_fn)
 
     def run(self, run_id: str) -> JSON:
-        """One run's record, as it was posted (with the server's `user`)."""
+        """One run's record, as it was posted (with the server's `user`), and `children`: the runs
+        its scripts started, with the step and pass that started each, when it has any."""
         def tx_fn(tx: Tx) -> JSON:
             rows = tx.run(FETCH_RUN, run_id=run_id)
             if not rows:
                 raise NotFound(f"no run {run_id}")
-            return {**json.loads(rows[0]["json"]), "history": [json.loads(r["json"]) for r in tx.run(FETCH_ENTRIES, run_id=run_id)]}
+            children = [{**c, "draft": bool(c.get("draft")), "tokens": c.get("tokens") or 0}
+                        for c in tx.run(FETCH_CHILDREN, run_id=run_id)]
+            record = {**json.loads(rows[0]["json"]), "history": [json.loads(r["json"]) for r in tx.run(FETCH_ENTRIES, run_id=run_id)]}
+            return {**record, "children": children} if children else record
         return self.graph.reading(tx_fn)
 
     def runs(self, name: str | None = None, status: str | None = None, agent: str | None = None, session: str | None = None,

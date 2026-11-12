@@ -235,6 +235,41 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   built is `scratch/a2/build/inbox/`, not committed.
 - **Not done:** Zach's Studio pass on a brief that needs a script (the proof's last step).
 
+## What R7 left (2026-11-12)
+
+- **The orchestrator is `examples/language/assist`** (shipped as `src/aip/server/bundles/assist.rl`)
+  and `examples/harness/assist.py`; `docs/runah.md`, The orchestrator, is the design. `assist`'s
+  `act` script (`scripts/runah.py`) is the only place with verbs: it starts each child in a
+  detached process of its own (`runah.py --child <order>`) that writes the outcome to
+  `<workdir>/.assist/<run id>.json`, and waits on that file within the script cap. A child has
+  no run file until its first stop, so `act` knows its own children by the order files there.
+- **Lineage is the engine's script environment plus the client's run file.** `Engine(script_env=,
+  guard=)` (`aip.model.engine`), filled by `aip.sdk._Lineage`: `AIP_RUN_ID`, `AIP_STEP`,
+  `AIP_PASS`, `AIP_RUNAH_DEPTH`, `AIP_RUNAH_BUDGET_TOKENS` (what is left), `AIP_HOME`, the
+  parent's `AIP_AGENT`/`AIP_SESSION`; `steps.run_script` adds `AIP_SCRIPT_TIMEOUT`. A run file
+  has `parent`, `depth`, `budget_tokens`, `tokens`; a parent's children are listed in
+  `~/.aip/runs/children/<run id>` (`aip.client.runs.add_child`). The store links `SPAWNED` from
+  either side (`LINK_TO_PARENT`, `LINK_TO_CHILDREN` in `store.py`). `tests/conftest.py` clears
+  the five variables, since a test run from inside an aip script would inherit them.
+- **The budget is checked before each step and each task's chat, not at `End`**: a run that
+  passes it on its last step is done, its record showing the sum.
+- **Choices made against the plan's text**, each a default: `assist` has a `search` step before
+  the loop (the plan's sketch had no way for `plan` to see the catalog); what `build_procedure`
+  builds is **published under its new name** (a revision, so the next search finds it, as the
+  proof requires), and only a taken name goes up as a draft run by its folder; the plan step has
+  runah's five workdir tools like any task (aip has no per-step tool switch), but no aip verb.
+- **The proof's runs are in the local store** (`aip runs --agent r7-proof`): `build_procedure`
+  run `fcef914bd57946fa` published `refund_line_counter@1`; sessions `r7-harness-2` and `-3` found
+  it and built nothing; `assist` run `d3dda909b77940ea` (session `r7-assist-1`) has it as its child.
+  The folder it built is `scratch/r7/proof/refund_line_counter/`, not committed.
+- **Found, not fixed:** a model-written script resolved a relative path against its own
+  directory (scripts run with the unpacked bundle as their current directory), not against
+  `AIP_WORKDIR` as `references/language.md` says, so the first two harness runs answered "no
+  folder notes". The third, with the full path in the task, counted right. Either the drafter's
+  prompt says it louder or the engine starts scripts in the working directory: Zach's call.
+- **Not done:** the MCP `runah` tool takes no `budget_tokens`; no e2e spec runs `assist` itself
+  (`e2e/orchestrated.spec.ts` checks a parent and its child on the run pages).
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

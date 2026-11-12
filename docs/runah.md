@@ -169,6 +169,80 @@ of its own, and its report names where it stopped and lists every script the dra
 what each says it does, so the person who reads the review knows what would run before
 anything does.
 
+## The orchestrator
+
+runah answers the tasks of one run. An orchestrator decides which runs to make: a task comes in,
+it picks a procedure from the catalog and runs it, reads what the run came to, picks again, and
+builds a procedure with `build_procedure` when none fits. With aip that is a short loop, one model
+call a turn and `runah` for everything else. `examples/harness/assist.py` is that harness:
+
+```python
+client, task, outcome = aip.Client(), "Triage the 40 emails in ./inbox", None
+while True:
+    step = model(task, outcome)        # one model call: {"run": name, "inputs": {...}} or {"done": answer}
+    if "done" in step: break
+    outcome = runah(client, step)      # client.runah, and a build published under its new name
+```
+
+`model` is one chat call whose prompt carries the task, the last outcome and what
+`client.search(task)` finds (each procedure's description and inputs), and says: pick one, or run
+`build_procedure` with a brief when none fits. Building is a procedure in the catalog, so it is
+not a special case. `runah` is `client.runah` with one addition: what `build_procedure` built is
+published under its new name, so the next task like this one finds it; a name the catalog has is
+never published over (the folder goes up as a draft and is run by its path instead).
+
+**The same loop as a procedure.** `assist` ships with the built-ins (`examples/language/assist`),
+so the top loop is recorded and audited like every run under it, and needs no Python of its own:
+
+```
+aip runah assist -i '{"task": "...", "outcome": ""}'
+```
+
+A script lists what the catalog has for the task (`search`); then a loop of two steps, at most 50
+passes: `plan`, a `Task_Agent` that answers `run`, `inputs`, `note` and `done` from the task, the
+last outcome and the catalog, and `act`, a script that runs it. `act` holds the only verbs there
+are: start a run with `Client.runah`, carry on one it started (`{"answers": ...}` into a pause, or
+`{}` to wait on it), and publish what `build_procedure` built under its new name. It never
+retires, pins or publishes over a name, and it refuses to run `assist`, so a run never changes
+the catalog it was given and never starts itself. A child runs ahead with runah, except at the
+steps a person answers (a `Task_Agent` whose description says "a person" or "the person" does
+it): those come back to `plan` as a pause, which answers them when the task says enough, or ends
+the run with the question in `note`. Only the orchestrator's own end reaches the person; to
+answer it, run `assist` again with the answer as `outcome`.
+
+**Waiting.** A child can run longer than the script cap (300 seconds by default). `act` starts
+the child in a process of its own, detached, which writes the child's outcome to
+`<workdir>/.assist/<run id>.json` when it stops; `act` waits on that file until a little before
+the cap (the engine tells every script its cap as `AIP_SCRIPT_TIMEOUT`), and if the child is still
+going it answers `{"status": "running", "run_id"}`, and the next pass waits again. So a child of
+an hour costs a dozen passes, not a failed step. `Client.runah` itself blocks until the run
+stops, which is what the harness does.
+
+**Runs started from runs.** The engine starts every script with `AIP_RUN_ID`, `AIP_STEP` and
+`AIP_PASS` (the run, the step and its innermost pass), so a run the script starts, through the
+SDK or the CLI, is that run's child: its record carries `parent: {run_id, step, pass}` and
+`depth`, the parent's record lists it under `children`, `aip runs <parent>` prints it under the
+entry that started it (`-> run <id>  <name>  done, 18200 tokens`), and the server links the
+entry to it (`(:Entry)-[:SPAWNED]->(:Run)`; the audit query `spawned-runs` counts what an
+orchestrator ran, how it went and what it cost). A child is run by whoever ran its parent: the
+script is given the parent's `AIP_AGENT` and `AIP_SESSION`.
+
+**Three bounds.**
+- *Depth.* A child is one deeper than its parent (`AIP_RUNAH_DEPTH`, which the engine sets for
+  scripts); `aip runah` refuses to start one deeper than `aip config runah --max-depth N`
+  (default 2), with `depth_exceeded`, before anything runs. `assist` is 0, the procedure it runs
+  1, and a run that procedure's script starts 2. It bounds nested runah runs only: `aip run`
+  calls no model and is not refused.
+- *Budget.* `aip runah --budget-tokens N` (`aip config runah --budget-tokens N`,
+  `AIP_RUNAH_BUDGET_TOKENS`; default none) bounds the model tokens a run spends, its children's
+  included: the tasks runah answered in it, plus each child's own total. It is checked before
+  every step and before each task's chat, and past it the run fails with `budget_exhausted`
+  (`budget`, `spent`); `aip runah <run id> --budget-tokens M` with a larger M carries it on. A
+  child is given what is left as its own budget. The record carries the sum, `tokens: {own,
+  children, total}`, and the budget.
+- *Wait.* Above: a child longer than the script cap is waited on across passes, never by a
+  script that outlives its cap.
+
 ## Not here
 
 A Claude Code or Codex backend (they use `run` and `resume` themselves; a `run-as X` form can be

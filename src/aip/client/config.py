@@ -17,7 +17,12 @@ model_name, model_key, max_tool_calls_per_task, max_tokens_per_task}`; `AIP_RUNA
 in a run started or carried on with `aip runah` (`aip.model.answerer`, `docs/runah.md`), an
 endpoint with the OpenAI Chat Completions shape, Anthropic's by default. Nothing else calls it.
 A file written before runah had a name keeps the block as `agent_model: {url, api_key, name}`,
-which is read as the same block and moved on the next `aip config runah`. `script_timeout`
+which is read as the same block and moved on the next `aip config runah`. The same block holds
+the orchestrator's two bounds (`docs/runah.md`, The orchestrator): `max_depth`, how deep runah
+runs may nest when a script or the SDK starts one inside another (2 by default; a run started
+from a script is one deeper than the run whose script started it, `AIP_RUNAH_DEPTH`), and
+`budget_tokens`, the model tokens a runah run may spend, its children's included (unlimited by
+default; `AIP_RUNAH_BUDGET_TOKENS`, which a run's scripts are given as what is left). `script_timeout`
 (`AIP_SCRIPT_TIMEOUT`) is the seconds one script may run, wherever a script runs; 300 by
 default. The identity
 of a run (`agent`, `session`; runtime.md, The record) comes from `--agent` / `AIP_AGENT` and
@@ -43,6 +48,8 @@ SERVER_ENV, TOKEN_ENV, BATCH_ENV = "AIP_SERVER", "AIP_TOKEN", "AIP_BATCH"
 AGENT_ENV, SESSION_ENV = "AIP_AGENT", "AIP_SESSION"
 DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV = URL_ENV, KEY_ENV
 RUNAH_MODEL_URI_ENV, RUNAH_MODEL_NAME_ENV, RUNAH_MODEL_KEY_ENV = "AIP_RUNAH_MODEL_URI", "AIP_RUNAH_MODEL_NAME", "AIP_RUNAH_MODEL_KEY"
+RUNAH_BUDGET_ENV = "AIP_RUNAH_BUDGET_TOKENS"
+DEFAULT_MAX_DEPTH = 2
 DEFAULT_RUNAH_MODEL_URI = "https://api.anthropic.com/v1"
 DEFAULT_RUNAH_MODEL_NAME = "claude-opus-5-5"        # pinned, not an alias: two runs never record one name for two models
 DEFAULT_MAX_TOOL_CALLS_PER_TASK = 40
@@ -100,6 +107,9 @@ class Settings:
     max_tool_calls_per_task: int = DEFAULT_MAX_TOOL_CALLS_PER_TASK   # per task runah's model answers
     max_tokens_per_task: int = DEFAULT_MAX_TOKENS_PER_TASK           # per task: prompt and completion tokens over every call of its chat
     script_timeout: float | None = 300.0  # seconds one script may run, wherever a script runs; None: no cap
+    max_depth: int = DEFAULT_MAX_DEPTH    # how deep runah runs may nest, started from a script or the SDK inside another run
+    budget_tokens: int | None = None      # model tokens a runah run may spend, its children's included; None: no budget
+    budget_source: str | None = None
 
     @property
     def token_set(self) -> bool:
@@ -146,9 +156,13 @@ class Settings:
         """The `aip config` block for runah: endpoint, model, whether a key is set, the caps."""
         key = "set" if self.runah_model_key else f"none (`aip runah` refuses to start; {RUNAH_HINT})"
         source = f"  (from {self.runah_source})" if self.runah_source else ""
+        budget = "none" if self.budget_tokens is None else f"{self.budget_tokens} tokens per run, its children's included"
+        if self.budget_tokens is not None and self.budget_source:
+            budget += f"  (from {self.budget_source})"
         return (f"runah:{source}\n  model uri:   {self.runah_model_endpoint}\n  model name:  {self.runah_model}\n"
                 f"  model key:   {key}\n  per task:    at most {self.max_tool_calls_per_task} tool calls, "
-                f"{self.max_tokens_per_task} tokens")
+                f"{self.max_tokens_per_task} tokens\n  max depth:   {self.max_depth} (runah runs started inside another run)\n"
+                f"  budget:      {budget}")
 
     @property
     def script_cap(self) -> str:
@@ -185,10 +199,17 @@ def settings() -> Settings:
     uri = values["model_uri"]
     from aip.model.environment import script_timeout
 
+    env_budget = os.environ.get(RUNAH_BUDGET_ENV, "").strip()
+    budget = _int(env_budget) if env_budget else _int(runah.get("budget_tokens"))
+    budget_source = RUNAH_BUDGET_ENV if env_budget else (str(config_path()) if budget else None)
+    depth = runah.get("max_depth")
+    max_depth = depth if isinstance(depth, int) and not isinstance(depth, bool) and depth >= 0 else DEFAULT_MAX_DEPTH
+
     return Settings(server.rstrip("/") if server else None, source, token, url.rstrip("/") if url else None, key, model_source,
                     batch, config_path(), local, uri.rstrip("/") if uri else None, values["model_key"], values["model_name"],
                     runah_source, _int(runah.get("max_tool_calls_per_task")) or DEFAULT_MAX_TOOL_CALLS_PER_TASK,
-                    _int(runah.get("max_tokens_per_task")) or DEFAULT_MAX_TOKENS_PER_TASK, script_timeout(config.get("script_timeout")))
+                    _int(runah.get("max_tokens_per_task")) or DEFAULT_MAX_TOKENS_PER_TASK, script_timeout(config.get("script_timeout")),
+                    max_depth, budget, budget_source)
 
 
 LEGACY_RUNAH = {"url": "model_uri", "api_key": "model_key", "name": "model_name", "max_tool_calls": "max_tool_calls_per_task",
@@ -259,9 +280,12 @@ def configure(server: str | None = None, token: str | None = None, decision_mode
 
 
 def configure_runah(model_uri: str | None = None, model_name: str | None = None, model_key: str | None = None,
-                    max_tool_calls_per_task: int | None = None, max_tokens_per_task: int | None = None) -> Settings:
+                    max_tool_calls_per_task: int | None = None, max_tokens_per_task: int | None = None,
+                    max_depth: int | None = None, budget_tokens: int | None = None) -> Settings:
     """Write runah's block (`aip config runah`): arguments left None are unchanged, an empty
-    string forgets the value (back to its default; for the key, no key)."""
+    string forgets the value (back to its default; for the key, no key). `max_depth` is how
+    deep runah runs may nest (0: none may start inside another run); `budget_tokens` the model
+    tokens one runah run may spend, its children's included (0 forgets it: no budget)."""
     config = load_config()
     block = _runah_block(config)
     for key, value in (("model_uri", model_uri.rstrip("/") if model_uri else model_uri), ("model_name", model_name),
@@ -275,6 +299,17 @@ def configure_runah(model_uri: str | None = None, model_name: str | None = None,
             if value < 1:
                 raise ValueError(f"--{key.replace('_', '-')} is at least 1, not {value}")
             block[key] = value
+    if max_depth is not None:
+        if max_depth < 0:
+            raise ValueError(f"--max-depth is at least 0, not {max_depth}")
+        block["max_depth"] = max_depth
+    if budget_tokens is not None:
+        if budget_tokens < 0:
+            raise ValueError(f"--budget-tokens is at least 0 (0: no budget), not {budget_tokens}")
+        if budget_tokens:
+            block["budget_tokens"] = budget_tokens
+        else:
+            block.pop("budget_tokens", None)
     config.pop("agent_model", None)
     if block:
         config["runah"] = block
@@ -298,5 +333,5 @@ def identity(agent: str | None = None, session: str | None = None, default_agent
 
 __all__ = ["CONFIG_ENV", "SERVER_ENV", "TOKEN_ENV", "BATCH_ENV", "AGENT_ENV", "SESSION_ENV", "DECISION_MODEL_ENV", "LOCAL", "NONE",
            "DECISION_MODEL_KEY_ENV", "CONFIGURE_HINT", "RUNAH_MODEL_URI_ENV", "RUNAH_MODEL_NAME_ENV", "RUNAH_MODEL_KEY_ENV",
-           "RUNAH_HINT", "DEFAULT_RUNAH_MODEL_URI", "DEFAULT_RUNAH_MODEL_NAME", "DECISION_MODEL_HINT", "Settings", "config_path",
+           "RUNAH_HINT", "RUNAH_BUDGET_ENV", "DEFAULT_MAX_DEPTH", "DEFAULT_RUNAH_MODEL_URI", "DEFAULT_RUNAH_MODEL_NAME", "DECISION_MODEL_HINT", "Settings", "config_path",
            "load_config", "save_config", "settings", "configure", "configure_runah", "identity"]

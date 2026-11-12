@@ -210,14 +210,22 @@ class Engine:
     10); `clock` the source of timestamps and `timer` of durations; `on_entry` is called with
     every history entry the moment it is written (`--progress`). With `scripts` False the engine
     runs no script: an `Execute` fails the run with `script_not_run` before its script starts (a
-    trial: `Decide`, routes and loops run, a `Task_Agent` pauses as usual)."""
+    trial: `Decide`, routes and loops run, a `Task_Agent` pauses as usual). `script_env(run)` gives
+    the variables a script is started with beyond this process's own (the client's: which run
+    it is part of, the depth and the budget a run it starts inherits); the engine adds
+    `AIP_STEP` and `AIP_PASS`, the step and its innermost pass. `guard(run, step)` is called
+    before every step but `End` and may raise a `StepError` (the client's token budget,
+    `budget_exhausted`), which fails the run at that step as any step's error does."""
 
     def __init__(self, resolver: Resolver | None = None, *, home: Path | None = None, python: str | None = None,
                  timeout: float | None | Any = DEFAULT_TIMEOUT, workdir: Path | None = None, batch: int = DEFAULT_BATCH,
                  clock: Callable[[], str] = utc_now, timer: Callable[[], float] = time.monotonic,
-                 on_entry: Callable[[JSON], None] | None = None, scripts: bool = True):
+                 on_entry: Callable[[JSON], None] | None = None, scripts: bool = True,
+                 script_env: Callable[[Run], JSON] | None = None, guard: Callable[[Run, str], None] | None = None):
         self.resolver = resolver
         self.scripts = scripts
+        self.script_env = script_env
+        self.guard = guard
         self.home = home
         self.python = python
         self.timeout = script_timeout() if timeout is DEFAULT_TIMEOUT else timeout
@@ -364,6 +372,8 @@ class Engine:
         began = self.timer()
         state = cursor.view()
         if step.kind != "End":                 # End takes what the path produced (steps.end)
+            if self.guard is not None:
+                self.guard(run, step.name)
             steps.check_reads(procedure, step, state)
         match step.kind:
             case "End":
@@ -388,8 +398,11 @@ class Engine:
                 if not self.scripts:
                     raise ScriptNotRun(step.name, step.file("RUNS").path)
                 self._ensure_requires(run, step)
+                passes = _passes(cursor)
+                env = {**(self.script_env(run) if self.script_env is not None else {}), steps.STEP_ENV: step.name,
+                       steps.PASS_ENV: str(passes[-1]["pass"]) if passes else ""}
                 outputs, stdin, _ = steps.execute(procedure, step, state, self._root(procedure), python=self.python,
-                                                  timeout=self.timeout, workdir=self.workdir)
+                                                  timeout=self.timeout, workdir=self.workdir, env=env)
                 cursor.state.update(outputs)
                 self._record(run, cursor, step, stdin["state"], outputs, began, script=step.file("RUNS").path, stdin=stdin)
                 self._after_step(run, cursor, step, set(outputs))

@@ -114,7 +114,7 @@ server writes its own nodes, told from a bundle's by label:
 | `Name` | `name`, `pinned` (a revision, when one is pinned) |
 | `Revision` | `id` (`name@revision`), `name`, `revision` (text), `number`, `bundle_id`, `published_at`, `retired` |
 | `Bundle` | `bundle_id`, `name`, `description`, `stored_at`, `draft` (true until published), `described` (the description `GET /catalog/{ref}` returns, as JSON) |
-| `Run` | `run_id`, `bundle_id`, `name`, `revision`, `draft`, `status`, `agent`, `agent_version` (when given), `session`, `user`, `started`, `finished`, `created`, `updated`, `position`, `batch`, `entries` (how many); when paused `paused_at`, `paused_since`, `tasks`; when failed `error` (the kind), `error_step`, `error_message`; `json` (the run without its history) |
+| `Run` | `run_id`, `bundle_id`, `name`, `revision`, `draft`, `status`, `agent`, `agent_version` (when given), `session`, `user`, `started`, `finished`, `created`, `updated`, `position`, `batch`, `entries` (how many); when paused `paused_at`, `paused_since`, `tasks`; when failed `error` (the kind), `error_step`, `error_message`; when a script of another run started it `parent_run`, `parent_step`, `parent_pass`, `depth`; `budget_tokens` when it has a budget, `tokens` (runah's model's total, its children's included) when any were spent; `json` (the run without its history) |
 | `Entry` | one per history entry: `run_id`, `bundle_id`, `seq`, `step`, `kind`, `pass`, `loop` (the innermost), `loops` (each enclosing loop and pass, `revise 0`), `at`, `seconds`; a `Decide`: `model`, `endpoint`, `model_seconds`, `history_sent`, `batched`, `batch_size`; a `Task_Agent`: `agent`, `session`, `waited_seconds`, and when what answering took is known, `work` (`observed` when runah's model answered it, `agent` then being `runah`; `reported` when the agent said so with `aip resume --work`), `model`, `tool_calls` (how many), `tokens` (the total), and `model_seconds` (observed) or `work_seconds` (reported); a `Route`: `read`, `value`, `to`, `check_fired`, `check_reason`, `check_confidence`, `check_below`; an `Execute`: `script`; a loop's exit: `exit` (`until`, `items`, `times`, `cap`), `exit_where`, `iterations`; the first entry of a `Loop` pass: `until_holds`, `until_where`; `sha` and `json` (the entry as posted) |
 | `Answer` | one per answer object an entry produced: `run_id`, `bundle_id`, `seq`, `step`, `name`, `value`, `source` (`measured`, `scripted`, `agent`, `aggregated`), `confidence`, `score`, `probabilities` (JSON); an aggregation's: `answers` (how many it judged), `held`, `barred` |
 | `Meta` | `key: 'builtins'`, `offered` (the ids of the built-in bundles this store has been offered) |
@@ -130,12 +130,15 @@ server writes its own nodes, told from a bundle's by label:
 | `AT` | `Entry` → `Step` or `Loop` | the node of the procedure the entry ran |
 | `GAVE` | `Entry` → `Answer` | |
 | `ANSWERS` | `Answer` → `Question` or `Aggregation` | a decision's answer to its question; an aggregation's result |
+| `SPAWNED` | `Entry` → `Run` | the run an `Execute` entry's script started (its child): made by whichever of the two is posted second, matching the child's `parent_run`, `parent_step` and `parent_pass` to the entry's run, step and pass |
 
 A property whose value would be null is left out. A run is upserted whole at every stop: the
 `Run` node is rewritten, and of the history only the entries that are new or changed are
 written (each carries the hash of its JSON), so recording a long run is not quadratic in its
 length. `GET /runs/{run_id}` rebuilds the record from `Run.json` and the entries' `json`, so
-what comes back is what was posted, with the server's `user`.
+what comes back is what was posted, with the server's `user`, and, for a run whose scripts
+started runs, `children`: each child's `run_id`, `name`, `status`, `draft`, the `step` and `pass`
+that started it, its `tokens` and when it `started`.
 
 A run paused inside a `For` is posted with the entries its passes have written so far, pass by
 pass in input order, although the engine itself appends a pass's entries to the history only
@@ -168,10 +171,11 @@ same on both backends; an exact name wins outright.
 `aip.server.builtins.publish_builtins` runs when the app is built: each `.rl` shipped under
 `aip/server/bundles/` that the store has not been offered before is published, and the store
 remembers the ids it has been offered, so a built-in appears on a store's first start and is not
-brought back after someone retires it. One ships: `make_procedure`, the procedure that writes a
-procedure from a description (`examples/language/make_procedure/` is its source; the `.rl` in
-the package is that folder compiled, and a test fails when the two disagree). So `aip list` on a
-store that has just been created shows `make_procedure@1`, and a package upgrade that carries a
+brought back after someone retires it. Four ship: `make_procedure`, the procedure that writes a
+procedure from a description, `build_procedure` and `edit_procedure` (`docs/runah.md`), and
+`assist`, the orchestrator (each `examples/language/<name>/` is its source; the `.rl` in the
+package is that folder compiled, and a test fails when the two disagree). So `aip list` on a
+store that has just been created shows each of them at revision 1, and a package upgrade that carries a
 changed one publishes it as the next revision on the server's next start. `aip upgrade` publishes
 the same bundles from a client, as `aip publish` would, for a server that runs an older package
 than the client; a bundle the server already holds keeps its revision.
@@ -192,6 +196,7 @@ come back (default 50).
 | `failing-aggregations` | per aggregation: how often it was computed, how often it did not hold, how many answers its bar turned |
 | `model-answers` | per question: how many answers the decision model gave, their mean and lowest confidence, the mean time of the call |
 | `agent-work` | per `Task_Agent` step, who answered, the model and `work` (`observed` by runah, or `reported` by the agent): how many tasks, their tool calls and tokens, most tokens first |
+| `spawned-runs` | per orchestrator, `Execute` step and procedure it started (the `SPAWNED` edges of the windowed runs): how many runs, how many are done, paused and failed, and the model tokens they spent, most runs first |
 | `failing-scripts` | per `Execute` step and error (`script_failed`, `timeout`, `requires_unmet`): the windowed runs that stand failed there, the script, the latest message. A run that was resumed past the failure no longer counts: the record keeps where a run stands, not the attempts before |
 | `untaken-branches` | branches of a route (its `Confidence_Below` line included) that none of the windowed runs took, in the bundles those runs ran |
 | `repeated-cycles` | per `Loop` and how it ended (`until`, `times`, `cap`): the runs where it went round more than `repeats` times (default 1), and the most passes |

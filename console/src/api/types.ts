@@ -271,6 +271,28 @@ export interface RunRecord {
   target?: string;
   workdir?: string | null;
   recorded?: boolean;
+  /** A run started from a script of another run (the orchestrator, `docs/runah.md`): that run, the step and its pass. */
+  parent?: { run_id: string; step: string | null; pass: number | null } | null;
+  /** How many runs up the parent chain goes; with `parent` only. */
+  depth?: number;
+  /** runah's token budget for the run, its children's tokens included (`aip runah --budget-tokens`). */
+  budget_tokens?: number;
+  /** What runah's model spent: in this run, in the runs started from it, and the sum. */
+  tokens?: { own: number; children: number; total: number };
+  /** The runs this run's scripts started, with the step and pass that started each; absent when there are none. */
+  children?: ChildRun[];
+}
+
+/** One run started from another run's script, as its parent's record lists it. */
+export interface ChildRun {
+  run_id: string;
+  name: string | null;
+  status: RunStatus;
+  draft?: boolean;
+  step: string | null;
+  pass: number | null;
+  tokens: number;
+  started?: string | null;
 }
 
 // ------------------------------------------------------------------ audit
