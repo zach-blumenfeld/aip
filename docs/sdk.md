@@ -102,9 +102,10 @@ run_id=None)` runs ahead
 (`docs/runah.md`): as `run` for a target, or carrying on the run a run id, a run file or a
 result names (`answers` going into its standing pause first; with none, the model answers it,
 or a failed step is retried), with a chat model answering each `Task_Agent` task in one
-tool-using chat confined to the working directory, until a step named in `human` (a list, or
-one comma-separated string; the run keeps them for its later calls), the end, an error, or the
-model giving up. It returns what `run` returns, and a `Paused` says why under `answerer`. Each
+tool-using chat confined to the working directory, until a human step (`human`, a list or
+one comma-separated string, `none` for none; with no `human`, the steps written for a person,
+`docs/runah.md`; the run keeps them for its later calls), the end, an error, or the model
+giving up. It returns what `run` returns, and a `Paused` says why under `answerer`. Each
 task the model answers is recorded `answered_by: {"agent": "runah", "model": <the id the
 endpoint reported>}` with its tool calls and tokens, marked `work: "observed"`. It raises
 `InvalidInput` before anything runs when no model key is configured (`aip config runah

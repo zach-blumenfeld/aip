@@ -81,11 +81,14 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
   const [ranAhead, setRanAhead] = useState(false);
 
   useEffect(() => {
-    describeProcedure(reference).then(setAbout).catch((e: unknown) => setLoadError(describe(e)));
+    const described = describeProcedure(reference);
+    described.then(setAbout).catch((e: unknown) => setLoadError(describe(e)));
     modelSettings().then(setSettings).catch(() => setSettings(null));
     const graph: Promise<Graph | null> = folder ? folderGraph().then((g) => g.graph) : reference ? graphOf(reference).then((b) => b.graph) : Promise.resolve(null);
-    graph.then((g) => {
-      const found = g ? agentSteps(g) : [];
+    // The steps written for a person are aip's to say (the description's human_steps, plan R8): ticked as runah's default.
+    const marked = described.then((d) => d.human_steps ?? []).catch(() => [] as string[]);
+    Promise.all([graph, marked]).then(([g, m]) => {
+      const found = g ? agentSteps(g, m) : [];
       setAgents(found);
       setHuman(found.filter((s) => s.person).map((s) => s.name));
     }).catch(() => setAgents([]));

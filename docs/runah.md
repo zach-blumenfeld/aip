@@ -25,15 +25,15 @@ and a `Decide` asks the decision model, as always.
 
 1. Before anything runs, it refuses when no model key is configured, naming the config line.
 2. Scripts, `Decide`, routes and loops run exactly as `aip run` runs them.
-3. At a `Task_Agent` pause: a step named in `--human` stops it, and it prints the `paused`
-   object. Otherwise each task of the pause is one chat; the model answers with the five tools
+3. At a `Task_Agent` pause: a human step stops it, and it prints the `paused` object (below,
+   Human steps). Otherwise each task of the pause is one chat; the model answers with the five tools
    below, confined to the working directory; the answer is checked as `aip resume` checks one;
    a refusal goes back to the model, up to three times; then the answers go in and the run
    carries on.
 4. It stops and prints at a human step, at the end, at an error, or when the model gives up,
    with the reason, in the same `paused`, `done` and `error` objects as `aip run`
    (`docs/cli-json.md`). A pause it did not answer carries `answerer: {"answered": false,
-   "step", "reason", ...}`.
+   "step", "reason", ...}`, and at a human step `"human": "marked"` or `"listed"`.
 5. `run`, `resume` and `runah` mix on one run: `aip run` a procedure, answer its first pause
    yourself with `aip resume`, then `aip runah <run_id>` to have the model carry on, or the
    other way round.
@@ -70,7 +70,8 @@ alias, so two runs never record one name for two models.
 | tokens per task | `--max-tokens-per-task N` | | 500000 (prompt and completion, over every call of the chat) |
 
 The environment wins over the file, and the file over the default. Human steps are per
-procedure, so there is no config or environment for them: `--human` on the command only.
+procedure, so there is no config or environment for them: the procedure marks them, and
+`--human` on the command overrides that.
 `aip config` and `aip config runah` print the block, with the key masked:
 
 ```
@@ -114,9 +115,22 @@ A pause with several tasks (a batched `For`) is answered in task order, each its
 the answers go in as one resume. A task given up leaves the whole pause standing: a resume
 answers every task at once, so the answers made before it are not kept.
 
-A marker for human steps in the language itself (`Task_Human`, or a word on `Task_Agent`) is
-plan open item 17, undecided: until then a human step is a `Task_Agent` whose description says
-so, named by `--human`.
+## Human steps
+
+The language has no marker for a person's step (plan open item 17: `Task_Agent` is the one kind,
+and whoever runs the procedure answers it). A procedure says it in words, and runah reads them:
+with no `--human`, it stops at every `Task_Agent` **written for a person**, one whose prompt
+(its `Prompt` file, else its description) opens with "This is a task for a person, not for you",
+or whose description says a person or the person does it ("A person answers the questions the
+rules leave open."). `build_procedure` and `edit_procedure` write the marker on the steps they
+draft for a person. The rule is in one place, `aip.model.answerer.human_steps(bundle)`; `aip info
+--json` and the server's description of a bundle list its answer as `human_steps`, and the
+console's run picker ticks those.
+
+`--human STEP,STEP` replaces the marked steps with the ones it names, and `--human none` leaves
+none: the model answers every task. A run keeps its human steps for its later `aip runah`; a
+`--human` given again replaces them. The paused object says which rule stopped it:
+`answerer.human` is `marked` or `listed`.
 
 ## The record
 
@@ -198,17 +212,29 @@ so the top loop is recorded and audited like every run under it, and needs no Py
 aip runah assist -i '{"task": "...", "outcome": ""}'
 ```
 
-A script lists what the catalog has for the task (`search`); then a loop of two steps, at most 50
-passes: `plan`, a `Task_Agent` that answers `run`, `inputs`, `note` and `done` from the task, the
-last outcome and the catalog, and `act`, a script that runs it. `act` holds the only verbs there
-are: start a run with `Client.runah`, carry on one it started (`{"answers": ...}` into a pause, or
-`{}` to wait on it), and publish what `build_procedure` built under its new name. It never
-retires, pins or publishes over a name, and it refuses to run `assist`, so a run never changes
-the catalog it was given and never starts itself. A child runs ahead with runah, except at the
-steps a person answers (a `Task_Agent` whose description says "a person" or "the person" does
-it): those come back to `plan` as a pause, which answers them when the task says enough, or ends
-the run with the question in `note`. Only the orchestrator's own end reaches the person; to
-answer it, run `assist` again with the answer as `outcome`.
+A script lists what the catalog has for the task (`search`); then a loop, at most 50 passes:
+`plan`, a `Task_Agent` that answers `run`, `inputs`, `note` and `action` (`run`, `ask` or
+`done`) from the task, the last outcome and the catalog; a route on `action`; and `act`, a script
+that runs what `plan` chose, or `ask_person`. `act` holds the only verbs there are: start a run
+with `Client.runah`, carry on one it started (`{"answers": ...}` into a pause, or `{}` to wait on
+it), and publish what `build_procedure` built under its new name. It never retires, pins or
+publishes over a name, and it refuses to run `assist`, so a run never changes the catalog it was
+given and never starts itself. A child runs ahead with runah, except at its human steps (with no
+`--human`, the ones written for a person, above): those come back to `plan` as a pause, which
+answers them when the task says enough, or asks the person.
+
+**Asking the person.** When only the person can say what comes next (a folder that is not where
+the task says, a pause only they can answer), `plan` answers `ask` with the question in `note`,
+and the run stops at `ask_person`, a `Task_Agent` written for a person, so `aip runah` leaves it
+to one:
+
+```
+aip runah <run_id> --answers '{"outcome": "the notes are in ~/inbox/notes"}'
+```
+
+carries the same run on, its children and history intact, and `plan` reads the answer as the
+outcome. `done` is for finishing only; the run's result is `note`, the answer to the task.
+`outcome` stays a `Start` input, empty on a fresh start, so a person can seed one.
 
 **Waiting.** A child can run longer than the script cap (300 seconds by default). `act` starts
 the child in a process of its own, detached, which writes the child's outcome to

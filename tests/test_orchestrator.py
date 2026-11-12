@@ -269,10 +269,10 @@ def test_assist_waits_on_a_child_past_its_script_cap(stand_in, tmp_path, monkeyp
         status = re.search(r'"status": "(\w+)"', outcome)
         run_id = re.search(r'"run_id": "(\w+)"', outcome)
         if status is None:
-            return say({"run": str(child), "inputs": "{}", "note": "", "done": False})
+            return say({"run": str(child), "inputs": "{}", "note": "", "action": "run"})
         if status.group(1) == "running":
-            return say({"run": run_id.group(1), "inputs": "{}", "note": "", "done": False})
-        return say({"run": "", "inputs": "{}", "note": f"{status.group(1)} by {run_id.group(1)}", "done": True})
+            return say({"run": run_id.group(1), "inputs": "{}", "note": "", "action": "run"})
+        return say({"run": "", "inputs": "{}", "note": f"{status.group(1)} by {run_id.group(1)}", "action": "done"})
 
     server = stand_in(plan)
     monkeypatch.setenv("AIP_SCRIPT_TIMEOUT", "3")                  # act waits a second at most; the child takes four
@@ -314,3 +314,63 @@ def test_assist_does_not_run_itself_and_has_no_verb_that_changes_the_catalog(tmp
         assert ".publish(" not in source or script.name == "runah.py"
     source = (ASSIST / "scripts" / "runah.py").read_text(encoding="utf-8")
     assert "if name in taken:" in source and "client.publish(folder, draft=True)" in source, "a taken name is never published over"
+
+
+# --------------------------------------------------------------------------- R8: assist asks by pausing
+
+
+def asking(body: dict) -> dict:
+    """assist's plan: ask where the folder is, then finish with what the person said; at
+    ask_person, when runah's model is let answer it, a guess."""
+    if "Task: ask_person" in json.dumps(body):
+        return say({"outcome": "the model's guess"})
+    outcome = last_outcome(body).split("in their words.", 1)[1].strip()       # past the prompt's own line about it
+    if not outcome:
+        return say({"run": "", "inputs": "{}", "note": "There is no folder ./notes: where are the notes?", "action": "ask"})
+    return say({"run": "", "inputs": "{}", "note": f"heard: {outcome}", "action": "done"})
+
+
+@needs_relate
+def test_assist_pauses_to_ask_the_person_and_carries_on_with_the_answer(stand_in, tmp_path):
+    from aip.compiler import compile_folder
+    from aip.model.answerer import human_steps
+
+    assert human_steps(compile_folder(ASSIST)[0]) == ["ask_person"]
+    server = stand_in(asking)
+    client = aip.Client(agent="tests")
+    paused = client.runah(ASSIST, {"task": "count the refunds in ./notes", "outcome": ""}, workdir=tmp_path)
+    assert isinstance(paused, aip.Paused) and paused.step == "ask_person"
+    assert paused.answerer["human"] == "marked" and "written for a person" in paused.answerer["reason"]
+    assert paused.tasks[0].state["note"] == "There is no folder ./notes: where are the notes?"
+    assert paused.tasks[0].prompt.startswith("This is a task for a person, not for you")
+    assert len(server.requests) == 1, "the model planned once and did not answer the person's step"
+
+    done = client.runah(paused.run_id, answers={"outcome": "they are in ./inbox/notes"})
+    assert isinstance(done, aip.Done) and done.run_id == paused.run_id, "the same run carries on"
+    assert done.result == {"note": "heard: they are in ./inbox/notes"}
+    history = client.run_record(done.run_id).history
+    assert [e["step"] for e in history if e["kind"] in ("Task_Agent", "Route", "Execute")] == \
+        ["search", "plan", "next_move", "ask_person", "plan"]
+    assert next(e for e in history if e["step"] == "ask_person")["answered_by"]["agent"] == "tests"
+
+
+@needs_relate
+def test_a_marked_step_is_human_by_default_and_human_none_answers_it(stand_in, tmp_path, capsys, monkeypatch):
+    from aip.client.cli import main
+
+    stand_in(asking)
+    monkeypatch.chdir(tmp_path)
+    inputs = json.dumps({"task": "count the refunds in ./notes", "outcome": ""})
+    assert main(["runah", str(ASSIST), "-i", inputs]) == 0
+    paused = json.loads(capsys.readouterr().out)
+    assert paused["step"] == "ask_person" and paused["answerer"]["human"] == "marked", paused
+
+    assert main(["runah", str(ASSIST), "-i", inputs, "--human", "none"]) == 0
+    done = json.loads(capsys.readouterr().out)
+    assert done["done"] is True and done["result"] == {"note": "heard: the model's guess"}
+
+    assert main(["runah", str(ASSIST), "-i", inputs, "--human", "plan"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["step"] == "plan" and listed["answerer"]["human"] == "listed"
+    assert main(["runah", listed["run_id"], "--human", "none"]) == 0, "given again, --human replaces the run's"
+    assert json.loads(capsys.readouterr().out)["done"] is True

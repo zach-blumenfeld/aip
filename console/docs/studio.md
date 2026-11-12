@@ -106,8 +106,9 @@ The run console asks how to run. **Run ahead** (`aip runah`, the default from th
 model answer the tasks and stops at the steps ticked as **human steps** (`--human`); the picker lists
 the procedure's `Task_Agent` steps and ticks the ones written for a person: a prompt that begins with
 the drafter's marker, "This is a task for a person, not for you" (build_procedure's `draft` and
-edit_procedure's `rewrite` write it), or a description that says a person does it
-(`src/run/human.ts`). **Run** (`aip run`) pauses at every task instead. The Start step's inputs are a
+edit_procedure's `rewrite` write it), or a description that says a person does it. The rule is
+aip's (`aip.model.answerer.human_steps`, the steps `aip runah` stops at with no `--human`, since R8);
+the page ticks what the description's `human_steps` names (`src/run/human.ts`). **Run** (`aip run`) pauses at every task instead. The Start step's inputs are a
 form, typed from `aip info --json`.
 
 A pause is answered through a form built from the step's `Produce` fields: a `true_or_false` is two

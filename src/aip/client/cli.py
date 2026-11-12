@@ -281,7 +281,8 @@ def runah_command(argv: list[str]) -> int:
                                 "       aip runah run_id [--answers JSON] [--human STEP,STEP] [options]",
         description="Run ahead: run a procedure as `aip run` does and keep going, with a chat model answering each "
                     "Task_Agent task in one short tool-using chat confined to the working directory (docs/runah.md). "
-                    "Scripts, Decide, routes and loops run exactly as in `aip run`. It stops at a step named in --human, at "
+                    "Scripts, Decide, routes and loops run exactly as in `aip run`. It stops at a human step (--human; by "
+                    "default the steps written for a person), at "
                     "the end, at an error, or when the model gives up, and prints the same paused, done or error object as "
                     "`aip run`. Given a run id it carries that run on: --answers go into its pause first (with none, the model "
                     "answers the pause, or a failed step is retried). `run`, `resume` and `runah` mix on one run. Needs "
@@ -293,8 +294,10 @@ def runah_command(argv: list[str]) -> int:
     parser.add_argument("--answers", "-a", default=None, metavar="JSON",
                         help="for a run id: the answers to its standing pause, as `aip resume --answers` takes them")
     parser.add_argument("--human", default=None, metavar="STEP[,STEP]",
-                        help="the Task_Agent steps a person answers: the run stops there and prints the paused object. Kept by the "
-                             "run for its later `aip runah`; given again, it replaces them (\"\" for none)")
+                        help="the Task_Agent steps a person answers: the run stops there and prints the paused object. Without "
+                             "it, the steps written for a person: a prompt that opens \"This is a task for a person, not for you\", "
+                             "or a description that says a person (or the person) does it. Kept by the run for its later `aip "
+                             "runah`; given again, it replaces them (`none` for none: the model answers every task)")
     parser.add_argument("--batch", type=int, default=None, metavar="N", help="how many For passes run at once (default 10)")
     parser.add_argument("--agent", default=None, help="who launched the run, for the record (default AIP_AGENT, else `cli`); each "
                                                       "task the model answers says `runah` answered it")

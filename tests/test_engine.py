@@ -573,6 +573,21 @@ class Scripts(EngineCase):
         run = self.engine().start(self.load(self.bundle(script, source)), {"n": 4})
         self.assertEqual((run.status, run.error), (DONE, None))
 
+    def test_a_script_starts_in_the_working_directory(self):
+        """Plan R8: a relative path a script opens is the run's file, not one of the unpacked
+        bundle's; the bundle is `AIP_BUNDLE`, and a `Command` naming a bundle file still finds it."""
+        (Path(self.tmp) / "notes.txt").write_text("the run's file\n")
+        script = CHECK_PY.replace("n = p", "import os\n"
+                                  "assert os.getcwd() == os.environ['AIP_WORKDIR'] == os.path.realpath(" + repr(str(self.tmp)) + "), os.getcwd()\n"
+                                  "assert open('notes.txt').read() == \"the run's file\\n\"\n"
+                                  "assert os.path.isfile(os.path.join(os.environ['AIP_BUNDLE'], 'scripts', 'check.py'))\n"
+                                  "n = p")
+        run = self.engine().start(self.load(self.bundle(script)), {"n": 4})
+        self.assertEqual((run.status, run.error), (DONE, None))
+        source = SCRIPTS.replace("Run_Script scripts/check.py", 'Run_Script scripts/check.py\n  Command "python scripts/check.py"')
+        run = self.engine().start(self.load(self.bundle(script, source)), {"n": 4})
+        self.assertEqual((run.status, run.error), (DONE, None))
+
 
 SCORED = '''
 Procedure scored "A route on a score by its label."

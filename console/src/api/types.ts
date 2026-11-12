@@ -79,6 +79,8 @@ export interface Description {
   /** The `End` step's keys and their types. */
   result: Record<string, string | null>;
   example_inputs: Record<string, unknown>;
+  /** The Task_Agent steps written for a person, which `aip runah` stops at with no `--human` (plan R8). */
+  human_steps?: string[];
   revision?: string | null;
   draft?: boolean;
   published_at?: string;

@@ -9,7 +9,8 @@ calling, no provider SDK), `tools.py` the tools confined to the run's working di
 
 from aip.model.answerer.answerer import AGENT, MAX_REFUSALS, Answered, GaveUp, ModelAnswerer, language_page, parse_answer, task_message
 from aip.model.answerer.chat import ChatClient, ChatError, Completion
+from aip.model.answerer.human import PERSON_MARKER, for_a_person, human_steps
 from aip.model.answerer.tools import DEFINITIONS, NAMES, Tools
 
 __all__ = ["AGENT", "Answered", "ChatClient", "ChatError", "Completion", "DEFINITIONS", "GaveUp", "MAX_REFUSALS", "ModelAnswerer",
-           "NAMES", "Tools", "language_page", "parse_answer", "task_message"]
+           "NAMES", "PERSON_MARKER", "Tools", "for_a_person", "human_steps", "language_page", "parse_answer", "task_message"]

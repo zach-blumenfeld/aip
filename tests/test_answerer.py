@@ -272,8 +272,8 @@ def test_human_steps_pause_and_runah_goes_on_after_them(stand_in, workdir, tmp_p
     server = stand_in([say({"reply": "Here is what that line is."})])
     home = tmp_path / "home"
     paused = client(home).runah(example_dir("billing-support-agent"), {"message": CALM}, workdir=workdir, human="triage")
-    assert paused.step == "triage" and paused.answerer["reason"] == (
-        f"triage is a human step: answer it with `aip runah {paused.run_id} --answers JSON`")
+    assert paused.step == "triage" and paused.answerer["human"] == "listed" and paused.answerer["reason"] == (
+        f"triage is a human step (listed in --human): answer it with `aip runah {paused.run_id} --answers JSON`")
     assert server.requests == []
     done = client(home).runah(paused.run_id, answers={"billing": True, "tone": "calm"})
     assert isinstance(done, aip.Done) and done.result["reply"] == "Here is what that line is."

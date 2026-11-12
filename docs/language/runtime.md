@@ -74,8 +74,10 @@ procedure means; this page says what running one entails.
   the value must be among the key's labels, and anything else on the answer fails the step
   (`invalid_output`). The runtime never performs a script's work by hand. A runtime bounds how
   long one script may run and fails the step past it (`timeout`, which a retry runs again); this
-  one's cap is `aip config --script-timeout`, 300 seconds by default. This one tells a script where
-  it runs: the run's working directory (`AIP_WORKDIR`), the run, the step and its innermost pass
+  one's cap is `aip config --script-timeout`, 300 seconds by default. A script starts in the
+  run's working directory, so a relative path it opens is the run's, not the bundle's. This one
+  tells a script where it runs: the run's working directory (`AIP_WORKDIR`), the unpacked bundle
+  (`AIP_BUNDLE`), the run, the step and its innermost pass
   (`AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS`) and the cap it runs under (`AIP_SCRIPT_TIMEOUT`), so a
   run the script starts knows its parent and a script that waits can stop in time. A runtime may also run a
   procedure without executing any script, as a trial of a procedure nobody has read yet: such a

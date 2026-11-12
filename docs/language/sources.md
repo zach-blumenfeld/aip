@@ -270,6 +270,31 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - **Not done:** the MCP `runah` tool takes no `budget_tokens`; no e2e spec runs `assist` itself
   (`e2e/orchestrated.spec.ts` checks a parent and its child on the run pages).
 
+## What R8 left (2026-11-12)
+
+- **Human steps by default are `aip.model.answerer.human_steps(bundle)`** (`human.py`): a
+  `Task_Agent` whose prompt opens "This is a task for a person, not for you" or whose description
+  says "a person"/"the person" (or "a human") does it. The SDK applies it when `human` is None
+  (so the CLI, the MCP tool and `examples/harness/assist.py` all get it); `none` or `[]` is none.
+  The run file keeps `human` and `human_source` (`marked`/`listed`); a paused object's
+  `answerer.human` says which. `describe` (local and the server's, `describe_bundle`, and filled
+  in on read for a bundle stored before R8) carries `human_steps`; the console's picker reads it
+  and keeps no rule. **The description rule is loose**: `assist`'s `plan` was caught by "a
+  question for the person" in its description and had to be reworded; a drafter writing a
+  description that mentions the person makes the step a person's.
+- **`assist`'s `plan` answers `action: choice [run, ask, done]`** (was `done: true_or_false`);
+  `Until action == done`, a `Route next_move` on it, and `ask_person` (prompt `assets/ask.md`,
+  opening with the marker) produces `outcome` and `Continue`s. The audit `agent-routes` now lists
+  `assist`'s route among the built-ins (`tests/test_local_server.py` leaves it out).
+- **Scripts start in `AIP_WORKDIR`** (`steps.run_script`, which creates it if missing);
+  `AIP_BUNDLE` is the unpacked bundle; a `Command` argument naming a bundle file is made its path
+  under the bundle (`steps.launch`). R7's `refund_line_counter` counted `./notes` right with no
+  full path in the R8 proof.
+- **The proof's run is in the local store**: `assist` run `9623a175feca48ff` (agent `r8-proof`,
+  session `r8-assist-1`), paused at `ask_person` after its first child found no `./meeting-notes`,
+  answered with `aip runah 9623a175feca48ff --answers`, done with monday 2, tuesday 0, wednesday 3.
+  The driver is `scratch/r8/proof.py`, not committed.
+
 ## Agent frameworks (track D2)
 
 `aip mcp` is `src/aip/mcp.py` since M1 (2026-11-09), described in `docs/mcp.md`, on the MCP

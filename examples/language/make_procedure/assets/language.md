@@ -205,7 +205,8 @@ is never checked: for `n` checked fixes write `At_Most n+1`.
   {<stem>: <text of each Use file>}, "expects": {<its Produce keys and types>}}`, and prints one
   JSON object on stdout holding exactly its `Produce` keys. A non-zero exit fails the step. An
   answer-typed key is written as the bare value (`{"passed": true}`). Files it reads or writes
-  by relative path belong under the directory in the `AIP_WORKDIR` environment variable.
+  by relative path belong under the directory in the `AIP_WORKDIR` environment variable, which
+  is where it starts: a relative path it opens is the run's file.
 - Every `Run_Script`, `Prompt` and `Use` path must exist under `scripts/`, `assets/` or
   `references/` of the folder.
 

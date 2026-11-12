@@ -69,9 +69,11 @@ their types) and `labels` (for each `choice` or `score` among them, the values i
 `hint` is one line on the shape of an answer to this pause.
 
 `aip runah` prints the same three objects (`docs/runah.md`). It pauses only where its model
-does not answer: at a step named by `--human`, or when the model gives up (its answer refused
-four times, its cap of tool calls or tokens reached, its endpoint failing). The paused object
-then carries `answerer`: `{"answered": false, "step", "reason"}`, and, when the model tried, the
+does not answer: at a human step (one named by `--human`, or with no `--human` one written for
+a person, `docs/runah.md`), or when the model gives up (its answer refused four times, its cap
+of tool calls or tokens reached, its endpoint failing). The paused object then carries
+`answerer`: `{"answered": false, "step", "reason"}`, at a human step `"human": "marked"` (written
+for a person) or `"listed"` (named by `--human`), and, when the model tried, the
 `task` it gave up on and what it spent (`tool_calls`, `tokens`, `model_seconds`, `refusals`).
 The pause is the same as any other: answer it with `aip resume` or `aip runah <run_id>
 --answers JSON`, or run `aip runah <run_id>` with no answers to have the model try again.
@@ -590,7 +592,8 @@ top: `run_id`, `bundle_id` (once, here; the bundle is in the cache under that id
 none is a draft's),
 `workdir` (the run's working directory; `aip runs <run_id> --json` prints it, and the server's
 record keeps it), `server` and `recorded` (where it is recorded, and whether the last stop got
-there), `human` (the steps `aip runah` leaves to a person, kept for the run's later calls),
+there), `human` (the steps `aip runah` leaves to a person, kept for the run's later calls) and
+`human_source` (`marked` when no `--human` chose them, else `listed`),
 `scripts` (false for a trial, which executes no script and is not recorded), `created` and
 `updated` (the file's own times), and `run`, which holds:
 

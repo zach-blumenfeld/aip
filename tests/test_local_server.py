@@ -85,11 +85,14 @@ def test_a_run_starts_the_local_server_and_is_recorded_as_a_draft(machine):
     record = json.loads(call("runs", paused["run_id"], "--json")[1])
     assert (record["status"], record["draft"], record["server"], record["recorded"]) == ("done", True, local.url(), True)
 
+    def routes(out: str) -> list:                    # the shipped assist has an agent's route too (its next_move, plan R8)
+        return [r for r in json.loads(out) if r["name"] != "assist"]
+
     code, out, _ = call("audit", "agent-routes")
-    assert code == 0 and json.loads(out) == [], "a draft is not a published revision; nothing is published"
+    assert code == 0 and routes(out) == [], "a draft is not a published revision; nothing is published"
     code, out, _ = call("publish", str(AGENT))
     assert code == 0 and out.startswith("billing_support_agent@1")
-    [route] = json.loads(call("audit", "agent-routes")[1])
+    [route] = routes(call("audit", "agent-routes")[1])
     assert (route["route"], route["reads"], route["runs"]) == ("by_tone", "tone", 1)
 
     code, out, err = call("export", "runs", "billing_support_agent", "--since", "2026-01-01", "-o", "audit.rl")

@@ -26,15 +26,14 @@ writes the outcome to `<workdir>/.assist/<run id>.json` when the child stops; th
 that file until a little before the cap, and if the child is still going it says `running` and
 the planner's next pass waits again. The child is an ordinary run with a run file, started from
 this run's script, so it is this run's child (`parent` in its record) and one level deeper; it
-runs ahead with runah, with the steps a person answers (by their description, "a person" or "the
-person") left to the planner, which answers them or asks the person.
+runs ahead with runah, which stops at the steps written for a person (`human_steps`, runah's
+default); the planner answers those or asks the person.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -44,7 +43,6 @@ from typing import Any
 SELF = "assist"
 BUILDER = "build_procedure"
 SPOOL = ".assist"
-PERSON = re.compile(r"\b(a|the) person\b", re.IGNORECASE)
 LONGEST = 20_000                       # characters of outcome the planner is shown
 
 
@@ -130,10 +128,7 @@ def child(order_file: str) -> int:
     client = aip.Client()
     try:
         if order["start"]:
-            target = order["target"]
-            steps = client.describe(target).steps
-            human = [s["name"] for s in steps if s.get("kind") == "Task_Agent" and PERSON.search(s.get("description") or "")]
-            result = client.runah(target, order["inputs"], human=human, run_id=run_id, workdir=workdir())
+            result = client.runah(order["target"], order["inputs"], run_id=run_id, workdir=workdir())
         else:
             result = client.runah(run_id, answers=order.get("answers"))
         out = outcome_of(result, client)

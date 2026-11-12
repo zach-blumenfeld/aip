@@ -5,30 +5,16 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Graph } from "../src/graph/bundle.ts";
 import { candidatesOf, rowText } from "../src/run/answers.ts";
-import { agentSteps, forAPerson, PERSON_MARKER } from "../src/run/human.ts";
+import { agentSteps } from "../src/run/human.ts";
 import { scriptNotes } from "../src/studio/chat.ts";
 
 const graph = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.graph.json`, import.meta.url), "utf8")) as Graph;
 
-test("a task is a person's when its prompt opens with the drafter's marker or its description says so", () => {
-  assert.equal(forAPerson("Approve it.", `${PERSON_MARKER}: approve the refund.`), true);
-  assert.equal(forAPerson(`${PERSON_MARKER}: approve the refund.`, `${PERSON_MARKER}: approve the refund.`), true);
-  assert.equal(forAPerson("A person answers the questions the rules leave open.", "# Ask\n..."), true);
-  assert.equal(forAPerson("Summarize the request for the approver.", "Summarize the request for the approver."), false);
-  assert.equal(forAPerson("Draft a reply.", "Mention a personal touch."), false);
-});
-
-test("the Task_Agent steps of a graph, in written order, with the prompt a Prompt file gives", () => {
+test("the Task_Agent steps of a graph, in written order, each a person's when aip's human_steps names it", () => {
   const g = graph("billing-support-agent");
-  const steps = agentSteps(g);
-  assert.deepEqual(steps.map((s) => s.name), ["triage", "reply"]);
-  // The compiler's graph has no file text: the description stands in for the prompt.
-  assert.equal(steps[1].prompt, steps[1].description);
-  assert.deepEqual(steps.map((s) => s.person), [false, false]);
-  // The server's does: a Prompt file that opens with the marker makes the step a person's.
-  const file = g.nodes.find((n) => n.labels.includes("File") && n.properties.path === "assets/reply.md")!;
-  const served: Graph = { ...g, nodes: g.nodes.map((n) => (n === file ? { ...n, properties: { ...n.properties, text: `${PERSON_MARKER}: write the reply.` } } : n)) };
-  assert.deepEqual(agentSteps(served).map((s) => [s.name, s.person]), [["triage", false], ["reply", true]]);
+  assert.deepEqual(agentSteps(g).map((s) => [s.name, s.person]), [["triage", false], ["reply", false]]);
+  // Which steps are a person's is aip's rule (aip.model.answerer.human_steps); the page reads its answer.
+  assert.deepEqual(agentSteps(g, ["reply"]).map((s) => [s.name, s.person]), [["triage", false], ["reply", true]]);
   assert.deepEqual(agentSteps(graph("billing-support")).map((s) => s.name), ["reply"]);
 });
 

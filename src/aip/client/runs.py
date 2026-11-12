@@ -77,6 +77,7 @@ class RunFile:
     server: str | None = None              # where the run is recorded
     recorded: bool = False                 # whether the last stop reached the server
     human: list[str] | None = None         # the steps runah leaves to a person (`aip runah --human`), for its later calls
+    human_source: str | None = None        # how they were chosen: `marked` (no --human: the steps written for a person) or `listed`
     scripts: bool = True                   # False for a trial, which executes no script and is not recorded
     parent: JSON | None = None             # the run, step and pass whose script started this run: `{run_id, step, pass}`
     depth: int = 0                         # how many runs up the parent chain goes

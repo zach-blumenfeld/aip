@@ -241,8 +241,9 @@ class Description:
     types; `steps` lists name, kind and description in source order; `data` is the whole
     object, the server's for a catalog reference. In `data`, `result_on_some_paths` lists the
     result keys only some paths produce (a result has them when its path did), `retired` is
-    true for a retired revision, and `warning` is there when the procedure has a `Decide` and
-    this client has no decision model configured."""
+    true for a retired revision, `human_steps` names the `Task_Agent` steps written for a person
+    (the ones `runah` stops at when not told otherwise), and `warning` is there when the
+    procedure has a `Decide` and this client has no decision model configured."""
     name: str
     bundle_id: str
     description: str
@@ -665,7 +666,9 @@ class Client:
         bundle, origin = self._open(target, cache=False)
         with Procedure.load(bundle) as procedure:
             data = describe_procedure(procedure)
-        data.update(target=origin["target"], revision=origin["revision"], draft=origin["kind"] != "name")
+        from aip.model.answerer import human_steps
+
+        data.update(target=origin["target"], revision=origin["revision"], draft=origin["kind"] != "name", human_steps=human_steps(bundle))
         data = self._model_warned(data)
         return Description(data["name"], data["bundle_id"], data["description"], data["inputs"], data["result"], data["steps"],
                            text, origin["revision"], data)
@@ -762,6 +765,7 @@ class Client:
         engine = self._engine(where, batch, on_step, scripts=scripts, lineage=lineage)
         if parent:
             add_child(parent["run_id"], run_id, self.home)
+        human, human_source = _human_steps(bundle, human) if runah else (None, None)
         with Procedure.load(bundle) as procedure:
             if runah:
                 self._check_human(procedure, human or [])
@@ -775,7 +779,8 @@ class Client:
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc
             handle = RunFile(run_id, bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
                              origin["revision"], server=self.server.url if self.server and scripts else None,
-                             human=human or None, scripts=scripts, parent=parent, depth=depth, budget_tokens=budget)
+                             human=human or None, human_source=human_source, scripts=scripts, parent=parent, depth=depth,
+                             budget_tokens=budget)
             answerer = self._answerer(engine, procedure, where, on_step, lineage) if runah else None
             return self._settle(engine, run, handle, on_pause, warning, answerer)
 
@@ -815,7 +820,10 @@ class Client:
         chat confined to the run's working directory (`aip.model.answerer`, `docs/runah.md`),
         each answer checked as `resume` checks one, a refusal sent back up to three times, and
         the run carries on. It stops at a step named in `human` (names, or one comma-separated
-        string; a run keeps them for its later calls, and passing them again replaces them), at
+        string; a run keeps them for its later calls, and passing them again replaces them; `none`
+        or `[]` for none), or with no `human` at the steps written for a person
+        (`aip.model.answerer.human_steps`: the prompt opens "This is a task for a person, not for
+        you", or the description says a person does it), at
         the end, at an error, or when the model gives up, and returns the same `Paused`, `Done`
         or `RunError` as `run`; a `Paused` it returns says why under `answerer`. For a run,
         `answers` go into the standing pause first (with none, the model answers it, or a failed
@@ -839,8 +847,9 @@ class Client:
             if run_id is not None:
                 raise InvalidInput("run_id names a new run; this one has its id")
             handle, path, bundle = self._reopen(target)
-            if human is not None:
-                handle.human = _human(human) or None
+            if human is not None or handle.human_source is None:
+                listed, handle.human_source = _human_steps(bundle, _human(human))
+                handle.human = listed or None
             if budget_tokens is not None:
                 if budget_tokens < 1:
                     raise InvalidInput(f"the token budget is at least 1, not {budget_tokens}")
@@ -949,8 +958,10 @@ class Client:
                 return Done(handle.run_id, run.result or {}, path, recorded, block)
             if answerer is not None and stopped is None:
                 if run.pause["step"] in (handle.human or []) and not ask:
-                    stopped = {"answered": False, "step": run.pause["step"],
-                               "reason": f"{run.pause['step']} is a human step: answer it with `aip runah {handle.run_id} --answers JSON`"}
+                    why = "written for a person" if handle.human_source == "marked" else "listed in --human"
+                    stopped = {"answered": False, "step": run.pause["step"], "human": handle.human_source or "listed",
+                               "reason": f"{run.pause['step']} is a human step ({why}): answer it with `aip runah {handle.run_id} "
+                                         "--answers JSON`"}
                 else:
                     ask = False
                     answered, stopped = self._model_answers(engine, run, answerer)
@@ -1203,12 +1214,24 @@ class Client:
         return Exported(path, runs, exported, procedures)
 
 
-def _human(human: list[str] | str | None) -> list[str]:
-    """The human steps: names, or one comma-separated string."""
+def _human(human: list[str] | str | None) -> list[str] | None:
+    """The human steps: names, or one comma-separated string; `none` (or nothing) for none.
+    None when not given, which leaves the choice to the steps marked for a person."""
     if human is None:
-        return []
+        return None
     names = human.split(",") if isinstance(human, str) else list(human)
-    return [n.strip() for n in names if n and n.strip()]
+    names = [n.strip() for n in names if n and n.strip()]
+    return [] if [n.lower() for n in names] == ["none"] else names
+
+
+def _human_steps(bundle: Bundle, human: list[str] | None) -> tuple[list[str], str]:
+    """The steps a runah run stops at for a person, and why: those listed, or with no list the
+    ones written for a person (`aip.model.answerer.human_steps`)."""
+    if human is not None:
+        return human, "listed"
+    from aip.model.answerer import human_steps
+
+    return human_steps(bundle), "marked"
 
 
 WORK_KEYS = ("model", "tool_calls", "tokens", "seconds")

@@ -44,15 +44,22 @@ Execute search "List the catalog's procedures that may fit the task, with what e
   Next_Step work
 }
 
-Loop work Until done, At_Most 50, Else_Exit {
-  Task_Agent plan "One model call: which procedure to run next, with what inputs, or done." {
+Loop work Until action == done, At_Most 50, Else_Exit {
+  Task_Agent plan "One model call: which procedure to run next and with what inputs, what to ask, or done." {
     Read task, outcome, catalog
     Prompt assets/plan.md
-    Produce run:    string        "A procedure name, a folder, or the run id of a run to carry on; empty when done."
-            inputs: string        "Its inputs as a JSON object; for a run id, {\"answers\": ...} or {} to wait."
-            note:   string        "The answer to the task, or the question for the person, when done; empty otherwise."
-            done:   true_or_false "Whether the task is done or the person must be asked."
-    Next_Step act
+    Produce run:    string                  "A procedure name, a folder, or the run id of a run to carry on; empty otherwise."
+            inputs: string                  "Its inputs as a JSON object; for a run id, {\"answers\": ...} or {} to wait."
+            note:   string                  "The question for the person, or the answer to the task when done; empty otherwise."
+            action: choice [run, ask, done] "run what run names, ask the person the question in note, or done."
+    Next_Step next_move
+  }
+
+  Route next_move "Run what plan chose, or stop to ask the person." {
+    Read action
+    run  -> act
+    ask  -> ask_person
+    done -> Continue
   }
 
   Execute act "Run it through the aip client: start the run, or carry one on, and wait on it within the script cap." {
@@ -62,9 +69,16 @@ Loop work Until done, At_Most 50, Else_Exit {
     Continue
   }
 
+  Task_Agent ask_person "This is a task for a person, not for you: answer the question the orchestrator asks." {
+    Read task, note
+    Prompt assets/ask.md
+    Produce outcome: string "The person's answer, in their words."
+    Continue
+  }
+
   Next_Step end
 }
 
-End "The answer, or the question for the person." {
+End "The answer to the task." {
   Read note
 }

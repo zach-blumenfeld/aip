@@ -323,9 +323,10 @@ offline), `aip pin` and `aip retire`. `aip compile` and `aip fmt` need no server
 An `Execute` step runs its script on this machine, from the bundle's files unpacked under
 `~/.aip/cache/<bundle id>/`. The script gets one JSON object on stdin (`state`, the keys the step
 reads; `assets`, the files it `Use`s; `expects`, the keys it must produce) and prints one JSON
-object on stdout. It runs with your environment plus `AIP_WORKDIR`, the run's working directory
-(`--workdir`, kept in the run file, so a resume from elsewhere uses the same one), which is where
-it reads and writes the run's files. Before the first script of a run, the machine is checked
+object on stdout. It starts in the run's working directory (`--workdir`, kept in the run file,
+so a resume from elsewhere uses the same one), so a relative path it opens is the run's file, and
+runs with your environment plus `AIP_WORKDIR`, that directory, and `AIP_BUNDLE`, the unpacked
+bundle its own files are under. Before the first script of a run, the machine is checked
 against the procedure's `Requires`, and everything missing is named at once (`requires_unmet`).
 
 One script may run for `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`; 300 by

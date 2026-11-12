@@ -319,8 +319,9 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
     def runah(ctx: Context, target: str, inputs: dict[str, Any] | None = None, answers: dict[str, Any] | list[Any] | None = None,
               human: list[str] | None = None, session: str | None = None, workdir: str | None = None) -> dict[str, Any]:
         """Run ahead: like `run`, but this server's own chat model (`aip config runah`)
-        answers each `Task_Agent` task and the run keeps going, stopping at a step named in
-        `human` (the run pauses there for you, as `run` would), at the end, at an error, or when
+        answers each `Task_Agent` task and the run keeps going, stopping at a human step (the
+        run pauses there for you, as `run` would: the steps named in `human`, `["none"]` for
+        none, or without it the steps written for a person), at the end, at an error, or when
         the model gives up (`answerer` in the reply says why). Use it when the user wants the
         procedure carried through without you doing each task. `target` is what `run` takes, or
         the `run_id` of a run to carry on, with `answers` for its standing pause. Returns what

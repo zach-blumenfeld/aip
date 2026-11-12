@@ -33,6 +33,7 @@ from aip.model.types import (
 from aip.model.environment import SCRIPT_TIMEOUT_ENV
 
 WORKDIR = "AIP_WORKDIR"
+BUNDLE_ENV = "AIP_BUNDLE"                   # the unpacked bundle a script's own files are under
 # What a script is told about where it runs (runtime.md, Scripts), so a run it starts knows its
 # parent: the run, the step and its innermost pass; and what that run inherits: its depth among
 # nested runah runs and the tokens left of the parent's budget.
@@ -444,28 +445,37 @@ def assets_of(procedure: Procedure, step: Step, root: Path) -> dict[str, str]:
     return out
 
 
-def launch(command: str | None, script: Path, python: str) -> list[str]:
+def launch(command: str | None, script: Path, python: str, root: Path | None = None) -> list[str]:
     """The argument list: `Command` split like a shell would with a leading `python` replaced by
-    the interpreter, else the interpreter on the script."""
+    the interpreter, else the interpreter on the script. A script starts in the run's working
+    directory, so an argument that names a file of the bundle (`scripts/check.py`) is made its
+    path under `root`, the unpacked bundle."""
     if not command:
         return [python, str(script)]
     argv = shlex.split(command)
     if argv and argv[0] == PYTHON:
         argv[0] = python
+    if root is not None:
+        argv = [str(root / Path(*a.split("/"))) if i and not Path(a).is_absolute() and (root / Path(*a.split("/"))).is_file() else a
+                for i, a in enumerate(argv)]
     return argv
 
 
-def run_script(step: str, script: str, argv: list[str], stdin: JSON, cwd: Path, timeout: float | None,
+def run_script(step: str, script: str, argv: list[str], stdin: JSON, root: Path, timeout: float | None,
                workdir: Path | None, env: JSON | None = None) -> JSON:
     """Run one script under the stdin/stdout contract and return the JSON object it printed.
     `ScriptTimeout`, or `ScriptFailed` on a non-zero exit or output that is not one JSON object.
-    The script sees this process's environment, `env` over it, `AIP_WORKDIR`, and
+    The script starts in the run's working directory, so a relative path it opens is the run's
+    file; it sees this process's environment, `env` over it, `AIP_WORKDIR` (that directory),
+    `AIP_BUNDLE` (`root`, the unpacked bundle its own files are under), and
     `AIP_SCRIPT_TIMEOUT`, the cap it runs under (`0` for none), so a script that waits on
     something can stop waiting in time."""
-    env = {**os.environ, **(env or {}), WORKDIR: str(Path(workdir or Path.cwd()).resolve()),
+    where = Path(workdir or Path.cwd()).resolve()
+    where.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, **(env or {}), WORKDIR: str(where), BUNDLE_ENV: str(Path(root).resolve()),
            SCRIPT_TIMEOUT_ENV: "0" if timeout is None else f"{timeout:g}"}
     try:
-        proc = subprocess.run(argv, input=json.dumps(stdin), capture_output=True, text=True, cwd=cwd, timeout=timeout, env=env)
+        proc = subprocess.run(argv, input=json.dumps(stdin), capture_output=True, text=True, cwd=where, timeout=timeout, env=env)
     except subprocess.TimeoutExpired as err:
         raise ScriptTimeout(step, script, timeout) from err
     stderr = proc.stderr.strip()
@@ -493,7 +503,7 @@ def execute(procedure: Procedure, step: Step, state: JSON, root: Path, *, python
         raise InvalidInput(step.name, [f"{step.name} names no script"])
     path = root / Path(*script.path.split("/"))
     stdin = {"state": project(step, state), "assets": assets_of(procedure, step, root), "expects": expects(procedure, step)}
-    argv = launch(step.properties.get("command"), path, python or sys.executable)
+    argv = launch(step.properties.get("command"), path, python or sys.executable, root)
     began = time.monotonic()
     raw = run_script(step.name, script.path, argv, stdin, root, timeout, workdir, env)
     seconds = round(time.monotonic() - began, 3)
