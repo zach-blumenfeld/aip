@@ -151,9 +151,7 @@ same on both backends; an exact name wins outright.
 ### Backends
 
 - **Relate** (the default, `aip.server.backends.relate`). One file under the data directory,
-  `~/.local/share/aip/server/store.rl` unless `--path` or `backend.path` says otherwise (kept as
-  `store.cl` while the pinned engine release still carries its old name; `aip.compiler.relate`
-  knows). No other process is needed. A connection belongs to the thread that opened it, so one
+  `~/.local/share/aip/server/store.rl` unless `--path` or `backend.path` says otherwise. No other process is needed. A connection belongs to the thread that opened it, so one
   worker thread owns it and runs every transaction in turn. Look inside with the engine's own
   CLI or a Browser on `relate serve --read-only`, and `docs/language/queries.md`.
 - **Neo4j** (`aip.server.backends.neo4j`, `--backend neo4j`, `NEO4J_URI`, `NEO4J_USERNAME`,

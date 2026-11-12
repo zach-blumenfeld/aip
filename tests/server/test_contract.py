@@ -410,7 +410,7 @@ def test_the_relate_store_is_one_file_that_outlives_the_server(tmp_path):
     ids = record(first, tmp_path)
     kept = first.store.run(ids["batched"])
     first.close()
-    assert [p.name for p in (tmp_path / "data").iterdir()] == [relate.store_file(path).name], "one file under the data directory"
+    assert [p.name for p in (tmp_path / "data").iterdir()] == [path.name], "one file under the data directory"
 
     again = Served(RelateBackend(path))
     assert [e["name"] for e in again.store.catalog()] == ["billing_support", "billing_support_agent", "dynamic_policy"]

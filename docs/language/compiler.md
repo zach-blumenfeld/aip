@@ -181,8 +181,7 @@ makes the `Bundle`; `compiler_version()` is the installed package's.
 `write_graph(conn, graph, bundle_id)`, the one body of Cypher that puts a graph in a store: one
 `UNWIND ... CREATE` per label set, then one per edge type that matches both ends by label and
 `{bundle_id, id}`. The same function fills the engine's in-memory copy and a server's store, where many bundles
-share one graph. `relate.py` imports the engine lazily (`relate`, the public `relate-db` package; until milestone R6
-moves the pin off the pre-release 0.16.1 wheel it falls back to that wheel's `cypherlite`) and knows
+share one graph. `relate.py` imports the engine lazily (`relate`, the `relate-db` package from PyPI) and knows
 the suffix. Nothing imports it at package load, so `aip compile --check`, `--json` without a bundle and `fmt` run without Relate; `compile`
 exits 3 when writing needs it.
 

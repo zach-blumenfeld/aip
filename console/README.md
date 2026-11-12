@@ -180,7 +180,7 @@ in words, data flow, a run's path and traffic, a run's history nested under its 
 server kept, the forms' typing, the launcher's reading of what `aip` prints. Node 22.18 or newer (it runs the TypeScript as it is).
 
 `npm run e2e` drives the real thing and needs this repository's `aip` (`AIP_REPO`, default `..`)
-with Relate installed (`../scripts/install-relate.sh`), and `uv`. Before anything starts,
+synced with `uv sync` (which installs Relate, `relate-db`), and `uv`. Before anything starts,
 `e2e/prepare.mjs` writes a fresh `.aip-e2e/`: an `aip` on the consoles' PATH that runs the
 checkout's CLI, and procedures copied from `../examples/language` (two revisions of
 `billing-support-agent` whose escalate script files its ticket under the run's working directory and

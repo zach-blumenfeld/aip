@@ -439,7 +439,7 @@ uv run pytest -q                                       # the Neo4j backend tests
 uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall agent-instruction-protocol` removes it
 ```
 
-The compiler, the runtime, the server and the client are one package (`src/aip/`), so `uv sync` installs everything editable and `uv run pytest -q` at the root runs every test. Writing or reading a bundle needs Relate, which is not on PyPI yet: `scripts/install-relate.sh` installs the pinned wheel into `.venv`, and the bundle and engine tests skip without it.
+The compiler, the runtime, the server and the client are one package (`src/aip/`), so `uv sync` installs everything editable and `uv run pytest -q` at the root runs every test. Writing or reading a bundle needs Relate, the `relate-db` dependency, which `uv sync` installs with the rest.
 
 The design behind the client-server architecture is [`docs/server-design.md`](docs/server-design.md).
 

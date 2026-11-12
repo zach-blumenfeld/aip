@@ -21,8 +21,8 @@ aip --version
 aip 0.9.0 language 0.9
 ```
 
-The run recorded here used this repository's checkout (`uv run aip`), with Relate installed by
-`scripts/install-relate.sh`, because 0.9 is not on PyPI yet.
+The run recorded here used this repository's checkout (`uv run aip`), because 0.9 is not on PyPI
+yet; `uv sync` installs Relate (`relate-db`) with the rest.
 
 ## 1. Configure
 
@@ -47,7 +47,7 @@ aip config --decision-model-key "$TYPESAFE_API_KEY"
 
 ```
 wrote /Users/you/.config/aip/config.json
-server: local  http://127.0.0.1:8247, started when a command needs it; its store is /Users/you/.local/share/aip/server/store.cl  (from /Users/you/.config/aip/config.json)
+server: local  http://127.0.0.1:8247, started when a command needs it; its store is /Users/you/.local/share/aip/server/store.rl  (from /Users/you/.config/aip/config.json)
 decision model: https://api.typesafe.ai  (TypeSafe's, the default)  key: set  (from /Users/you/.config/aip/config.json)
 batch: 10
 ```

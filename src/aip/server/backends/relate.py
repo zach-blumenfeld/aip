@@ -90,7 +90,7 @@ class RelateGraph:
         from aip.compiler import relate
 
         relate.module()                      # RelateMissing here, with the install hint, not on the worker
-        self.path = ":memory:" if str(path) == ":memory:" else str(relate.store_file(Path(path).expanduser()))
+        self.path = ":memory:" if str(path) == ":memory:" else str(Path(path).expanduser())
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="aip-store")
         self.conn = self._on_worker(lambda: relate.store(self.path))
 

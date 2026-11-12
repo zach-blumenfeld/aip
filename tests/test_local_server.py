@@ -71,7 +71,7 @@ def test_a_run_starts_the_local_server_and_is_recorded_as_a_draft(machine):
     assert (paused["paused"], paused["step"], paused["recorded"]) == ("task", "triage", True)
     about = local.health()
     assert about is not None and (about["local"], about["backend"]) == (True, "relate") and isinstance(about["pid"], int)
-    assert (machine / "data" / "store.cl").is_file() or (machine / "data" / "store.rl").is_file(), "the store is under the data directory"
+    assert (machine / "data" / "store.rl").is_file(), "the store is under the data directory"
 
     code, out, _ = call("runs", "--agent", "cli")
     assert code == 0 and paused["run_id"] in out and "billing_support_agent (draft)" in out

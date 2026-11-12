@@ -5,10 +5,8 @@
 # server's suite (`tests/server`) runs over the Relate backend where Relate is installed; its
 # Neo4j half skips (no `NEO4J_URI`).
 #
-# Relate, the engine a bundle is written in, is released on an internal GitHub repository, so it
-# is installed by `scripts/install-relate.sh` with a token that can read it (the repository
-# secret `RELATE_GH_TOKEN`). Without the secret the bundle tests skip and say so, and the
-# fresh-venv proof (`scripts/fresh-venv.sh`) does not run.
+# Relate, the engine a bundle is written in, is the `relate-db` dependency from PyPI, so
+# `uv sync` installs it and the bundle tests run everywhere.
 name: Tests
 
 on:
@@ -24,8 +22,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    env:
-      RELATE_GH_TOKEN: ${{ secrets.RELATE_GH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,12 +35,6 @@ jobs:
 
       - name: Install the package
         run: uv sync --group dev
-
-      - name: Install Relate
-        if: runner.os == 'Linux' && env.RELATE_GH_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
-        run: scripts/install-relate.sh .venv
 
       - name: Run the tests
         # The code under test names utf-8 on every text file it reads or writes; the tests' own
@@ -61,9 +51,7 @@ jobs:
         run: uv run aip fmt --check examples/language
 
       - name: A fresh venv compiles an example (L3's proof)
-        if: runner.os == 'Linux' && env.RELATE_GH_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
+        if: runner.os == 'Linux'
         run: scripts/fresh-venv.sh
 
   # The VS Code extension (E1's and E2's proofs): esbuild bundles it and its graph preview (the
@@ -134,12 +122,10 @@ jobs:
   # The console's Playwright suite (C1's proof, `npm run typecheck && npm run e2e`): a real
   # `aip server` from this checkout on a Relate store, the console's launcher over this checkout's
   # `aip`, a decision model that answers from marks in the text (`console/e2e/model.mjs`), and
-  # Chromium. It needs Relate, so like the bundle tests it runs only with `RELATE_GH_TOKEN`.
+  # Chromium.
   console-e2e:
     name: Console e2e
     runs-on: ubuntu-latest
-    env:
-      RELATE_GH_TOKEN: ${{ secrets.RELATE_GH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -153,12 +139,6 @@ jobs:
 
       - name: Install the package
         run: uv sync --group dev
-
-      - name: Install Relate
-        if: env.RELATE_GH_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ env.RELATE_GH_TOKEN }}
-        run: scripts/install-relate.sh .venv
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -176,11 +156,9 @@ jobs:
         run: npm run typecheck
 
       - name: Install Chromium
-        if: env.RELATE_GH_TOKEN != ''
         working-directory: console
         run: npx playwright install --with-deps chromium
 
       - name: The e2e suite
-        if: env.RELATE_GH_TOKEN != ''
         working-directory: console
         run: npm run e2e

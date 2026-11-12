@@ -38,8 +38,8 @@ e2e harness runs this checkout's (`AIP_REPO`, default `..`) behind `uv run`.
 
 - **Node 24, npm** (22.18 is the least for `npm test`, which runs TypeScript as it is). `npm
   install` to set up; `npm run typecheck && npm test && npm run e2e` must pass before a commit
-  that touches this folder. The e2e suite needs `uv`, Relate installed in the checkout's `.venv`
-  (`../scripts/install-relate.sh`; the server it starts stores in it) and a browser (`npx
+  that touches this folder. The e2e suite needs `uv` (whose `uv sync` installs Relate, `relate-db`,
+  into the checkout's `.venv`; the server it starts stores in it) and a browser (`npx
   playwright install chromium`, or `PLAYWRIGHT_CHANNEL=chrome`).
 - **Keep dependencies few.** Add a library only when a milestone names the need: the graph
   layout, the diff and the grammar tokenizer are hand-rolled for that reason. There is no

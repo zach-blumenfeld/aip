@@ -637,7 +637,7 @@ def config_command(argv: list[str]) -> int:
     elif s.local:
         from aip.client import local
 
-        print(f"server: local  {s.server}, started when a command needs it; its store is {local.store_file()}  (from {s.source})")
+        print(f"server: local  {s.server}, started when a command needs it; its store is {local.store_path()}  (from {s.source})")
     else:
         print(f"server: {s.server}  (from {s.source})")
         print(f"token:  {'set' if s.token_set else 'none'}")
