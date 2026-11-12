@@ -117,7 +117,7 @@ def workdir(tmp_path) -> Path:
 def test_the_tools_stay_inside_the_working_directory(tmp_path, workdir):
     bundle = tmp_path / "bundle"
     (bundle / "references").mkdir(parents=True)
-    (bundle / "references" / "help.md").write_text("call tier 2\n")
+    (bundle / "references" / "help.md").write_text("call tier 2\n", newline="\n")  # 12 bytes on Windows too
     (tmp_path / "secret.txt").write_text("no")
     tools = Tools(workdir, bundle)
     assert tools.call("read_file", {"path": "notes.md"}) == "Refunds over 100 need a manager.\n"
