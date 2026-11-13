@@ -16,7 +16,8 @@ were written by a model and nobody has read them yet):
 {test_report}
 
 Say, in a few short lines: which rules it covers and where; which it does not, or covers only
-partly; and anything a person should check before it is published. Then, under a line
+partly; and anything a person should check before it is published. If it has a `Decide`,
+say that it runs only where a decision model is configured (`aip config` shows whether one is). Then, under a line
 `Scripts:`, one line per script: what it does, and what it touches outside the working directory
 (services and URLs it calls, files it reads or writes elsewhere, commands it runs) and which
 credentials it uses (tokens, logins, keys, environment variables), or that it touches nothing

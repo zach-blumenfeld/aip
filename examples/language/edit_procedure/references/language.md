@@ -122,6 +122,14 @@ End "Every ticket has a reply or an escalation, and the lead has a summary." {
 
 A task for a person is a `Task_Agent` whose description says so: the agent takes it to them and answers with what they decided.
 
+Choosing who does a step: a rule a person would read and judge is a `Decide`, one question
+answered with a confidence; a policy of several rules is a `For` over the rules with one `Decide`
+per rule, `Collect`ing the verdicts, and an `Aggregate` with a confidence bar (as below), so a
+rule added to the policy needs no new step. A `Task_Agent` reads or writes prose and acts in the
+world, never makes a judgment a `Decide` can make; anything exact, recording a line in a file
+included, is an `Execute`. A procedure with a `Decide` runs only where a decision model is
+configured.
+
 Types: `string`, `integer`, `float`, `boolean`, `list`, `object`, and the three answer types
 `true_or_false`, `choice [a, b]` and `score [low, medium, high]` (at least two labels each).
 

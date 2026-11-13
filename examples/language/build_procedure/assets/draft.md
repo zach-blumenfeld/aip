@@ -28,14 +28,24 @@ What the documents say:
 - `procedure.aip`, starting `Procedure <its name>` with a one-sentence description and
   `Use_When` lines an agent searching a catalog would recognise the task by. The language page
   (the reference `references/language.md`) is the law; follow its rules and its example's shape.
-- One step per thing done, each done by whoever the rules say: a script (`Execute`) for anything
-  exact or repeatable (a limit checked against a number, a lookup, a file read, a ticket opened),
-  the agent (`Task_Agent`) for reading, writing and judgement, a `Route` on an answer for each
-  decision. An agent's or a script's decision is an answer type (`true_or_false`, `choice
-  [...]`); no `Decide`, so the procedure runs where no decision model is configured.
+- One step per thing done, each done by whoever the rules say:
+  - A rule a person would read and judge (is this receipt for alcohol, does it support the
+    claim) is a `Decide`: one question, answered with a confidence.
+  - A policy with several rules is a `For` over the rules (a list in an asset, or an input) with
+    one `Decide` per rule inside it, `Collect`ing the verdicts, then an `Aggregate` with a
+    confidence bar (`All verdicts.follows With Confidence_Above 0.8`) and a `Route` on it; so a
+    rule added to the policy is covered without editing the steps. Never one script or one
+    agent step that checks every rule in turn.
+  - A `Task_Agent` is for reading or writing prose (a receipt's text, a rationale, a reply) and
+    for acting in the world, never for a judgment a `Decide` can make.
+  - Anything exact (a number against a limit, a date difference, a lookup, a file read,
+    recording a line in a file, a ticket opened) is a script (`Execute`).
+  - A `Route` on an answer for each decision.
 - A step the rules give to a person (an approval, a sign-off, a judgement the documents reserve
   for someone) is a `Task_Agent` whose prompt says what the person decides; whoever runs the
   procedure takes it to them.
+- A procedure with a `Decide` needs a decision model configured on the machine that runs it;
+  the review says so.
 - Something done for each item of a list is a `For`; a check and its fix is a `Loop ... Until`
   with the check inside it. Every loop has a cap.
 - `scripts/<name>.py` for each `Execute`: real Python that reads the JSON object on stdin
