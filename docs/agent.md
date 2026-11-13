@@ -13,55 +13,93 @@ the question goes away: whoever drives the run answers its pauses.
 
 ## The harness
 
-All of it is `src/aip/agent.py`, around these three lines:
+All of it is `src/aip/agent.py`, and this is the whole file:
 
 ```python
-r = client.run("assist", {"task": task, "outcome": outcome}, agent="agent", session=session)
-while isinstance(r, Paused):
-    r = client.resume(r, answers=chat(r))       # one model call per pause, no tools
+"""aip agent: a chat model outside the run, answering the pauses of assist. This is all of it."""
+from aip.chat import ChatError, continuation, message_for, parse, reason, refused, work_of
+from aip.sdk import Paused, RunError
+
+AGENT, ASSIST, MAX_REFUSALS = "agent", "assist", 3
+
+
+def agent(client, chat, text, session, on_step=None, procedure=ASSIST):
+    r = client.run(procedure, inputs(client, session, text), agent=AGENT, session=session, on_step=on_step)
+    while isinstance(r, Paused):
+        r, gave_up = answer(client, chat, r, AGENT, session, on_step)
+        if gave_up:
+            break                                                    # left paused, for whoever answers next
+    return r
+
+
+def answer(client, chat, paused, agent, session, on_step=None):
+    """One pause: the model's answer resumes the run, a refused one goes back to it; (result, why it gave up)."""
+    msg = message_for(client, paused)
+    for _ in range(MAX_REFUSALS + 1):
+        try:
+            reply = chat(msg)
+            return client.resume(paused, parse(reply), agent=agent, session=session, on_step=on_step,
+                                 work=work_of(reply, paused)), None
+        except ChatError as e:
+            return paused, f"the model's endpoint failed: {e}"
+        except (ValueError, RunError) as e:
+            if getattr(e, "stopped", False):
+                raise                                                # the answer went in; a later step failed the run
+            msg, why = msg + refused(reply, e), reason(e)
+    return paused, f"the model's answer at {paused.step} was refused {MAX_REFUSALS + 1} times; the last time: {why}"
+
+
+def inputs(client, session, text):
+    """What it asked last time and the person's reply, from the session's newest assist run in the record."""
+    last = client.runs(name=ASSIST, session=session, limit=1)
+    return continuation(client.run_record(last[0].run_id) if last else None, text)
 ```
 
-`chat` is one Chat Completions call (`aip.chat.ChatClient`). The message is the pause as it comes:
-each task's prompt, the state it reads, the text of every file it references (from the run's
-bundle), the keys to answer with and their labels. The model answers with one JSON object. The
+`agent` runs `assist` and answers its pauses until it is done; `answer` is one pause; `inputs` is
+the session, read from the record. Each pause is one call to `chat`, no tools. The plumbing is in
+`aip.chat`, beside the chat client, one function each: `message_for` (the pause as it comes: each
+task's prompt, the state it reads, the text of every file it references from the run's bundle,
+the keys to answer with and their labels, after the system text), `parse` (the JSON object the
+reply holds), `refused` (the reply and the correction that goes back with the reason), `reason`,
+`work_of` (the model's id, its tokens and the seconds the call took, kept on the task's entry as
+`work: "reported"`, as `aip resume --work` keeps an agent's own account) and `continuation`. The
 answer goes in through `resume`, which checks it as it checks anyone's; a refusal goes back to the
-model with the reason, up to three times, then the run is left paused as it is and the command
-says so. The model's id, its tokens and the seconds the call took are kept on the task's entry
-(`work: "reported"`, as `aip resume --work` keeps an agent's own account).
+model, up to three times, then the run is left paused as it is, for whoever answers next.
 
 ```
 aip config agent --model-key KEY          # Anthropic's endpoint and claude-opus-5-5 by default
 aip agent "count the lines mentioning refund in each .txt file in ./notes"
-aip agent "the notes are in ./meeting-notes"     # the same shell: your reply to its question
-aip agent --new "another task"                   # a new session
-aip agent --session ID "..."                     # a session by its id
+#   aip: session: agent-20261112-101500-3f2a (`export AIP_SESSION=agent-20261112-101500-3f2a` to continue it)
+aip agent --session agent-20261112-101500-3f2a "the notes are in ./meeting-notes"   # your reply to its question
 ```
 
-`--json` prints the outcome as one object: `session`, `status` (`done`; `paused` when an answer
-would not hold or the endpoint failed, with `reason` and the `pause`; `failed` with the `error`),
-`note`, `result`, `run_id`, `runs` (every run this call started), `model_calls` and `tokens`.
-`--progress` prints a JSON line per step and per model call as they happen. The model, endpoint
-and key come from `aip config agent` (`--model-uri`, `--model-name`, `--model-key`;
-`AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`, `AIP_AGENT_MODEL_KEY`); any endpoint with the
-OpenAI Chat Completions shape works.
+The command prints where `assist`'s run stopped as `aip run` prints it (`done` with its `result`,
+whose `note` is the answer or the question; `paused` when an answer would not hold or the endpoint
+failed; or the error object), with `session` added, and exits as `aip run` does. The session line
+goes to stderr first. `--progress` prints the run's own step lines as they are written; the agent
+adds none of its own. The model, endpoint and key come from `aip config agent` (`--model-uri`,
+`--model-name`, `--model-key`; `AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`,
+`AIP_AGENT_MODEL_KEY`); any endpoint with the OpenAI Chat Completions shape works.
 
-The SDK's call is `Client.ask(text, session=None, new=False)`, which returns the same outcome; the
-MCP server's tool is `agent` (`{task, session?}`), for a caller that wants the whole task done by
-this machine's model rather than answering each pause itself.
+The SDK's call is `Client.ask(text, session=None, on_step=None)`, which returns what `agent`
+returns (`Done` or `Paused`; a run that fails raises `RunError`); `Client.chat()` is the configured
+model, or `agent_chat` when the client was given one. The MCP server's tool is `agent`
+(`{task, session?}`), for a caller that wants the whole task done by this machine's model rather
+than answering each pause itself; it answers with the same object and the `session`.
 
 ## One pause of any run
 
-`aip agent --answer RUN [--session ID] [--progress]` is the loop's body on its own: the model
-answers the pause run `RUN` waits at, with the same message and the same three retries, and the
-run is resumed with it. It works on a run of any procedure, and prints what `aip resume` prints
-(exit 0 for paused or done, 1 for an error); when no answer would hold, or the endpoint failed,
-the run is left as it was and the paused object comes back with `gave_up`, the reason (exit 1).
-With `--progress`, the model's calls are lines of their own, `{"event": "answer", "step",
-"run_id", "tokens", "seconds"}`, then `refused` or `gave_up` with a `reason`, among the run's step
-lines. The answer is recorded as `AIP_AGENT`'s (default `cli`) in `--session` or `AIP_SESSION`,
-with the model and what it spent. The SDK's call is `Client.answer(run, agent=None,
-session=None)`, which returns the result the resume came to and None, or the run's `Paused` and
-the reason.
+`aip agent --answer RUN [--session ID] [--progress]` is the loop's body on its own, `answer`: the
+model answers the pause run `RUN` waits at, with the same message and the same three retries, and
+the run is resumed with it. It works on a run of any procedure, and prints what `aip resume`
+prints (exit 0 for paused or done, 1 for an error); when no answer would hold, or the endpoint
+failed, the run is left as it was and the paused object comes back with `gave_up`, the reason
+(exit 1). With `--progress`, the model's calls are lines of their own, `{"event": "answer",
+"step", "run_id", "tokens", "seconds"}`, then `refused` or `gave_up` with a `reason`, among the
+run's step lines (`aip.chat.observed` wraps `chat` to say them). The answer is recorded as
+`AIP_AGENT`'s (default `cli`) in `--session` or `AIP_SESSION`, with the model and what it spent.
+The SDK's call is `Client.answer(run, agent=None, session=None)`, which returns the result the
+resume came to and None, or the run's `Paused` and the reason.
 
 This is how the console drives a run (its plan milestone C6): it runs `aip run`, and at every
 pause but those at the steps a person was given, `aip agent --answer`; the Studio's person answers
@@ -69,12 +107,12 @@ pause but those at the steps a person was given, `aip agent --answer`; the Studi
 
 ## Sessions
 
-A session is a conversation with the person. The first `aip agent` in a shell starts one and
-runs `assist` on the task. Each later call in the same shell runs `assist` again on the same
-task, with `outcome` saying "You asked: <the last run's note>. The person answered: <the text>",
-so the model has its own question and the reply. The shell's current session is kept under
-`~/.aip/agent/` (`shells/<the shell's process id>`, and `sessions/<id>.json` with the task, the
-runs and the last note); `--new` starts another and `--session ID` picks one.
+A session is a conversation with the person, and the record is its memory: nothing is kept
+anywhere else. The session id is `--session ID`, else `AIP_SESSION`, else a new one, which the
+command prints with the line to export. `inputs` asks the record for the session's newest
+`assist` run (`client.runs(name="assist", session=...)`): with none, `assist` starts on the text
+as its task; with one, it starts again on that run's task, with `outcome` saying "You asked: <that
+run's note>. The person answered: <the text>", so the model has its own question and the reply.
 
 Every run `aip agent` starts, and every run `assist` starts beneath it, carries `agent: agent` and
 the session: the runtime hands both to `assist`'s scripts (`AIP_AGENT`, `AIP_SESSION`), and the

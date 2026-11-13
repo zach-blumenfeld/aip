@@ -100,7 +100,7 @@ A procedure is named three ways, and every command takes any of them: a publishe
 - **A task no one procedure covers** can go to `aip agent`, when the user wants it run
   unattended: `aip agent "<task>"` runs the procedures that fit one after another, builds one
   with `build_procedure` when none does, and prints the answer or a question for the person;
-  `aip agent "<their reply>"` in the same shell carries on. It needs its own model (`aip config
+  `aip agent --session <the session it printed> "<their reply>"` carries on. It needs its own model (`aip config
   agent`); every run it starts is in `aip runs --session <the session it prints>`.
 
 ## Write a procedure

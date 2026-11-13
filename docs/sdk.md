@@ -90,17 +90,17 @@ total, or `{"prompt", "completion", "total"}`) and `seconds`, any of them; for a
 several tasks, keyed by task index like the answers. A key it does not know is refused as
 `invalid_input` and the pause stands.
 
-`ask(text, *, session=None, new=False, shell=None, on_event=None)` is `aip agent` (`docs/agent.md`):
+`ask(text, *, session=None, on_step=None)` is `aip agent` (`docs/agent.md`, `aip.agent.agent`):
 the configured chat model drives the `assist` procedure from outside the run, `run` and then one
-model call and one `resume` per pause, until it is done, fails, or an answer will not hold after
-three refusals (the run is then left paused). `text` is the task, or in a session that has one
-the person's reply to the last run's note; `session` picks a session, `new` starts one, else the
-shell's current one goes on. It returns an `aip.agent.Outcome` (`session`, `status`, `run_id`,
-`note`, `result`, `pause`, `error`, `reason`, `runs`, `calls`, `tokens`; `to_json()` is `aip agent
---json`'s object). It raises `aip.agent.AgentError` (`invalid_input`) before anything runs when
-no model key is configured (`aip config agent --model-key KEY`, `AIP_AGENT_MODEL_KEY`);
-`aip.Client(agent_chat=...)` injects the chat client in tests. The runtime itself never calls a
-chat model. `answer(run, *, agent=None, session=None, on_event=None, on_step=None)` is `aip agent
+model call and one `resume` per pause, until it is done or an answer will not hold after three
+refusals (the run is then left paused). `text` is the task, or in a session whose record has an
+`assist` run, the person's reply to that run's note. `session` defaults to `AIP_SESSION`, else a
+new id (`aip.agent_session`, `aip.new_session`). It returns what the run came to, `Done` or
+`Paused`, and a run that fails raises `RunError`, as `run` does. It raises `NoAgentModel`
+(`invalid_input`) before anything runs when no model key is configured (`aip config agent
+--model-key KEY`, `AIP_AGENT_MODEL_KEY`); `chat()` is that model, a callable from messages to a
+completion, and `aip.Client(agent_chat=...)` injects one in tests. The runtime itself never calls
+a chat model. `answer(run, *, agent=None, session=None, on_event=None, on_step=None)` is `aip agent
 --answer`: that model answers the one pause a run of any procedure waits at, with the same call,
 and the run is resumed; it returns `(result, None)`, or `(the run's Paused, reason)` when no answer
 would hold or the endpoint failed, and raises `RunError` (`not_paused`) for a run that is not

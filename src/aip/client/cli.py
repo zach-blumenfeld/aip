@@ -2,7 +2,7 @@
 
     aip run <target> --inputs JSON      run a program directory, an .rl bundle or a catalog name; pauses print as JSON
     aip resume <run_id> --answers JSON  answer a pause (or, with no answers, retry a failed run)
-    aip agent "<task>"                  a chat model outside the run drives the `assist` procedure; again in the shell: the reply
+    aip agent "<task>"                  a chat model outside the run drives the `assist` procedure; again with --session: the reply
     aip agent --answer <run_id>         that model answers the pause of any run, once, and resumes it (the console's model steps)
     aip compile | export | fmt          the language's tooling (aip.compiler)
     aip export runs [name] -o FILE      the server's runs and the procedures they ran, as one Relate file
@@ -277,52 +277,53 @@ def resume_command(argv: list[str]) -> int:
 
 def agent_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        prog="aip agent", usage='aip agent "<task>" [--new | --session ID] [--json] [--progress]\n       aip agent --answer RUN [--session ID] [--progress]',
+        prog="aip agent", usage='aip agent "<task>" [--session ID] [--progress]\n       aip agent --answer RUN [--session ID] [--progress]',
         description="Do a task with the catalog's procedures: a chat model outside the run drives the `assist` procedure, "
                     "answering each of its pauses with one call and no tools; assist searches the catalog, runs what fits, "
                     "builds a procedure with build_procedure when nothing does, and finishes with the result or a question "
-                    "for you. Run it again in the same shell to answer that question: the text is your reply. Every run it "
-                    "starts is recorded as agent `agent` in the session (`aip runs --session ID`). Needs `aip config agent "
-                    "--model-key KEY` (or AIP_AGENT_MODEL_KEY); aip calls no chat model otherwise (docs/agent.md).")
+                    "for you. Prints where assist's run stopped, as `aip run` does, with the session; run it again in that "
+                    "session (--session ID, or AIP_SESSION) to answer the question: the text is your reply, and what was "
+                    "asked comes from the record. Every run it starts is recorded as agent `agent` in the session "
+                    "(`aip runs --session ID`). Needs `aip config agent --model-key KEY` (or AIP_AGENT_MODEL_KEY); aip "
+                    "calls no chat model otherwise (docs/agent.md).")
     parser.add_argument("text", metavar="task", nargs="?", help="what is to be done; in a session that asked you something, your reply")
-    which = parser.add_mutually_exclusive_group()
-    which.add_argument("--new", action="store_true", help="start a new session instead of continuing this shell's")
-    which.add_argument("--session", default=None, metavar="ID", help="continue (or start) the session with this id; with "
-                       "--answer, the session the answer is recorded in (default AIP_SESSION)")
+    parser.add_argument("--session", default=None, metavar="ID", help="the session: continue it, or start it under this id "
+                        "(default AIP_SESSION, else a new one); with --answer, the session the answer is recorded in")
     parser.add_argument("--answer", default=None, metavar="RUN",
                         help="instead of a task: have the model answer the pause RUN waits at, once, and resume it; prints "
                              "what `aip resume` prints, or the paused object with `gave_up` (exit 1) when no answer would "
                              "hold. Any run of any procedure; the answer is recorded as AIP_AGENT's (the console uses it)")
-    parser.add_argument("--json", action="store_true", help="print the outcome as one JSON object")
-    parser.add_argument("--progress", action="store_true", help="print one JSON line per step and per model call as it happens")
-    parser.add_argument("--debug", action="store_true", help="print a traceback on stderr when the command fails")
+    _run_flags(parser)
     args = parser.parse_args(argv)
     if args.answer is not None:
-        if args.text is not None or args.new:
-            parser.error("--answer takes a run id and no task, and no --new")
+        if args.text is not None:
+            parser.error("--answer takes a run id and no task")
         return _answer_pause(args)
     if args.text is None:
         parser.error("the task is required: what is to be done, in your words")
-    client = _client()
-    on_event = (lambda event: print(json.dumps(event), flush=True)) if args.progress else None
+    from aip.sdk import RunError, agent_session
 
-    def go() -> int:
-        out = client.ask(args.text, session=args.session, new=args.new, on_event=on_event)
-        if args.json:
-            print(json.dumps(out.to_json(), indent=None if args.progress else 2))
-        else:
-            if out.note:
-                print(out.note)
-            if out.status == "paused":
-                print(f"aip: the run {out.run_id} is left paused at {(out.pause or {}).get('step')}: {out.reason}", file=sys.stderr)
-            elif out.status == "failed":
-                print(f"aip: the run {out.run_id} failed: {(out.error or {}).get('error')}", file=sys.stderr)
-            print(f"aip: session {out.session}, run {out.run_id}, {out.calls} model call(s), {out.tokens} tokens"
-                  f" (`aip runs --session {out.session}`)", file=sys.stderr)
-        return 0 if out.status == "done" else 1
-    if args.debug:
-        return go()
-    return _serving(go)
+    client = _client()
+    session = agent_session(args.session)
+    print(f"aip: session: {session} (`export AIP_SESSION={session}` to continue it)", file=sys.stderr, flush=True)
+
+    def go(on_step):
+        try:
+            return _InSession(client.ask(args.text, session=session, on_step=on_step), session)
+        except RunError as exc:
+            exc.error["session"] = session
+            raise
+    return _outcome(go, client, args.progress, args.debug, starting=True)
+
+
+class _InSession:
+    """`aip agent`'s result: where assist's run stopped, as `aip run` prints it, with the session."""
+
+    def __init__(self, result: Any, session: str):
+        self.result, self.session, self.recorded = result, session, result.recorded
+
+    def to_json(self) -> dict:
+        return {**self.result.to_json(), "session": self.session}
 
 
 class _GaveUp:

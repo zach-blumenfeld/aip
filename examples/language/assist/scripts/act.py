@@ -77,7 +77,7 @@ def is_self(procedure: str) -> bool:
 def result_of(c: Any, call) -> dict:
     """A run's stop as plan reads it."""
     from aip import Done, Paused, RunError
-    from aip.agent import pause_view
+    from aip.chat import pause_view
 
     try:
         result = call()

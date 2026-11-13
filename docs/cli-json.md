@@ -68,12 +68,10 @@ loaded; read them when the prompt calls for it), `answer_with` (what to answer: 
 their types) and `labels` (for each `choice` or `score` among them, the values it may take).
 `hint` is one line on the shape of an answer to this pause.
 
-`aip agent --json` prints a different object, the outcome of a turn with its model
-(`docs/agent.md`): `session`, `status` (`done`, `paused` or `failed`), `run_id` (the run of
-`assist` it started), `note` (the result, or the question for the person), `result` when done,
-`pause` (the paused object above) and `reason` when its model's answer would not hold, `error`
-(the error object below) when the run failed, `runs` (every run it started) and `model_calls`
-and `tokens`. The runs themselves are ordinary runs, recorded as agent `agent`: `aip runs
+`aip agent` prints the object `aip run` prints for the run of `assist` it drove
+(`docs/agent.md`), done (its `result.note` is the answer, or the question for the person),
+paused (its model's answer would not hold) or the error object below, with `session` added. The
+runs themselves are ordinary runs, recorded as agent `agent`: `aip runs
 --session <session>` lists them, and their pauses and errors are the objects of this page.
 
 `aip resume --work JSON` adds what the answering agent says it spent to the task's history
@@ -462,13 +460,14 @@ value); for a `Task_Agent`, `answered_by` (the agent and session that answered);
 exit, `exit` (`until`, `items`, `times` or `cap`), `where` (`head`, or the step that produced
 the `Until` answer) and `iterations`. A loop's line has no `seconds`.
 
-`aip agent --progress` prints a line per step of the runs it drives (`{"event": "step", ...}`,
-the fields above), one per model call (`{"event": "answer", "step", "run_id", "tokens",
-"seconds"}`), and `{"event": "refused", "step", "run_id", "reason"}` when an answer did not hold
-and went back to the model, or `{"event": "gave_up", "step", "run_id", "reason"}` when none would
-or the endpoint failed. `aip agent --answer RUN --progress` (one pause of any run, answered by the
-model and resumed; `docs/agent.md`) prints the same lines, then the object `aip resume` prints;
-when the model gave up, the run's paused object as it was, with `"gave_up": "<reason>"`, exit 1.
+`aip agent --progress` prints the step lines of the run of `assist` it drives
+(`{"event": "step", ...}`, the fields above) and nothing of its own. `aip agent --answer RUN
+--progress` (one pause of any run, answered by the model and resumed; `docs/agent.md`) prints a
+line per model call (`{"event": "answer", "step", "run_id", "tokens", "seconds"}`),
+`{"event": "refused", "step", "run_id", "reason"}` when an answer did not hold and went back to
+the model, or `{"event": "gave_up", "step", "run_id", "reason"}` when none would or the endpoint
+failed, among the run's step lines, then the object `aip resume` prints; when the model gave up,
+the run's paused object as it was, with `"gave_up": "<reason>"`, exit 1.
 
 The lines of a `For` appear as its passes run, so a batch reports while it works: the
 classifications, the routes, a script, before the pause that follows. That is the order things

@@ -26,7 +26,6 @@ from aip.compiler import example_dir, relate
 
 import aip
 from aip import sdk
-from aip.agent import Outcome
 from aip.client import bundles
 from aip.client.cli import ALIASES, COMMANDS, main
 from aip.client.runs import RunFile, run_path
@@ -542,7 +541,7 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
         ("run", "run", ["billing_support_agent", "--inputs", json.dumps({"message": CALM})]),
         ("resume", "resume", [first.run_id, "--answers", json.dumps({"billing": True, "tone": "calm"})]),
         ("resume", "resume", [second.run_id, "--answers", json.dumps({"billing": True, "tone": "calm"})]),
-        ("agent", "ask", ["count the refunds", "--new"]),            # the model is not called: Client.ask is stood in for
+        ("agent", "ask", ["count the refunds", "--session", "s-1"]),            # the model is not called: Client.ask is stood in for
         ("search", "search", ["refund"]),
         ("list", "list", []),
         ("pull", "pull", ["billing_support"]),
@@ -566,7 +565,7 @@ def test_every_cli_command_calls_the_sdk(served, fake, tmp_path, monkeypatch):
     with mock.patch("aip.client.cli._server", return_value=served.server):
         for command, method, argv in cases:
             real = getattr(aip.Client, method)
-            stand_in = {"return_value": Outcome("s", "done", "r", "ok")} if method == "ask" else {"side_effect": real}
+            stand_in = {"return_value": aip.Done("r", {"note": "ok"}, tmp_path / "r.json", None, {"done": True})} if method == "ask" else {"side_effect": real}
             with mock.patch.object(aip.Client, method, autospec=True, **stand_in) as spy:
                 code, out, err = _call(command, *argv)
             assert code == 0, (command, argv, out, err)

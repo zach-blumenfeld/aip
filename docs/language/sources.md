@@ -211,7 +211,7 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 
 - **`aip agent` is `src/aip/agent.py`** (`docs/agent.md`): `Client.ask` runs `assist` and answers
   each pause with one call to `aip.chat.ChatClient` (moved from the removed answerer package), no
-  tools, then `resume`. Sessions are `~/.aip/agent/` (`shells/<ppid>`, `sessions/<id>.json`).
+  tools, then `resume`. Sessions were `~/.aip/agent/` until A4, which reads them from the record.
   Config is `aip config agent` / `AIP_AGENT_MODEL_URI`, `_NAME`, `_KEY`; this machine's shell sets
   `AIP_AGENT_MODEL_KEY` and `AIP_AGENT_MODEL_NAME`, and a config file's blocks from earlier 0.9
   checkouts (A1's `agent_model`, A2's) are no longer read. `tests/conftest.py` clears the three for every test;
@@ -242,7 +242,7 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - **The console drives a run as `aip agent` does.** The launcher (`console/bin/aip-console.mjs`,
   `stream` and `nextOf`) runs `aip run --progress`; at a pause whose step is not one of the run's
   `person` steps it runs `aip agent --answer <run_id> --progress` (`Client.answer` in the SDK, the
-  same `Agent.answer` call `aip agent` makes) on the same event stream, until the run is done,
+  same `answer` call `aip agent` makes, `aip.agent.answer` since A4) on the same event stream, until the run is done,
   fails, or waits for a person. It holds back each process's final object and relays only the last,
   with `answerer: {person, reason}`. The Studio's person step is `ask_user` (`STUDIO_PERSON`, in the
   launcher and in `src/api/console.ts`); the run console's picker starts with nothing ticked.
@@ -254,6 +254,22 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   approval brief's `approve` step lost its person marker; the spec ticks it in the picker.
 - `console/e2e/orchestrated.spec.ts` (R7's parent link) is removed, and with it the record's
   `parent`, `tokens`, `children` and `budget_tokens` in `src/api/types.ts` and `Record.tsx`.
+
+## What A4 left (2026-11-12)
+
+- **`src/aip/agent.py` is the loop, whole** (37 lines, shown verbatim in `docs/agent.md`, and
+  `tests/test_agent.py` fails if it grows past 40 or gains a function): `agent` (run `assist`,
+  answer each pause), `answer` (one pause, three refusals; the console's `aip agent --answer`
+  uses it too), `inputs` (the session from the record). The plumbing is in `aip.chat`:
+  `message_for`, `parse`, `refused`, `reason`, `work_of`, `continuation`, `references_of`,
+  `pause_view` (which `assist`'s `act.py` imports, so `assist.rl` was compiled again), and
+  `observed`, which wraps `chat` to say `aip agent --answer`'s `answer` and `refused` lines.
+  `ChatClient` is the `chat` callable (`ChatClient(url, key, model)(messages)`), timing its call.
+- **No session files.** `--session ID`, else `AIP_SESSION`, else `aip.new_session()`; the command
+  prints `session:` and the export line on stderr. `--new` and `--json` went; `aip agent` prints
+  `aip run`'s object plus `session`. `Outcome`, `Sessions`, `pause_view` in `aip.agent`, the
+  `on_event` of `Client.ask` and its progress events went; `AgentError` is `aip.NoAgentModel`.
+- **A same-session repeat** still reads as a reply to the last note, as in A3.
 
 ## Agent frameworks (track D2)
 

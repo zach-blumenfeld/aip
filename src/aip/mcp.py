@@ -325,16 +325,14 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         it when the user wants the task done without you answering each step; to drive a
         procedure yourself, use `run` and `resume`. `session` continues a session this tool
         started (the `session` of an earlier reply): `task` is then the person's reply to that
-        note. Returns `session`, `status` (`done`, `failed`, or `paused` when the model's answer
-        would not hold), `note`, `run_id` and the `runs` it started, all recorded as agent
-        `agent`; refused when no chat model is configured on this server."""
-        on_step, _ = reporter(ctx)
-        try:
-            out = client.ask(task, session=session, new=session is None, shell=f"mcp-{default_session}",
-                               on_event=lambda event: on_step(event) if event.get("event") == "step" else None)
-        except AipError as exc:
-            return failure(exc)
-        return out.to_json()
+        note. Returns what `run` returns for assist's run, `done` with its `result` (`note`),
+        `paused` when the model's answer would not hold, or an error, with the `session`; every
+        run is recorded as agent `agent`; refused when no chat model is configured on this server."""
+        from aip.sdk import new_session
+
+        session = session or new_session()
+        out = driven(ctx, lambda on_step: client.ask(task, session=session, on_step=on_step))
+        return {**out, "session": session}
 
     @server.tool()
     def pull(ref: str | None = None) -> dict[str, Any]:

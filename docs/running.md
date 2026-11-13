@@ -220,19 +220,20 @@ with `aip run` and `aip resume`:
 ```
 aip config agent --model-key KEY
 aip agent "count the lines mentioning refund in each .txt file in ./notes"
-aip agent "the notes are in ./meeting-notes"         # the same shell: the reply to its question
+aip agent --session ID "the notes are in ./meeting-notes"   # the reply to its question
 ```
 
 - It refuses before starting when no model key is configured (`invalid_input`, naming the
   config line).
 - `assist` searches the catalog, runs what fits, builds a procedure with `build_procedure` when
   nothing does, publishes it under a new name and runs it, and finishes with a note: the result,
-  or a question for you. Your next `aip agent` in the same shell is the reply (`--new` starts
-  over, `--session ID` picks a session).
+  or a question for you. It prints that run as `aip run` does, with its `session` (and the
+  `export AIP_SESSION=...` line on stderr); your next `aip agent` in that session is the reply,
+  and what it asked is read from the record.
 - The model answers each pause in one call, with no tools: the pause's prompt, state and the text
   of the files it references are the whole message, and its JSON answer goes in through `resume`.
   A refused answer goes back to it with the reasons, up to three times; then the run is left
-  paused and the command says where.
+  paused, and the command prints it paused.
 - Every run it starts, `assist`'s and the ones beneath it, is recorded as agent `agent` in the
   session it prints, so `aip runs --session ID` shows all of it. Each answer is recorded as
   `answered_by: {"agent": "agent", "model": <the id the endpoint reported>}` with its tokens,

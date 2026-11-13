@@ -25,6 +25,7 @@ of the `assist` procedure (`ask`). Every method returns a typed value and raises
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,6 +94,23 @@ class InvalidBundle(AipError):
 
     def __init__(self, error: BundleError):
         super().__init__(error.message, error.code)
+
+
+class NoAgentModel(AipError):
+    """`aip agent` has no chat model to ask: no key configured (`aip config agent --model-key KEY`)."""
+    kind = "invalid_input"
+
+
+def new_session() -> str:
+    """A new session id for `aip agent`: `agent-<time>-<4 hex>`."""
+    import secrets
+
+    return f"agent-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
+
+
+def agent_session(session: str | None = None) -> str:
+    """The session `aip agent` runs in: `session`, else `AIP_SESSION`, else a new one."""
+    return session or os.environ.get(config.SESSION_ENV) or new_session()
 
 
 class RunError(AipError):
@@ -716,32 +734,50 @@ class Client:
             state = self._apply(engine, state, answers, handle, path, agent, session, work=work)
             return self._settle(engine, state, handle, on_pause, None)
 
-    def ask(self, text: str, *, session: str | None = None, new: bool = False, shell: str | None = None,
-              on_event: Callable[[JSON], None] | None = None, procedure: str | Path | None = None) -> Any:
-        """`aip agent`: a chat model outside the run answers the pauses of `assist` until it is
-        done (`aip.agent`, `docs/agent.md`). `text` is the task, or in a session that has one,
-        the person's reply to the last run's note. `session` picks a session, `new` starts one,
-        else this shell's current one goes on (`shell` names the shell; its parent process by
-        default). Returns an `aip.agent.Outcome`. Raises `aip.agent.AgentError` when no model
-        key is configured (`aip config agent --model-key KEY`) and `agent_chat` was not given."""
-        from aip.agent import ASSIST, Agent
+    def chat(self) -> Callable[[list[JSON]], Any]:
+        """The chat model `aip agent` asks: `agent_chat` if given, else the configured endpoint
+        (`aip config agent`); `NoAgentModel` when no key is configured."""
+        if self.agent_chat is not None:
+            return self.agent_chat
+        s = self.settings
+        if not s.agent_configured:
+            raise NoAgentModel(f"aip agent needs a chat model to answer the pauses: {config.AGENT_HINT}")
+        from aip.chat import ChatClient
 
-        return Agent(self, self.agent_chat, on_event=on_event, procedure=procedure or ASSIST).ask(
-            text, session=session, new=new, shell=shell)
+        return ChatClient(s.agent_model_endpoint, s.agent_model_key, s.agent_model)
+
+    def ask(self, text: str, *, session: str | None = None, on_step: OnStep | None = None) -> Result:
+        """`aip agent` (`aip.agent.agent`, `docs/agent.md`): the chat model answers the pauses of
+        `assist` on `text` until it is done or an answer will not hold (the run is then left
+        paused). `text` is a task, or in a session with an earlier `assist` run, the person's
+        reply to what that run said, read from the record. `session` is `agent_session`'s.
+        Returns what the run came to; a run that fails is a `RunError` as `run` raises it."""
+        from aip.agent import ASSIST, agent
+
+        if not isinstance(text, str) or not text.strip():
+            raise InvalidInput("aip agent needs a task: what is to be done, in your words")
+        chat, procedure = self.chat(), ASSIST
+        if self.server is None:          # no catalog to name it in: the bundle aip ships
+            from aip.server.builtins import builtin_files
+
+            procedure = next(str(p) for p in builtin_files() if p.stem == ASSIST)
+        return agent(self, chat, text, agent_session(session), on_step, procedure)
 
     def answer(self, run: str | Path | Paused, *, agent: str | None = None, session: str | None = None,
                on_event: Callable[[JSON], None] | None = None, on_step: OnStep | None = None) -> tuple[Result, str | None]:
         """`aip agent --answer`: the configured chat model answers the pause a run waits at, once,
-        with the call `aip agent` makes at each pause of `assist` (the same message, no tools, a
-        refused answer back to it up to three times), and the run is resumed with what it says.
-        Any run, any procedure: this is how the console has the model answer the steps a person
-        does not. Returns the result the resume came to and None; or, when no answer would hold
-        or the endpoint failed, the run's `Paused` as it was and the reason. `agent` and
-        `session` are who answered, as `resume` takes them. A run that is not paused, and a
-        resume that fails the run, are a `RunError` as `resume` raises them; no model key
-        configured (and no `agent_chat`) is an `aip.agent.AgentError`."""
-        from aip.agent import Agent, Outcome
+        with the call `aip agent` makes at each pause of `assist` (`aip.agent.answer`), and the
+        run is resumed with what it says. Any run, any procedure: this is how the console has the
+        model answer the steps a person does not. Returns the result the resume came to and None;
+        or, when no answer would hold or the endpoint failed, the run's `Paused` as it was and the
+        reason. `on_event` gets a line per model call (`answer`), per refusal (`refused`) and the
+        giving up (`gave_up`). `agent` and `session` are who answered, as `resume` takes them. A
+        run that is not paused, and a resume that fails the run, are a `RunError` as `resume`
+        raises them; no model key configured (and no `agent_chat`) is `NoAgentModel`."""
+        from aip.agent import answer
+        from aip.chat import observed
 
+        chat = self.chat()
         handle, path, bundle = self._reopen(run)
         with Procedure.load(bundle) as procedure:
             state = Run.from_dict(procedure, handle.run)
@@ -753,9 +789,10 @@ class Client:
         recorded = handle.recorded if handle.server and handle.scripts else None
         paused = Paused(state.pause["kind"], state.pause["step"], [Task.from_dict(t) for t in state.pause["tasks"]],
                         handle.run_id, path, recorded, outcome(state, handle.run_id, path, recorded))
-        out = Outcome(session or "", "paused", handle.run_id)
-        result = Agent(self, self.agent_chat, on_event=on_event).answer(paused, session, out, on_step, agent=agent)
-        return (paused, out.reason) if result is None else (result, None)
+        result, why = answer(self, observed(chat, paused, on_event) if on_event else chat, paused, agent, session, on_step)
+        if why and on_event:
+            on_event({"event": "gave_up", "step": paused.step, "run_id": paused.run_id, "reason": why})
+        return result, why
 
     def _reopen(self, run: str | Path | Paused | RunError) -> tuple[RunFile, Path, Bundle]:
         """A run's file, its path and its bundle, from the bundle cache."""
@@ -1104,7 +1141,7 @@ def describe_procedure(procedure: Procedure) -> JSON:
 
 __all__ = [
     "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
-    "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired", "RetiredRevision",
-    "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "SkillExported", "Task", "configure", "configure_agent",
+    "InvalidBundle", "InvalidInput", "NoAgentModel", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired", "RetiredRevision",
+    "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "SkillExported", "Task", "agent_session", "configure", "new_session", "configure_agent",
     "describe_procedure", "reported_work", "settings",
 ]
