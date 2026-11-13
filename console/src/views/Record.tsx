@@ -6,7 +6,6 @@
 
 import type { ReactNode } from "react";
 import type { AnswerObject, HistoryEntry, Resolution, RunErrorBody, RunRecord } from "../api/types";
-import { href } from "../router";
 import { duration, exitText, nest, timing, untilText, type LoopRows, type Row } from "../record/model.ts";
 import { passLabel } from "../run/answers.ts";
 
@@ -48,42 +47,6 @@ export function RecordSummary({ record }: { record: RunRecord }) {
       </dd>
       <dt>bundle</dt>
       <dd><code title={record.bundle_id}>{record.bundle_id.slice(0, 12)}</code> <DraftBadge draft={record.draft} /></dd>
-      {record.parent && (
-        <>
-          <dt>started by</dt>
-          <dd data-testid="run-parent">
-            run <a href={href({ page: "run-detail", id: record.parent.run_id })}><code>{record.parent.run_id}</code></a> at{" "}
-            <code>{record.parent.step ?? "?"}</code>{record.parent.pass !== null && record.parent.pass !== undefined && <> pass {record.parent.pass}</>}
-            <span className="muted"> · depth {record.depth ?? 1}</span>
-          </dd>
-        </>
-      )}
-      {(record.tokens || record.budget_tokens !== undefined) && (
-        <>
-          <dt>tokens</dt>
-          <dd data-testid="run-tokens">
-            {record.tokens?.total ?? 0} spent by runah's model ({record.tokens?.own ?? 0} in this run, {record.tokens?.children ?? 0} in the runs it started)
-            {record.budget_tokens !== undefined && <> · budget {record.budget_tokens}</>}
-          </dd>
-        </>
-      )}
-      {record.children && record.children.length > 0 && (
-        <>
-          <dt>started</dt>
-          <dd>
-            <ul className="children" data-testid="run-children">
-              {record.children.map((child) => (
-                <li key={child.run_id} data-testid="run-child" data-run={child.run_id} data-status={child.status}>
-                  <a href={href({ page: "run-detail", id: child.run_id })}><code>{child.run_id}</code></a> <code>{child.name ?? "?"}</code>{" "}
-                  <DraftBadge draft={child.draft} /> <span className={`status-tag ${child.status}`}>{child.status}</span>
-                  <span className="muted"> · from <code>{child.step ?? "?"}</code>{child.pass !== null && child.pass !== undefined && <> pass {child.pass}</>}
-                  {child.tokens ? <> · {child.tokens} tokens</> : null}</span>
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </>
-      )}
     </dl>
   );
 }
@@ -138,10 +101,9 @@ function resolutionText(r: Resolution): string {
   return `${name} was ${JSON.stringify(r.value)}${bar}: ${r.holds ? "holds" : "does not hold"}`;
 }
 
-/** A task whose answering work is on record: `observed` when runah's model answered it (which model, the tool calls it
- *  made, counted by tool and then one by one, the tokens it spent and the answers refused before one held), `reported`
- *  when the agent that answered said what it spent (`aip resume --work`): its model if it gave one, its tool calls as a
- *  count or a list, its tokens, its time. */
+/** A task whose answering work is on record, `reported` by the agent that answered (`aip resume --work`; `aip agent`
+ *  and the console's model report theirs): its model if it gave one, its tool calls as a count or a list, its tokens,
+ *  its time. */
 function WorkAnswer({ entry }: { entry: HistoryEntry }) {
   const by = entry.answered_by;
   const listed = Array.isArray(entry.tool_calls) ? entry.tool_calls : [];

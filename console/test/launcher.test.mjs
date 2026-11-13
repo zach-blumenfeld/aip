@@ -2,7 +2,7 @@
 // The lines below are the ones aip 0.9.0 prints (src/aip/client/cli.py in this repository).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AGENT, MINIMUM_AIP, STUDIO_AGENT, compareVersions, parseConfiguredServer, parseModels, parseVersionLine, versionKey } from "../bin/aip-console.mjs";
+import { AGENT, MAX_MODEL_ANSWERS, MINIMUM_AIP, STUDIO_AGENT, STUDIO_PERSON, compareVersions, nextOf, parseConfiguredServer, parseModels, parseVersionLine, versionKey } from "../bin/aip-console.mjs";
 
 test("the version line is 0.9's: `aip <version> language <language>`", () => {
   assert.deepEqual(parseVersionLine("aip 0.9.0 language 0.9\n"), { version: "0.9.0", language: "0.9" });
@@ -44,30 +44,54 @@ test("the models `aip config` names, for the Studio's settings: where, which, wh
   const none = "server: none (runs are not recorded; ...)\n" +
     "decision model: none (a Decide fails the run with no_decision_model; run `aip config --decision-model-key KEY`, ...)\n" +
     "batch: 10\nscript timeout: 300 seconds per script\n" +
-    "runah:\n  model uri:   https://api.anthropic.com/v1\n  model name:  claude-opus-5-5\n" +
-    "  model key:   none (`aip runah` refuses to start; `aip config runah --model-key KEY` (...))\n" +
-    "  per task:    at most 40 tool calls, 500000 tokens\n";
+    "agent:\n  model uri:   https://api.anthropic.com/v1\n  model name:  claude-opus-5-5\n" +
+    "  model key:   none (`aip agent` refuses to start; `aip config agent --model-key KEY` (...))\n";
   assert.deepEqual(parseModels(none), {
-    runah: { endpoint: "https://api.anthropic.com/v1", model: "claude-opus-5-5", key: false, source: null },
+    agent: { endpoint: "https://api.anthropic.com/v1", model: "claude-opus-5-5", key: false, source: null },
     decision: null,
   });
   const file = "decision model: https://api.typesafe.ai  (TypeSafe's, the default)  key: set  (from /home/x/.aip/config.json)\n" +
     "batch: 10\nscript timeout: 300 seconds per script\n" +
-    "runah:  (from /home/x/.aip/config.json)\n  model uri:   https://api.anthropic.com/v1\n  model name:  claude-opus-5-5\n" +
-    "  model key:   set\n  per task:    at most 40 tool calls, 500000 tokens\n";
+    "agent:  (from /home/x/.aip/config.json)\n  model uri:   https://api.anthropic.com/v1\n  model name:  claude-opus-5-5\n" +
+    "  model key:   set\n";
   assert.deepEqual(parseModels(file), {
-    runah: { endpoint: "https://api.anthropic.com/v1", model: "claude-opus-5-5", key: true, source: "/home/x/.aip/config.json" },
+    agent: { endpoint: "https://api.anthropic.com/v1", model: "claude-opus-5-5", key: true, source: "/home/x/.aip/config.json" },
     decision: { endpoint: "https://api.typesafe.ai", model: null, key: true, source: "/home/x/.aip/config.json" },
   });
   const env = "decision model: http://127.0.0.1:8  key: none  (from AIP_DECISION_MODEL)\n" +
-    "runah:  (from AIP_RUNAH_MODEL_URI, AIP_RUNAH_MODEL_NAME, AIP_RUNAH_MODEL_KEY)\n  model uri:   http://127.0.0.1:9/v1\n" +
-    "  model name:  stand-in-1\n  model key:   set\n  per task:    at most 40 tool calls, 500000 tokens\n";
+    "agent:  (from AIP_AGENT_MODEL_URI, AIP_AGENT_MODEL_NAME, AIP_AGENT_MODEL_KEY)\n  model uri:   http://127.0.0.1:9/v1\n" +
+    "  model name:  stand-in-1\n  model key:   set";
   const read = parseModels(env);
   assert.equal(read.decision.key, false);
-  assert.equal(read.runah.model, "stand-in-1");
-  assert.equal(read.runah.source, "AIP_RUNAH_MODEL_URI, AIP_RUNAH_MODEL_NAME, AIP_RUNAH_MODEL_KEY");
-  // `aip config runah` prints the block alone
-  assert.equal(parseModels(env.split("\n").slice(1).join("\n")).runah.endpoint, "http://127.0.0.1:9/v1");
-  assert.equal(parseModels("").runah, null);
+  assert.equal(read.agent.model, "stand-in-1");
+  assert.equal(read.agent.source, "AIP_AGENT_MODEL_URI, AIP_AGENT_MODEL_NAME, AIP_AGENT_MODEL_KEY");
+  // `aip config agent` prints the block alone
+  assert.equal(parseModels(env.split("\n").slice(1).join("\n")).agent.endpoint, "http://127.0.0.1:9/v1");
+  assert.equal(parseModels("").agent, null);
   assert.equal(STUDIO_AGENT, "studio");
+});
+
+test("a driven run: the model answers every pause but a person's step, and the stream ends where it cannot go on", () => {
+  const paused = (step, extra = {}) => ({ paused: "task", step, tasks: [], hint: "", run_id: "r1", run_file: "/x", ...extra });
+  // Not driven: every pause is the page's, as `aip run` prints it.
+  assert.deepEqual(nextOf(paused("summarize"), null), { final: paused("summarize") });
+  // Driven: the model answers a step that is not the person's; the person's comes to the page, marked.
+  assert.deepEqual(nextOf(paused("summarize"), ["approve"]), { answer: "r1" });
+  assert.deepEqual(nextOf(paused("approve"), ["approve"]),
+                   { final: paused("approve", { answerer: { person: true, reason: "approve is a step for a person" } }) });
+  assert.deepEqual(STUDIO_PERSON, ["ask_user"]);
+  // Done or failed ends the stream as it is.
+  const done = { done: true, result: {}, run_id: "r1" };
+  assert.deepEqual(nextOf(done, ["approve"], paused("summarize")), { final: done });
+  const failed = { error: "script_failed", step: "check", message: "boom", run_id: "r1", resumable: true };
+  assert.deepEqual(nextOf(failed, []), { final: failed });
+  // The model gave up: the run waits, with why.
+  const left = nextOf(paused("summarize", { gave_up: "refused 4 times" }), [], paused("summarize"));
+  assert.deepEqual(left, { final: paused("summarize", { answerer: { person: false, reason: "refused 4 times" } }) });
+  // `aip agent --answer` could not start (no key): the pause it was given stands, with the message.
+  const nokey = { error: "invalid_input", step: null, message: "aip agent needs a chat model", run_id: null, resumable: false };
+  assert.deepEqual(nextOf(nokey, [], paused("summarize")),
+                   { final: paused("summarize", { answerer: { person: false, reason: "aip agent needs a chat model" } }) });
+  // A bound on the model's answers per stream.
+  assert.equal(nextOf(paused("summarize"), [], null, MAX_MODEL_ANSWERS).final.answerer.person, false);
 });

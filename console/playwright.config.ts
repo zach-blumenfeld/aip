@@ -3,7 +3,8 @@ import { AGENT_MODEL, AGENT_MODEL_PORT, AIP_PORT, AIP_REPO, CLI_ENV, CONSOLE_POR
 
 // Five processes, started in order:
 //   1. e2e/model.mjs, a decision model with the TypeSafe API shape that answers from marks in the text, and
-//      e2e/agent.mjs, a stand-in chat model for `aip runah` (Chat Completions) that answers the Studio's runs from a script
+//      e2e/agent.mjs, a stand-in chat model for `aip agent --answer` (Chat Completions) that answers the console's
+//      driven runs (the Studio's, the Run button's) from a script
 //   2. e2e/prepare.mjs writes a fresh .aip-e2e/, the bundle is built, and `aip server` from this repository
 //      (AIP_REPO, default `..`) starts on a Relate store under .aip-e2e/store
 //   3. the console against that server (bin/aip-console.mjs --server), the way `npx aip-console` runs it

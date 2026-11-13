@@ -4,10 +4,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { AGENT_MODEL_REPORTED, E2E, SERVER, WORKDIR } from "./aip";
 import { answer, done, entry, fill, pausedAt, pick, runIdOf } from "./pages";
 
-// Run it from the Studio (plan C5): a drafted procedure with one Execute and two Task_Agent steps is saved, and its
-// Run button opens the run console on the saved draft, run ahead (`aip runah`): runah's model (the stand-in,
-// e2e/agent.mjs) answers the task it can, the step written for a person stops for the form, and the record says
-// who answered what. The scripts the model wrote are asked about once more before they first execute.
+// Run it from the Studio (plans C5, C6): a drafted procedure with one Execute and two Task_Agent steps is saved, and
+// its Run button opens the run console on the saved draft, driven: the model (`aip agent --answer`, the stand-in
+// e2e/agent.mjs) answers every task but the step the user ticks for a person, which stops for the form (nothing is
+// ticked to begin with), and the record says who answered what. The scripts the model wrote are asked about once
+// more before they first execute.
 
 const BRIEF = "A refund approval procedure: a script checks the refund against the limit, the model summarizes it, and a person approves it.";
 const NAME = "refund_approval";            // what the stand-in names a procedure drafted from an approval brief
@@ -21,7 +22,7 @@ test.beforeEach(async ({ page }) => {
   rmSync(MARKER, { force: true });
 });
 
-test("a saved draft runs from the Studio: the person's step through the form, the other answered by runah", async ({ page, request }) => {
+test("a saved draft runs from the Studio: the person's step through the form, the other answered by the model", async ({ page, request }) => {
   // Drafted by the chat: a brief, the question it asks, the procedure it writes.
   await page.goto("./#/studio");
   await expect(page.getByTestId("studio-status")).toHaveText("compiles", { timeout: 30_000 });
@@ -56,25 +57,27 @@ test("a saved draft runs from the Studio: the person's step through the form, th
   const [run] = await Promise.all([page.waitForEvent("popup"), page.getByTestId("studio-run-ok").click()]);
   await expect(ask).toHaveCount(0);
 
-  // The run console on the draft: run ahead, with the step written for a person ticked as a human step.
+  // The run console on the draft: driven, nothing ticked; the user ticks approve as the person's step.
   await expect(run.getByRole("heading", { level: 1 })).toContainText(NAME, { timeout: 30_000 });
   await expect(run.getByRole("heading", { level: 1 }).getByText("draft")).toBeVisible();
   const how = run.getByTestId("run-how");
-  await expect(how).toHaveAttribute("data-mode", "runah");
-  await expect(how.locator('[data-testid="human-step"][data-step="approve"] input')).toBeChecked();
-  await expect(how.locator('[data-testid="human-step"][data-step="approve"]')).toHaveAttribute("data-person", "true");
-  await expect(how.locator('[data-testid="human-step"][data-step="summarize"] input')).not.toBeChecked();
+  await expect(how).toHaveAttribute("data-mode", "agent");
+  const approveStep = how.locator('[data-testid="person-step"][data-step="approve"] input');
+  await expect(approveStep).not.toBeChecked();
+  await expect(how.locator('[data-testid="person-step"][data-step="summarize"] input')).not.toBeChecked();
+  await approveStep.check();
   await expect(run.getByTestId("run-agent")).toHaveText("studio");
   await fill(run.getByTestId("pause-start"), "request", "Please refund the 40 I paid twice for March.");
   await shot(run, "studio-run-start");
   await run.getByTestId("pause-start-submit").click();
 
-  // The script ran, runah's model summarized, and the run stops at the person's step: a true_or_false is two buttons.
+  // The script ran, the model summarized, and the run stops at the person's step: a true_or_false is two buttons.
   const approve = await pausedAt(run, "approve");
   await expect(approve.getByTestId("pause-why")).toContainText("A step for a person");
   await expect(approve.locator('[data-testid="field"][data-key="approved"]').getByRole("radio")).toHaveCount(2);
   await expect(approve.getByTestId("answer-json")).toBeVisible();              // hand-typed JSON stays behind the form
   await expect(run.locator('[data-testid="trace"] li[data-step="summarize"]').first()).toBeVisible();
+  await expect(run.locator('[data-testid="trace"] li[data-kind="model"][data-step="summarize"]')).toContainText("answered summarize");
   expect(existsSync(MARKER)).toBe(true);
   await shot(run, "studio-run-approve");
   await pick(approve, "approved", "true");
@@ -84,11 +87,13 @@ test("a saved draft runs from the Studio: the person's step through the form, th
   expect(JSON.parse((await run.getByTestId("run-result").textContent())!).approved).toEqual({ value: true });
   await expect(run.getByTestId("run-workdir")).toHaveText(WORKDIR);
 
-  // Who answered what: runah's model the summary, the person (the studio's run) the approval.
+  // Who answered what: both as the studio's; the model's answer names its model and what it spent, the person's none.
   const summarized = entry(run, "summarize").getByTestId("answered-by");
-  await expect(summarized).toHaveAttribute("data-agent", "runah");
-  await expect(summarized).toContainText(AGENT_MODEL_REPORTED);
+  await expect(summarized).toHaveAttribute("data-agent", "studio");
+  await expect(summarized).toHaveAttribute("data-model", AGENT_MODEL_REPORTED);
+  await expect(summarized).toHaveAttribute("data-work", "reported");
   await expect(entry(run, "approve").getByTestId("answered-by")).toHaveAttribute("data-agent", "studio");
+  await expect(entry(run, "approve").getByTestId("answered-by")).not.toContainText(AGENT_MODEL_REPORTED);
   await shot(run, "studio-run-done");
 
   // Recorded as the studio's, against the draft the Studio saved, in History like any other run.
@@ -98,8 +103,10 @@ test("a saved draft runs from the Studio: the person's step through the form, th
   expect(record.draft).toBe(true);
   expect(record.bundle_id).toBe(bundle);
   const byStep = Object.fromEntries(record.history.map((e: { step: string }) => [e.step, e]));
-  expect(byStep.summarize.answered_by).toEqual({ agent: "runah", model: AGENT_MODEL_REPORTED });
+  expect(byStep.summarize.answered_by).toMatchObject({ agent: "studio", model: AGENT_MODEL_REPORTED });
+  expect(byStep.summarize.work).toBe("reported");
   expect(byStep.approve.answered_by.agent).toBe("studio");
+  expect(byStep.approve.answered_by.model ?? null).toBeNull();
   expect(byStep.check_limit.kind).toBe("Execute");
   await run.close();
 

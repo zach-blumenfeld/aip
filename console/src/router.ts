@@ -9,8 +9,8 @@ import { useEffect, useState } from "react";
 //   #/p/<name>/diff[/<a>..<b>]  diff between two revisions of a name
 //   #/studio[/<ref>]            the Studio: the card canvas as an editor of a revision, a draft, or (no ref) a new
 //                               procedure, saving drafts
-//   #/run[/<ref>][?from=studio] run console: pick a procedure, then drive it through the CLI (`aip run`, or `aip runah`
-//                               with the human steps picked); from the Studio's Run button, recorded as the studio's
+//   #/run[/<ref>][?from=studio] run console: pick a procedure, then drive it through the CLI (`aip run`, or the model
+//                               answering all but the steps picked for a person); from the Studio's Run button, the studio's
 //   #/runs[?name=&status=&agent=&session=&user=&draft=]   history: the runs the server holds
 //   #/runs/<id>                 one run's record
 //   #/audit[?name=]             the audit queries of GET /audit

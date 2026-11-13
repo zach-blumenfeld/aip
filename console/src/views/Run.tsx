@@ -10,13 +10,14 @@ import { answersFor, candidatesOf, collect, fieldKind, fieldText, optionsOf, pas
 import { agentSteps, type AgentStep } from "../run/human.ts";
 import { duration } from "../record/model.ts";
 import { href } from "../router";
-import { toolWords } from "../studio/chat.ts";
+import { modelWords } from "../studio/chat.ts";
 import { RecordHistory, RecordSummary, ErrorSummary, Json, DraftBadge } from "./Record";
 import { RunPath } from "./Steps";
 
 /** The run console. Runs go through the `aip` CLI on this machine (`aip run --progress`, then `aip resume
- *  --progress` per answer; or `aip runah`, runah's model answering every task but the human steps' picked here,
- *  plan C5): scripts run here, the decision model is the one this machine's `aip config` names, and the CLI records
+ *  --progress` per answer), every pause coming here; or driven (plan C6), the chat model `aip config agent` names
+ *  answering every pause but those at the steps ticked here, which come here (`aip agent --answer`, run by the
+ *  launcher): scripts run here, the decision model is the one this machine's `aip config` names, and the CLI records
  *  the run on the console's server as agent `console` in this tab's session, or `studio` when the Studio's Run
  *  button opened it (`studio`). */
 export function Run({ reference, studio = false }: { reference?: string; studio?: boolean }) {
@@ -56,8 +57,8 @@ function Picker() {
 
 type Status = "not started" | "running" | "paused" | "done" | "failed" | "cancelled";
 
-/** A line of the trace: a step as `--progress` reports it, or a tool call of runah's model, in words. */
-type TraceLine = StepEvent | { event: "tool"; step: string; words: string };
+/** A line of the trace: a step as `--progress` reports it, or a call of the model, in words. */
+type TraceLine = StepEvent | { event: "model"; step: string; words: string };
 
 function Console({ reference, studio = false }: { reference?: string; studio?: boolean }) {
   const folder = isFolderMode();
@@ -71,27 +72,22 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
   const [running, setRunning] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  /** The procedure's Task_Agent steps (from its graph), runah's model as `aip config` names it, and how to run:
-   *  `ahead` is `aip runah` with `human` the steps a person answers; else `aip run`, every task pausing. */
+  /** The procedure's Task_Agent steps (from its graph), the chat model as `aip config` names it, and how to run:
+   *  `driven`, the model answering every pause but those at the `person` steps (none ticked to begin with); else
+   *  `aip run`, every task pausing. */
   const [agents, setAgents] = useState<AgentStep[] | null>(null);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [ahead, setAhead] = useState(studio);
-  const [human, setHuman] = useState<string[]>([]);
-  /** Whether the run on the page was started run ahead: its answers go back through `aip runah <run id>`. */
-  const [ranAhead, setRanAhead] = useState(false);
+  const [driven, setDriven] = useState(studio);
+  const [person, setPerson] = useState<string[]>([]);
+  /** Whether the run on the page was started driven: it goes on driven after each answer given here. */
+  const [ranDriven, setRanDriven] = useState(false);
 
   useEffect(() => {
     const described = describeProcedure(reference);
     described.then(setAbout).catch((e: unknown) => setLoadError(describe(e)));
     modelSettings().then(setSettings).catch(() => setSettings(null));
     const graph: Promise<Graph | null> = folder ? folderGraph().then((g) => g.graph) : reference ? graphOf(reference).then((b) => b.graph) : Promise.resolve(null);
-    // The steps written for a person are aip's to say (the description's human_steps, plan R8): ticked as runah's default.
-    const marked = described.then((d) => d.human_steps ?? []).catch(() => [] as string[]);
-    Promise.all([graph, marked]).then(([g, m]) => {
-      const found = g ? agentSteps(g, m) : [];
-      setAgents(found);
-      setHuman(found.filter((s) => s.person).map((s) => s.name));
-    }).catch(() => setAgents([]));
+    graph.then((g) => setAgents(g ? agentSteps(g) : [])).catch(() => setAgents([]));
   }, [reference, folder]);
 
   const call = async (what: CliCall) => {
@@ -105,7 +101,7 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
       const exit = await runCli(what, {
         onProcess: setProcess,
         onStep: (e) => setSteps((s) => [...s, e]),
-        onTool: (e) => setSteps((s) => [...s, { event: "tool", step: e.step, words: toolWords(e) }]),
+        onModel: (e) => setSteps((s) => [...s, { event: "model", step: e.step, words: modelWords(e) }]),
         onOutcome: (o) => { got = o; },
         onOther: (line) => other.push(line),
       });
@@ -136,12 +132,12 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
     setSteps([]);
     setRunId(null);
     setRecord(null);
-    setRanAhead(ahead);
-    void call(ahead ? { runah: { ref: reference ?? "", inputs, human, studio } } : { run: { ref: reference ?? "", inputs } });
+    setRanDriven(driven);
+    void call(driven ? { agent: { ref: reference ?? "", inputs, person, studio } } : { run: { ref: reference ?? "", inputs } });
   };
-  // A run started ahead goes on ahead: the person's answers in, then runah's model again until the next human step.
+  // A driven run goes on driven: the person's answers in, then the model again until the next person's step.
   const resume = (answers?: unknown) => {
-    if (runId) void call({ resume: { run_id: runId, answers, ...(ranAhead ? (studio ? { studio: true } : { runah: true }) : {}) } });
+    if (runId) void call({ resume: { run_id: runId, answers, ...(ranDriven ? { person, ...(studio ? { studio: true } : {}) } : {}) } });
   };
   const reset = () => { setSteps([]); setOutcome(null); setRecord(null); setRunId(null); setProblem(null); setCancelled(false); };
 
@@ -177,8 +173,8 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
       <div className="run-grid">
         <div>
           {unstarted && agents !== null && (
-            <HowToRun agents={agents} settings={settings} ahead={ahead} human={human} busy={running}
-                      onAhead={setAhead} onHuman={setHuman} />
+            <HowToRun agents={agents} settings={settings} driven={driven} person={person} busy={running}
+                      onDriven={setDriven} onPerson={setPerson} />
           )}
           {unstarted && (
             <KeysForm title="Inputs" testid="pause-start" submit="Start" busy={running} types={about.inputs}
@@ -229,8 +225,8 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
           <h2>Steps</h2>
           <p className="muted small">One line per step as the CLI reports it (<code>--progress</code>), in the order things happened.</p>
           <ol className="trace small" data-testid="trace">
-            {steps.map((s, i) => s.event === "tool" ? (
-              <li key={i} data-step={s.step} data-kind="tool" className="muted">runah&apos;s model, at <code>{s.step}</code>: {s.words}</li>
+            {steps.map((s, i) => s.event === "model" ? (
+              <li key={i} data-step={s.step} data-kind="model" className="muted">the model, at <code>{s.step}</code>: {s.words}</li>
             ) : (
               <li key={i} data-step={s.step} data-kind={s.kind}>
                 <code>{s.step}</code> <span className="muted">{s.kind}</span>
@@ -250,41 +246,40 @@ function Console({ reference, studio = false }: { reference?: string; studio?: b
 
 const retryable = (error: Failed) => error.resumable === true;
 
-/** How the run goes: `aip run`, every task pausing for this page; or `aip runah`, runah's model answering every task
- *  but those of the steps ticked here, the human steps, which pause for this page. The ticks start on the steps written
- *  for a person (run/human.ts). */
-function HowToRun({ agents, settings, ahead, human, busy, onAhead, onHuman }: {
-  agents: AgentStep[]; settings: ModelSettings | null; ahead: boolean; human: string[]; busy: boolean;
-  onAhead: (ahead: boolean) => void; onHuman: (human: string[]) => void;
+/** How the run goes: `aip run`, every task pausing for this page; or driven (plan C6), the model answering every pause
+ *  but those at the steps ticked here, which pause for this page. Nothing is ticked to begin with. */
+function HowToRun({ agents, settings, driven, person, busy, onDriven, onPerson }: {
+  agents: AgentStep[]; settings: ModelSettings | null; driven: boolean; person: string[]; busy: boolean;
+  onDriven: (driven: boolean) => void; onPerson: (person: string[]) => void;
 }) {
-  const model = settings?.runah;
-  const toggle = (name: string, on: boolean) => onHuman(on ? [...new Set([...human, name])] : human.filter((h) => h !== name));
+  const model = settings?.agent;
+  const toggle = (name: string, on: boolean) => onPerson(on ? [...new Set([...person, name])] : person.filter((h) => h !== name));
   return (
-    <section className="pause" data-testid="run-how" data-mode={ahead ? "runah" : "run"}>
+    <section className="pause" data-testid="run-how" data-mode={driven ? "agent" : "run"}>
       <h2>How it runs</h2>
       <div className="options" role="radiogroup" aria-label="how it runs">
         <label className="option">
-          <input type="radio" name="run-how" checked={ahead} disabled={busy} data-testid="run-how-runah" onChange={() => onAhead(true)} />
-          {" "}run ahead (<code>aip runah</code>): runah&apos;s model answers the tasks, a person answers the steps ticked below
+          <input type="radio" name="run-how" checked={driven} disabled={busy} data-testid="run-how-agent" onChange={() => onDriven(true)} />
+          {" "}the model answers: it answers every task, and a person answers the steps ticked below (<code>aip agent --answer</code> at each pause)
         </label>
         <label className="option">
-          <input type="radio" name="run-how" checked={!ahead} disabled={busy} data-testid="run-how-run" onChange={() => onAhead(false)} />
+          <input type="radio" name="run-how" checked={!driven} disabled={busy} data-testid="run-how-run" onChange={() => onDriven(false)} />
           {" "}run (<code>aip run</code>): every task pauses here for you
         </label>
       </div>
-      {ahead && (
+      {driven && (
         <>
           <p className="muted small" data-testid="run-how-model">
-            {model ? <>runah&apos;s model: <code>{model.model}</code> at <code>{model.endpoint}</code>{model.key ? "" : ", with no key set: set one in the Studio's Settings or with `aip config runah --model-key`"}</> : "runah's model: not known"}
+            {model ? <>the model: <code>{model.model}</code> at <code>{model.endpoint}</code>{model.key ? "" : ", with no key set: set one in the Studio's Settings or with `aip config agent --model-key`"}</> : "the model: not known"}
           </p>
           {agents.length === 0
             ? <p className="muted small">It has no Task_Agent step: nothing for a model or a person to answer.</p>
             : (
-              <fieldset className="human-steps" data-testid="human-steps">
-                <legend>steps a person answers <span className="muted small">(<code>--human</code>): the run stops there for the form</span></legend>
+              <fieldset className="person-steps" data-testid="person-steps">
+                <legend>steps a person answers <span className="muted small">the run stops there for the form</span></legend>
                 {agents.map((s) => (
-                  <label key={s.name} className="option" data-testid="human-step" data-step={s.name} data-person={String(s.person)}>
-                    <input type="checkbox" checked={human.includes(s.name)} disabled={busy} onChange={(e) => toggle(s.name, e.target.checked)} />
+                  <label key={s.name} className="option" data-testid="person-step" data-step={s.name}>
+                    <input type="checkbox" checked={person.includes(s.name)} disabled={busy} onChange={(e) => toggle(s.name, e.target.checked)} />
                     {" "}<code>{s.name}</code> <span className="muted small">{s.description.split("\n")[0]}</span>
                   </label>
                 ))}
@@ -418,8 +413,8 @@ function Checklist({ name, rows, value, busy, onChange }: { name: string; rows: 
 
 /** A pause: every task waiting at the step, each with its prompt, the state it reads and a field per key it
  *  answers with. Several tasks (the passes of a `For` batch) are answered together, in one resume. The form is
- *  built from the step's `Produce` fields; the answer as hand-typed JSON stays behind it. `stopped` says why runah
- *  stopped here, when it did. */
+ *  built from the step's `Produce` fields; the answer as hand-typed JSON stays behind it. `stopped` says why a driven
+ *  run stopped here: a person's step, or a pause the model did not answer. */
 function PauseForm({ step, tasks, refused, onAnswer, stopped = null }: {
   step: string; tasks: Task[]; refused: boolean; onAnswer: (answers: unknown) => void; stopped?: Paused["answerer"] | null;
 }) {
@@ -456,7 +451,7 @@ function PauseForm({ step, tasks, refused, onAnswer, stopped = null }: {
         </p>
       )}
       {stopped && (
-        <p className="muted small" data-testid="pause-why">{/human step/.test(stopped.reason) ? "A step for a person: runah stopped here for you." : `runah stopped here: ${stopped.reason}`}</p>
+        <p className="muted small" data-testid="pause-why" data-person={String(stopped.person)}>{stopped.person ? "A step for a person: the run stopped here for you." : `The model did not answer: ${stopped.reason}`}</p>
       )}
       {refused && <p className="error" role="alert" data-testid="answer-refused">The last answer was refused, nothing was applied, and the same tasks wait. Answer again.</p>}
       {tasks.map((task) => (

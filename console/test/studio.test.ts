@@ -3,26 +3,22 @@
 // lacks, and the scripts a run wrote.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { missingScripts, questionsOf, scriptsWritten, stepWords, toolWords } from "../src/studio/chat.ts";
+import { missingScripts, modelWords, questionsOf, scriptsWritten, stepWords } from "../src/studio/chat.ts";
 
-const tool = (name: string, args: string, error?: string) => ({ event: "tool" as const, step: "draft", task: 0, tool: name, args, ...(error ? { error } : {}) });
+const model = (event: "answer" | "refused" | "gave_up", extra: Record<string, unknown> = {}) => ({ event, step: "draft", run_id: "r1", ...extra });
 const step = (name: string, kind: string, extra: Record<string, unknown> = {}) => ({ event: "step" as const, step: name, kind, pass: null, passes: [], ...extra });
 
-test("the model's tool calls in plain words: what it reads, writes, searches and compiles", () => {
-  assert.equal(toolWords(tool("read_file", "docs/refund-policy.md")), "reading refund-policy.md");
-  assert.equal(toolWords(tool("read_file", "bundle:assets/draft.md")), "reading draft.md");
-  assert.equal(toolWords(tool("write_file", "refund_handling/procedure.aip (1240 bytes)")), "writing procedure.aip");
-  assert.equal(toolWords(tool("list_files", "")), "listing the files");
-  assert.equal(toolWords(tool("list_files", "docs")), "listing the files in docs");
-  assert.equal(toolWords(tool("search", "pattern=refund")), "searching for refund");
-  assert.equal(toolWords(tool("compile", "refund_handling")), "compiling refund_handling");
-  assert.equal(toolWords(tool("read_file", "../secret", "outside the working directory")), "reading secret: outside the working directory");
-  assert.equal(toolWords({ event: "refused", step: "draft", task: 0, errors: ["path: missing"] }), "its answer at draft was refused, and went back to it");
+test("the model's calls in plain words: what it answered, what was refused, where it gave up", () => {
+  assert.equal(modelWords(model("answer", { tokens: 1200 })), "answered draft (1200 tokens)");
+  assert.equal(modelWords(model("answer")), "answered draft");
+  assert.equal(modelWords(model("refused", { reason: "drafted: missing" })), "its answer at draft was refused, and went back to it: drafted: missing");
+  assert.equal(modelWords(model("gave_up", { reason: "refused 4 times" })), "gave up at draft: refused 4 times");
 });
 
 test("the steps of build_procedure and edit_procedure in words; Start and End say nothing", () => {
   assert.equal(stepWords(step("draft", "Task_Agent")), "wrote the procedure");
   assert.equal(stepWords(step("compile", "Execute")), "compiled it");
+  assert.equal(stepWords(step("write", "Execute")), "saved the files");
   assert.equal(stepWords(step("rewrite", "Task_Agent")), "made the change");
   assert.equal(stepWords(step("start", "Start")), null);
   assert.equal(stepWords(step("end", "End")), null);

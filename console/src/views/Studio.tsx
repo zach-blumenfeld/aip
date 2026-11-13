@@ -3,21 +3,22 @@
 // console's process keeps in a folder of its own (bin/aip-console.mjs, the Studio's workspaces).
 //
 // - The chat (StudioChat) runs build_procedure on the first brief of a new procedure and edit_procedure
-//   after, run ahead (`aip runah`) with a chat model answering; the folder is what they write, and the
+//   after, driven: `aip run`, and the chat model `aip config agent` names answers every pause but build_procedure's
+//   ask_user, which is the person's (plan C6); the folder is what they write, and the
 //   page reads it again when a run stops. Each run can be undone as a whole. The scripts a run wrote are
 //   shown with their text, and saving or publishing a draft that has them asks once that they were read.
 // - The graph is C3's step graph, control or data flow, drawn again after every run and every edit;
 //   clicking a node opens its form (StudioForm). A form's change is a text edit at a span of
 //   procedure.aip (studio/edit.ts), which the console's process formats (`aip fmt --stdin`) and compiles
 //   (`aip compile --partial`) before the graph is drawn again; the compiler is the only rule book.
-// - Source is a toggle, closed by default; Settings holds runah's model and the decision model.
+// - Source is a toggle, closed by default; Settings holds the chat model and the decision model.
 // Only a clean compile is saved: as a draft (the server holds the bundle with no revision), and
 // "publish" gives that bundle the next revision. Unsaved form edits are kept in this browser.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { describe, filesOf, graphOf, sourceOf } from "../api/client";
 import {
-  modelSettings, saveModelSettings, studioCheck, studioDocuments, studioOpen, studioRead, studioSave, studioUndo,
+  modelSettings, saveModelSettings, studioCheck, studioDocuments, studioOpen, studioRead, studioSave, studioUndo, STUDIO_PERSON,
   type ModelSettings, type ModelSettingsChange, type StudioCheck, type StudioSaved,
 } from "../api/console";
 import type { Graph } from "../graph/bundle.ts";
@@ -240,7 +241,8 @@ export function Studio({ reference }: { reference?: string }) {
         ? { kind, call: { build: { workspace: opened.workspace, brief: text, title, source: s, files: changed } } }
         : { kind, call: { edit: { workspace: opened.workspace, instruction: text, source: s, files: changed } } };
     },
-    answer: (runId, answers) => ({ resume: { run_id: runId, answers, studio: true, workspace: opened.workspace } }),
+    // The person's answers in, then the model again at every pause but the person's step.
+    answer: (runId, answers) => ({ resume: { run_id: runId, answers, studio: true, workspace: opened.workspace, person: STUDIO_PERSON } }),
     wrote: (paths) => { if (paths.length) setModelScripts((had) => [...new Set([...had, ...paths])].sort()); },
     before: () => current.current,
     built: () => setBuilt(true),
@@ -498,7 +500,7 @@ function Diagnostics({ check }: { check: StudioCheck }) {
   );
 }
 
-/** Where to get runah's model's endpoint, one line per provider; any Chat Completions endpoint works. */
+/** Where to get the chat model's endpoint, one line per provider; any Chat Completions endpoint works. */
 const PROVIDERS = [
   ["Anthropic (the default)", "https://api.anthropic.com/v1", "claude-opus-5-5"],
   ["OpenAI", "https://api.openai.com/v1", "a model name from your account"],
@@ -506,7 +508,7 @@ const PROVIDERS = [
   ["Ollama, on this machine", "http://localhost:11434/v1", "a model you have pulled"],
 ];
 
-/** runah's model (`aip config runah`) and the decision model (`aip config`), written through the launcher. A key is
+/** The chat model (`aip config agent`) and the decision model (`aip config`), written through the launcher. A key is
  *  never shown: a field left empty keeps the one set. */
 function Settings({ settings, onSaved }: { settings: ModelSettings | null; onSaved: (s: ModelSettings) => void }) {
   const [form, setForm] = useState<ModelSettingsChange>({});
@@ -522,14 +524,14 @@ function Settings({ settings, onSaved }: { settings: ModelSettings | null; onSav
     <section className="studio-settings" data-testid="studio-settings">
       <h2>Settings</h2>
       <fieldset>
-        <legend>runah&apos;s model <span className="muted small">writes and changes procedures in the chat (<code>aip runah</code>)</span></legend>
-        <p className="small muted" data-testid="settings-runah">
-          {settings?.runah ? <>now: <code>{settings.runah.endpoint}</code>, <code>{settings.runah.model}</code>, key {settings.runah.key ? "set" : "not set"}</> : "none set"}
-          {fromEnv(settings?.runah) && <> — set by the environment ({settings!.runah!.source}), which wins over what is saved here</>}
+        <legend>the chat model <span className="muted small">answers the steps of the chat&apos;s runs and of a run the model drives (<code>aip config agent</code>, the model <code>aip agent</code> asks)</span></legend>
+        <p className="small muted" data-testid="settings-agent">
+          {settings?.agent ? <>now: <code>{settings.agent.endpoint}</code>, <code>{settings.agent.model}</code>, key {settings.agent.key ? "set" : "not set"}</> : "none set"}
+          {fromEnv(settings?.agent) && <> — set by the environment ({settings!.agent!.source}), which wins over what is saved here</>}
         </p>
-        <label className="form-row">endpoint <input type="url" placeholder={settings?.runah?.endpoint ?? PROVIDERS[0][1]} value={form.runah_model_uri ?? ""} onChange={(e) => set("runah_model_uri", e.target.value)} /></label>
-        <label className="form-row">model <input type="text" placeholder={settings?.runah?.model ?? PROVIDERS[0][2]} value={form.runah_model_name ?? ""} onChange={(e) => set("runah_model_name", e.target.value)} /></label>
-        <label className="form-row">key <input type="password" autoComplete="off" placeholder={settings?.runah?.key ? "set; type to replace it" : "the provider's API key"} value={form.runah_model_key ?? ""} onChange={(e) => set("runah_model_key", e.target.value)} data-testid="settings-runah-key" /></label>
+        <label className="form-row">endpoint <input type="url" placeholder={settings?.agent?.endpoint ?? PROVIDERS[0][1]} value={form.agent_model_uri ?? ""} onChange={(e) => set("agent_model_uri", e.target.value)} /></label>
+        <label className="form-row">model <input type="text" placeholder={settings?.agent?.model ?? PROVIDERS[0][2]} value={form.agent_model_name ?? ""} onChange={(e) => set("agent_model_name", e.target.value)} /></label>
+        <label className="form-row">key <input type="password" autoComplete="off" placeholder={settings?.agent?.key ? "set; type to replace it" : "the provider's API key"} value={form.agent_model_key ?? ""} onChange={(e) => set("agent_model_key", e.target.value)} data-testid="settings-agent-key" /></label>
         <ul className="small muted">
           {PROVIDERS.map(([who, url, model]) => <li key={who}>{who}: <code>{url}</code>, {model}</li>)}
         </ul>

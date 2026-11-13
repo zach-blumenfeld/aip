@@ -729,6 +729,34 @@ class Client:
         return Agent(self, self.agent_chat, on_event=on_event, procedure=procedure or ASSIST).ask(
             text, session=session, new=new, shell=shell)
 
+    def answer(self, run: str | Path | Paused, *, agent: str | None = None, session: str | None = None,
+               on_event: Callable[[JSON], None] | None = None, on_step: OnStep | None = None) -> tuple[Result, str | None]:
+        """`aip agent --answer`: the configured chat model answers the pause a run waits at, once,
+        with the call `aip agent` makes at each pause of `assist` (the same message, no tools, a
+        refused answer back to it up to three times), and the run is resumed with what it says.
+        Any run, any procedure: this is how the console has the model answer the steps a person
+        does not. Returns the result the resume came to and None; or, when no answer would hold
+        or the endpoint failed, the run's `Paused` as it was and the reason. `agent` and
+        `session` are who answered, as `resume` takes them. A run that is not paused, and a
+        resume that fails the run, are a `RunError` as `resume` raises them; no model key
+        configured (and no `agent_chat`) is an `aip.agent.AgentError`."""
+        from aip.agent import Agent, Outcome
+
+        handle, path, bundle = self._reopen(run)
+        with Procedure.load(bundle) as procedure:
+            state = Run.from_dict(procedure, handle.run)
+        if state.status != PAUSED or state.pause is None:
+            raise RunError(error_outcome({"error": "not_paused", "step": None, "message": f"run {handle.run_id} is "
+                                          f"{state.status}, not paused; there is nothing to answer", "pass": None,
+                                          "passes": []}, handle.run_id, path, False if handle.server else None, False),
+                           stopped=False)
+        recorded = handle.recorded if handle.server and handle.scripts else None
+        paused = Paused(state.pause["kind"], state.pause["step"], [Task.from_dict(t) for t in state.pause["tasks"]],
+                        handle.run_id, path, recorded, outcome(state, handle.run_id, path, recorded))
+        out = Outcome(session or "", "paused", handle.run_id)
+        result = Agent(self, self.agent_chat, on_event=on_event).answer(paused, session, out, on_step, agent=agent)
+        return (paused, out.reason) if result is None else (result, None)
+
     def _reopen(self, run: str | Path | Paused | RunError) -> tuple[RunFile, Path, Bundle]:
         """A run's file, its path and its bundle, from the bundle cache."""
         path = self.run_file(run)

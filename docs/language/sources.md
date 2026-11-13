@@ -234,10 +234,26 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
   and finished with a question; the reply ran it on `./notes` with the right counts. A first attempt
   (`scratch/a3/attempt1/`) found `act`'s publish taking a folder named like the procedure for a
   taken catalog name; fixed, with a test.
-- **The console still calls the run-ahead verb** (its launcher, the Studio, the run console's
-  picker and their e2e specs): it is C6's to move onto `aip agent`-style driving, so the console's
-  e2e suite fails on the Studio and Run specs until then. Old run files with R7's keys still load
-  (`RunFile.load` drops keys it does not know).
+- **The console called the run-ahead verb until C6** (below). Old run files with R7's keys still
+  load (`RunFile.load` drops keys it does not know).
+
+## What C6 left (2026-11-12)
+
+- **The console drives a run as `aip agent` does.** The launcher (`console/bin/aip-console.mjs`,
+  `stream` and `nextOf`) runs `aip run --progress`; at a pause whose step is not one of the run's
+  `person` steps it runs `aip agent --answer <run_id> --progress` (`Client.answer` in the SDK, the
+  same `Agent.answer` call `aip agent` makes) on the same event stream, until the run is done,
+  fails, or waits for a person. It holds back each process's final object and relays only the last,
+  with `answerer: {person, reason}`. The Studio's person step is `ask_user` (`STUDIO_PERSON`, in the
+  launcher and in `src/api/console.ts`); the run console's picker starts with nothing ticked.
+- **Every answer in such a run is the page's agent** (`console` or `studio`): the model's carry
+  `model` in `answered_by` and `work: "reported"` with tokens and seconds, the person's no model.
+  That is how the record tells them apart now that no `runah` agent exists.
+- **The e2e stand-in model** (`console/e2e/agent.mjs`) answers A3's builders with no tools: `draft`
+  with `{procedure, drafted: {path: text}}`, `rewrite` with `rewritten`, read off `before`. The
+  approval brief's `approve` step lost its person marker; the spec ticks it in the picker.
+- `console/e2e/orchestrated.spec.ts` (R7's parent link) is removed, and with it the record's
+  `parent`, `tokens`, `children` and `budget_tokens` in `src/api/types.ts` and `Record.tsx`.
 
 ## Agent frameworks (track D2)
 

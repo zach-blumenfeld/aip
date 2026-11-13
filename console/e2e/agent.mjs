@@ -1,23 +1,24 @@
-// A stand-in chat model for `aip runah`, which runs the Studio's chat (plans C4, A2): an OpenAI Chat Completions endpoint
-// (`POST /v1/chat/completions`) that answers the tasks of build_procedure and edit_procedure from a
-// script, the way tests/test_answerer.py's stand-in does for the Python suite. Each request is one turn
-// of one task's chat: the task is the first user message (`# Task: <step>`, then the state it reads as
-// JSON), and how far the chat has got is how many tool results it already holds. So the replies depend
-// on the request alone, and a run can be repeated.
+// A stand-in chat model for the console's driven runs (plan C6): the model `aip agent --answer` asks at each pause the
+// launcher hands it (the Studio's build_procedure and edit_procedure, and a draft run from the Run button). An OpenAI
+// Chat Completions endpoint (`POST /v1/chat/completions`) that answers from a script, the way tests/test_agent.py's
+// stand-in does for the Python suite. Each request is one pause: the message is `# Procedure step: <step>`, then the
+// state it reads as JSON and the keys to answer with; the model has no tools, so the reply is the answer, one JSON
+// object. A refused answer comes back as a later message of the same request, which this stand-in never earns. So the
+// replies depend on the request alone, and a run can be repeated.
 //
 //   node e2e/agent.mjs PORT
 //
-// What it writes for build_procedure: a support-inbox procedure (a Task_Agent that classifies with
-// labels [refund, bug, other], a route on them, a refund check by a script it also writes, a bug tag),
-// compiled once with the compile tool, named as the requester named it (`name` in the draft's state)
-// or, with none, `support_inbox` after what it handles. edit_procedure's `rewrite` reads procedure.aip
-// and adds a step for the `other` messages. The first extraction asks one question; once the person
-// has answered, the second is settled. A brief that asks for an approval drafts `refund_approval` instead
-// (plan C5): a script, a task the model answers, and a task for a person; any task of a procedure the Studio
-// built is answered with a value of each declared type.
+// What it drafts for build_procedure: a support-inbox procedure (a Task_Agent that classifies with labels [refund,
+// bug, other], a route on them, a refund check by a script it also writes, a bug tag), as the folder's files
+// (`drafted`, which build_procedure's `write` script puts on disk), named as the requester named it (`name` in the
+// state) or, with none, `support_inbox` after what it handles. edit_procedure's `rewrite` reads procedure.aip from the
+// folder's text (`before`) and adds a step for the `other` messages. The first extraction asks one question; once the
+// person has answered, the second is settled. A brief that asks for an approval drafts `refund_approval` instead: a
+// script, a task the model answers, and a task a person answers when the run console is told so; any task of a
+// procedure the Studio built is answered with a value of each declared type.
 //
-// Every reply names the model that answered (`model`, as a real endpoint does: a dated snapshot of the
-// name asked for), which aip records as the task's `answered_by.model`.
+// Every reply names the model that answered (`model`, as a real endpoint does: a dated snapshot of the name asked
+// for), which aip records as the task's `answered_by.model`.
 
 import { createServer } from "node:http";
 
@@ -80,8 +81,8 @@ json.load(sys.stdin)
 json.dump({"approved": True}, sys.stdout)
 `;
 
-/** What a brief that asks for an approval drafts (plan C5's Run button): a script, a task runah's model answers, and a
- *  task for a person, marked as the drafter marks one. */
+/** What a brief that asks for an approval drafts (the Run button, plans C5 and C6): a script, a task the model answers,
+ *  and a task a person answers when the run console ticks it. */
 const APPROVAL = (name) => `Procedure ${name}
   "Approve a refund request: a script checks it against the limit, the model summarizes it, a person approves it."
   Requires python 3.10
@@ -104,7 +105,7 @@ Task_Agent summarize "Summarize the request for the approver in one sentence." {
   Next_Step approve
 }
 
-Task_Agent approve "This is a task for a person, not for you: approve the refund or refuse it." {
+Task_Agent approve "Approve the refund or refuse it." {
   Read summary
   Produce approved: true_or_false "Whether the person approves the refund."
   Next_Step end
@@ -140,7 +141,7 @@ function typed(task) {
   const labels = JSON.parse(/^Labels: (.*)$/m.exec(task)?.[1] ?? "{}");
   const out = {};
   for (const [key, type] of Object.entries(shape ? JSON.parse(shape) : {})) {
-    out[key] = labels[key]?.[0] ?? (type === "true_or_false" || type === "boolean" ? true : type === "list" ? []
+    out[key] = labels[key]?.[0] ?? (type === "true_or_false" || type === "boolean" ? true : type === "list" ? [] : type === "object" ? {}
       : type === "integer" || type === "float" || type === "number" ? 1 : `the stand-in's ${key}`);
   }
   return out;
@@ -154,38 +155,28 @@ const OTHER = `Task_Agent answer_other "Answer a message that is neither a refun
 
 `;
 
-let calls = 0;
-
-const tool = (name, args) => ({
-  model: REPORTED_MODEL,
-  choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: `call_${++calls}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] },
-              finish_reason: "tool_calls" }],
-  usage: { prompt_tokens: 200, completion_tokens: 20 },
-});
 const say = (answer) => ({
   model: REPORTED_MODEL,
   choices: [{ message: { role: "assistant", content: JSON.stringify(answer) }, finish_reason: "stop" }],
   usage: { prompt_tokens: 240, completion_tokens: 40 },
 });
 
-/** The reply to one request of a task's chat. */
+/** The reply to one pause. */
 function reply(body) {
   const messages = body.messages ?? [];
   const task = messages.find((m) => m.role === "user")?.content ?? "";
-  const step = /^# Task: (\S+)/m.exec(task)?.[1] ?? "";
+  const step = /^# Procedure step: (\S+)/m.exec(task)?.[1] ?? "";
   const stateText = /## State it reads\n```json\n([\s\S]*?)\n```/.exec(task)?.[1];
   const state = stateText ? JSON.parse(stateText) : {};
-  const results = messages.filter((m) => m.role === "tool");
-  const n = results.length;
+  const approval = /\bapproval\b/i.test(state.brief ?? "");
   switch (step) {
     case "read_documents": {
       const doc = (state.files ?? [])[0];
-      if (doc && n === 0) return tool("read_file", { path: doc });
       return say({ notes: doc ? `${doc.split("/").pop()}: refunds up to 100 are approved by a script; bug reports go to the team of their area.` : "No documents." });
     }
     case "extract_rules": {
       const answered = typeof state.answers === "string" && state.answers.trim() !== "";
-      if (/\bapproval\b/i.test(state.brief ?? "")) {
+      if (approval) {
         return answered
           ? say({ rules: "1. A script checks the refund against the limit of 100. 2. The model summarizes it. 3. A person approves it.", questions: [], settled: true })
           : say({ rules: "1. A script checks the refund. 2. A person approves it.", questions: ["Who approves a refund?"], settled: false });
@@ -195,31 +186,26 @@ function reply(body) {
         : say({ rules: "1. Refunds are checked by a script. 2. Bug reports are tagged.", questions: ["What is the refund limit, and who approves above it?"], settled: false });
     }
     case "draft": {
-      const approval = /\bapproval\b/i.test(state.brief ?? "");
-      const out = state.out, name = state.name || (approval ? APPROVAL_NAME : SUBJECT_NAME);
-      if (n === 0) return tool("write_file", { path: `${out}/procedure.aip`, content: (approval ? APPROVAL : PROCEDURE)(name) });
-      if (n === 1) {
-        return tool("write_file", approval ? { path: `${out}/scripts/check_limit.py`, content: APPROVAL_SCRIPT }
-                                           : { path: `${out}/scripts/check_refund.py`, content: SCRIPT });
-      }
-      if (n === 2) return tool("compile", { path: out });
-      return say({ path: out, procedure: name });
+      const name = state.name || (approval ? APPROVAL_NAME : SUBJECT_NAME);
+      const drafted = approval
+        ? { "procedure.aip": APPROVAL(name), "scripts/check_limit.py": APPROVAL_SCRIPT }
+        : { "procedure.aip": PROCEDURE(name), "scripts/check_refund.py": SCRIPT };
+      return say({ procedure: name, drafted });
     }
     case "fix":
-      return say(state.path !== undefined && "rules" in state ? { path: state.path } : { fixed: "nothing to fix" });
+      return say("instruction" in state ? { fixed: "nothing to fix", repairs: {} } : { repairs: {} });
     case "review":
       if (/a person approves it/i.test(state.rules ?? "")) {
         return say({ review: "It checks the limit, summarizes the request and leaves the approval to a person.\nScripts:\nscripts/check_limit.py: writes limit-checked.txt in the working directory; uses no credentials." });
       }
       return say({ review: "It covers refunds and bug reports. The refund script is a stub that approves everything: a developer should make it read the amount before this is published.\nScripts:\nscripts/check_refund.py: approves every refund; touches nothing outside the working directory, uses no credentials." });
     case "rewrite": {
-      if (n === 0) return tool("read_file", { path: `${state.path}/procedure.aip` });
-      if (n === 1) {
-        const text = `${results[0].content}`;
-        const changed = text.replace(/(\n\s*other\s*->\s*)end\b/, "$1answer_other").replace(/\nEnd "/, `\n${OTHER}End "`);
-        return tool("write_file", { path: `${state.path}/procedure.aip`, content: changed });
-      }
-      return say({ changes: "Added answer_other, a step that answers the messages that are neither refunds nor bug reports; the route sends `other` to it.\nScripts:\nnone written or changed." });
+      const text = `${(state.before ?? {})["procedure.aip"] ?? ""}`;
+      const changed = text.replace(/(\n\s*other\s*->\s*)end\b/, "$1answer_other").replace(/\nEnd "/, `\n${OTHER}End "`);
+      return say({
+        changes: "Added answer_other, a step that answers the messages that are neither refunds nor bug reports; the route sends `other` to it.\nScripts:\nnone written or changed.",
+        rewritten: { "procedure.aip": changed },
+      });
     }
     default:
       // A task of a procedure the Studio built, run from its Run button: an answer of the declared types.

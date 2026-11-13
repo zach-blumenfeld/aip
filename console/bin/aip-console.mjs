@@ -6,11 +6,17 @@
 //
 // The page calls the AIP server directly for the catalog, the runs and the audit queries; nothing is
 // proxied. Runs go through the CLI, next to the data: the page posts to this process, which spawns
-// `aip run --progress` or `aip resume --progress` (the Studio's, `aip runah --progress`) and relays each JSON
-// line it prints to the page as a server-sent event, so scripts run here, the models are the ones this
-// machine's `aip config` names, and the run is recorded on the server by the CLI itself. With a FOLDER (a program directory,
-// one holding procedure.aip) instead of a server, runs are local and unrecorded and the server pages
-// are hidden.
+// `aip run --progress` or `aip resume --progress` and relays each JSON line it prints to the page as a
+// server-sent event, so scripts run here, the models are the ones this machine's `aip config` names, and
+// the run is recorded on the server by the CLI itself. With a FOLDER (a program directory, one holding
+// procedure.aip) instead of a server, runs are local and unrecorded and the server pages are hidden.
+//
+// Driving a run (plan C6), as `aip agent` drives `assist`: the model sits outside the run. A run started
+// with `person` (a list of Task_Agent step names) stops for the page only at those steps; at any other
+// pause this process runs `aip agent --answer <run_id> --progress`, where the chat model `aip config agent`
+// names answers it with the call `aip agent` makes, and the run goes on, on the same stream. Without
+// `person`, every pause comes to the page. The paused object that ends a driven stream carries
+// `answerer: {person, reason}`: a person's step, or why the model did not answer (it gave up, no key).
 //
 // Endpoints, all under /console/ and only for this machine (loopback Host, same-origin posts):
 //   GET  /console/config          {mode, server, local, folder, workdir, aip: {version, language}, minimum}
@@ -18,19 +24,17 @@
 //   GET  /console/graph           folder mode: `aip compile --check --json` on the folder, with `source`,
 //                                 the text of its procedure.aip
 //   POST /console/run             {ref, inputs, session}      -> event stream of `aip run --progress`
-//   POST /console/resume          {run_id, answers?, session} -> event stream of `aip resume --progress`
+//   POST /console/agent           {ref, inputs, person, session, studio?} -> the same, driven: the model answers every
+//                                 pause but those at the `person` steps. With `studio`, recorded as the studio's (the
+//                                 Studio's Run button); else as the console's
+//   POST /console/resume          {run_id, answers?, session, person?, studio?, workspace?} -> event stream of `aip resume
+//                                 --progress`; with `person`, driven on as above; with `studio`, recorded as the studio's
 //   POST /console/cancel          {process}                   kills that `aip` and its scripts
 //   GET  /console/record?run_id=  `aip runs <run_id> --json`: the run, from this machine's run file or the server
 //   GET  /console/runs            `aip runs --json`; in folder mode, this machine's runs of the folder
 //   POST /console/wake            starts the local server when the console's server is `aip config server local`
-//   POST /console/runah           {ref, inputs, human, session, studio?} -> event stream of `aip runah --progress --human
-//                                 STEP,...`: runah's model answers every task but the human steps' (plan C5). With `studio`,
-//                                 recorded as the studio's (the Studio's Run button); else as the console's
-//   POST /console/resume          ... with `runah: true` (and `human`), a runah run's: `aip runah <run_id> --answers -
-//                                 --progress`, which puts the answers in and runs ahead; with `studio: true` (and the run's
-//                                 `workspace`), a Studio run's, recorded as the studio's
 //   A `ref` of `bundle:<id>` names a draft the Studio saved in this process: the bundle `studio/save` compiled, run as
-//   its .rl file (the run is recorded against that draft). /console/procedure and /console/run take it too.
+//   its .rl file (the run is recorded against that draft). /console/procedure, /console/run and /console/agent take it.
 //   POST /console/studio/open     {files: [{path, text | base64, mode}], name?} -> {workspace}: a folder holding a bundle's
 //                                 files (or none, for a new procedure: a placeholder folder, `new_procedure`), named `name`,
 //                                 inside a working directory of its own
@@ -40,28 +44,30 @@
 //   POST /console/studio/read     {workspace} -> the folder as it is on disk (after a run changed it): the check's object
 //                                 for its procedure.aip, with {name, files: {path: text}} (its text files) and `undo`
 //   POST /console/studio/documents {workspace, documents: [{name, base64}]} -> saved under the folder's assets/docs/
-//   POST /console/studio/build    {workspace, brief, title?, session} -> event stream of `aip runah build_procedure
-//                                 --human ask_user` writing the folder; `title` is the name the person gave, or none for
-//                                 the model to name it from the brief's subject. When the run is done (here or after a
-//                                 resume) the folder is renamed to the `procedure` its result names
-//   POST /console/studio/edit     {workspace, instruction, session} -> event stream of `aip runah edit_procedure` on the
-//                                 folder. Build and edit keep the folder as it was first:
+//   POST /console/studio/build    {workspace, brief, title?, session} -> event stream of `aip run build_procedure`,
+//                                 driven with `ask_user` the person's step, writing the folder; `title` is the name the
+//                                 person gave, or none for the model to name it from the brief's subject. When the run is
+//                                 done (here or after a resume) the folder is renamed to the `procedure` its result names
+//   POST /console/studio/edit     {workspace, instruction, session} -> event stream of `aip run edit_procedure` on the
+//                                 folder, driven, the model answering every pause. Build and edit keep the folder as it was
+//                                 first:
 //   POST /console/studio/undo     {workspace} -> puts back the folder as it was before the last run; the read object
 //   POST /console/studio/save     {workspace, source, files?, publish?} -> writes the folder and runs `aip publish --draft
 //                                 --json` (with `publish`, `aip publish --json`): {name, revision, bundle_id, existed, draft};
 //                                 the bundle is kept as an .rl for the Run button (`bundle:<id>`)
-//   GET  /console/settings        runah's chat model and the decision model `aip config` names: {runah, decision}, each
-//                                 {endpoint, model?, key (whether one is set), source (null: the defaults)} or null; keys
-//                                 are never sent
-//   POST /console/settings        {runah_model_uri?, runah_model_name?, runah_model_key?, decision_model?, decision_model_key?}
-//                                 -> `aip config runah --model-uri/--model-name/--model-key` and `aip config
+//   GET  /console/settings        the chat model (`aip config agent`) and the decision model `aip config` names: {agent,
+//                                 decision}, each {endpoint, model?, key (whether one is set), source (null: the defaults)}
+//                                 or null; keys are never sent
+//   POST /console/settings        {agent_model_uri?, agent_model_name?, agent_model_key?, decision_model?, decision_model_key?}
+//                                 -> `aip config agent --model-uri/--model-name/--model-key` and `aip config
 //                                 --decision-model/--decision-model-key`; the settings as GET answers them
 //
 // An event stream sends `event: process` (its id, to cancel by) first, then one `data:` event per line
-// the CLI printed (step lines, runah's model's tool lines, then the final paused, done or error
-// object), then `event: exit` with the exit code, signal and stderr. Closing the stream kills the
-// subprocess too. Every run the console starts is recorded with `agent: console` and the page's
-// `session`; the Studio's runs, with `agent: studio`.
+// the CLI printed (step lines, the model's `answer`, `refused` and `gave_up` lines, then the final paused,
+// done or error object; a paused object the model went on to answer is not relayed), then `event: exit`
+// with the last process's exit code, signal and stderr. Closing the stream kills the subprocess too. Every
+// run the console starts, and every answer its model gives, is recorded with `agent: console` and the
+// page's `session`; the Studio's, with `agent: studio`.
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -78,6 +84,8 @@ export const MINIMUM_AIP = "0.9.0";
 /** Who the console's runs are recorded as (`aip run --agent`), and the Studio's: build_procedure and edit_procedure. */
 export const AGENT = "console";
 export const STUDIO_AGENT = "studio";
+/** The step of build_procedure the Studio's person answers; the model answers the rest (plan C6). */
+export const STUDIO_PERSON = ["ask_user"];
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const TYPES = {
@@ -151,16 +159,16 @@ function configuredServer(bin) {
   return parseConfiguredServer(spawnSync(bin, ["config"], { encoding: "utf8" }).stdout);
 }
 
-/** The models `aip config` names, read: `{runah, decision}`. `runah` is the `runah:` block (the chat model `aip runah`
- *  answers Task_Agent tasks with: `{endpoint, model, key, source}`, `source` null when nothing is set and the defaults
- *  show), or null when the block is missing; `decision` the `decision model:` line, or null when none is configured.
- *  `key` says whether one is set; `aip config` never prints a key, so neither does this. */
+/** The models `aip config` names, read: `{agent, decision}`. `agent` is the `agent:` block (the chat model `aip agent`
+ *  answers pauses with, and the console's driven runs: `{endpoint, model, key, source}`, `source` null when nothing is
+ *  set and the defaults show), or null when the block is missing; `decision` the `decision model:` line, or null when
+ *  none is configured. `key` says whether one is set; `aip config` never prints a key, so neither does this. */
 export function parseModels(text) {
   const t = text ?? "";
-  const runah = /^runah:(?:[ \t]+\(from ([^)\n]*)\))?[ \t]*\n[ \t]+model uri:[ \t]+(\S+)[ \t]*\n[ \t]+model name:[ \t]+(\S+)[ \t]*\n[ \t]+model key:[ \t]+(set|none)/m.exec(t);
+  const agent = /^agent:(?:[ \t]+\(from ([^)\n]*)\))?[ \t]*\n[ \t]+model uri:[ \t]+(\S+)[ \t]*\n[ \t]+model name:[ \t]+(\S+)[ \t]*\n[ \t]+model key:[ \t]+(set|none)/m.exec(t);
   const decision = /^decision model: (\S+)(?:\s+\(TypeSafe's, the default\))?\s+key: (set|none)\s+\(from ([^)]*)\)/m.exec(t);
   return {
-    runah: runah ? { endpoint: runah[2], model: runah[3], key: runah[4] === "set", source: runah[1] ?? null } : null,
+    agent: agent ? { endpoint: agent[2], model: agent[3], key: agent[4] === "set", source: agent[1] ?? null } : null,
     decision: decision ? { endpoint: decision[1], model: null, key: decision[2] === "set", source: decision[3] } : null,
   };
 }
@@ -217,57 +225,109 @@ function envFor(setup, session, agent = AGENT) {
   return env;
 }
 
-/** Spawn `aip <args>` and stream what it prints to `res` as server-sent events. `onDone`, when given, is called with
- *  the run's `done` object once the process has ended, before the stream's `exit` event (the Studio names the folder
- *  after the procedure a build wrote). */
-function stream(res, setup, args, input, session, agent = AGENT, onDone = undefined) {
+/** How many pauses the model answers on one stream before the console stops and hands the run to the page. */
+export const MAX_MODEL_ANSWERS = 200;
+
+/** The CLI's final object (paused, done or error), as against a `--progress` line. */
+const isOutcome = (o) => o !== null && typeof o === "object" && !Array.isArray(o) && o.event === undefined &&
+  ("paused" in o || "done" in o || "error" in o);
+
+/** What follows a process of a driven run (plan C6), given the outcome it printed: `{answer: run_id}` to have the model
+ *  answer the pause it stopped at (`aip agent --answer`), or `{final}`, the object the stream ends with. `person` is
+ *  null for a run that is not driven (every pause is the page's), else the steps a person answers; `asked` the paused
+ *  object the model was just asked to answer (null when the process was not `aip agent --answer`); `answers` how many
+ *  the model has answered on this stream. Exported for the launcher's test. */
+export function nextOf(outcome, person, asked = null, answers = 0) {
+  if (asked !== null) {
+    // The model could not answer: its answers were refused past the retries, or its endpoint failed.
+    if (outcome && "paused" in outcome && typeof outcome.gave_up === "string") {
+      const { gave_up: reason, ...paused } = outcome;
+      return { final: { ...paused, answerer: { person: false, reason } } };
+    }
+    // `aip agent --answer` could not start (no key, a bad run id): the run still waits where it was.
+    if (outcome && "error" in outcome && !outcome.run_id) {
+      return { final: { ...asked, answerer: { person: false, reason: outcome.message ?? String(outcome.error) } } };
+    }
+  }
+  if (person === null || !outcome || !("paused" in outcome) || typeof outcome.run_id !== "string") return { final: outcome };
+  if (person.includes(outcome.step)) return { final: { ...outcome, answerer: { person: true, reason: `${outcome.step} is a step for a person` } } };
+  if (answers >= MAX_MODEL_ANSWERS) {
+    return { final: { ...outcome, answerer: { person: false, reason: `the console stopped after ${answers} answers by the model` } } };
+  }
+  return { answer: outcome.run_id };
+}
+
+/** Spawn `aip <args>` and stream what it prints to `res` as server-sent events. With `person` (step names), the run
+ *  is driven: a pause at any other step is answered by the model with `aip agent --answer <run_id> --progress`, on the
+ *  same stream, until the run is done, fails, or waits for a person (`nextOf`). `onDone`, when given, is called with
+ *  the run's `done` object once the last process has ended, before the stream's `exit` event (the Studio names the
+ *  folder after the procedure a build wrote). */
+function stream(res, setup, args, input, session, agent = AGENT, onDone = undefined, person = null) {
   const id = randomBytes(8).toString("hex");
   res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive" });
   const send = (event, data) => res.write(`${event ? `event: ${event}\n` : ""}data: ${data}\n\n`);
   send("process", JSON.stringify({ process: id }));
 
-  // Its own process group, so cancelling stops the scripts it started as well.
-  const child = spawn(setup.aip, args, { cwd: setup.cwd, env: envFor(setup, session, agent), detached: true, stdio: ["pipe", "pipe", "pipe"] });
-  const entry = { child, done: false, cancelled: false };
+  const entry = { child: null, done: false, cancelled: false };
   running.set(id, entry);
   let stderr = "";
-  let buffered = "";
-  let done = null;
-  const relay = (line) => {
-    if (!line) return;
-    if (onDone && line.startsWith("{") && line.includes('"done"')) {
-      try { const o = JSON.parse(line); if (o && o.done === true) done = o; } catch { /* not the CLI's object */ }
-    }
-    send(null, line);
-  };
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    buffered += chunk;
-    let nl;
-    while ((nl = buffered.indexOf("\n")) >= 0) {
-      const line = buffered.slice(0, nl).trim();
-      buffered = buffered.slice(nl + 1);
-      relay(line);
-    }
-  });
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => { if (stderr.length < STDERR_LIMIT) stderr += chunk; });
-  const finish = (code, signal, error) => {
+  let answers = 0;
+  const finish = (code, signal, error, final) => {
     if (entry.done) return;
     entry.done = true;
     running.delete(id);
-    relay(buffered.trim());
-    if (done && onDone) {
-      try { onDone(done); } catch (e) { stderr += `\naip-console: ${e instanceof Error ? e.message : String(e)}`; }
+    if (final) send(null, JSON.stringify(final));
+    if (final && final.done === true && onDone) {
+      try { onDone(final); } catch (e) { stderr += `\naip-console: ${e instanceof Error ? e.message : String(e)}`; }
     }
     send("exit", JSON.stringify({ code, signal, cancelled: entry.cancelled, stderr: stderr.slice(0, STDERR_LIMIT),
                                   ...(error ? { error } : {}) }));
     res.end();
   };
-  child.on("error", (e) => finish(null, null, `could not run ${setup.aip}: ${e.message}`));
-  child.on("close", (code, signal) => finish(code, signal));
-  child.stdin.on("error", () => {});
-  child.stdin.end(input === undefined ? "" : JSON.stringify(input));
+
+  /** One `aip` process; `asked` is the pause it is the model's answer to, when it is one. */
+  const one = (args, input, asked) => {
+    // Its own process group, so cancelling stops the scripts it started as well.
+    const child = spawn(setup.aip, args, { cwd: setup.cwd, env: envFor(setup, session, agent), detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    entry.child = child;
+    let buffered = "";
+    let outcome = null;
+    // Step and model lines go out as they come; the outcome waits until it is known whether the run goes on.
+    const relay = (line) => {
+      if (!line) return;
+      let o = null;
+      if (line.startsWith("{")) { try { o = JSON.parse(line); } catch { /* not the CLI's object */ } }
+      if (isOutcome(o)) outcome = o;
+      else send(null, line);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buffered += chunk;
+      let nl;
+      while ((nl = buffered.indexOf("\n")) >= 0) {
+        const line = buffered.slice(0, nl).trim();
+        buffered = buffered.slice(nl + 1);
+        relay(line);
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { if (stderr.length < STDERR_LIMIT) stderr += chunk; });
+    let ended = false;
+    child.on("error", (e) => { ended = true; finish(null, null, `could not run ${setup.aip}: ${e.message}`, outcome); });
+    child.on("close", (code, signal) => {
+      if (ended) return;
+      ended = true;
+      relay(buffered.trim());
+      if (entry.cancelled || outcome === null) return finish(code, signal, undefined, outcome);
+      const next = nextOf(outcome, person, asked, answers);
+      if (next.final !== undefined) return finish(code, signal, undefined, next.final);
+      answers += 1;
+      one(["agent", "--answer", next.answer, "--progress"], undefined, outcome);
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end(input === undefined ? "" : JSON.stringify(input));
+  };
+  one(args, input, null);
   // The page went away: nobody will read the outcome, so stop the run where it is.
   res.on("close", () => { if (!entry.done) kill(entry); });
 }
@@ -293,9 +353,9 @@ function said(out, what) {
 
 /** The Studio's workspaces by id. Each is a working directory of its own (`work`), holding the procedure's folder
  *  (`work/<name>`), which `aip compile --stdin` reads beside the source the page sends, which build_procedure and
- *  edit_procedure write (runah's model's tools reach the working directory and nothing else), and which `aip
- *  publish` uploads. Before each run the folder is copied aside (`undo`, outside `work` so the model never sees
- *  it), and Undo puts the last copy back. All of it lives under one temporary directory that goes when the console
+ *  edit_procedure write (their scripts write what the model answers, under the working directory), and which `aip
+ *  publish` uploads. Before each run the folder is copied aside (`undo`, outside `work` so no run reaches it), and
+ *  Undo puts the last copy back. All of it lives under one temporary directory that goes when the console
  *  stops. */
 const workspaces = new Map();
 const WORKSPACE = /^[0-9a-f]{16}$/;
@@ -325,12 +385,12 @@ function targetOf(ref) {
   return file;
 }
 
-/** The Task_Agent steps a run stops at for a person (`--human`): step names, joined as the flag takes them. */
-function humanArg(human) {
-  if (human === undefined || human === null) return null;
-  const names = Array.isArray(human) ? human : [];
-  for (const n of names) if (typeof n !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(n)) throw new Error(`${JSON.stringify(n)} is not a step name`);
-  return names.join(",");
+/** The Task_Agent steps a driven run stops at for a person: step names; null when the run is not driven. */
+function personOf(person) {
+  if (person === undefined || person === null) return null;
+  if (!Array.isArray(person)) throw new Error("person is a list of step names");
+  for (const n of person) if (typeof n !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(n)) throw new Error(`${JSON.stringify(n)} is not a step name`);
+  return person;
 }
 
 /** Write a file of the procedure into its folder; a path outside assets/, references/ and scripts/ is refused. */
@@ -509,31 +569,28 @@ function handler(setup, port) {
         return stream(res, setup, ["run", setup.folder ? ref : targetOf(ref), "--progress", "--inputs", "-", "--workdir", setup.workdir],
                       body.inputs ?? {}, body.session);
       }
-      if (route === "POST /console/runah") {
+      if (route === "POST /console/agent") {
         const body = await readJson(req);
         const ref = setup.folder ?? body.ref;
         if (typeof ref !== "string" || !ref) return problem(res, 400, "invalid_input", "ref is required");
-        const human = humanArg(body.human ?? []);
-        // runah's model answers every task but those of the human steps, where the run stops for the page's form.
-        return stream(res, setup, ["runah", setup.folder ? ref : targetOf(ref), "--progress", "--inputs", "-", "--workdir", setup.workdir,
-                                   "--human", human], body.inputs ?? {}, body.session, body.studio === true ? STUDIO_AGENT : AGENT);
+        // The model answers every pause but those at the person's steps, where the run stops for the page's form.
+        const person = personOf(body.person ?? []);
+        return stream(res, setup, ["run", setup.folder ? ref : targetOf(ref), "--progress", "--inputs", "-", "--workdir", setup.workdir],
+                      body.inputs ?? {}, body.session, body.studio === true ? STUDIO_AGENT : AGENT, undefined, person);
       }
       if (route === "POST /console/resume") {
         const body = await readJson(req);
         if (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)) return problem(res, 400, "invalid_input", "run_id is required");
         const studio = body.studio === true;
-        // A runah run goes on with runah's model answering (`aip runah <run_id>` puts the answers into the pause and
-        // keeps going, stopping again at the human steps the run was started with, or at `human` when given). A
-        // Studio run is recorded as the studio's.
-        const ahead = studio || body.runah === true;
-        const args = [ahead ? "runah" : "resume", body.run_id, "--progress"];
-        const human = ahead ? humanArg(body.human) : null;
-        if (human !== null) args.push("--human", human);
+        // With `person`, a driven run goes on driven: the answers in, then the model at every pause until the next
+        // person's step. A Studio run is recorded as the studio's.
+        const person = personOf(body.person);
+        const args = ["resume", body.run_id, "--progress"];
         const answered = body.answers !== undefined && body.answers !== null;
         if (answered) args.push("--answers", "-");
         const ws = studio && typeof body.workspace === "string" && WORKSPACE.test(body.workspace) ? workspaces.get(body.workspace) : undefined;
         return stream(res, setup, args, answered ? body.answers : undefined, body.session, studio ? STUDIO_AGENT : AGENT,
-                      ws?.building ? (done) => namedAfter(ws, done) : undefined);
+                      ws?.building ? (done) => namedAfter(ws, done) : undefined, person);
       }
       if (route === "POST /console/cancel") {
         const body = await readJson(req);
@@ -601,9 +658,10 @@ function handler(setup, port) {
         ws.building = build;
         const inputs = build ? { brief: text, documents: documentsOf(ws), out: ws.name, title }
                              : { folder: ws.name, instruction: text, documents: documentsOf(ws) };
-        const args = ["runah", build ? "build_procedure" : "edit_procedure", "--progress", "--inputs", "-", "--workdir", ws.work,
-                      ...(build ? ["--human", "ask_user"] : [])];
-        return stream(res, setup, args, inputs, body.session, STUDIO_AGENT, build ? (done) => namedAfter(ws, done) : undefined);
+        // Driven: the model answers every pause but build_procedure's ask_user, which is the person's.
+        const args = ["run", build ? "build_procedure" : "edit_procedure", "--progress", "--inputs", "-", "--workdir", ws.work];
+        return stream(res, setup, args, inputs, body.session, STUDIO_AGENT, build ? (done) => namedAfter(ws, done) : undefined,
+                      build ? STUDIO_PERSON : []);
       }
       if (route === "POST /console/studio/undo") {
         const body = await readJson(req);
@@ -642,9 +700,9 @@ function handler(setup, port) {
       }
       if (route === "POST /console/settings") {
         const body = await readJson(req);
-        // runah's chat model is `aip config runah`'s; the decision model is `aip config`'s own flags.
+        // The chat model is `aip config agent`'s; the decision model is `aip config`'s own flags.
         const commands = [
-          [["config", "runah"], { runah_model_uri: "--model-uri", runah_model_name: "--model-name", runah_model_key: "--model-key" }],
+          [["config", "agent"], { agent_model_uri: "--model-uri", agent_model_name: "--model-name", agent_model_key: "--model-key" }],
           [["config"], { decision_model: "--decision-model", decision_model_key: "--decision-model-key" }],
         ];
         const runs = [];

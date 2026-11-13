@@ -1,4 +1,4 @@
-// The run console's human-step picker (plan C5): which Task_Agent steps a person answers, and the rows a list
+// The run console's person-step picker (plan C6): the Task_Agent steps a person may answer, and the rows a list
 // answer is ticked from; and the Studio's word on each script, from the reviews.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -10,11 +10,8 @@ import { scriptNotes } from "../src/studio/chat.ts";
 
 const graph = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.graph.json`, import.meta.url), "utf8")) as Graph;
 
-test("the Task_Agent steps of a graph, in written order, each a person's when aip's human_steps names it", () => {
-  const g = graph("billing-support-agent");
-  assert.deepEqual(agentSteps(g).map((s) => [s.name, s.person]), [["triage", false], ["reply", false]]);
-  // Which steps are a person's is aip's rule (aip.model.answerer.human_steps); the page reads its answer.
-  assert.deepEqual(agentSteps(g, ["reply"]).map((s) => [s.name, s.person]), [["triage", false], ["reply", true]]);
+test("the Task_Agent steps of a graph, in written order: the steps a person may be given", () => {
+  assert.deepEqual(agentSteps(graph("billing-support-agent")).map((s) => s.name), ["triage", "reply"]);
   assert.deepEqual(agentSteps(graph("billing-support")).map((s) => s.name), ["reply"]);
 });
 

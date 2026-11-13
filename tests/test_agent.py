@@ -191,3 +191,47 @@ def test_act_refuses_to_publish_over_a_taken_name_and_publishes_a_draft(tmp_path
         assert [e.name for e in c.list()].count("billing_support") == 1
     finally:
         fake.close()
+
+
+def test_answer_has_the_model_answer_one_pause_of_any_run(tmp_path, monkeypatch, capsys):
+    """`aip agent --answer RUN` (plan C6): the console's model steps. The same call as at a pause of
+    `assist`, on any run; the answer is recorded as the caller's agent; a run left unanswerable
+    comes back paused, with why."""
+    from aip.client import cli
+    from aip.sdk import Done, Paused, RunError
+
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "greet"
+    folder.mkdir()
+    (folder / "procedure.aip").write_text(GREET, encoding="utf-8")
+    chat = Scripted({"text": "Hello, Ada!"})
+    c = client(chat)
+    paused = c.run(folder, {"name": "Ada"}, agent="studio", session="page-1")
+    assert isinstance(paused, Paused) and paused.step == "reply"
+    events = []
+    done, reason = c.answer(paused.run_id, agent="studio", session="page-1", on_event=events.append)
+    assert isinstance(done, Done) and reason is None and done.result == {"text": "Hello, Ada!"}
+    assert chat.asked[0][1]["content"].startswith("# Procedure step: reply") and '"name": "Ada"' in chat.asked[0][1]["content"]
+    assert [e["event"] for e in events] == ["answer"]
+    reply = next(e for e in RunFile.load(run_path(done.run_id)).run["history"] if e["step"] == "reply")
+    assert reply["answered_by"]["agent"] == "studio" and reply["answered_by"]["model"] == "stand-in-1"
+    with pytest.raises(RunError) as exc:
+        c.answer(done.run_id)
+    assert exc.value.error["error"] == "not_paused"
+
+    second = c.run(folder, {"name": "Bo"})
+    stuck = client(Scripted(*[{"txt": "no"}] * (MAX_REFUSALS + 1)))
+    left, reason = stuck.answer(second.run_id)
+    assert isinstance(left, Paused) and left.run_id == second.run_id and f"refused {MAX_REFUSALS + 1} times" in reason
+
+    # The command: progress lines, then the paused object with `gave_up`, exit 1.
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(*[{"txt": "no"}] * (MAX_REFUSALS + 1))))
+    assert cli.main(["agent", "--answer", second.run_id, "--progress"]) == 1
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert [line.get("event") for line in lines[:-1]] == ["answer", "refused"] * MAX_REFUSALS + ["answer", "gave_up"]
+    assert lines[-1]["paused"] == "task" and lines[-1]["step"] == "reply" and "refused" in lines[-1]["gave_up"]
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted({"text": "Hi, Bo"})))
+    assert cli.main(["agent", "--answer", second.run_id, "--progress"]) == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert lines[-1]["done"] is True and lines[-1]["result"] == {"text": "Hi, Bo"}
+    assert any(line.get("event") == "step" and line.get("step") == "reply" for line in lines)

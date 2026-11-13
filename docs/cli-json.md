@@ -465,7 +465,10 @@ the `Until` answer) and `iterations`. A loop's line has no `seconds`.
 `aip agent --progress` prints a line per step of the runs it drives (`{"event": "step", ...}`,
 the fields above), one per model call (`{"event": "answer", "step", "run_id", "tokens",
 "seconds"}`), and `{"event": "refused", "step", "run_id", "reason"}` when an answer did not hold
-and went back to the model.
+and went back to the model, or `{"event": "gave_up", "step", "run_id", "reason"}` when none would
+or the endpoint failed. `aip agent --answer RUN --progress` (one pause of any run, answered by the
+model and resumed; `docs/agent.md`) prints the same lines, then the object `aip resume` prints;
+when the model gave up, the run's paused object as it was, with `"gave_up": "<reason>"`, exit 1.
 
 The lines of a `For` appear as its passes run, so a batch reports while it works: the
 classifications, the routes, a script, before the pause that follows. That is the order things

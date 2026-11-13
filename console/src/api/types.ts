@@ -79,8 +79,6 @@ export interface Description {
   /** The `End` step's keys and their types. */
   result: Record<string, string | null>;
   example_inputs: Record<string, unknown>;
-  /** The Task_Agent steps written for a person, which `aip runah` stops at with no `--human` (plan R8). */
-  human_steps?: string[];
   revision?: string | null;
   draft?: boolean;
   published_at?: string;
@@ -172,11 +170,10 @@ export interface HistoryEntry {
   /** An `Execute`. */
   script?: string;
   stdin?: unknown;
-  /** A `Task_Agent` whose answering work is on record: `observed` when runah's model answered it (`answered_by` is
-   *  `{agent: "runah", model}`; its tool calls one by one, its tokens, the model's time, how many of its answers were
-   *  refused before one held), `reported` when the agent that answered said what it spent (`aip resume --work`: the
-   *  tool calls as a count or a list, the tokens as a total or in full, the seconds it worked). */
-  work?: "observed" | "reported";
+  /** A `Task_Agent` whose answering work is on record: `reported` when the agent that answered said what it spent
+   *  (`aip resume --work`, as `aip agent` and the console's model do: the model, the tool calls as a count or a list,
+   *  the tokens as a total or in full, the seconds it worked). */
+  work?: "reported";
   tool_calls?: number | { name: string; args?: string; seconds?: number; error?: string }[];
   tokens?: { prompt?: number; completion?: number; total: number };
   work_seconds?: number;
@@ -273,28 +270,6 @@ export interface RunRecord {
   target?: string;
   workdir?: string | null;
   recorded?: boolean;
-  /** A run started from a script of another run (the orchestrator, `docs/runah.md`): that run, the step and its pass. */
-  parent?: { run_id: string; step: string | null; pass: number | null } | null;
-  /** How many runs up the parent chain goes; with `parent` only. */
-  depth?: number;
-  /** runah's token budget for the run, its children's tokens included (`aip runah --budget-tokens`). */
-  budget_tokens?: number;
-  /** What runah's model spent: in this run, in the runs started from it, and the sum. */
-  tokens?: { own: number; children: number; total: number };
-  /** The runs this run's scripts started, with the step and pass that started each; absent when there are none. */
-  children?: ChildRun[];
-}
-
-/** One run started from another run's script, as its parent's record lists it. */
-export interface ChildRun {
-  run_id: string;
-  name: string | null;
-  status: RunStatus;
-  draft?: boolean;
-  step: string | null;
-  pass: number | null;
-  tokens: number;
-  started?: string | null;
 }
 
 // ------------------------------------------------------------------ audit

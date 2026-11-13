@@ -306,10 +306,12 @@ class Agent:
         out.note = note if isinstance(note, str) else json.dumps(result.result, ensure_ascii=False)
         return out
 
-    def answer(self, paused: Any, session: str, out: Outcome, on_step: Any = None) -> Any:
+    def answer(self, paused: Any, session: str | None, out: Outcome, on_step: Any = None, agent: str | None = AGENT) -> Any:
         """Ask the model for the pause's answers and resume the run with them: the next result,
         or None when no answer would hold (the reason is in `out.reason`, the run left paused).
-        A `RunError` the resume raises for the run itself (a step after this one failed) goes up."""
+        A `RunError` the resume raises for the run itself (a step after this one failed) goes up.
+        `agent` and `session` are who answered, for the record (None: `AIP_AGENT` and
+        `AIP_SESSION`, as `aip resume` takes them)."""
         from aip.sdk import RunError
 
         messages: list[JSON] = [{"role": "system", "content": SYSTEM},
@@ -321,6 +323,7 @@ class Agent:
                 reply = self.chat.complete(self.model, messages, None, COMPLETION_TOKENS)
             except ChatError as exc:
                 out.reason = f"the model's endpoint failed: {exc}"
+                self._event(event="gave_up", step=paused.step, run_id=paused.run_id, reason=out.reason)
                 return None
             seconds = round(time.monotonic() - began, 3)
             out.calls += 1
@@ -332,7 +335,7 @@ class Agent:
                     "tokens": {"prompt": reply.prompt_tokens, "completion": reply.completion_tokens}}
             try:
                 answers = parse_answer(reply.content)
-                return self.client.resume(paused, answers, agent=AGENT, session=session, on_step=on_step,
+                return self.client.resume(paused, answers, agent=agent, session=session, on_step=on_step,
                                           work={str(paused.tasks[0].index): work})
             except ValueError as exc:
                 why = str(exc)
@@ -345,7 +348,7 @@ class Agent:
                     why = "; ".join(str(e) for e in errors)
             if refusals >= MAX_REFUSALS:
                 out.reason = f"the model's answer at {paused.step} was refused {refusals + 1} times; the last time: {why}"
-                self._event(event="gave_up", step=paused.step, run_id=paused.run_id, reason=why)
+                self._event(event="gave_up", step=paused.step, run_id=paused.run_id, reason=out.reason)
                 return None
             refusals += 1
             self._event(event="refused", step=paused.step, run_id=paused.run_id, reason=why)

@@ -100,7 +100,11 @@ shell's current one goes on. It returns an `aip.agent.Outcome` (`session`, `stat
 --json`'s object). It raises `aip.agent.AgentError` (`invalid_input`) before anything runs when
 no model key is configured (`aip config agent --model-key KEY`, `AIP_AGENT_MODEL_KEY`);
 `aip.Client(agent_chat=...)` injects the chat client in tests. The runtime itself never calls a
-chat model. `on_step` receives each history
+chat model. `answer(run, *, agent=None, session=None, on_event=None, on_step=None)` is `aip agent
+--answer`: that model answers the one pause a run of any procedure waits at, with the same call,
+and the run is resumed; it returns `(result, None)`, or `(the run's Paused, reason)` when no answer
+would hold or the endpoint failed, and raises `RunError` (`not_paused`) for a run that is not
+paused. `agent` and `session` say who answered, as `resume` takes them. `on_step` receives each history
 entry's progress line the moment the run writes it, inside a batch of `For` passes too;
 `on_pause`, if given, answers pauses in-process: return the answers to go on, or None to stop
 and get the `Paused` back. Each result's `to_json()` is exactly the object the CLI prints

@@ -1,17 +1,18 @@
 // The Studio's chat (plan C4): every message runs a procedure. The first message on a new procedure is
 // a brief (with the procedure's name, if the person gives one), which runs build_procedure; every later
-// one runs edit_procedure with the draft and the instruction. Both run through the launcher as `aip
-// runah`, a chat model answering their tasks, recorded as agent `studio`; the pane shows the steps as
-// they run and the model's tool calls in plain words. build_procedure's `ask_user` is a human step
-// (`--human ask_user`): it arrives here as a form, and its answers go back through `aip runah <run id>
-// --answers`, which runs on. When a run ends the page reads the folder it wrote; the pane shows the
-// review and the diff, and the page the scripts the model wrote.
+// one runs edit_procedure with the draft and the instruction. Both run through the launcher driven
+// (plan C6): `aip run`, and at each pause the chat model `aip config agent` names answers it with the
+// call `aip agent` makes, recorded as agent `studio`; the pane shows the steps as they run and the
+// model's calls in plain words. build_procedure's `ask_user` is the person's step: it arrives here as a
+// form, and its answers go back through `aip resume`, after which the model goes on. When a run ends
+// the page reads the folder it wrote; the pane shows the review and the diff, and the page the scripts
+// the model wrote.
 
 import { useRef, useState, type DragEvent } from "react";
 import { describe } from "../api/client";
 import { runCli, type CliCall, type ModelSettings, type Outcome, type Paused } from "../api/console";
 import { diffLines, type LineOp } from "../diff/lines";
-import { questionsOf, scriptsWritten, stepWords, toolWords } from "../studio/chat.ts";
+import { modelWords, questionsOf, scriptsWritten, stepWords } from "../studio/chat.ts";
 import { collect } from "../run/answers";
 import { Hunks } from "./Diff";
 import { Fields } from "./Run";
@@ -21,7 +22,7 @@ export interface Turn {
   id: number;
   kind: "build" | "edit";
   text: string;
-  lines: { kind: "step" | "tool" | "note"; text: string }[];
+  lines: { kind: "step" | "model" | "note"; text: string }[];
   status: "running" | "paused" | "done" | "failed";
   runId: string | null;
   pause: Paused | null;
@@ -43,7 +44,7 @@ export interface ChatHost {
   answer: (runId: string, answers: unknown) => CliCall;
   /** A run wrote these scripts (added or changed, under scripts/): the page shows them before the draft runs. */
   wrote: (scripts: string[]) => void;
-  /** The run stopped (done, failed, or paused at a human step): read the folder it wrote. Resolves with the
+  /** The run stopped (done, failed, or paused at the person's step): read the folder it wrote. Resolves with the
    *  folder's procedure.aip and text files as they are now. */
   settled: () => Promise<{ source: string; files: Record<string, string> } | null>;
   /** procedure.aip and the text files before the run. */
@@ -73,11 +74,11 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
   const [problem, setProblem] = useState<string | null>(null);
   const seq = useRef(0);
 
-  const noModel = settings !== null && !settings.runah?.key;
+  const noModel = settings !== null && !settings.agent?.key;
   // A run waiting on the person: the next message waits until it is answered.
   const waiting = turns.some((t) => t.status === "paused");
   const update = (id: number, change: (t: Turn) => Turn) => setTurns((all) => all.map((t) => (t.id === id ? change(t) : t)));
-  const say = (id: number, kind: "step" | "tool" | "note", line: string) => update(id, (t) => ({ ...t, lines: [...t.lines, { kind, text: line }] }));
+  const say = (id: number, kind: "step" | "model" | "note", line: string) => update(id, (t) => ({ ...t, lines: [...t.lines, { kind, text: line }] }));
 
   /** Run `call` for the turn, then read what it left. */
   const drive = async (id: number, kind: Turn["kind"], call: CliCall, before: { source: string; files: Record<string, string> }) => {
@@ -87,7 +88,7 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
     try {
       const exit = await runCli(call, {
         onStep: (e) => { const w = stepWords(e); if (w) say(id, "step", w); },
-        onTool: (e) => say(id, "tool", toolWords(e)),
+        onModel: (e) => { if (e.event !== "answer") say(id, "model", modelWords(e)); },
         onOutcome: (o) => { outcome = o; },
       });
       const o = outcome as Outcome | null;
@@ -165,7 +166,7 @@ export function StudioChat({ host, next, settings, documents, busy, setBusy }: P
       )}
       {noModel && (
         <p className="boundary" data-testid="studio-no-model">
-          The chat needs a model to run ahead with (<code>aip runah</code>): set its key under Settings. The model is what reads the documents and writes the procedure.
+          The chat needs a model to answer the runs&apos; steps (<code>aip config agent</code>): set its key under Settings. The model is what reads the documents and writes the procedure.
         </p>
       )}
       {waiting && <p className="muted small" data-testid="studio-waiting">Answer the question above first: the run waits for it.</p>}
@@ -221,15 +222,15 @@ function TurnView({ turn, busy, onAnswer }: { turn: Turn; busy: boolean; onAnswe
   );
 }
 
-/** A pause the model did not answer: a human step (build_procedure's ask_user), or a task it gave up on. The questions
- *  it carries, and a field per key it is answered with. */
+/** A pause the model did not answer: the person's step (build_procedure's ask_user), or a task it gave up on. The
+ *  questions it carries, and a field per key it is answered with. */
 function HumanForm({ pause, busy, onAnswer }: { pause: Paused; busy: boolean; onAnswer: (answers: unknown) => void }) {
   const task = pause.tasks[0];
   const [fields, setFields] = useState<Record<string, string>>({});
   const [problems, setProblems] = useState<Record<string, string>>({});
   if (!task) return null;
   const questions = questionsOf(task.state);
-  const human = pause.answerer?.reason?.includes("human step");
+  const human = pause.answerer?.person !== false;
   const go = () => {
     const made = collect(fields, task.answer_with, task.labels ?? {});
     setProblems(made.problems);

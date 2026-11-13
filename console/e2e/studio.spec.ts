@@ -2,8 +2,9 @@ import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { AGENT_MODEL_NAME, AGENT_MODEL_REPORTED, BILLING, E2E, SERVER, TRIAGE } from "./aip";
 
-// The Studio (plan C4, A2), for people who do not code: a chat that runs build_procedure and edit_procedure
-// with `aip runah` (its model here the stand-in, e2e/agent.mjs), the step graph beside it, forms for field
+// The Studio (plans C4, C6), for people who do not code: a chat that runs build_procedure and edit_procedure
+// driven, the model answering every pause but ask_user (`aip agent --answer`, its model here the stand-in,
+// e2e/agent.mjs), the step graph beside it, forms for field
 // edits, Undo per run, save and publish. A field edit is a text edit of procedure.aip that the console's
 // process formats and compiles; only what compiles is saved. The scripts the model wrote are shown, and
 // saving or publishing a draft that has them asks once.
@@ -57,7 +58,7 @@ test("a brief and a document build a procedure; a label changed on its form; a s
   await expect(turn).toHaveAttribute("data-kind", "build");
   await expect(turn).toHaveAttribute("data-status", "paused");
   await expect(human).toHaveAttribute("data-step", "ask_user");
-  await expect(turn.getByTestId("studio-lines")).toContainText("reading refund-policy.md");
+  await expect(turn.getByTestId("studio-lines")).toContainText("read the documents");
   await expect(turn.getByTestId("studio-lines")).toContainText("worked out the rules");
   await expect(human.getByTestId("studio-questions")).toContainText("What is the refund limit, and who approves above it?");
   await expect(page.getByTestId("studio-waiting")).toBeVisible();            // no new message until it is answered
@@ -68,7 +69,7 @@ test("a brief and a document build a procedure; a label changed on its form; a s
   await human.getByLabel("answers", { exact: true }).fill("1. The limit is 100; above it a manager approves.");
   await human.getByTestId("studio-answer").click();
   await expect(turn).toHaveAttribute("data-status", "done", { timeout: 90_000 });
-  await expect(turn.getByTestId("studio-lines")).toContainText("writing procedure.aip");
+  await expect(turn.getByTestId("studio-lines")).toContainText("saved the files");
   await expect(turn.getByTestId("studio-lines")).toContainText("compiled it");
   await expect(turn.getByTestId("studio-review")).toContainText("stub");
   await expect(turn.getByTestId("studio-diff")).toContainText("Task_Agent classify");
@@ -138,23 +139,25 @@ test("a brief and a document build a procedure; a label changed on its form; a s
   const files = published.graph.nodes.filter((n: { labels: string[] }) => n.labels.includes("File")).map((n: { properties: { path: string } }) => n.properties.path);
   expect(files).toEqual(expect.arrayContaining(["assets/docs/refund-policy.md", "scripts/check_refund.py"]));
 
-  // The chat's runs are recorded as the studio's, with what runah's model did: the model as the endpoint reported it.
+  // The chat's runs are recorded as the studio's, the model's answers with what it spent: the model as the endpoint
+  // reported it, and its tokens.
   const record = await (await request.get(`${SERVER}/runs/${buildRun}`)).json();
   expect(record.name).toBe("build_procedure");
   expect(record.identity.agent).toBe("studio");
   const draft = record.history.find((e: { step: string }) => e.step === "draft");
-  expect(draft.answered_by).toEqual({ agent: "runah", model: AGENT_MODEL_REPORTED });
-  expect(draft.work).toBe("observed");
-  expect(draft.tool_calls.map((c: { name: string }) => c.name)).toEqual(["write_file", "write_file", "compile"]);
+  expect(draft.answered_by).toMatchObject({ agent: "studio", model: AGENT_MODEL_REPORTED });
+  expect(draft.work).toBe("reported");
+  expect(draft.tokens.total).toBe(280);
+  expect(Object.keys(draft.result.drafted)).toEqual(["procedure.aip", "scripts/check_refund.py"]);
   expect(draft.result.procedure).toBe(NAME);
   const asked = record.history.find((e: { step: string }) => e.step === "ask_user");
   expect(asked.answered_by.agent).toBe("studio");
   // History's page of the run says so too.
   await page.goto(`./#/runs/${buildRun}`);
   const drafted = page.locator('[data-testid="record-entry"][data-step="draft"] [data-testid="answered-by"]');
-  await expect(drafted).toHaveAttribute("data-agent", "runah");
-  await expect(drafted).toHaveAttribute("data-work", "observed");
-  await expect(drafted).toContainText(`answered by runah (${AGENT_MODEL_REPORTED}), observed: 3 tool calls (write_file 2, compile 1)`);
+  await expect(drafted).toHaveAttribute("data-agent", "studio");
+  await expect(drafted).toHaveAttribute("data-work", "reported");
+  await expect(drafted).toContainText(`answered by studio (${AGENT_MODEL_REPORTED}), reported: 280 tokens`);
   await expect(page.locator('[data-testid="record-entry"][data-step="ask_user"] [data-testid="answered-by"]')).toHaveAttribute("data-agent", "studio");
 });
 
@@ -273,13 +276,13 @@ test("a step whose script the draft lacks is marked: it needs a developer", asyn
   await expect(page.getByTestId("studio-save")).toBeDisabled();
 });
 
-test("settings: the model `aip runah` runs the chat with, never its key", async ({ page }) => {
+test("settings: the model that answers the chat's runs (`aip config agent`), never its key", async ({ page }) => {
   await openStudio(page);
   await page.getByTestId("studio-view-settings").check();
-  const runah = page.getByTestId("settings-runah");
-  await expect(runah).toContainText(AGENT_MODEL_NAME);
-  await expect(runah).toContainText("key set");
-  await expect(runah).toContainText("set by the environment");
-  await expect(runah).toContainText("AIP_RUNAH_MODEL_KEY");
+  const model = page.getByTestId("settings-agent");
+  await expect(model).toContainText(AGENT_MODEL_NAME);
+  await expect(model).toContainText("key set");
+  await expect(model).toContainText("set by the environment");
+  await expect(model).toContainText("AIP_AGENT_MODEL_KEY");
   await expect(page.getByTestId("studio-settings")).not.toContainText("e2e");     // the stand-in's key
 });

@@ -49,6 +49,24 @@ The SDK's call is `Client.ask(text, session=None, new=False)`, which returns the
 MCP server's tool is `agent` (`{task, session?}`), for a caller that wants the whole task done by
 this machine's model rather than answering each pause itself.
 
+## One pause of any run
+
+`aip agent --answer RUN [--session ID] [--progress]` is the loop's body on its own: the model
+answers the pause run `RUN` waits at, with the same message and the same three retries, and the
+run is resumed with it. It works on a run of any procedure, and prints what `aip resume` prints
+(exit 0 for paused or done, 1 for an error); when no answer would hold, or the endpoint failed,
+the run is left as it was and the paused object comes back with `gave_up`, the reason (exit 1).
+With `--progress`, the model's calls are lines of their own, `{"event": "answer", "step",
+"run_id", "tokens", "seconds"}`, then `refused` or `gave_up` with a `reason`, among the run's step
+lines. The answer is recorded as `AIP_AGENT`'s (default `cli`) in `--session` or `AIP_SESSION`,
+with the model and what it spent. The SDK's call is `Client.answer(run, agent=None,
+session=None)`, which returns the result the resume came to and None, or the run's `Paused` and
+the reason.
+
+This is how the console drives a run (its plan milestone C6): it runs `aip run`, and at every
+pause but those at the steps a person was given, `aip agent --answer`; the Studio's person answers
+`build_procedure`'s `ask_user`, and in the run console the user ticks the steps that are theirs.
+
 ## Sessions
 
 A session is a conversation with the person. The first `aip agent` in a shell starts one and

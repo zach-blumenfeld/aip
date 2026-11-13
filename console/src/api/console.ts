@@ -90,17 +90,26 @@ export interface StepEvent {
   iterations?: number;
 }
 
-/** `aip runah --progress`: a tool call runah's model made while answering a task of `step`. `args` is a summary (a path,
- *  a pattern, a written file's size), `error` set when the tool refused. */
-export interface ToolEvent { event: "tool"; step: string; task: number; tool: string; args: string; seconds?: number; error?: string }
-
-/** `aip runah --progress`: an answer runah's model gave did not hold and went back to it. */
-export interface RefusedEvent { event: "refused"; step: string; task: number; errors: unknown }
+/** `aip agent --answer --progress` (plan C6): the model answered the pause at `step` (`answer`: the tokens and seconds
+ *  of the call), the run refused that answer and it went back to the model (`refused`), or no answer held and the run
+ *  is left paused (`gave_up`). */
+export interface ModelEvent {
+  event: "answer" | "refused" | "gave_up";
+  step: string;
+  run_id: string;
+  tokens?: number;
+  seconds?: number;
+  reason?: string;
+}
 
 interface Stop { run_id: string | null; run_file?: string; recorded?: boolean }
 
-/** Why `aip runah` stopped at a pause its model was to answer: a human step (`--human`), a cap, a refusal. */
-export interface Answerer { answered: false; step?: string; reason: string; refusals?: number }
+/** Why a driven run stopped for the page (the launcher says, plan C6): a person's step (`person`), or a pause the model
+ *  did not answer (it gave up, or has no key), with why. */
+export interface Answerer { person: boolean; reason: string }
+
+/** The Studio's person's step: build_procedure's `ask_user`; the model answers the rest (the launcher's `STUDIO_PERSON`). */
+export const STUDIO_PERSON = ["ask_user"];
 
 /** A pause: every `For` pass waiting at the step is one task, answered together. */
 export interface Paused extends Stop { paused: string; step: string; tasks: Task[]; hint: string; answerer?: Answerer }
@@ -118,8 +127,8 @@ export interface StreamHandlers {
   /** The launcher's id for the process, to cancel it by. */
   onProcess?: (id: string) => void;
   onStep: (e: StepEvent) => void;
-  /** runah's model's work, when it answers the run's tasks. */
-  onTool?: (e: ToolEvent | RefusedEvent) => void;
+  /** The model's calls, when it answers a driven run's pauses. */
+  onModel?: (e: ModelEvent) => void;
   onOutcome: (o: Outcome) => void;
   /** A line that is not one of the CLI's objects: shown, never parsed further. */
   onOther?: (line: string) => void;
@@ -127,23 +136,23 @@ export interface StreamHandlers {
 
 export type CliCall =
   | { run: { ref: string; inputs: Record<string, unknown> } }
-  /** `aip runah`: runah's model answers every task but the `human` steps', where the run stops (plan C5). */
-  | { runah: { ref: string; inputs: Record<string, unknown>; human: string[]; studio?: boolean } }
-  /** `runah` (or `studio`) carries a runah run on, `aip runah <run_id>`, with `human` replacing its human steps when given. */
-  | { resume: { run_id: string; answers?: unknown; studio?: boolean; workspace?: string; runah?: boolean; human?: string[] } }
+  /** `aip run`, driven (plan C6): the model answers every pause but those at the `person` steps, where the run stops. */
+  | { agent: { ref: string; inputs: Record<string, unknown>; person: string[]; studio?: boolean } }
+  /** `aip resume`; with `person`, a driven run goes on driven; `studio` records it as the studio's. */
+  | { resume: { run_id: string; answers?: unknown; studio?: boolean; workspace?: string; person?: string[] } }
   | { build: { workspace: string; brief: string; title?: string; source?: string; files?: Record<string, string> } }
   | { edit: { workspace: string; instruction: string; source?: string; files?: Record<string, string> } };
 
 function callOf(call: CliCall): [string, object] {
   if ("run" in call) return ["/console/run", call.run];
-  if ("runah" in call) return ["/console/runah", call.runah];
+  if ("agent" in call) return ["/console/agent", call.agent];
   if ("resume" in call) return ["/console/resume", call.resume];
   if ("build" in call) return ["/console/studio/build", call.build];
   return ["/console/studio/edit", call.edit];
 }
 
-/** Start `aip run` (a reference and the inputs) or `aip resume` (a run id and the answers, or none to retry), or one
- *  of the Studio's runs (build_procedure, edit_procedure, run ahead by `aip runah`), and feed what it prints to
+/** Start `aip run` (a reference and the inputs) or `aip resume` (a run id and the answers, or none to retry), driven
+ *  or not, or one of the Studio's runs (build_procedure, edit_procedure, driven), and feed what it prints to
  *  `handlers` as it arrives. Resolves with how the process ended. */
 export async function runCli(call: CliCall, handlers: StreamHandlers): Promise<Exit> {
   const [path, body] = callOf(call);
@@ -181,8 +190,8 @@ function dispatch(line: string, handlers: StreamHandlers) {
   try { parsed = JSON.parse(line); } catch { handlers.onOther?.(line); return; }
   const o = parsed as Record<string, unknown> | null;
   if (o && o.event === "step") handlers.onStep(o as unknown as StepEvent);
-  else if (o && (o.event === "tool" || o.event === "refused")) {
-    if (handlers.onTool) handlers.onTool(o as unknown as ToolEvent | RefusedEvent);
+  else if (o && (o.event === "answer" || o.event === "refused" || o.event === "gave_up")) {
+    if (handlers.onModel) handlers.onModel(o as unknown as ModelEvent);
     else handlers.onOther?.(line);
   }
   else if (o && ("paused" in o || "done" in o || "error" in o)) handlers.onOutcome(o as unknown as Outcome);
@@ -254,10 +263,11 @@ export function studioDocuments(workspace: string, documents: { name: string; ba
 /** One model `aip config` names: where it is, which model, whether a key is set (never the key), and where that came
  *  from (the config file, or the environment, which wins; null when nothing is set and the defaults show). */
 export interface ModelSetting { endpoint: string; model: string | null; key: boolean; source: string | null }
-/** `runah` is the chat model `aip runah` answers the Studio's tasks with (`aip config runah`); `decision` the decision model. */
-export interface ModelSettings { runah: ModelSetting | null; decision: ModelSetting | null }
+/** `agent` is the chat model that answers a driven run's pauses (`aip config agent`, the one `aip agent` asks); `decision`
+ *  the decision model. */
+export interface ModelSettings { agent: ModelSetting | null; decision: ModelSetting | null }
 export interface ModelSettingsChange {
-  runah_model_uri?: string; runah_model_name?: string; runah_model_key?: string; decision_model?: string; decision_model_key?: string;
+  agent_model_uri?: string; agent_model_name?: string; agent_model_key?: string; decision_model?: string; decision_model_key?: string;
 }
 
 export function modelSettings(): Promise<ModelSettings> {

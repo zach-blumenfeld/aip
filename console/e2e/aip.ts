@@ -11,8 +11,8 @@ export const CONSOLE_PORT = Number(process.env.CONSOLE_E2E_PORT ?? 5174);
 export const FOLDER_PORT = Number(process.env.FOLDER_E2E_PORT ?? 5175);
 export const SERVER = `http://localhost:${AIP_PORT}`;
 export const MODEL = `http://127.0.0.1:${MODEL_PORT}`;
-/** The stand-in chat model `aip runah` uses (e2e/agent.mjs), which answers build_procedure's and edit_procedure's tasks
- *  from a script: configured as `stand-in-1`, it reports itself as `stand-in-1-snapshot` in each reply. */
+/** The stand-in chat model `aip agent --answer` asks (e2e/agent.mjs) when the console drives a run, which answers
+ *  build_procedure's and edit_procedure's tasks from a script: configured as `stand-in-1`, it reports itself as `stand-in-1-snapshot` in each reply. */
 export const AGENT_MODEL = `http://127.0.0.1:${AGENT_MODEL_PORT}/v1`;
 export const AGENT_MODEL_NAME = "stand-in-1";
 export const AGENT_MODEL_REPORTED = "stand-in-1-snapshot";
@@ -48,16 +48,16 @@ export const FOLDER_WORKDIR = path.join(E2E, "work-folder");
 
 /** The CLI's environment in the e2e run: its own run files and bundle cache, no client config, the e2e decision
  *  model (e2e/model.mjs), which answers from marks in the text it is given, and the stand-in chat model for
- *  `aip runah` (e2e/agent.mjs) in place of any this machine's shell names. The server is set per call. */
+ *  `aip config agent` (e2e/agent.mjs) in place of any this machine's shell names. The server is set per call. */
 export const CLI_ENV = {
   PATH: `${BIN}:${process.env.PATH}`,
   AIP_HOME: path.join(E2E, "home"),
   AIP_CONFIG: path.join(E2E, "no-config.json"),
   AIP_DECISION_MODEL: MODEL,
   AIP_DECISION_MODEL_KEY: "e2e",
-  AIP_RUNAH_MODEL_URI: AGENT_MODEL,
-  AIP_RUNAH_MODEL_KEY: "e2e",
-  AIP_RUNAH_MODEL_NAME: AGENT_MODEL_NAME,
+  AIP_AGENT_MODEL_URI: AGENT_MODEL,
+  AIP_AGENT_MODEL_KEY: "e2e",
+  AIP_AGENT_MODEL_NAME: AGENT_MODEL_NAME,
 };
 
 /** `aip <args>` against the e2e server, as the specs' own client (publishing, making runs for history), from the
