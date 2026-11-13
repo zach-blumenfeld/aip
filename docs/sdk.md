@@ -90,11 +90,15 @@ total, or `{"prompt", "completion", "total"}`) and `seconds`, any of them; for a
 several tasks, keyed by task index like the answers. A key it does not know is refused as
 `invalid_input` and the pause stands.
 
-`ask(text, *, session=None, on_step=None)` is `aip agent` (`docs/agent.md`, `aip.agent.agent`):
-the configured chat model drives the `assist` procedure from outside the run, `run` and then one
-model call and one `resume` per pause, until it is done or an answer will not hold after three
-refusals (the run is then left paused). `text` is the task, or in a session whose record has an
-`assist` run, the person's reply to that run's note. `session` defaults to `AIP_SESSION`, else a
+`ask(text, *, session=None, on_step=None)` is `aip agent` (`docs/agent.md`, `aip.agent.agent`,
+called as `agent(client, chat, text, session)`): the configured chat model drives the `assist`
+procedure from outside the run, `run` and then one model call and one `resume` per pause, until
+it is done or an answer will not hold after three refusals (the run is then left paused). `text`
+is the task, or in a session whose record has `assist` runs, the person's reply to the last one's
+note; the session so far goes in as `outcome` (`aip.chat.history`). A `Paused` is the loop giving
+up, and the client's `gave_up` then says why the last answer was refused. The endpoint failing
+raises `aip.chat.ChatError`, the run left where it was. Without a server, `"assist"` is the bundle aip
+ships. `session` defaults to `AIP_SESSION`, else a
 new id (`aip.agent_session`, `aip.new_session`). It returns what the run came to, `Done` or
 `Paused`, and a run that fails raises `RunError`, as `run` does. It raises `NoAgentModel`
 (`invalid_input`) before anything runs when no model key is configured (`aip config agent
@@ -105,7 +109,9 @@ a chat model. `answer(run, *, agent=None, session=None, on_event=None, on_step=N
 and the run is resumed; it returns `(result, None)`, or `(the run's Paused, reason)` when no answer
 would hold or the endpoint failed, and raises `RunError` (`not_paused`) for a run that is not
 paused. `agent` and `session` say who answered, as `resume` takes them. `on_step` receives each history
-entry's progress line the moment the run writes it, inside a batch of `For` passes too;
+entry's progress line the moment the run writes it, inside a batch of `For` passes too; a call
+that names none uses the client's `on_step` attribute (None by default), which is how `aip agent
+--progress` reports without the loop carrying it;
 `on_pause`, if given, answers pauses in-process: return the answers to go on, or None to stop
 and get the `Paused` back. Each result's `to_json()` is exactly the object the CLI prints
 (`docs/cli-json.md`).

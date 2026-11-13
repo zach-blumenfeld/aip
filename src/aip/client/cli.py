@@ -301,19 +301,31 @@ def agent_command(argv: list[str]) -> int:
         return _answer_pause(args)
     if args.text is None:
         parser.error("the task is required: what is to be done, in your words")
-    from aip.sdk import RunError, agent_session
+    from aip.chat import ANSWERS, ChatError
+    from aip.client.runs import EXIT_ERROR
+    from aip.sdk import Paused, RunError, agent_session
 
     client = _client()
     session = agent_session(args.session)
     print(f"aip: session: {session} (`export AIP_SESSION={session}` to continue it)", file=sys.stderr, flush=True)
+    gave_up = []
 
     def go(on_step):
+        client.on_step = on_step                       # the run's step lines; the loop adds none of its own
         try:
-            return _InSession(client.ask(args.text, session=session, on_step=on_step), session)
+            result = client.ask(args.text, session=session)
         except RunError as exc:
             exc.error["session"] = session
             raise
-    return _outcome(go, client, args.progress, args.debug, starting=True)
+        except ChatError as exc:                       # the run is left where it was; the loop does not catch this
+            print(f"aip agent: the model's endpoint failed: {exc}", file=sys.stderr, flush=True)
+            raise
+        if isinstance(result, Paused):                 # the loop gave up: four answers at this step, none held
+            gave_up.append(result.step)
+            print(f"aip agent: gave up at {result.step} after {ANSWERS} answers: {client.gave_up}", file=sys.stderr, flush=True)
+        return _InSession(result, session)
+    code = _outcome(go, client, args.progress, args.debug, starting=True)
+    return EXIT_ERROR if gave_up else code
 
 
 class _InSession:

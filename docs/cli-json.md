@@ -70,7 +70,10 @@ their types) and `labels` (for each `choice` or `score` among them, the values i
 
 `aip agent` prints the object `aip run` prints for the run of `assist` it drove
 (`docs/agent.md`), done (its `result.note` is the answer, or the question for the person),
-paused (its model's answer would not hold) or the error object below, with `session` added. The
+paused (its model's answer would not hold after four tries: exit 1, and `aip agent: gave up at
+<step> after 4 answers: <reason>` on stderr) or the error object below (the model's endpoint
+failing is one, kind `server`, with `aip agent: the model's endpoint failed: <why>` on stderr),
+with `session` added. The
 runs themselves are ordinary runs, recorded as agent `agent`: `aip runs
 --session <session>` lists them, and their pauses and errors are the objects of this page.
 

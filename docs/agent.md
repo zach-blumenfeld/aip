@@ -16,55 +16,43 @@ the question goes away: whoever drives the run answers its pauses.
 All of it is `src/aip/agent.py`, and this is the whole file:
 
 ```python
-"""aip agent: a chat model outside the run, answering the pauses of assist. This is all of it."""
-from aip.chat import ChatError, continuation, message_for, parse, reason, refused, work_of
+"""aip agent: a chat model outside the run answering the pauses of assist. This is all of it."""
+from aip.chat import history, message_for, parse, refused, work_of
 from aip.sdk import Paused, RunError
 
-AGENT, ASSIST, MAX_REFUSALS = "agent", "assist", 3
 
-
-def agent(client, chat, text, session, on_step=None, procedure=ASSIST):
-    r = client.run(procedure, inputs(client, session, text), agent=AGENT, session=session, on_step=on_step)
+def agent(client, chat, text, session):
+    r = client.run("assist", {"task": text, "outcome": history(client, session, text)}, agent="agent", session=session)
     while isinstance(r, Paused):
-        r, gave_up = answer(client, chat, r, AGENT, session, on_step)
-        if gave_up:
-            break                                                    # left paused, for whoever answers next
-    return r
-
-
-def answer(client, chat, paused, agent, session, on_step=None):
-    """One pause: the model's answer resumes the run, a refused one goes back to it; (result, why it gave up)."""
-    msg = message_for(client, paused)
-    for _ in range(MAX_REFUSALS + 1):
-        try:
+        msg = message_for(client, r)
+        for _ in range(4):                                   # one answer, up to three corrections
             reply = chat(msg)
-            return client.resume(paused, parse(reply), agent=agent, session=session, on_step=on_step,
-                                 work=work_of(reply, paused)), None
-        except ChatError as e:
-            return paused, f"the model's endpoint failed: {e}"
-        except (ValueError, RunError) as e:
-            if getattr(e, "stopped", False):
-                raise                                                # the answer went in; a later step failed the run
-            msg, why = msg + refused(reply, e), reason(e)
-    return paused, f"the model's answer at {paused.step} was refused {MAX_REFUSALS + 1} times; the last time: {why}"
-
-
-def inputs(client, session, text):
-    """What it asked last time and the person's reply, from the session's newest assist run in the record."""
-    last = client.runs(name=ASSIST, session=session, limit=1)
-    return continuation(client.run_record(last[0].run_id) if last else None, text)
+            try:
+                r = client.resume(r, parse(reply), agent="agent", session=session, work=work_of(reply, r))
+                break
+            except RunError as e:
+                msg = msg + refused(reply, e)
+        else:
+            break                                            # left paused, for whoever answers next
+    return r
 ```
 
-`agent` runs `assist` and answers its pauses until it is done; `answer` is one pause; `inputs` is
-the session, read from the record. Each pause is one call to `chat`, no tools. The plumbing is in
-`aip.chat`, beside the chat client, one function each: `message_for` (the pause as it comes: each
-task's prompt, the state it reads, the text of every file it references from the run's bundle,
-the keys to answer with and their labels, after the system text), `parse` (the JSON object the
-reply holds), `refused` (the reply and the correction that goes back with the reason), `reason`,
-`work_of` (the model's id, its tokens and the seconds the call took, kept on the task's entry as
-`work: "reported"`, as `aip resume --work` keeps an agent's own account) and `continuation`. The
-answer goes in through `resume`, which checks it as it checks anyone's; a refusal goes back to the
-model, up to three times, then the run is left paused as it is, for whoever answers next.
+One function: run `assist` on the text and the session so far, and at each pause ask the model,
+up to four times, until an answer holds. Each pause is one call to `chat`, no tools. The helpers
+live in `aip.chat`, beside the chat client, one function each: `history` (the session, read from
+the record: its `assist` runs oldest first, each run's task and the note it ended with, then the
+text as the person's answer; empty for a session with no runs), `message_for` (the pause as it
+comes: each task's prompt, the state it reads, the text of every file it references from the
+run's bundle, the keys to answer with and their labels, after the system text), `parse` (the
+JSON object the reply holds; a reply with none is refused as `resume` refuses an answer, a
+`RunError` that changed nothing), `refused` (the reply and the correction that goes back with
+the reason; a `RunError` that stopped the run is no refusal and is raised again: the answer went
+in and a later step failed) and `work_of` (the model's id, its tokens and the seconds the call
+took, kept on the task's entry as `work: "reported"`, as `aip resume --work` keeps an agent's own
+account). The answer goes in through `resume`, which checks it as it checks anyone's; a refusal
+goes back to the model, up to three times, then the run is left paused as it is, for whoever
+answers next. The loop catches refusals and nothing else: the endpoint failing (`ChatError`)
+leaves the run where it was and reaches the caller.
 
 ```
 aip config agent --model-key KEY          # Anthropic's endpoint and claude-opus-5-5 by default
@@ -74,24 +62,30 @@ aip agent --session agent-20261112-101500-3f2a "the notes are in ./meeting-notes
 ```
 
 The command prints where `assist`'s run stopped as `aip run` prints it (`done` with its `result`,
-whose `note` is the answer or the question; `paused` when an answer would not hold or the endpoint
-failed; or the error object), with `session` added, and exits as `aip run` does. The session line
-goes to stderr first. `--progress` prints the run's own step lines as they are written; the agent
-adds none of its own. The model, endpoint and key come from `aip config agent` (`--model-uri`,
+whose `note` is the answer or the question; `paused` when an answer would not hold; or the error
+object), with `session` added, and exits as `aip run` does, except that a run left paused because
+the model gave up is exit 1, with `aip agent: gave up at <step> after 4 answers: <the last
+reason>` on stderr; the endpoint failing prints `aip agent: the model's endpoint failed: <why>`
+there, the error object on stdout, exit 1, and the run waits where it was. The session line goes
+to stderr first. `--progress` prints the run's own step lines as they are written (the client's
+`on_step`, which `run` and `resume` use when a call names none); the agent adds none of its own. The model, endpoint and key come from `aip config agent` (`--model-uri`,
 `--model-name`, `--model-key`; `AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`,
 `AIP_AGENT_MODEL_KEY`); any endpoint with the OpenAI Chat Completions shape works.
 
-The SDK's call is `Client.ask(text, session=None, on_step=None)`, which returns what `agent`
-returns (`Done` or `Paused`; a run that fails raises `RunError`); `Client.chat()` is the configured
-model, or `agent_chat` when the client was given one. The MCP server's tool is `agent`
+The SDK's call is `Client.ask(text, session=None, on_step=None)`, which calls `agent(client, chat,
+text, session)` and returns what it returns (`Done` or `Paused`; a run that fails raises
+`RunError`, the endpoint failing `aip.chat.ChatError`); `Client.chat()` is the configured model,
+or `agent_chat` when the client was given one. Without a server, `"assist"` resolves to the
+bundle aip ships. The MCP server's tool is `agent`
 (`{task, session?}`), for a caller that wants the whole task done by this machine's model rather
 than answering each pause itself; it answers with the same object and the `session`.
 
 ## One pause of any run
 
-`aip agent --answer RUN [--session ID] [--progress]` is the loop's body on its own, `answer`: the
-model answers the pause run `RUN` waits at, with the same message and the same three retries, and
-the run is resumed with it. It works on a run of any procedure, and prints what `aip resume`
+`aip agent --answer RUN [--session ID] [--progress]` is the loop's body on its own,
+`aip.chat.answer_once`, the same four tries written once more so that `agent.py` stays the loop
+and nothing else: the model answers the pause run `RUN` waits at, with the same message and the
+same three retries, and the run is resumed with it. It works on a run of any procedure, and prints what `aip resume`
 prints (exit 0 for paused or done, 1 for an error); when no answer would hold, or the endpoint
 failed, the run is left as it was and the paused object comes back with `gave_up`, the reason
 (exit 1). With `--progress`, the model's calls are lines of their own, `{"event": "answer",
@@ -109,10 +103,12 @@ pause but those at the steps a person was given, `aip agent --answer`; the Studi
 
 A session is a conversation with the person, and the record is its memory: nothing is kept
 anywhere else. The session id is `--session ID`, else `AIP_SESSION`, else a new one, which the
-command prints with the line to export. `inputs` asks the record for the session's newest
-`assist` run (`client.runs(name="assist", session=...)`): with none, `assist` starts on the text
-as its task; with one, it starts again on that run's task, with `outcome` saying "You asked: <that
-run's note>. The person answered: <the text>", so the model has its own question and the reply.
+command prints with the line to export. `history` asks the record for the session's `assist` runs
+(`client.runs(name="assist", session=...)`): with none, `assist` starts on the text as its task
+with an empty `outcome`; with some, the text is the task and `outcome` is the session so far,
+oldest first, "The task was: <that run's task>" and "You asked: <the note it ended with>" for each
+run, then "The person answered: <the text>", so the model has every question it asked and every
+reply.
 
 Every run `aip agent` starts, and every run `assist` starts beneath it, carries `agent: agent` and
 the session: the runtime hands both to `assist`'s scripts (`AIP_AGENT`, `AIP_SESSION`), and the

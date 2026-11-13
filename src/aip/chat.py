@@ -1,6 +1,7 @@
 """The one chat call aip makes, for `aip agent` (`aip.agent`), and the plumbing around it: the
 message a pause becomes, the answer a reply holds, the correction a refusal sends back, what a
-call spent, and a session's next inputs read from the record.
+call spent, the session so far read from the record, and `answer_once`, the loop's body on its
+own for `aip agent --answer`.
 
 The call is OpenAI Chat Completions (`POST {url}/chat/completions`), the shape OpenAI, Anthropic
 (`https://api.anthropic.com/v1`), Gemini, Azure's v1 surface, Groq, Mistral, OpenRouter, Ollama
@@ -17,6 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+from aip.sdk import RunError
 
 JSON = dict[str, Any]
 
@@ -116,6 +119,7 @@ class ChatClient:
 # --------------------------------------------------------------------------- aip agent's plumbing
 
 COMPLETION_TOKENS = 32000
+ASSIST, ANSWERS = "assist", 4          # the procedure `aip agent` drives; one answer, up to three corrections, as `aip.agent` has it
 REFUSED = "That answer was refused: {}. Reply with the corrected JSON object only."
 
 SYSTEM = """You are the agent answering the pauses of an AIP procedure. A procedure is a reviewed
@@ -163,7 +167,9 @@ def message_for(client: Any, paused: Any) -> list[JSON]:
 
 
 def parse(reply: Completion) -> JSON:
-    """The JSON object a reply holds: the whole reply, or the one fenced or braced object in it."""
+    """The JSON object a reply holds: the whole reply, or the one fenced or braced object in it.
+    A reply that holds none is refused as `resume` refuses an answer: a `RunError`
+    (`invalid_output`, `stopped` False), so one loop handles both."""
     text = reply.content.strip()
     candidates = [text] + re.findall(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if "{" in text and "}" in text:
@@ -175,7 +181,8 @@ def parse(reply: Completion) -> JSON:
             continue
         if isinstance(value, dict):
             return value
-    raise ValueError("the reply holds no JSON object")
+    raise RunError({"error": "invalid_output", "step": None, "message": "the reply holds no JSON object", "pass": None, "passes": []},
+                   stopped=False)
 
 
 def reason(exc: Exception) -> str:
@@ -189,7 +196,10 @@ def reason(exc: Exception) -> str:
 
 
 def refused(reply: Completion, exc: Exception) -> list[JSON]:
-    """The model's refused reply and the correction that goes back to it."""
+    """The model's refused reply and the correction that goes back to it. A `RunError` that
+    `stopped` the run is no refusal (the answer went in; a later step failed): it is raised again."""
+    if getattr(exc, "stopped", False):
+        raise exc
     return [{"role": "assistant", "content": reply.content}, {"role": "user", "content": REFUSED.format(reason(exc))}]
 
 
@@ -199,14 +209,53 @@ def work_of(reply: Completion, paused: Any) -> JSON:
     return {str(paused.tasks[0].index): {"model": reply.model, **work} if reply.model else work}
 
 
-def continuation(record: Any, text: str) -> JSON:
-    """`assist`'s inputs: `text` as a new task or, given the record of the session's last run,
-    the session's task and the person's reply to what that run said."""
-    if record is None:
-        return {"task": text, "outcome": ""}
-    note = (record.result or {}).get("note") or (record.error or {}).get("message") or ""
-    task = (record.data.get("state") or {}).get("task") or text
-    return {"task": task, "outcome": f"You asked: {note}. The person answered: {text}" if note else f"The person answered: {text}"}
+def history(client: Any, session: str, text: str) -> str:
+    """`assist`'s `outcome`: the session so far, from the record. Its `assist` runs oldest first,
+    each as its task and the note it ended with, then `text` as the person's answer; empty when
+    the session has no runs, so `text` is a new task."""
+    runs = client.runs(name=ASSIST, session=session)
+    if not runs:
+        return ""
+    lines = []
+    for row in reversed(runs):
+        record = client.run_record(row.run_id)
+        note = (record.result or {}).get("note") or (record.error or {}).get("message") or ""
+        lines.append(f"The task was: {(record.data.get('state') or {}).get('task') or ''}")
+        if note:
+            lines.append(f"You asked: {note}")
+    lines.append(f"The person answered: {text}")
+    return "\n".join(lines)
+
+
+def answer_once(client: Any, chat: Any, paused: Any, agent: str | None, session: str | None) -> tuple[Any, str | None]:
+    """One pause of any run, answered as `aip.agent` answers each pause of `assist`: one answer,
+    up to three corrections (`aip agent --answer`). Returns what the resume came to and None, or
+    the run's `Paused` as it was and why the model gave up."""
+    msg = message_for(client, paused)
+    for _ in range(ANSWERS):
+        reply = chat(msg)
+        try:
+            return client.resume(paused, parse(reply), agent=agent, session=session, work=work_of(reply, paused)), None
+        except RunError as e:
+            msg, why = msg + refused(reply, e), reason(e)
+    return paused, f"the model's answer at {paused.step} was refused {ANSWERS} times; the last time: {why}"
+
+
+def why_refused(client: Any, reply: Completion) -> str:
+    """Why the model's latest reply was refused, once the loop gave up on it: it held no JSON
+    object, else what `resume` said of it (`client.last_refusal`)."""
+    try:
+        parse(reply)
+    except RunError as exc:
+        return reason(exc)
+    return reason(client.last_refusal) if client.last_refusal is not None else "no reason was given"
+
+
+def refusal_of(messages: list[JSON]) -> str | None:
+    """The reason the last message carries when it is a correction (`refused`), else None."""
+    head, tail = REFUSED.split("{}")
+    last = messages[-1]["content"] if len(messages) > 2 else ""
+    return last[len(head):].removesuffix(tail) if isinstance(last, str) and last.startswith(head) else None
 
 
 def references_of(client: Any, paused: Any) -> dict[str, str]:
@@ -233,13 +282,10 @@ def pause_view(client: Any, paused: Any) -> JSON:
 def observed(chat: Any, paused: Any, on_event: Any) -> Any:
     """`chat`, telling `on_event` of each call (`answer`: its tokens and seconds) and of the
     refusal each later call carries (`refused`): the progress lines of `aip agent --answer`."""
-    head, tail = REFUSED.split("{}")
-
     def call(messages: list[JSON]) -> Completion:
-        last = messages[-1]["content"] if len(messages) > 2 else ""
-        if last.startswith(head):
-            on_event({"event": "refused", "step": paused.step, "run_id": paused.run_id,
-                      "reason": last[len(head):].removesuffix(tail)})
+        why = refusal_of(messages)
+        if why is not None:
+            on_event({"event": "refused", "step": paused.step, "run_id": paused.run_id, "reason": why})
         reply = chat(messages)
         on_event({"event": "answer", "step": paused.step, "run_id": paused.run_id,
                   "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": reply.seconds})
@@ -247,5 +293,5 @@ def observed(chat: Any, paused: Any, on_event: Any) -> Any:
     return call
 
 
-__all__ = ["COMPLETION_TOKENS", "ChatClient", "ChatError", "Completion", "SYSTEM", "continuation", "message_for", "observed",
-           "parse", "pause_view", "reason", "references_of", "refused", "work_of"]
+__all__ = ["ANSWERS", "ASSIST", "COMPLETION_TOKENS", "ChatClient", "ChatError", "Completion", "SYSTEM", "answer_once", "history",
+           "message_for", "observed", "parse", "pause_view", "reason", "references_of", "refusal_of", "refused", "why_refused", "work_of"]

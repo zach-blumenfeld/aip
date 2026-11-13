@@ -484,7 +484,8 @@ class Client:
     moves `~/.aip` (default `AIP_HOME`). `agent` is the identity's `agent` when neither a call
     nor `AIP_AGENT` names one. `agent_chat` injects the chat client `agent` asks (an
     `aip.chat.ChatClient`; tests); otherwise `agent` speaks to the configured endpoint (`aip
-    config agent --model-key KEY`).
+    config agent --model-key KEY`). `on_step`, an attribute, is what `run` and `resume` tell
+    of each history entry when the call gives no `on_step` of its own (`aip agent --progress`).
     """
 
     def __init__(self, server: str | Server | None = None, token: str | None = None, *, decision_client: Any = None,
@@ -494,6 +495,9 @@ class Client:
         self.agent_chat = agent_chat
         self.home = Path(home) if home is not None else None
         self.agent = agent
+        self.on_step: OnStep | None = None         # `run` and `resume`'s progress when the call names none
+        self.last_refusal: RunError | None = None  # the latest answer `resume` refused (`stopped` False)
+        self.gave_up: str | None = None            # after `ask`: why the loop left the run paused, else None
         self.recording_error: str | None = None   # why the last stop was not recorded, when a server is configured
         self._uploaded: set[str] = set()
         self._retired: dict[str, bool] = {}        # catalog reference -> whether the server said its revision is retired
@@ -567,6 +571,15 @@ class Client:
         bundle, revision, _ = self._fetch(text)
         return bundle, {"kind": "name", "target": text, "revision": revision, "retired": self._retired.get(text, False)}
 
+    def _builtin(self, ref: str) -> Bundle | None:
+        """The bundle aip ships under a bare name (`assist`, `build_procedure`, ...), put in the
+        bundle cache: what a catalog reference resolves to when no server is configured, so
+        `aip agent` runs on a machine with no server."""
+        from aip.server.builtins import builtin_files
+
+        path = next((p for p in builtin_files() if p.stem == ref), None) if "@" not in ref else None
+        return bundles.store_file(path, self.home) if path is not None else None
+
     def _described(self, ref: str) -> JSON:
         """The server's description of a catalog reference. A reference it does not have is
         `NotFound` in the server's own words, so every call that names one says the same thing."""
@@ -584,8 +597,11 @@ class Client:
         cached = bundles.resolve_ref(ref, self.home)
         if self.server is None:
             if cached is None:
-                raise NoServer(f"{ref!r} is not a folder or a bundle file, it is not in the bundle cache, and no server is "
-                               f"configured to look it up; {CONFIGURE_HINT}, then `aip pull {ref}`")
+                builtin = self._builtin(ref)
+                if builtin is None:
+                    raise NoServer(f"{ref!r} is not a folder or a bundle file, it is not in the bundle cache, and no server is "
+                                   f"configured to look it up; {CONFIGURE_HINT}, then `aip pull {ref}`")
+                return builtin, None, False
             bundle_id, revision = cached
             return bundles.load(bundle_id, self.home), revision, False
         try:
@@ -644,11 +660,13 @@ class Client:
 
     def _engine(self, workdir: Path, batch: int | None, on_step: OnStep | None = None, scripts: bool = True,
                 handle: RunFile | None = None) -> Engine:
-        """The engine for one call. `on_step` gets each history entry's progress line the
-        moment the entry is written, so a batch of `For` passes reports as it goes. A script
-        may run `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`; 300 by default).
-        `handle` is the run, whose scripts are told which run they are part of and who runs it."""
+        """The engine for one call. `on_step` (the call's, else the client's) gets each history
+        entry's progress line the moment the entry is written, so a batch of `For` passes
+        reports as it goes. A script may run `aip config --script-timeout` seconds
+        (`AIP_SCRIPT_TIMEOUT`; 300 by default). `handle` is the run, whose scripts are told
+        which run they are part of and who runs it."""
         s = self.settings
+        on_step = on_step if on_step is not None else self.on_step
         resolver = TypeSafeResolver.from_environment(client=self.decision_client, api_key=s.decision_model_key, url=s.decision_model_url)
         on_entry = (lambda entry: on_step(progress_line(entry))) if on_step is not None else None
         return Engine(resolver, home=self.home, workdir=workdir, batch=batch or s.batch, on_entry=on_entry, timeout=s.script_timeout,
@@ -676,8 +694,9 @@ class Client:
         step's object, until it pauses or is done. `workdir` is where its scripts read and write
         files (default the current directory); `batch` how many `For` passes run at once;
         `agent` and `session` the run's identity, `agent_version` the agent's own version when
-        it has one to give. `on_step` gets each history entry's progress line as it is written;
-        `on_pause`, if given, answers each pause in-process (returning None stops there).
+        it has one to give. `on_step` gets each history entry's progress line as it is written
+        (the client's `on_step` when the call gives none); `on_pause`, if given, answers each
+        pause in-process (returning None stops there).
         A `name@revision` that is retired is refused (`RetiredRevision`) unless `force`. When the
         procedure has a `Decide` and no decision model is configured, the run is not refused,
         since it may never reach the step: `on_warning` is told before the first step runs, and
@@ -731,7 +750,12 @@ class Client:
         engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts, handle=handle)
         with Procedure.load(bundle) as procedure:
             state = Run.from_dict(procedure, handle.run)
-            state = self._apply(engine, state, answers, handle, path, agent, session, work=work)
+            try:
+                state = self._apply(engine, state, answers, handle, path, agent, session, work=work)
+            except RunError as exc:
+                if not exc.stopped:
+                    self.last_refusal = exc
+                raise
             return self._settle(engine, state, handle, on_pause, None)
 
     def chat(self) -> Callable[[list[JSON]], Any]:
@@ -749,24 +773,36 @@ class Client:
     def ask(self, text: str, *, session: str | None = None, on_step: OnStep | None = None) -> Result:
         """`aip agent` (`aip.agent.agent`, `docs/agent.md`): the chat model answers the pauses of
         `assist` on `text` until it is done or an answer will not hold (the run is then left
-        paused). `text` is a task, or in a session with an earlier `assist` run, the person's
-        reply to what that run said, read from the record. `session` is `agent_session`'s.
-        Returns what the run came to; a run that fails is a `RunError` as `run` raises it."""
-        from aip.agent import ASSIST, agent
+        paused). `text` is a task, or in a session with earlier `assist` runs, the person's
+        reply to what the last one said; the session so far is read from the record. `session`
+        is `agent_session`'s. `on_step`, when given, stands in for the client's for this call.
+        Returns what the run came to; a run that fails is a `RunError` as `run` raises it; the
+        model's endpoint failing is `aip.chat.ChatError`, the run left where it was. A `Paused`
+        is the loop giving up, and `gave_up` then says why its last answer was refused."""
+        from aip.agent import agent
+        from aip.chat import why_refused
 
         if not isinstance(text, str) or not text.strip():
             raise InvalidInput("aip agent needs a task: what is to be done, in your words")
-        chat, procedure = self.chat(), ASSIST
-        if self.server is None:          # no catalog to name it in: the bundle aip ships
-            from aip.server.builtins import builtin_files
+        chat, replies = self.chat(), []
 
-            procedure = next(str(p) for p in builtin_files() if p.stem == ASSIST)
-        return agent(self, chat, text, agent_session(session), on_step, procedure)
+        def kept(messages):                       # the latest reply, for `gave_up`
+            replies[:] = [chat(messages)]
+            return replies[0]
+        before, self.on_step = self.on_step, on_step if on_step is not None else self.on_step
+        self.gave_up = None
+        try:
+            result = agent(self, kept, text, agent_session(session))
+        finally:
+            self.on_step = before
+        if isinstance(result, Paused) and replies:
+            self.gave_up = why_refused(self, replies[0])
+        return result
 
     def answer(self, run: str | Path | Paused, *, agent: str | None = None, session: str | None = None,
                on_event: Callable[[JSON], None] | None = None, on_step: OnStep | None = None) -> tuple[Result, str | None]:
         """`aip agent --answer`: the configured chat model answers the pause a run waits at, once,
-        with the call `aip agent` makes at each pause of `assist` (`aip.agent.answer`), and the
+        with the call `aip agent` makes at each pause of `assist` (`aip.chat.answer_once`), and the
         run is resumed with what it says. Any run, any procedure: this is how the console has the
         model answer the steps a person does not. Returns the result the resume came to and None;
         or, when no answer would hold or the endpoint failed, the run's `Paused` as it was and the
@@ -774,8 +810,7 @@ class Client:
         giving up (`gave_up`). `agent` and `session` are who answered, as `resume` takes them. A
         run that is not paused, and a resume that fails the run, are a `RunError` as `resume`
         raises them; no model key configured (and no `agent_chat`) is `NoAgentModel`."""
-        from aip.agent import answer
-        from aip.chat import observed
+        from aip.chat import ChatError, answer_once, observed
 
         chat = self.chat()
         handle, path, bundle = self._reopen(run)
@@ -789,7 +824,13 @@ class Client:
         recorded = handle.recorded if handle.server and handle.scripts else None
         paused = Paused(state.pause["kind"], state.pause["step"], [Task.from_dict(t) for t in state.pause["tasks"]],
                         handle.run_id, path, recorded, outcome(state, handle.run_id, path, recorded))
-        result, why = answer(self, observed(chat, paused, on_event) if on_event else chat, paused, agent, session, on_step)
+        before, self.on_step = self.on_step, on_step if on_step is not None else self.on_step
+        try:
+            result, why = answer_once(self, observed(chat, paused, on_event) if on_event else chat, paused, agent, session)
+        except ChatError as exc:
+            result, why = paused, f"the model's endpoint failed: {exc}"
+        finally:
+            self.on_step = before
         if why and on_event:
             on_event({"event": "gave_up", "step": paused.step, "run_id": paused.run_id, "reason": why})
         return result, why

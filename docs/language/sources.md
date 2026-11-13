@@ -242,7 +242,7 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - **The console drives a run as `aip agent` does.** The launcher (`console/bin/aip-console.mjs`,
   `stream` and `nextOf`) runs `aip run --progress`; at a pause whose step is not one of the run's
   `person` steps it runs `aip agent --answer <run_id> --progress` (`Client.answer` in the SDK, the
-  same `answer` call `aip agent` makes, `aip.agent.answer` since A4) on the same event stream, until the run is done,
+  same four tries `aip agent` makes at a pause, `aip.chat.answer_once` since A4) on the same event stream, until the run is done,
   fails, or waits for a person. It holds back each process's final object and relays only the last,
   with `answerer: {person, reason}`. The Studio's person step is `ask_user` (`STUDIO_PERSON`, in the
   launcher and in `src/api/console.ts`); the run console's picker starts with nothing ticked.
@@ -257,14 +257,24 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 
 ## What A4 left (2026-11-12)
 
-- **`src/aip/agent.py` is the loop, whole** (37 lines, shown verbatim in `docs/agent.md`, and
-  `tests/test_agent.py` fails if it grows past 40 or gains a function): `agent` (run `assist`,
-  answer each pause), `answer` (one pause, three refusals; the console's `aip agent --answer`
-  uses it too), `inputs` (the session from the record). The plumbing is in `aip.chat`:
-  `message_for`, `parse`, `refused`, `reason`, `work_of`, `continuation`, `references_of`,
-  `pause_view` (which `assist`'s `act.py` imports, so `assist.rl` was compiled again), and
-  `observed`, which wraps `chat` to say `aip agent --answer`'s `answer` and `refused` lines.
-  `ChatClient` is the `chat` callable (`ChatClient(url, key, model)(messages)`), timing its call.
+- **`src/aip/agent.py` is the loop, whole** (19 lines, one function of four parameters, shown
+  verbatim in `docs/agent.md`; `tests/test_agent.py` fails if it grows past 40 lines, gains a
+  function or a parameter): run `assist` on the text and the session's history, and at each
+  pause one answer and up to three corrections, catching `RunError` and nothing else. The
+  plumbing is in `aip.chat`: `history` (the session from the record, oldest first; it replaced
+  `inputs` and `continuation`), `message_for`, `parse` (a reply with no JSON object is a
+  `RunError` that changed nothing, so the one `except` covers it), `refused` (which raises a
+  `RunError` that `stopped` the run again), `reason`, `work_of`, `references_of`, `pause_view`
+  (which `assist`'s `act.py` imports), `answer_once` (the same four tries, for `Client.answer`
+  and the console's `aip agent --answer`; six lines twice, so the file stays the point),
+  `refusal_of` and `observed`, which wraps `chat` to say `aip agent --answer`'s `answer` and
+  `refused` lines. `ChatClient` is the `chat` callable (`ChatClient(url, key, model)(messages)`),
+  timing its call. Progress is the client's own: `Client.on_step` is what `run` and `resume` use
+  when a call names none, so `aip agent --progress` sets it and the loop carries nothing. The
+  command says on stderr why it stopped short: `aip agent: gave up at <step> after 4 answers:
+  <last reason>` (the run left paused, exit 1; `Client.ask` sets `gave_up` from the last reply and
+  `last_refusal`, the reason `resume` gave) or `aip agent: the model's endpoint failed: <why>`
+  (`ChatError`, uncaught by the loop).
 - **No session files.** `--session ID`, else `AIP_SESSION`, else `aip.new_session()`; the command
   prints `session:` and the export line on stderr. `--new` and `--json` went; `aip agent` prints
   `aip run`'s object plus `session`. `Outcome`, `Sessions`, `pause_view` in `aip.agent`, the

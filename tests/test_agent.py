@@ -1,6 +1,6 @@
 """`aip agent` (plan aip#29, A3 and A4; `docs/agent.md`): a chat model outside the run answers the
 pauses of `assist`, one call per pause and no tools; the runtime never calls it. `aip.agent` is
-the loop and nothing else; a session is what the record holds.
+the loop and nothing else, its helpers are `aip.chat`'s; a session is what the record holds.
 
 The model here is a stand-in (`Scripted`): each reply is the next one in its list, or what a
 function makes of the messages it was sent. The runs are local (no server), so `assist`'s
@@ -20,8 +20,7 @@ import pytest
 
 import aip
 import aip.agent
-from aip.agent import AGENT, MAX_REFUSALS
-from aip.chat import Completion
+from aip.chat import ANSWERS, ChatError, Completion, history
 from aip.client.runs import RunFile, local_runs, run_path
 from aip.sdk import Done, NoAgentModel, Paused
 from aip.client.server import Server
@@ -31,6 +30,7 @@ from served import Served
 
 pytestmark = pytest.mark.skipif(not relate.available(), reason="relate is not installed")
 
+AGENT = "agent"                                   # who `aip agent`'s runs and answers are recorded as
 ACT = example_dir("assist") / "scripts" / "act.py"
 GREET = """Procedure greet
   "Greet someone by name."
@@ -80,8 +80,8 @@ def client(chat: Scripted) -> aip.Client:
 def test_the_module_is_the_loop_and_nothing_else():
     source = inspect.getsource(aip.agent)
     assert len(source.splitlines()) < 40
-    assert [n for n, v in vars(aip.agent).items() if inspect.isfunction(v) and v.__module__ == "aip.agent"] == \
-        ["agent", "answer", "inputs"]
+    assert [n for n, v in vars(aip.agent).items() if inspect.isfunction(v) and v.__module__ == "aip.agent"] == ["agent"]
+    assert inspect.signature(aip.agent.agent).parameters.keys() == {"client", "chat", "text", "session"}
     doc = (Path(__file__).parent.parent / "docs" / "agent.md").read_text(encoding="utf-8")
     assert f"```python\n{source.rstrip()}\n```" in doc, "docs/agent.md shows src/aip/agent.py verbatim: copy it again"
 
@@ -105,15 +105,24 @@ def test_a_sessions_second_call_reads_what_it_asked_from_the_record(tmp_path, mo
     second = c.ask("./notes", session="s-1")
     assert isinstance(second, Done) and second.result["note"] == "monday 2, tuesday 0"
     asked = chat.asked[1][1]["content"]
-    assert "You asked: Which folder holds the notes?. The person answered: ./notes" in asked
-    assert '"task": "count the lines mentioning refund in each note"' in asked     # the session's task, not the reply
+    assert '"task": "./notes"' in asked                                              # the text is the task...
+    assert "The task was: count the lines mentioning refund in each note" in asked  # ...and the session is the outcome
+    assert "You asked: Which folder holds the notes?" in asked and "The person answered: ./notes" in asked
 
     run = RunFile.load(run_path(second.run_id)).run
     assert run["identity"]["agent"] == AGENT and run["identity"]["session"] == "s-1"
-    assert run["state"]["outcome"].startswith("You asked: Which folder")          # the record holds the session
+    assert run["state"]["outcome"] == ("The task was: count the lines mentioning refund in each note\n"
+                                       "You asked: Which folder holds the notes?\nThe person answered: ./notes")
     plan_entry = next(e for e in run["history"] if e["step"] == "plan")
     assert plan_entry["answered_by"]["agent"] == AGENT and plan_entry["answered_by"]["model"] == "stand-in-1"
     assert plan_entry["work"] == "reported" and plan_entry["tokens"]["total"] == 120
+
+    # The whole session, oldest first, every run's task and note, then the new text: `history` reads the record.
+    assert history(c, "s-1", "thanks") == ("The task was: count the lines mentioning refund in each note\n"
+                                           "You asked: Which folder holds the notes?\n"
+                                           "The task was: ./notes\nYou asked: monday 2, tuesday 0\n"
+                                           "The person answered: thanks")
+    assert history(c, "s-none", "anything") == ""                                   # no runs: a new task, no outcome
 
     chat = Scripted(finish("ok"))
     client(chat).ask("something else", session="s-2")                              # another session starts afresh
@@ -140,7 +149,7 @@ def test_the_command_prints_the_run_as_aip_run_does_with_the_session(tmp_path, m
     monkeypatch.setattr(cli, "_client", lambda: client(chat))
     assert cli.main(["agent", "./notes"]) == 0
     assert json.loads(capsys.readouterr().out)["session"] == session
-    assert "You asked: Which folder?. The person answered: ./notes" in chat.asked[0][1]["content"]
+    assert "You asked: Which folder?" in chat.asked[0][1]["content"] and "The person answered: ./notes" in chat.asked[0][1]["content"]
 
 
 def test_a_refused_answer_goes_back_to_the_model_then_the_run_is_left_paused(tmp_path, monkeypatch):
@@ -152,13 +161,40 @@ def test_a_refused_answer_goes_back_to_the_model_then_the_run_is_left_paused(tmp
     assert once.asked[1][-2] == {"role": "assistant", "content": "I would finish here."}
 
     wrong = {"verb": "dance", "args": {}, "note": "", "done": False}
-    chat = Scripted(*[wrong] * (MAX_REFUSALS + 1))
+    chat = Scripted(*[wrong] * ANSWERS)
     out = client(chat).ask("anything", session="s-3")
-    assert isinstance(out, Paused) and out.step == "plan" and len(chat.asked) == MAX_REFUSALS + 1 and not chat.replies
+    assert isinstance(out, Paused) and out.step == "plan" and len(chat.asked) == ANSWERS and not chat.replies
     assert all(asked[-1]["content"].startswith("That answer was refused") for asked in chat.asked[1:])
     assert "dance" in chat.asked[-1][-1]["content"]
     run = RunFile.load(run_path(out.run_id))
     assert run.status == "paused" and run.run["pause"]["step"] == "plan"
+
+
+def test_the_command_says_why_the_model_gave_up_or_its_endpoint_failed(tmp_path, monkeypatch, capsys):
+    """The loop catches refusals and nothing else: the command says on stderr why it stopped short."""
+    from aip.client import cli
+
+    monkeypatch.chdir(tmp_path)
+    wrong = {"verb": "dance", "args": {}, "note": "", "done": False}
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(*[wrong] * ANSWERS)))
+    assert cli.main(["agent", "anything", "--session", "s-5"]) == 1
+    out, err = capsys.readouterr()
+    assert json.loads(out)["paused"] == "task" and json.loads(out)["step"] == "plan" and json.loads(out)["session"] == "s-5"
+    assert "aip agent: gave up at plan after 4 answers: " in err and "dance" in err.split("gave up at plan")[1]
+
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted("not json", "still not", "no", "nope")))
+    assert cli.main(["agent", "anything", "--session", "s-6"]) == 1
+    assert "aip agent: gave up at plan after 4 answers: the reply holds no JSON object" in capsys.readouterr().err
+
+    def down(messages):
+        raise ChatError("https://model.example answered 503: busy")
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(down)))
+    assert cli.main(["agent", "anything", "--session", "s-7"]) == 1
+    out, err = capsys.readouterr()
+    assert "aip agent: the model's endpoint failed: https://model.example answered 503: busy" in err
+    assert json.loads(out)["error"] == "server" and "503" in json.loads(out)["message"]
+    [left] = aip.Client(agent="tests").runs(session="s-7")
+    assert left.status == "paused", "the run waits where it was, for whoever answers next"
 
 
 def test_a_child_runs_pause_comes_back_to_plan_and_is_answered_with_resume(tmp_path, monkeypatch):
@@ -256,15 +292,20 @@ def test_answer_has_the_model_answer_one_pause_of_any_run(tmp_path, monkeypatch,
     assert exc.value.error["error"] == "not_paused"
 
     second = c.run(folder, {"name": "Bo"})
-    stuck = client(Scripted(*[{"txt": "no"}] * (MAX_REFUSALS + 1)))
+    stuck = client(Scripted(*[{"txt": "no"}] * ANSWERS))
     left, reason = stuck.answer(second.run_id)
-    assert isinstance(left, Paused) and left.run_id == second.run_id and f"refused {MAX_REFUSALS + 1} times" in reason
+    assert isinstance(left, Paused) and left.run_id == second.run_id and f"refused {ANSWERS} times" in reason
+
+    def down(messages):
+        raise ChatError("https://model.example answered 503: busy")
+    left, reason = client(Scripted(down)).answer(second.run_id)                 # the endpoint failing is a reason, not a raise
+    assert isinstance(left, Paused) and reason == "the model's endpoint failed: https://model.example answered 503: busy"
 
     # The command: progress lines, then the paused object with `gave_up`, exit 1.
-    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(*[{"txt": "no"}] * (MAX_REFUSALS + 1))))
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(*[{"txt": "no"}] * ANSWERS)))
     assert cli.main(["agent", "--answer", second.run_id, "--progress"]) == 1
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
-    assert [line.get("event") for line in lines[:-1]] == ["answer", "refused"] * MAX_REFUSALS + ["answer", "gave_up"]
+    assert [line.get("event") for line in lines[:-1]] == ["answer", "refused"] * (ANSWERS - 1) + ["answer", "gave_up"]
     assert lines[-1]["paused"] == "task" and lines[-1]["step"] == "reply" and "refused" in lines[-1]["gave_up"]
     monkeypatch.setattr(cli, "_client", lambda: client(Scripted({"text": "Hi, Bo"})))
     assert cli.main(["agent", "--answer", second.run_id, "--progress"]) == 0
