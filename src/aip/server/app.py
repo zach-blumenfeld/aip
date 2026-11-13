@@ -130,11 +130,10 @@ def describe_bundle(bundle: Bundle) -> JSON:
     """The description stored with a bundle, the one `aip info` prints for a folder: computed
     once, when the bundle arrives, by loading it as a run would."""
     from aip.model import Procedure
-    from aip.model.answerer import human_steps
     from aip.sdk import describe_procedure
 
     with Procedure.load(bundle) as procedure:
-        return {**describe_procedure(procedure), "human_steps": human_steps(bundle)}
+        return describe_procedure(procedure)
 
 
 def read_upload(data: bytes) -> Bundle:
@@ -254,10 +253,6 @@ def create_app(backend: Any, tokens: dict[str, Token | set[str] | frozenset[str]
         if BUNDLE_MEDIA_TYPE in request.headers.get("accept", ""):
             return Response(content=store.bundle_file(bundle_id), media_type=BUNDLE_MEDIA_TYPE,
                             headers={"Content-Disposition": f'attachment; filename="{filename}{BUNDLE_SUFFIX}"'})
-        if "human_steps" not in described:            # stored before the description carried them (plan R8)
-            from aip.model.answerer import human_steps
-
-            described = {**described, "human_steps": human_steps(store.bundle_graph(bundle_id).to_dict())}
         return described
 
     # ------------------------------------------------------------------- health

@@ -8,7 +8,7 @@ upgrade that carries it, and one that was retired or superseded by hand stays th
 hook never offers the same bundle twice.
 
 Four ship: `make_procedure`, since A1 `build_procedure` and `edit_procedure`, and since R7
-`assist`, the orchestrator (`docs/runah.md`), each `bundles/<name>.rl` compiled from
+`assist`, which `aip agent` drives (`docs/agent.md`), each `bundles/<name>.rl` compiled from
 `examples/language/<name>/`. Whenever one of those folders
 changes, or the graph the compiler derives does, compile it again and commit the file
 (`tests/test_make_procedure.py` fails when the two disagree, and its message has the command):

@@ -145,11 +145,11 @@
 <path d="M788 662H808" class="wire"/>
 <text x="720" y="712" font-size="22" class="muted" text-anchor="middle" font-weight="400">…</text>
 <rect x="652" y="736" width="136" height="34" rx="17.0" class="pill-ghost"/>
-<text x="720.0" y="758.76" font-size="16" class="ink mono" text-anchor="middle" font-weight="500">aip runah</text>
+<text x="720.0" y="758.76" font-size="16" class="ink mono" text-anchor="middle" font-weight="500">aip agent</text>
 <path d="M788 753H808" class="wire"/>
 <text x="652" y="798" font-size="15" class="muted" text-anchor="start" font-weight="400">the built-in harness:</text>
-<text x="652" y="819" font-size="15" class="muted" text-anchor="start" font-weight="400">a chat model takes</text>
-<text x="652" y="840" font-size="15" class="muted" text-anchor="start" font-weight="400">the agent's turns</text>
+<text x="652" y="819" font-size="15" class="muted" text-anchor="start" font-weight="400">a chat model outside</text>
+<text x="652" y="840" font-size="15" class="muted" text-anchor="start" font-weight="400">the run answers pauses</text>
 <path d="M808 462V753" class="wire"/>
 <rect x="828" y="446" width="130" height="36" rx="8" class="chip"/>
 <path d="M840 453h11l6 6v16h-17z" class="doc"/><path d="M851 453v6h6" class="doc-fold"/>

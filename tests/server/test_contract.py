@@ -375,15 +375,6 @@ def test_an_open_server_records_no_user(backend, tmp_path):
 # ------------------------------------------------------------------ built-in bundles
 
 
-def test_a_description_names_the_steps_written_for_a_person(served, tmp_path):
-    """Plan R8: what `aip runah` stops at with no --human, said where the console reads it."""
-    api = server(served)
-    bundle_id, data = rl(example_dir("build_procedure"), tmp_path)
-    api.publish(data)
-    assert api.describe("build_procedure")["human_steps"] == ["ask_user"]
-    assert api.get(f"/bundles/{bundle_id}")["human_steps"] == ["ask_user"]
-
-
 def test_built_in_bundles_are_published_once_per_store(backend, tmp_path):
     from aip.server.builtins import builtin_files, publish_builtins
 

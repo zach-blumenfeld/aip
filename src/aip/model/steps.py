@@ -34,11 +34,9 @@ from aip.model.environment import SCRIPT_TIMEOUT_ENV
 
 WORKDIR = "AIP_WORKDIR"
 BUNDLE_ENV = "AIP_BUNDLE"                   # the unpacked bundle a script's own files are under
-# What a script is told about where it runs (runtime.md, Scripts), so a run it starts knows its
-# parent: the run, the step and its innermost pass; and what that run inherits: its depth among
-# nested runah runs and the tokens left of the parent's budget.
+# What a script is told about where it runs (runtime.md, Scripts): the run, the step and its
+# innermost pass.
 RUN_ENV, STEP_ENV, PASS_ENV = "AIP_RUN_ID", "AIP_STEP", "AIP_PASS"
-DEPTH_ENV, BUDGET_ENV = "AIP_RUNAH_DEPTH", "AIP_RUNAH_BUDGET_TOKENS"
 PYTHON = "python"
 INDEX, ITERATIONS = "index", "iterations"   # the runtime's keys (spec 2.6)
 PASS_SUFFIX = "__"                           # `follows__3`: question `follows` of pass 3 in a batched call (runtime.md)

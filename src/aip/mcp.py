@@ -12,7 +12,7 @@ with the object the CLI prints for the same thing (`docs/cli-json.md`).
     compile   check a program directory, write its bundle   Client.compile
     run       run a procedure until it pauses or is done    Client.run
     resume    answer a pause, or retry a failed step        Client.resume
-    runah     run ahead: a chat model answers the tasks     Client.runah
+    agent     do a task with this server's own chat model   Client.agent
     pull      put a published procedure in the cache        Client.pull, pull_all
 
 A run that pauses, a run that fails and a call that cannot be made all answer with an ordinary
@@ -53,7 +53,7 @@ from aip.sdk import Client, CompileError, RunError
 
 JSON = dict[str, Any]
 MCP_AGENT = "mcp"                  # the record's `agent` when nobody says who is calling
-TOOLS = ("search", "describe", "compile", "run", "resume", "runah", "pull")
+TOOLS = ("search", "describe", "compile", "run", "resume", "agent", "pull")
 
 INSTRUCTIONS = """\
 AIP runs procedures: reviewed, step-by-step instructions (a runbook, a workflow, a decision
@@ -187,8 +187,10 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
     server = Server("aip", title="Agent Instruction Protocol", instructions=INSTRUCTIONS,
                     version=version_line().split()[1], log_level="WARNING")
 
+    named = agent                      # the `agent` tool below takes the name in this scope
+
     def who(ctx: Context) -> str:
-        return agent or client_name(ctx) or os.environ.get(AGENT_ENV) or MCP_AGENT
+        return named or client_name(ctx) or os.environ.get(AGENT_ENV) or MCP_AGENT
 
     def version_of(ctx: Context) -> str | None:
         """The MCP client's version, recorded as the run's `agent_version` when the run's
@@ -316,19 +318,23 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         return driven(ctx, lambda on_step: client.resume(run_id, answers, agent=who(ctx), on_step=on_step, work=work))
 
     @server.tool()
-    def runah(ctx: Context, target: str, inputs: dict[str, Any] | None = None, answers: dict[str, Any] | list[Any] | None = None,
-              human: list[str] | None = None, session: str | None = None, workdir: str | None = None) -> dict[str, Any]:
-        """Run ahead: like `run`, but this server's own chat model (`aip config runah`)
-        answers each `Task_Agent` task and the run keeps going, stopping at a human step (the
-        run pauses there for you, as `run` would: the steps named in `human`, `["none"]` for
-        none, or without it the steps written for a person), at the end, at an error, or when
-        the model gives up (`answerer` in the reply says why). Use it when the user wants the
-        procedure carried through without you doing each task. `target` is what `run` takes, or
-        the `run_id` of a run to carry on, with `answers` for its standing pause. Returns what
-        `run` returns; refused when no chat model is configured on this server."""
-        return driven(ctx, lambda on_step: client.runah(target, inputs, answers, human=human, agent=who(ctx),
-                                                        session=session or default_session, workdir=workdir, on_step=on_step,
-                                                        agent_version=version_of(ctx)))
+    def agent(ctx: Context, task: str, session: str | None = None) -> dict[str, Any]:
+        """Hand a whole task to this server's own chat model (`aip config agent`), which drives
+        the `assist` procedure: it searches the catalog, runs what fits, builds a procedure when
+        nothing does, and finishes with a `note`, the answer or a question for the person. Use
+        it when the user wants the task done without you answering each step; to drive a
+        procedure yourself, use `run` and `resume`. `session` continues a session this tool
+        started (the `session` of an earlier reply): `task` is then the person's reply to that
+        note. Returns `session`, `status` (`done`, `failed`, or `paused` when the model's answer
+        would not hold), `note`, `run_id` and the `runs` it started, all recorded as agent
+        `agent`; refused when no chat model is configured on this server."""
+        on_step, _ = reporter(ctx)
+        try:
+            out = client.ask(task, session=session, new=session is None, shell=f"mcp-{default_session}",
+                               on_event=lambda event: on_step(event) if event.get("event") == "step" else None)
+        except AipError as exc:
+            return failure(exc)
+        return out.to_json()
 
     @server.tool()
     def pull(ref: str | None = None) -> dict[str, Any]:

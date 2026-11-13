@@ -46,9 +46,8 @@ def parse_script_timeout(raw: object, source: str = SCRIPT_TIMEOUT_ENV) -> float
 
 def script_timeout(configured: object = None) -> float | None:
     """Seconds one script may run before it is killed, wherever a script runs (run, resume,
-    runah): `AIP_SCRIPT_TIMEOUT`, else `configured` (the config file's), else 300. `0`, `none`
-    or `inf` means no cap. It bounds scripts only; runah caps the model's turns by tool calls
-    and tokens per task."""
+    and the runs `aip agent` drives): `AIP_SCRIPT_TIMEOUT`, else `configured` (the config
+    file's), else 300. `0`, `none` or `inf` means no cap."""
     raw = os.environ.get(SCRIPT_TIMEOUT_ENV, "").strip()
     if raw:
         return parse_script_timeout(raw)

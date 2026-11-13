@@ -78,8 +78,9 @@ procedure means; this page says what running one entails.
   run's working directory, so a relative path it opens is the run's, not the bundle's. This one
   tells a script where it runs: the run's working directory (`AIP_WORKDIR`), the unpacked bundle
   (`AIP_BUNDLE`), the run, the step and its innermost pass
-  (`AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS`) and the cap it runs under (`AIP_SCRIPT_TIMEOUT`), so a
-  run the script starts knows its parent and a script that waits can stop in time. A runtime may also run a
+  (`AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS`), who runs it (`AIP_AGENT`, `AIP_SESSION`, so a run the
+  script starts is recorded as the same agent's) and the cap it runs under (`AIP_SCRIPT_TIMEOUT`),
+  so a script that waits can stop in time. A runtime may also run a
   procedure without executing any script, as a trial of a procedure nobody has read yet: such a
   run stops at the first `Execute`, before its script starts (`script_not_run`), is not
   recorded, and is over.
@@ -223,21 +224,12 @@ reference runtime's field names are in `docs/cli-json.md`, The run file.
   the number a bar reads, whether it held, whether a bar turned it). A script's entry keeps the
   script and what it was given on stdin. An agent task's entry keeps the prompt and references
   it was given, who answered (`agent`, `session`) and how long the run waited for the answer
-  (`waited_seconds`). A runtime that has a model answer the task (`aip runah`,
-  `docs/runah.md`) says so in `answered_by` (`{"agent": "runah", "model": <the id the model's
-  endpoint reported>}`) and keeps what answering took, marked `work: "observed"`: the tool calls
-  (`name`, a summary of the arguments, `seconds`), the tokens (`prompt`, `completion`, `total`),
-  `model_seconds` and how many answers were refused before one held (`refusals`). An agent that
-  reports what its own answer took (`aip resume --work`) has it kept marked `work: "reported"`,
-  so the record says which numbers the runtime saw and which it was told. The answer itself is
-  checked as any agent's is.
-- A run started from a script of another run (an orchestrator's child) says so: `parent` (the
-  run, the step and the pass whose script started it) and `depth` (how many runs up the chain
-  goes), and the parent's record can name its children. A runtime that bounds what a run spends
-  (`aip runah --budget-tokens`) keeps the bound and what runah's model spent, the children's
-  included (`tokens`: `own`, `children`, `total`); a run past its budget fails before its next
-  step (`budget_exhausted`). None of it changes what the procedure means: a child is an ordinary
-  run of its own procedure.
+  (`waited_seconds`). The runtime never answers a task itself and calls no chat model: whoever
+  drives the run answers, a person, an agent, or a harness such as `aip agent`
+  (`docs/agent.md`), and the record names it. An agent that reports what its answer took (its
+  model, tool calls, tokens, seconds: `aip resume --work`) has it kept marked `work:
+  "reported"`, so the record says which numbers it was told. The answer itself is checked as
+  any agent's is.
 - The history is appended, never rewritten (the entries of a batch still open are the one case
   where an entry may yet move, above). A run that fails keeps everything up to the failure
   and the error beside it; the failed step runs again on a retry, from the state before it.

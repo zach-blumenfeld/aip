@@ -33,7 +33,7 @@ ANSWER_FIELDS = {"true_or_false": ("confidence", "noul", "probabilities"), "choi
                  "score": ("confidence", "score", "probabilities")}
 
 ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "script_not_run", "requires_unmet",
-               "no_decision_model", "decision_model_failed", "loop_cap", "budget_exhausted", "not_paused", "server")
+               "no_decision_model", "decision_model_failed", "loop_cap", "not_paused", "server")
 
 # The failures a retry would only repeat: `aip resume` does not retry them, and their error
 # objects say `resumable: false`.
@@ -293,24 +293,6 @@ class DecisionModelFailed(StepError):
         return {"model": self.model, "endpoint": self.endpoint, "cause": self.cause}
 
 
-class BudgetExhausted(StepError):
-    """A run made with a token budget (`aip runah --budget-tokens N`) has spent it: the model
-    tokens of the tasks runah answered in it, and those of every run started from it (its
-    children, whose own tokens include theirs), passed `budget`. Checked before each step, so
-    the run fails at the step it would have run next. A retry checks again: it carries on once
-    the run's budget is raised (`aip runah <run id> --budget-tokens N`)."""
-
-    kind = "budget_exhausted"
-
-    def __init__(self, step: str | None, budget: int, spent: int):
-        self.budget, self.spent = budget, spent
-        super().__init__(step, f"the run has spent {spent} model tokens, its children's included, past its budget of {budget}; "
-                               "raise it with `aip runah <run id> --budget-tokens N` to carry on")
-
-    def fields(self) -> JSON:
-        return {"budget": self.budget, "spent": self.spent}
-
-
 class LoopCap(StepError):
     """A loop reached its cap: a `For` (or a fold) given more items than `At_Most`, or an `Until`
     loop that ran `At_Most` passes without its condition holding and says `Else_Fail`. The error
@@ -340,4 +322,4 @@ def resumable(error: JSON | None) -> bool:
 
 __all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "ANSWER_FIELDS", "DECISION_MODEL_HINT", "NOT_RESUMABLE", "resumable", "StepError", "KeysError", "InvalidInput",
            "InvalidOutput", "NoBranch", "ScriptFailed", "ScriptTimeout", "ScriptNotRun", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed",
-           "LoopCap", "BudgetExhausted", "NotPaused", "is_plain", "normalise", "conforms", "extra_fields", "describe", "branch_key"]
+           "LoopCap", "NotPaused", "is_plain", "normalise", "conforms", "extra_fields", "describe", "branch_key"]

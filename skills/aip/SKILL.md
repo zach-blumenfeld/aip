@@ -97,12 +97,11 @@ A procedure is named three ways, and every command takes any of them: a publishe
   `aip runs <run_id>` shows one step by step.
 - **Report the result** from `result`, in the task's terms, and say which procedure ran.
 - **Do not publish, pin or retire** anything unless asked; those change the catalog for everyone.
-- **A task no one procedure covers** can go to the orchestrator, when the user wants it run
-  unattended: `aip runah assist -i '{"task": "...", "outcome": ""}'` runs the procedures that fit
-  one after another, builds one with `build_procedure` when none does, and ends with the answer or
-  a question for the person in `result.note`. It needs runah's model (`aip config runah`), and
-  `--budget-tokens N` bounds what it spends; every run it starts is listed under it in
-  `aip runs <run_id>`.
+- **A task no one procedure covers** can go to `aip agent`, when the user wants it run
+  unattended: `aip agent "<task>"` runs the procedures that fit one after another, builds one
+  with `build_procedure` when none does, and prints the answer or a question for the person;
+  `aip agent "<their reply>"` in the same shell carries on. It needs its own model (`aip config
+  agent`); every run it starts is in `aip runs --session <the session it prints>`.
 
 ## Write a procedure
 

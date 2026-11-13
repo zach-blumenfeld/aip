@@ -32,11 +32,10 @@ server: none (runs are not recorded; run `aip config server local` to record run
 decision model: none (a Decide fails the run with no_decision_model; run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other than TypeSafe's)
 batch: 10
 script timeout: 300 seconds per script
-runah:
+agent:
   model uri:   https://api.anthropic.com/v1
   model name:  claude-opus-5-5
-  model key:   none (`aip runah` refuses to start; `aip config runah --model-key KEY` (and `--model-uri URL --model-name NAME` for an endpoint other than Anthropic's), or AIP_RUNAH_MODEL_KEY)
-  per task:    at most 40 tool calls, 500000 tokens
+  model key:   none (`aip agent` refuses to start; `aip config agent --model-key KEY` (and `--model-uri URL --model-name NAME` for an endpoint other than Anthropic's), or AIP_AGENT_MODEL_KEY)
 ```
 
 The file is `~/.config/aip/config.json` (`AIP_CONFIG` moves it). Each setting has an
@@ -49,8 +48,7 @@ environment variable that overrides the file for one command:
 | the decision model's key | `--decision-model-key KEY` | `AIP_DECISION_MODEL_KEY` | none: a `Decide` fails the run |
 | `For` passes run at once | `--batch N` | `AIP_BATCH` | 10 |
 | seconds one script may run | `--script-timeout N` (`0` or `none`: no cap) | `AIP_SCRIPT_TIMEOUT` | 300 |
-| runah's chat model | `runah --model-uri URL --model-name NAME --model-key KEY` | `AIP_RUNAH_MODEL_URI`, `AIP_RUNAH_MODEL_NAME`, `AIP_RUNAH_MODEL_KEY` | `https://api.anthropic.com/v1`, `claude-opus-5-5`, no key |
-| runah's caps per task | `runah --max-tool-calls-per-task N --max-tokens-per-task N` | | 40 tool calls, 500000 tokens |
+| the chat model `aip agent` asks | `agent --model-uri URL --model-name NAME --model-key KEY` | `AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`, `AIP_AGENT_MODEL_KEY` | `https://api.anthropic.com/v1`, `claude-opus-5-5`, no key |
 
 An empty string forgets a setting (`aip config --decision-model-key ""`); `aip config --clear`
 forgets them all. Keys are never printed. `aip config server local` records runs on this
@@ -60,10 +58,9 @@ interface and it stops when idle ([`docs/server-design.md`](server-design.md), T
 aip calls no chat model unless you ask it to. A `Decide` step asks the decision model, as it
 always has, and that is a model of one narrow kind: questions in, typed answers with their
 confidence out. Everything else a model might do in a run, the `Task_Agent` steps, is handed to
-whoever runs the procedure. `aip runah` is the one exception, and you choose it per command: a
-small harness the runtime can host for you, which takes the agent's turns and stops where a
-person must answer. The procedure still decides what happens, and the record still says who
-answered each task.
+whoever runs the procedure. The runtime never calls a chat model for them. `aip agent` is a
+small harness that ships with aip and drives runs from outside, as any agent does: it answers
+each pause with one call to the model you configured, and the record says it answered.
 
 ## Run a procedure
 
@@ -214,55 +211,34 @@ help: `resumable` is false and the run is over. An error before any step ran (in
 fit `Start`, a target that cannot be found or compiled) writes no run file: fix it and `aip run`
 again. `aip resume` on a run that is done answers `not_paused`.
 
-## runah: run ahead
+## aip agent: hand over the whole task
 
-`aip runah` runs a procedure as `aip run` does and keeps going, with a chat model answering each
-`Task_Agent` task:
+`aip agent` does a task with the catalog's procedures, with a chat model of your choosing
+answering every pause. It drives the `assist` procedure from outside the run, as any agent does
+with `aip run` and `aip resume`:
 
 ```
-aip config runah --model-key KEY
-aip runah <folder | bundle.rl | name[@rev]> -i '{...}' [--human STEP,STEP]
-aip runah <run_id> [--answers '{...}'] [--human STEP,STEP]
+aip config agent --model-key KEY
+aip agent "count the lines mentioning refund in each .txt file in ./notes"
+aip agent "the notes are in ./meeting-notes"         # the same shell: the reply to its question
 ```
 
 - It refuses before starting when no model key is configured (`invalid_input`, naming the
-  config line), so it never starts a run it cannot carry.
-- Scripts, `Decide` steps, routes and loops run exactly as in `aip run`.
-- At a task, unless its step is named in `--human`, the model answers it in one short chat with
-  five tools confined to the run's working directory: `read_file`, `list_files`, `search`,
-  `write_file` and `compile` (the procedure's own files are readable as `bundle:<path>`). Its
-  answer is checked exactly as a resume's; a refused answer goes back to the model with the
-  reasons, up to three times. A pause with several tasks is one chat per task, and the answers go
-  in together.
-- It stops at a `--human` step, at the end, at an error, or when the model gives up (a fourth
-  refused answer, its tool-call or token cap for the task, an endpoint that keeps failing), and
-  prints the same paused, done or error object as `aip run`. A pause it did not answer carries
-  `answerer`: `{"answered": false, "step", "reason"}`, with what the model spent when it tried.
-- `--human` is kept by the run, so a later `aip runah <run_id>` need not repeat it; given again it
-  replaces the list (`""` for none). Given a run id, `--answers` go into the standing pause
-  first; with none, the model answers that pause, or a failed step is retried.
-- `run`, `resume` and `runah` mix on one run: answer a human step with `aip resume` and the run
-  pauses at the next task; answer it with `aip runah <run_id> --answers ...` and the model carries
-  on.
+  config line).
+- `assist` searches the catalog, runs what fits, builds a procedure with `build_procedure` when
+  nothing does, publishes it under a new name and runs it, and finishes with a note: the result,
+  or a question for you. Your next `aip agent` in the same shell is the reply (`--new` starts
+  over, `--session ID` picks a session).
+- The model answers each pause in one call, with no tools: the pause's prompt, state and the text
+  of the files it references are the whole message, and its JSON answer goes in through `resume`.
+  A refused answer goes back to it with the reasons, up to three times; then the run is left
+  paused and the command says where.
+- Every run it starts, `assist`'s and the ones beneath it, is recorded as agent `agent` in the
+  session it prints, so `aip runs --session ID` shows all of it. Each answer is recorded as
+  `answered_by: {"agent": "agent", "model": <the id the endpoint reported>}` with its tokens,
+  `work: "reported"`.
 
-A task the model answered is recorded with `answered_by: {"agent": "runah", "model": <the id the
-endpoint reported in its reply, not the configured name>}`, its tool calls (name, a summary of
-the arguments, seconds), its tokens, and `work: "observed"`. The run's own `agent` stays whoever
-launched it. The model's endpoint is any that serves OpenAI Chat Completions; the details are in
-[`docs/runah.md`](runah.md).
-
-Two bounds matter when runs start other runs, as the orchestrator `assist` does (`aip runah
-assist -i '{"task": "...", "outcome": ""}'`; `docs/runah.md`, The orchestrator):
-
-- **Depth.** A run started from a script of another run is that run's child, one level deeper;
-  `aip runah` refuses to start one deeper than `aip config runah --max-depth N` (default 2) with
-  `depth_exceeded`. `aip run` is not bounded by it.
-- **Budget.** `aip runah ... --budget-tokens N` (or `aip config runah --budget-tokens N`, or
-  `AIP_RUNAH_BUDGET_TOKENS`) bounds the model tokens the run may spend, its children's included.
-  Past it the run fails with `budget_exhausted` before its next step; `aip runah <run_id>
-  --budget-tokens M` with a larger M carries it on. `aip runs <run_id>` shows what was spent,
-  `tokens  420 (own 0, children 420)   budget 400`, and lists each child under the step that
-  started it.
+The details, and what `assist` may and may not do, are in [`docs/agent.md`](agent.md).
 
 ## Where runs are kept, and how to look at them
 
@@ -297,8 +273,8 @@ end      End         -     22:55:31.016    0  message, reply
 result: {"message": "I was charged twice for March. Could you check?", "reply": "Sorry about that; duplicate charges are refunded in full within 5 business days."}
 ```
 
-(The `reply` row is the answer given with `--work` above; a runah answer reads `answered by
-runah (<model>), observed: ...`.) `aip runs` lists the server's runs when one is configured, else
+(The `reply` row is the answer given with `--work` above; an `aip agent` answer reads the same,
+`answered by agent (<model>), reported: ...`.) `aip runs` lists the server's runs when one is configured, else
 this machine's run files, and filters by `--name`, `--status`, `--agent`, `--session`, `--user`,
 `--draft` or `--published`; `aip runs <run_id> --json` prints the whole record.
 
@@ -331,8 +307,7 @@ against the procedure's `Requires`, and everything missing is named at once (`re
 
 One script may run for `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`; 300 by
 default; `0` or `none` for no cap). That is the only cap on a script, wherever one runs: `run`,
-`resume` and `runah` alike. It does not bound runah's model, which is capped per task by tool
-calls and tokens instead. A script past the cap fails the step with `timeout`, which names the
+`resume`, and the runs `aip agent` drives. A script past the cap fails the step with `timeout`, which names the
 setting and is resumable.
 
 A script runs as you, with your credentials, your files and your network. Running a procedure
@@ -397,7 +372,7 @@ The same runs, the same run files and the same record, from elsewhere:
   machine) and uses `aip run` and `aip resume` itself; `skills/aip/SKILL.md` is what it is told.
 - **Python**: `aip.Client` is the runtime as a library, and every command above is one of its
   calls ([`docs/sdk.md`](sdk.md)).
-- **MCP**: `aip mcp` serves `search`, `describe`, `compile`, `run`, `resume`, `runah` and `pull`
+- **MCP**: `aip mcp` serves `search`, `describe`, `compile`, `run`, `resume`, `agent` and `pull`
   as tools, each answering with the object the command prints ([`docs/mcp.md`](mcp.md)).
 - **A whole session**, from installing to two agents' runs side by side in the console, is
   [`docs/demo/local.md`](demo/local.md).

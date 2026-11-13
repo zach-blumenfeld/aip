@@ -68,15 +68,13 @@ loaded; read them when the prompt calls for it), `answer_with` (what to answer: 
 their types) and `labels` (for each `choice` or `score` among them, the values it may take).
 `hint` is one line on the shape of an answer to this pause.
 
-`aip runah` prints the same three objects (`docs/runah.md`). It pauses only where its model
-does not answer: at a human step (one named by `--human`, or with no `--human` one written for
-a person, `docs/runah.md`), or when the model gives up (its answer refused four times, its cap
-of tool calls or tokens reached, its endpoint failing). The paused object then carries
-`answerer`: `{"answered": false, "step", "reason"}`, at a human step `"human": "marked"` (written
-for a person) or `"listed"` (named by `--human`), and, when the model tried, the
-`task` it gave up on and what it spent (`tool_calls`, `tokens`, `model_seconds`, `refusals`).
-The pause is the same as any other: answer it with `aip resume` or `aip runah <run_id>
---answers JSON`, or run `aip runah <run_id>` with no answers to have the model try again.
+`aip agent --json` prints a different object, the outcome of a turn with its model
+(`docs/agent.md`): `session`, `status` (`done`, `paused` or `failed`), `run_id` (the run of
+`assist` it started), `note` (the result, or the question for the person), `result` when done,
+`pause` (the paused object above) and `reason` when its model's answer would not hold, `error`
+(the error object below) when the run failed, `runs` (every run it started) and `model_calls`
+and `tokens`. The runs themselves are ordinary runs, recorded as agent `agent`: `aip runs
+--session <session>` lists them, and their pauses and errors are the objects of this page.
 
 `aip resume --work JSON` adds what the answering agent says it spent to the task's history
 entry, marked `work: "reported"` (below); it changes nothing else in the object printed. A
@@ -301,14 +299,9 @@ and `run_file` when `resumable` is true.
 | `requires_unmet` | the machine lacks what the procedure's `Requires` names, checked before the first script runs | `missing` |
 | `no_decision_model` | a `Decide` step and this client has no decision model configured | |
 | `decision_model_failed` | the decision model failed on a `Decide` step (unreachable, refused the key, a bad reply) | `model`, `endpoint`, `cause` |
-| `budget_exhausted` | a runah run with a token budget (`aip runah --budget-tokens N`) has spent it, its children's tokens included; checked before each step and each task's chat, so `step` is the one it would have run next. Resumable: `aip runah <run_id> --budget-tokens M` with a larger M carries it on | `budget`, `spent` |
 | `loop_cap` | a `For` (or fold) given more items than `At_Most`, or an `Until` loop at its cap with `Else_Fail`; `step` is `null` and `loop` names the loop; never resumable | `loop`, `cap` (the most passes, or items, allowed), `count` (the passes run, or the items given) |
 | `not_paused` | `resume` with answers for a run that is not paused (a failed run is retried with none), or with none for a run that is done or that failed in a way a retry would only repeat (`loop_cap`, `script_not_run`) | |
 | `server` | anything else: a bug, an unreachable server | |
-
-`aip runah` refuses before anything runs, with `depth_exceeded` (no `run_id`), a run that would
-start deeper than `aip config runah --max-depth` (2): one started from a script of a run that was
-itself started from a script, and so on (`docs/runah.md`, The orchestrator).
 
 A step that failed while running leaves the run at the state before it, so
 `aip resume <run_id>` with no answers retries it once the cause is fixed. The retry runs the
@@ -469,10 +462,10 @@ value); for a `Task_Agent`, `answered_by` (the agent and session that answered);
 exit, `exit` (`until`, `items`, `times` or `cap`), `where` (`head`, or the step that produced
 the `Until` answer) and `iterations`. A loop's line has no `seconds`.
 
-With `aip runah` its model's work is reported too, before the entry of the task it answers: one `{"event": "tool", "step", "task", "tool", "args", "seconds"}` line per tool call
-(`args` is a summary: the path, the pattern, a written file's size, never its content; `error`
-when the tool refused), and `{"event": "refused", "step", "task", "errors"}` when an answer it
-gave did not hold and went back to it.
+`aip agent --progress` prints a line per step of the runs it drives (`{"event": "step", ...}`,
+the fields above), one per model call (`{"event": "answer", "step", "run_id", "tokens",
+"seconds"}`), and `{"event": "refused", "step", "run_id", "reason"}` when an answer did not hold
+and went back to the model.
 
 The lines of a `For` appear as its passes run, so a batch reports while it works: the
 classifications, the routes, a script, before the pause that follows. That is the order things
@@ -541,18 +534,6 @@ step it waits at and since when, a failed one with the error and whether a retry
 run paused inside a `For` lists the passes it has made so far, one row per entry as for a
 finished loop; only the loop's own exit row waits for the loop to end.
 
-A run started from a script of another run (the orchestrator, `docs/runah.md`) says so under its
-header, `parent    run 9ec32cfa18da40e3 at act pass 0   depth 1`, and a run whose scripts started
-runs lists each under the `Execute` row that started it, `  -> run 6ac661845f4944aa  slow  done`,
-with the tokens it spent when runah's model spent any. A run with a token budget, or whose
-model spent tokens, has a `tokens` line: the total, what was spent in the run and in its children,
-and the budget. In `--json` the same are `parent` (`{run_id, step, pass}`) and `depth`,
-`children` (`[{run_id, name, status, draft, step, pass, tokens, started}]`, absent when there are
-none), `tokens` (`{own, children, total}`) and `budget_tokens`. A script that starts a run and
-must not outlive its own cap waits on the child's run file, or on a file the child's process
-writes when it stops, rather than on the call: `Client.runah` blocks until the run stops, and a
-child can take longer than the cap (`assist`'s `act` does this).
-
 ## `aip audit` and `aip export runs`
 
 `aip audit` lists the server's audit queries, one per line with what it answers, and `aip audit
@@ -592,9 +573,7 @@ top: `run_id`, `bundle_id` (once, here; the bundle is in the cache under that id
 none is a draft's),
 `workdir` (the run's working directory; `aip runs <run_id> --json` prints it, and the server's
 record keeps it), `server` and `recorded` (where it is recorded, and whether the last stop got
-there), `human` (the steps `aip runah` leaves to a person, kept for the run's later calls) and
-`human_source` (`marked` when no `--human` chose them, else `listed`),
-`scripts` (false for a trial, which executes no script and is not recorded), `created` and
+there), `scripts` (false for a trial, which executes no script and is not recorded), `created` and
 `updated` (the file's own times), and `run`, which holds:
 
 | key | what |
@@ -630,7 +609,7 @@ show them in place already, so a paused loop's work is always in the record. Per
 | `Route` | `read` (the dotted key it routed on, for lineage; `input` has the answer under its short name), `check` (`null` without a `Confidence_Below`; else `below`, `confidence`, `fired`, and when it fired `reason`: `below`, or `absent` for a script's answer with no confidence), `value` (the branch word taken, `null` when the check fired) and `to`. Its `result` is empty: a route produces nothing |
 | `Aggregate` | `resolutions`: per aggregation, each answer's `source`, `value`, `holds`, `probability` (the probability the answer put on the condition, the number a `With Confidence_Above` bar reads; `null` for an answer that has none) and `barred` |
 | `Execute` | `script` and `stdin` |
-| `Task_Agent` | `prompt` and `references` as handed over; `answered_by` (`{"agent", "session"}`: who resumed with the answer, or `{"agent": "runah", "model": ID}` when runah's model answered, `ID` being the model the endpoint said answered); `waited_seconds`, from the pause to the answer. The entry is written when the answer is accepted. What answering took, when it is known, is marked `work`: `"observed"` for a task runah's model answered, which has `tool_calls` (`[{"name", "args", "seconds"}]`, `error` on a call a tool refused), `tokens` (`{"prompt", "completion", "total"}`), `model_seconds` (its calls alone) and `refusals`; `"reported"` for an answer given with `aip resume --work`, which has what the agent said: `model` in `answered_by`, `tool_calls` (a count, or a list as above), `tokens` (at least `total`) and `work_seconds` |
+| `Task_Agent` | `prompt` and `references` as handed over; `answered_by` (`{"agent", "session"}`: who resumed with the answer; `aip agent`'s answers are `{"agent": "agent", "session", "model": ID}`, `ID` being the model the endpoint said answered); `waited_seconds`, from the pause to the answer. The entry is written when the answer is accepted. What answering took, when it is known, is marked `work: "reported"`: an answer given with `aip resume --work` (or by `aip agent`, which reports its model's tokens and seconds) has what the agent said: `model` in `answered_by`, `tool_calls` (a count, or a list as above), `tokens` (at least `total`) and `work_seconds` |
 | `For`, `Loop` | written when the loop exits: `result` holds `iterations` and a `For`'s collected list; `exit` has `reason` (`until`, `items`, `times`, `cap`), `where` (`head`, or the step or loop that produced the `Until` answer) and that answer's `resolution`. A loop that fails the run at its cap writes it too, with `reason: cap`. No `seconds` |
 
 The first entry a `Loop Until` pass writes at the loop's own level also carries `until`, the test

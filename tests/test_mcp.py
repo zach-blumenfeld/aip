@@ -85,13 +85,12 @@ def test_the_server_offers_seven_tools_and_says_how_to_use_them():
     async def script(call, client):
         return (await client.list_tools()).tools, client.server_info, client.instructions
     tools, info, instructions = over(build(aip.Client()), script)
-    assert [t.name for t in tools] == list(TOOLS) == ["search", "describe", "compile", "run", "resume", "runah", "pull"]
+    assert [t.name for t in tools] == list(TOOLS) == ["search", "describe", "compile", "run", "resume", "agent", "pull"]
     assert all(t.description and len(t.description) > 80 for t in tools), "the description is what the caller's model reads"
     by_name = {t.name: t.input_schema for t in tools}
     assert by_name["run"]["required"] == ["target"] and set(by_name["run"]["properties"]) == {"target", "inputs", "session", "batch", "workdir"}
     assert by_name["resume"]["required"] == ["run_id"] and set(by_name["resume"]["properties"]) == {"run_id", "answers", "work"}
-    assert by_name["runah"]["required"] == ["target"] and set(by_name["runah"]["properties"]) == {
-        "target", "inputs", "answers", "human", "session", "workdir"}
+    assert by_name["agent"]["required"] == ["task"] and set(by_name["agent"]["properties"]) == {"task", "session"}
     assert (info.name, info.version) == ("aip", aip.__version__)
     assert instructions == INSTRUCTIONS and "`resume`" in instructions
 

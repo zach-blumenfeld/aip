@@ -54,9 +54,7 @@ kind: a `Decide` entry `answered_by` (`{"model": name, "endpoint": url}`), `hist
 (`below`, `confidence`, `fired`, and `reason` when it fired: `below` or `absent`), `value` and
 `to`; an `Aggregate` entry `resolutions` per aggregation; an `Execute` entry `script` and
 `stdin`; a `Task_Agent` entry the `prompt` and `references` it was given, `answered_by`
-(`{"agent", "session"}`, or `{"agent": "runah", "model"}` when runah's model answered it, which
-adds `work: "observed"`, `tool_calls`, `tokens`, `model_seconds` and `refusals`:
-`aip.model.answerer`; an outside agent that reports its work adds `work: "reported"` and what it
+(`{"agent", "session"}`; an agent that reports its work adds `work: "reported"` and what it
 reported, `model` in `answered_by`, `tool_calls`, `tokens`, `work_seconds`) and
 `waited_seconds` (pause to resume). The first entry a `Loop` pass
 writes at the loop's level carries `until`, the test at the head that let the pass run
@@ -212,20 +210,17 @@ class Engine:
     runs no script: an `Execute` fails the run with `script_not_run` before its script starts (a
     trial: `Decide`, routes and loops run, a `Task_Agent` pauses as usual). `script_env(run)` gives
     the variables a script is started with beyond this process's own (the client's: which run
-    it is part of, the depth and the budget a run it starts inherits); the engine adds
-    `AIP_STEP` and `AIP_PASS`, the step and its innermost pass. `guard(run, step)` is called
-    before every step but `End` and may raise a `StepError` (the client's token budget,
-    `budget_exhausted`), which fails the run at that step as any step's error does."""
+    it is part of, who runs it); the engine adds `AIP_STEP` and `AIP_PASS`, the step and its
+    innermost pass."""
 
     def __init__(self, resolver: Resolver | None = None, *, home: Path | None = None, python: str | None = None,
                  timeout: float | None | Any = DEFAULT_TIMEOUT, workdir: Path | None = None, batch: int = DEFAULT_BATCH,
                  clock: Callable[[], str] = utc_now, timer: Callable[[], float] = time.monotonic,
                  on_entry: Callable[[JSON], None] | None = None, scripts: bool = True,
-                 script_env: Callable[[Run], JSON] | None = None, guard: Callable[[Run, str], None] | None = None):
+                 script_env: Callable[[Run], JSON] | None = None):
         self.resolver = resolver
         self.scripts = scripts
         self.script_env = script_env
-        self.guard = guard
         self.home = home
         self.python = python
         self.timeout = script_timeout() if timeout is DEFAULT_TIMEOUT else timeout
@@ -261,10 +256,9 @@ class Engine:
         nothing the pause did not ask for (a key, a task index, a field on an answer). Anything
         else raises `InvalidOutput` naming all of it, nothing is applied, and the pause stands.
         `identity` is who answers (`agent`, `session`), the run's own when not given. `answered`
-        holds, per task index, fields for that task's entry: an `answered_by` of its own (runah's
-        model) or a `model` to add to the identity's (one an outside agent reports), and what
-        answering cost, marked `work`: `observed` (runah: `tool_calls`, `tokens`, `model_seconds`,
-        `refusals`) or `reported` (an outside agent's word: `tool_calls`, `tokens`, `work_seconds`)."""
+        holds, per task index, fields for that task's entry: a `model` to add to the identity's
+        (the one the agent reports), and what answering cost, marked `work: "reported"` (the
+        agent's word: `tool_calls`, `tokens`, `work_seconds`)."""
         if run.status != PAUSED or run.pause is None:
             raise NotPaused(None, f"the run is {run.status}; only a paused run takes an answer")
         began = self.timer()
@@ -319,16 +313,6 @@ class Engine:
             run.pause, run.status = None, RUNNING
         return self._settle(run)
 
-    def check_answer(self, run: Run, task: JSON, answer: Any) -> JSON:
-        """One task's answer checked as `resume` checks it, applying nothing: the produced keys,
-        or `InvalidOutput` naming what does not hold."""
-        _, step = self._locate(run, task)
-        return steps.check_outputs(run.procedure, step, answer, source="agent")
-
-    def files(self, procedure: Procedure) -> Path:
-        """Where the bundle's files are unpacked (once per bundle id)."""
-        return self._root(procedure)
-
     def retry(self, run: Run) -> Run:
         """Run the step that failed again, from the state before it. A failure a retry cannot
         change (`loop_cap`) is not retried."""
@@ -372,8 +356,6 @@ class Engine:
         began = self.timer()
         state = cursor.view()
         if step.kind != "End":                 # End takes what the path produced (steps.end)
-            if self.guard is not None:
-                self.guard(run, step.name)
             steps.check_reads(procedure, step, state)
         match step.kind:
             case "End":

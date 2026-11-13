@@ -1,9 +1,9 @@
 # edit_procedure/procedure.aip
 #
-# The procedure that changes a procedure as an instruction says, meant to be run ahead
-# (`aip runah edit_procedure ...`). A script keeps the folder as it
-# is, the model rewrites it, the compile-and-fix loop runs until it compiles (`At_Most 5`: four
-# checked fixes), and a script shows the change as a unified diff against what was kept.
+# The procedure that changes a procedure as an instruction says. A script keeps the folder as it
+# is and reads the documents, the agent answers with the files it rewrites (it needs no tools) and
+# a script writes them, the compile-and-fix loop runs until it compiles (`At_Most 5`: four checked
+# fixes), and a script shows the change as a unified diff against what was kept.
 #
 # It ships inside the package as a bundle (src/aip/server/bundles/edit_procedure.rl, compiled
 # from this folder), as make_procedure does.
@@ -13,7 +13,7 @@ Procedure edit_procedure
 
   Use_When
     "An existing procedure folder is to be changed: a step added, a rule moved, a branch rerouted."
-    "A chat model is to make the change: run it with `aip runah edit_procedure ...`."
+    "An agent is to make the change, with the language page this procedure hands it."
   Do_Not_Use_When
     "A new procedure is to be built: use build_procedure."
   Requires python 3.10
@@ -28,20 +28,30 @@ Start "The procedure to change, what to change, and any documents the change is 
   Next_Step snapshot
 }
 
-Execute snapshot "Keep the folder as it is now, to compare the change with, and list the documents." {
+Execute snapshot "Keep the folder as it is now, to compare the change with, and read the documents." {
   Read folder, documents
   Run_Script scripts/snapshot.py
   Produce path:   string "The procedure's folder, relative to the working directory."
           source: string "Its procedure.aip as it is now."
           before: object "Every text file of the folder as it is now, by its path in the folder."
           files:  list   "The documents' paths, relative to the working directory."
+          texts:  string "The documents' text, each under a heading with its path."
   Next_Step rewrite
 }
 
 Task_Agent rewrite "Change the procedure as the instruction says." {
-  Read path, source, instruction, files
+  Read path, before, instruction, files, texts
   Prompt assets/rewrite.md
-  Produce changes: string "What was changed and why, in a few lines, and for each script written or changed what it touches outside the working directory."
+  Use references/language.md "The AIP language on one page: the law for what the folder holds."
+  Produce changes:   string "What was changed and why, in a few lines, and for each script written or changed what it touches outside the working directory."
+          rewritten: object "The files written or changed, by their path in the folder, each as its whole new text; null removes one."
+  Next_Step write
+}
+
+Execute write "Write the rewritten files into the folder." {
+  Read path, rewritten
+  Run_Script scripts/write.py
+  Produce saved: list "The files written or removed, by their path in the folder."
   Next_Step revise
 }
 
@@ -52,13 +62,23 @@ Loop revise Until compiled, At_Most 5, Else_Fail {
     Produce compiled:    true_or_false "Whether the folder compiles with no error."
             diagnostics: list          "The compiler's diagnostics, one line each: where, severity, code, message."
             bundle_id:   string        "The id of the bundle the folder compiles to; empty when it does not compile."
+            contents:    object        "Every text file of the folder as it is now, by its path in the folder."
     Next_Step fix
   }
 
   Task_Agent fix "Fix what the compiler reported, keeping the change the instruction asked for." {
-    Read path, diagnostics, instruction
+    Read path, diagnostics, instruction, contents
     Prompt assets/fix.md
-    Produce fixed: string "What was fixed, in a line or two."
+    Use references/language.md "The AIP language on one page."
+    Produce fixed:   string "What was fixed, in a line or two."
+            repairs: object "The files to replace, by their path in the folder, each as its whole new text."
+    Next_Step apply
+  }
+
+  Execute apply "Write the repaired files into the folder." {
+    Read path, repairs
+    Run_Script scripts/write.py
+    Produce applied: list "The files written, by their path in the folder."
     Continue
   }
 

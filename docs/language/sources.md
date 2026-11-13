@@ -180,23 +180,13 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 
 ## What A1 left (2026-11-10)
 
-- **The answerer is `src/aip/model/answerer/`**, driven from `aip.sdk.Client._settle`; `docs/answerer.md`
-  was the design (A2 made it `aip runah` and `docs/runah.md`, below). Its endpoint on this machine
-  came from the shell (`AIP_AGENT_MODEL`, `AIP_AGENT_MODEL_KEY`, `AIP_AGENT_MODEL_NAME`; since A2
-  `AIP_RUNAH_MODEL_URI`, `AIP_RUNAH_MODEL_KEY`, `AIP_RUNAH_MODEL_NAME`: Anthropic's OpenAI-compatible
-  `https://api.anthropic.com/v1`, `claude-opus-5-5`), not from `aip config`. `tests/conftest.py`
-  clears them for every test; `tests/test_answerer.py` reads them at import, so with the key set
-  `uv run pytest -q` makes one real call (the angry branch of billing-support-agent, about a second).
-- **Three built-ins ship now** (`build_procedure`, `edit_procedure`, `make_procedure`); the
-  counts in `tests/test_make_procedure.py`, `test_local_server.py`, `server/test_contract.py`
-  and `console/e2e/catalog.spec.ts` name them. Rebuild a `.rl` with the command in
-  `src/aip/server/builtins.py` when its folder changes.
-- **The proof's runs are in the local store** (`aip runs --agent a1-proof`); the folders the
-  model wrote are under `scratch/a1/work/` (`refund-handling/`, and `billing-support/` as
-  `edit_procedure` changed it), not committed.
-- **Not done:** the MCP tools take no `answer_with` (an outside agent answers its own pauses);
-  the console shows the model's entries as an agent's, without the tool calls (C4 is the chat
-  pane); open item 17, a language marker for human steps, is Zach's.
+- **Three built-ins shipped** (`build_procedure`, `edit_procedure`, `make_procedure`; `assist`
+  since R7); the counts in `tests/test_make_procedure.py`, `test_local_server.py`,
+  `server/test_contract.py` and `console/e2e/catalog.spec.ts` name them. Rebuild a `.rl` with the
+  command in `src/aip/server/builtins.py` when its folder changes.
+- A1's answerer (a chat model inside the run, `src/aip/model/answerer/`), A2's run-ahead verb,
+  R7's runs started from runs and R8's person marker were all removed by A3, below; their
+  history is in git (commits 18a540d, 9d49b53, d0bedb1, e6460bc).
 
 ## What C4 left (2026-11-10)
 
@@ -217,83 +207,37 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 - **Not done:** the real pass with the configured model is Zach's (the plan's proof says so); the
   page shows a run's tool calls in the pane but not on History's record of it.
 
-## What A2 left (2026-11-10)
+## What A3 left (2026-11-12)
 
-- **`aip runah` replaced `--answer-with model`**: `Client.runah` in `src/aip/sdk.py` (the run-or-run-id
-  dispatch is `_names_run`), the CLI verb, the MCP tool, `docs/runah.md`. Config is
-  `aip config runah` / `AIP_RUNAH_MODEL_*`; a file holding A1's `agent_model` is read as the same
-  block (`config._runah_block`). The record's model id is the reply's `model`, not the configured
-  name; Anthropic's endpoint echoes the name asked for.
-- **`scripts=False`** is the engine's `Engine(scripts=...)` and the run file's `scripts`; such a run
-  is never posted (`Client._record`). The script cap is `aip.model.environment.script_timeout`.
-- **`--work`** is `aip.sdk.reported_work`; the store keeps `work` and `work_seconds` on `Entry`, and
-  `agent-work` (`src/aip/server/audit.py`) is the thirteenth audit query.
-- **`build_procedure` takes a fourth input, `title`**, and its result a `procedure`; the console's
-  Studio renames the draft folder to it after the run (`console/bin/aip-console.mjs`). The Studio
-  has no run button, so "asks once" guards Save draft and Publish.
-- **The proof's runs are in the local store** (`aip runs --agent a2-proof`); the folder the model
-  built is `scratch/a2/build/inbox/`, not committed.
-- **Not done:** Zach's Studio pass on a brief that needs a script (the proof's last step).
-
-## What R7 left (2026-11-12)
-
-- **The orchestrator is `examples/language/assist`** (shipped as `src/aip/server/bundles/assist.rl`)
-  and `examples/harness/assist.py`; `docs/runah.md`, The orchestrator, is the design. `assist`'s
-  `act` script (`scripts/runah.py`) is the only place with verbs: it starts each child in a
-  detached process of its own (`runah.py --child <order>`) that writes the outcome to
-  `<workdir>/.assist/<run id>.json`, and waits on that file within the script cap. A child has
-  no run file until its first stop, so `act` knows its own children by the order files there.
-- **Lineage is the engine's script environment plus the client's run file.** `Engine(script_env=,
-  guard=)` (`aip.model.engine`), filled by `aip.sdk._Lineage`: `AIP_RUN_ID`, `AIP_STEP`,
-  `AIP_PASS`, `AIP_RUNAH_DEPTH`, `AIP_RUNAH_BUDGET_TOKENS` (what is left), `AIP_HOME`, the
-  parent's `AIP_AGENT`/`AIP_SESSION`; `steps.run_script` adds `AIP_SCRIPT_TIMEOUT`. A run file
-  has `parent`, `depth`, `budget_tokens`, `tokens`; a parent's children are listed in
-  `~/.aip/runs/children/<run id>` (`aip.client.runs.add_child`). The store links `SPAWNED` from
-  either side (`LINK_TO_PARENT`, `LINK_TO_CHILDREN` in `store.py`). `tests/conftest.py` clears
-  the five variables, since a test run from inside an aip script would inherit them.
-- **The budget is checked before each step and each task's chat, not at `End`**: a run that
-  passes it on its last step is done, its record showing the sum.
-- **Choices made against the plan's text**, each a default: `assist` has a `search` step before
-  the loop (the plan's sketch had no way for `plan` to see the catalog); what `build_procedure`
-  builds is **published under its new name** (a revision, so the next search finds it, as the
-  proof requires), and only a taken name goes up as a draft run by its folder; the plan step has
-  runah's five workdir tools like any task (aip has no per-step tool switch), but no aip verb.
-- **The proof's runs are in the local store** (`aip runs --agent r7-proof`): `build_procedure`
-  run `fcef914bd57946fa` published `refund_line_counter@1`; sessions `r7-harness-2` and `-3` found
-  it and built nothing; `assist` run `d3dda909b77940ea` (session `r7-assist-1`) has it as its child.
-  The folder it built is `scratch/r7/proof/refund_line_counter/`, not committed.
-- **Found, not fixed:** a model-written script resolved a relative path against its own
-  directory (scripts run with the unpacked bundle as their current directory), not against
-  `AIP_WORKDIR` as `references/language.md` says, so the first two harness runs answered "no
-  folder notes". The third, with the full path in the task, counted right. Either the drafter's
-  prompt says it louder or the engine starts scripts in the working directory: Zach's call.
-- **Not done:** the MCP `runah` tool takes no `budget_tokens`; no e2e spec runs `assist` itself
-  (`e2e/orchestrated.spec.ts` checks a parent and its child on the run pages).
-
-## What R8 left (2026-11-12)
-
-- **Human steps by default are `aip.model.answerer.human_steps(bundle)`** (`human.py`): a
-  `Task_Agent` whose prompt opens "This is a task for a person, not for you" or whose description
-  says "a person"/"the person" (or "a human") does it. The SDK applies it when `human` is None
-  (so the CLI, the MCP tool and `examples/harness/assist.py` all get it); `none` or `[]` is none.
-  The run file keeps `human` and `human_source` (`marked`/`listed`); a paused object's
-  `answerer.human` says which. `describe` (local and the server's, `describe_bundle`, and filled
-  in on read for a bundle stored before R8) carries `human_steps`; the console's picker reads it
-  and keeps no rule. **The description rule is loose**: `assist`'s `plan` was caught by "a
-  question for the person" in its description and had to be reworded; a drafter writing a
-  description that mentions the person makes the step a person's.
-- **`assist`'s `plan` answers `action: choice [run, ask, done]`** (was `done: true_or_false`);
-  `Until action == done`, a `Route next_move` on it, and `ask_person` (prompt `assets/ask.md`,
-  opening with the marker) produces `outcome` and `Continue`s. The audit `agent-routes` now lists
-  `assist`'s route among the built-ins (`tests/test_local_server.py` leaves it out).
-- **Scripts start in `AIP_WORKDIR`** (`steps.run_script`, which creates it if missing);
-  `AIP_BUNDLE` is the unpacked bundle; a `Command` argument naming a bundle file is made its path
-  under the bundle (`steps.launch`). R7's `refund_line_counter` counted `./notes` right with no
-  full path in the R8 proof.
-- **The proof's run is in the local store**: `assist` run `9623a175feca48ff` (agent `r8-proof`,
-  session `r8-assist-1`), paused at `ask_person` after its first child found no `./meeting-notes`,
-  answered with `aip runah 9623a175feca48ff --answers`, done with monday 2, tuesday 0, wednesday 3.
-  The driver is `scratch/r8/proof.py`, not committed.
+- **`aip agent` is `src/aip/agent.py`** (`docs/agent.md`): `Client.ask` runs `assist` and answers
+  each pause with one call to `aip.chat.ChatClient` (moved from the removed answerer package), no
+  tools, then `resume`. Sessions are `~/.aip/agent/` (`shells/<ppid>`, `sessions/<id>.json`).
+  Config is `aip config agent` / `AIP_AGENT_MODEL_URI`, `_NAME`, `_KEY`; this machine's shell sets
+  `AIP_AGENT_MODEL_KEY` and `AIP_AGENT_MODEL_NAME`, and a config file's blocks from earlier 0.9
+  checkouts (A1's `agent_model`, A2's) are no longer read. `tests/conftest.py` clears the three for every test;
+  `tests/test_agent.py` drives everything with a scripted stand-in model, so no key is needed.
+- **The runtime passes `AIP_AGENT` and `AIP_SESSION` to scripts** (`Client._script_env`), with
+  `AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS`, `AIP_HOME`: that is how the runs `assist`'s `act` starts
+  are the same agent's and session's. Nothing links a child run to its parent any more.
+- **A `choice` reaches a script as its answer object** (`{"value": "run"}`, spec 2.4), so
+  `act.py` reads `verb["value"]`; a script reading a choice must do the same.
+- **The builders hand over text and write what they get back**: `prepare`/`snapshot` read the
+  documents into `texts`, `compile` hands back the folder as `contents`, `draft`/`rewrite`/`fix`
+  answer `{path: text}` objects that `scripts/write.py` writes. Each builder carries the language
+  page as `references/language.md`, held equal to the skill's by `tests/test_skill.py`.
+- **The live proof ran on an isolated store** (`scratch/a3/proof.py`, not committed: `AIP_HOME`,
+  `AIP_LOCAL_DATA` under `scratch/a3/state`, port 8293, the notes in `scratch/a3/proof/`). Session
+  `agent-20261112-202808-6b9e`: `assist` `c06b51983554455d` ran `build_procedure` `8faee3ee26244326`,
+  published `count_mentions@1`, ran it (`727c321086a54db8`), monday 2, tuesday 0, wednesday 3; the same
+  task again (`b8e54f2c7a2043e0`) built nothing and answered from that run in one model call. Session
+  `agent-20261112-202918-fd8d`: `./meeting-notes` ran `count_mentions` straight away, which failed,
+  and finished with a question; the reply ran it on `./notes` with the right counts. A first attempt
+  (`scratch/a3/attempt1/`) found `act`'s publish taking a folder named like the procedure for a
+  taken catalog name; fixed, with a test.
+- **The console still calls the run-ahead verb** (its launcher, the Studio, the run console's
+  picker and their e2e specs): it is C6's to move onto `aip agent`-style driving, so the console's
+  e2e suite fails on the Studio and Run specs until then. Old run files with R7's keys still load
+  (`RunFile.load` drops keys it does not know).
 
 ## Agent frameworks (track D2)
 

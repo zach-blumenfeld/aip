@@ -1,10 +1,12 @@
 # build_procedure/procedure.aip
 #
-# The procedure that builds a procedure from a brief and a folder of documents, meant to be
-# run ahead (`aip runah build_procedure ... --human ask_user`): runah's model reads, writes and
-# reviews; a person answers its questions; scripts list the documents, compile the folder and
-# try it once without running any of the scripts the model wrote. It uses no decision model:
-# the loops watch answers the model and the compiler give.
+# The procedure that builds a procedure from a brief and a folder of documents. Whoever runs it
+# answers its tasks: an agent reads, writes and reviews, and answers `ask_user` itself from the
+# brief or takes it to a person (`aip agent` answers them all with its model; the console's Studio
+# hands `ask_user` to the person). Scripts read the documents, write the files the agent answers
+# with (the agent needs no tools), compile the folder and try it once without running any of the
+# scripts it wrote. It uses no decision model: the loops watch answers the agent and the compiler
+# give.
 #
 # Two loops, both in the one shape: the check inside the loop, `Until` watching its answer.
 # `clarify` extracts the rules and asks a person what they leave open; it ends the moment the
@@ -20,7 +22,7 @@ Procedure build_procedure
 
   Use_When
     "A new procedure is to be built from a brief and source documents (a policy, a runbook, a handbook), with a person answering what the documents leave open."
-    "A chat model is to do the writing: run it with `aip runah build_procedure ... --human ask_user`."
+    "An agent is to do the writing, with the language page this procedure hands it."
   Do_Not_Use_When
     "An existing procedure is to be changed: use edit_procedure."
   Requires python 3.10
@@ -36,17 +38,18 @@ Start "What to build, from what, and where to write it." {
   Next_Step prepare
 }
 
-Execute prepare "List the documents, tidy the name the requester gave, and open an empty record of the person's answers." {
+Execute prepare "Read the documents, tidy the name the requester gave, and open an empty record of the person's answers." {
   Read documents, title
   Run_Script scripts/prepare.py
   Produce files:   list   "The documents' paths, relative to the working directory."
+          texts:   string "The documents' text, each under a heading with its path."
           name:    string "The requester's name for the procedure, lowercase, with underscores; empty when they gave none."
           answers: string "The person's answers to the questions so far; none yet."
   Next_Step read_documents
 }
 
 Task_Agent read_documents "Read the documents and write down what they say that bears on the brief." {
-  Read brief, files
+  Read brief, files, texts
   Prompt assets/read_documents.md
   Produce notes: string "What the documents say that bears on the brief: rules, limits, roles, cases, each with the file it is from."
   Next_Step clarify
@@ -72,11 +75,20 @@ Loop clarify Until settled, At_Most 2, Else_Exit {
   Next_Step draft
 }
 
-Task_Agent draft "Name the procedure, write its folder from the rules, and check it with the compiler." {
+Task_Agent draft "Name the procedure and write its folder from the rules." {
   Read brief, notes, rules, answers, out, name
   Prompt assets/draft.md
-  Produce path:      string "The procedure's folder as written, relative to the working directory."
-          procedure: string "The procedure's name, as its header says."
+  Use references/language.md "The AIP language on one page: the law for what the folder holds."
+  Produce procedure: string "The procedure's name, as its header says."
+          drafted:   object "Every file of the folder, by its path in the folder, as its whole text."
+  Next_Step write
+}
+
+Execute write "Write the drafted files into the folder." {
+  Read out, drafted
+  Run_Script scripts/write.py
+  Produce path:  string "The procedure's folder, relative to the working directory."
+          saved: list   "The files written, by their path in the folder."
   Next_Step revise
 }
 
@@ -87,13 +99,22 @@ Loop revise Until compiled, At_Most 5, Else_Fail {
     Produce compiled:    true_or_false "Whether the folder compiles with no error."
             diagnostics: list          "The compiler's diagnostics, one line each: where, severity, code, message."
             bundle_id:   string        "The id of the bundle the folder compiles to; empty when it does not compile."
+            contents:    object        "Every text file of the folder as it is now, by its path in the folder."
     Next_Step fix
   }
 
-  Task_Agent fix "Fix what the compiler reported, in the folder, keeping to the rules." {
-    Read path, diagnostics, rules
+  Task_Agent fix "Fix what the compiler reported, keeping to the rules." {
+    Read path, diagnostics, rules, contents
     Prompt assets/fix.md
-    Produce path: string "The procedure's folder, as fixed."
+    Use references/language.md "The AIP language on one page."
+    Produce repairs: object "The files to replace, by their path in the folder, each as its whole new text."
+    Next_Step apply
+  }
+
+  Execute apply "Write the repaired files into the folder." {
+    Read path, repairs
+    Run_Script scripts/write.py
+    Produce applied: list "The files written, by their path in the folder."
     Continue
   }
 
@@ -109,7 +130,7 @@ Execute test_run "Try the new procedure once on example inputs, running none of 
 }
 
 Task_Agent review "Read the procedure once more against the rules and say what it does not cover." {
-  Read path, rules, test_report
+  Read path, rules, test_report, contents
   Prompt assets/review.md
   Produce review: string "What the procedure covers, what it does not, what each script touches outside the working directory, and what a person should check before it is published."
   Next_Step end

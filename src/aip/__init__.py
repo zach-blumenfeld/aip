@@ -6,11 +6,11 @@ __version__ = _version("agent-instruction-protocol")  # the distribution; the mo
 
 from aip.errors import AipError
 from aip.sdk import (
-    Client, Compiled, CompileError, DepthExceeded, Description, Done, InvalidBundle, InvalidInput, NoServer, NotFound, Paused, RetiredRevision,
-    RunError, ServerError, Task, configure, configure_runah, settings,
+    Client, Compiled, CompileError, Description, Done, InvalidBundle, InvalidInput, NoServer, NotFound, Paused, RetiredRevision,
+    RunError, ServerError, Task, configure, configure_agent, settings,
 )
 
 __all__ = [
-    "AipError", "Client", "Compiled", "CompileError", "DepthExceeded", "Description", "Done", "InvalidBundle", "InvalidInput", "NoServer",
-    "NotFound", "Paused", "RetiredRevision", "RunError", "ServerError", "Task", "configure", "configure_runah", "settings",
+    "AipError", "Client", "Compiled", "CompileError", "Description", "Done", "InvalidBundle", "InvalidInput", "NoServer",
+    "NotFound", "Paused", "RetiredRevision", "RunError", "ServerError", "Task", "configure", "configure_agent", "settings",
 ]

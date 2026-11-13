@@ -1,7 +1,8 @@
-"""One HTTP client for runah's model: OpenAI Chat Completions with function calling
+"""The one chat call aip makes, for `aip agent` (`aip.agent`): OpenAI Chat Completions
 (`POST {url}/chat/completions`), the shape OpenAI, Anthropic (`https://api.anthropic.com/v1`),
 Gemini, Azure's v1 surface, Groq, Mistral, OpenRouter, Ollama and vLLM all serve. No provider
-SDK and no streaming: one request, one JSON reply, its first choice's message and its usage."""
+SDK and no streaming: one request, one JSON reply, its first choice's message and its usage.
+The runtime never calls it: a run pauses, and whoever drives the run answers."""
 
 from __future__ import annotations
 

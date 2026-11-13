@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""List the documents, tidy the name the requester gave, and open an empty record of the person's answers.
+"""Read the documents, tidy the name the requester gave, and open an empty record of the person's answers.
 
 stdin:  {"state": {"documents": str, "title": str}, "assets": {}, "expects": {...}}
-stdout: {"files": [str], "name": str, "answers": str}
+stdout: {"files": [str], "texts": str, "name": str, "answers": str}
 
 `documents` is a folder (or one file) relative to the run's working directory (AIP_WORKDIR), or
 an empty string for none; `files` lists the text files under it, relative to the working
-directory, so the agent reads them with the same paths. `name` is `title` lowercased, with
+directory, and `texts` holds each one's text under a `## <path>` heading, so the agent, which has
+no tools, reads them there (each file cut at 40000 characters, all of them at 200000, and the
+cut said). `name` is `title` lowercased, with
 every character a procedure name cannot hold made `_`, or an empty string when the requester
 gave none (the `draft` step then names the procedure from the brief's subject). A `documents`
 path that does not exist fails the step with the reason on stderr.
@@ -18,6 +20,25 @@ import sys
 from pathlib import Path
 
 TEXT = {".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".aip", ".py", ".html", ".rst"}
+PER_FILE, ALL = 40_000, 200_000
+
+
+def read_all(workdir: Path, files: list) -> str:
+    parts, total = [], 0
+    for name in files:
+        try:
+            text = (workdir / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            parts.append(f"## {name}\n\n(could not be read: {exc})")
+            continue
+        if len(text) > PER_FILE:
+            text = text[:PER_FILE] + f"\n\n(cut at {PER_FILE} characters)"
+        if total + len(text) > ALL:
+            parts.append(f"## {name}\n\n(left out: the documents passed {ALL} characters)")
+            continue
+        total += len(text)
+        parts.append(f"## {name}\n\n{text.strip()}")
+    return "\n\n".join(parts)
 
 
 def fail(message: str) -> None:
@@ -44,7 +65,7 @@ def main() -> None:
     name = re.sub(r"[^a-z0-9_]+", "_", str(state.get("title") or "").strip().lower()).strip("_")
     if name and not name[0].isalpha():
         name = "p_" + name
-    json.dump({"files": files, "name": name, "answers": ""}, sys.stdout)
+    json.dump({"files": files, "texts": read_all(workdir, files), "name": name, "answers": ""}, sys.stdout)
 
 
 main()

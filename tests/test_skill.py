@@ -90,11 +90,15 @@ def test_it_is_one_page():
     assert "make_procedure" in SKILL_MD.read_text(encoding="utf-8") and "references/language.md" in SKILL_MD.read_text(encoding="utf-8")
 
 
-def test_the_language_page_is_the_one_make_procedure_hands_over():
-    shipped = example_dir("make_procedure") / "assets" / "language.md"
+@pytest.mark.parametrize("copy", ["make_procedure/assets", "build_procedure/references", "edit_procedure/references"])
+def test_the_language_page_is_the_one_the_builders_hand_over(copy):
+    """make_procedure hands the page to the user's agent; build_procedure and edit_procedure
+    reference it from the steps that write a procedure, so `aip agent` sends it to its model."""
+    folder, sub = copy.split("/")
+    shipped = example_dir(folder) / sub / "language.md"
     assert shipped.read_text(encoding="utf-8") == LANGUAGE_MD.read_text(encoding="utf-8"), \
-        "skills/aip/references/language.md and examples/language/make_procedure/assets/language.md have drifted; copy one over " \
-        "the other, then compile make_procedure again (src/aip/server/builtins.py says how)"
+        f"skills/aip/references/language.md and examples/language/{copy}/language.md have drifted; copy one over " \
+        f"the other, then compile {folder} again (src/aip/server/builtins.py says how)"
 
 
 def test_the_language_page_survives_being_a_prompt():

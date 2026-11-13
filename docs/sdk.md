@@ -39,7 +39,7 @@ print(result.result)                                         # aip.Done: the End
 ```
 
 `run(target, inputs, *, batch=None, agent=None, session=None, workdir=None, on_step=None,
-on_pause=None, force=False, agent_version=None, on_warning=None, scripts=True, run_id=None)` runs a target until it stops. The target is a program directory (compiled
+on_pause=None, force=False, agent_version=None, on_warning=None, scripts=True)` runs a target until it stops. The target is a program directory (compiled
 here), an `.rl` bundle, or a catalog reference `name[@rev]` (fetched from the server, or from
 the bundle cache when `pull` put it there); every run runs on this machine from the bundle
 cache, and when a server is configured it is recorded there at every stop (a folder or file as
@@ -57,11 +57,7 @@ first `Execute`, before its script starts, with a `RunError` of kind `script_not
 usual; such a run is a trial and is not recorded on the server (`build_procedure` tries a draft
 this way). A script that does run may take `aip config --script-timeout N` seconds
 (`AIP_SCRIPT_TIMEOUT`, 300 by default) before the run fails with `timeout`, which `resume`
-retries. `run_id` gives the new run its id, for a caller that must know it before the call
-returns (a script that starts a run in a process of its own and waits on its run file); a fresh
-one by default. A run started from a script of another run is that run's child: the engine
-gives every script `AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS` and `AIP_RUNAH_DEPTH`, and the record of
-a run started under them carries `parent` and `depth` (`docs/runah.md`, The orchestrator). It returns:
+retries. It returns:
 
 - `aip.Paused`: `kind` (`task`, the one kind: a `Task_Agent` step waits for the agent; a
   `Decide` never pauses), `step`, `tasks` (a list of `aip.Task`, one per `For` pass waiting at
@@ -70,9 +66,7 @@ a run started under them carries `parent` and `depth` (`docs/runah.md`, The orch
   `prompt`, `state`, `references`, `answer_with` and `labels` (the values each `choice` or
   `score` in `answer_with` may take), and inside a `Loop` with a cap `last_pass` (whether this
   pass is the last the cap allows) and `pass_of` (the cap); both are `None` elsewhere.
-  `paused.task` is the one task of a pause outside a loop. `answerer` is the object `runah`
-  left when it stopped at a pause it did not answer (a human step, or its model gave up), else
-  `None`.
+  `paused.task` is the one task of a pause outside a loop.
 - `aip.Done`: `run_id`, `result`, `run_file`, `recorded`.
 
 `recorded` is `True` when the server has this stop, `False` when the post failed
@@ -96,25 +90,17 @@ total, or `{"prompt", "completion", "total"}`) and `seconds`, any of them; for a
 several tasks, keyed by task index like the answers. A key it does not know is refused as
 `invalid_input` and the pause stands.
 
-`runah(target, inputs=None, answers=None, *, human=None, batch=None, agent=None, session=None,
-workdir=None, on_step=None, force=False, agent_version=None, on_warning=None, budget_tokens=None,
-run_id=None)` runs ahead
-(`docs/runah.md`): as `run` for a target, or carrying on the run a run id, a run file or a
-result names (`answers` going into its standing pause first; with none, the model answers it,
-or a failed step is retried), with a chat model answering each `Task_Agent` task in one
-tool-using chat confined to the working directory, until a human step (`human`, a list or
-one comma-separated string, `none` for none; with no `human`, the steps written for a person,
-`docs/runah.md`; the run keeps them for its later calls), the end, an error, or the model
-giving up. It returns what `run` returns, and a `Paused` says why under `answerer`. Each
-task the model answers is recorded `answered_by: {"agent": "runah", "model": <the id the
-endpoint reported>}` with its tool calls and tokens, marked `work: "observed"`. It raises
-`InvalidInput` before anything runs when no model key is configured (`aip config runah
---model-key KEY`, `AIP_RUNAH_MODEL_KEY`); `aip.Client(agent_chat=...)` injects the chat client
-in tests. `budget_tokens` bounds the model tokens the run may spend, its children's included
-(default `aip config runah --budget-tokens`, `AIP_RUNAH_BUDGET_TOKENS`, else none): past it the
-run fails with `budget_exhausted` before its next step, and a later `runah(run_id,
-budget_tokens=M)` with a larger M carries it on. A runah run started from a script one deeper
-than `aip config runah --max-depth` (2) raises `aip.DepthExceeded` before anything runs. `on_step` receives each history
+`ask(text, *, session=None, new=False, shell=None, on_event=None)` is `aip agent` (`docs/agent.md`):
+the configured chat model drives the `assist` procedure from outside the run, `run` and then one
+model call and one `resume` per pause, until it is done, fails, or an answer will not hold after
+three refusals (the run is then left paused). `text` is the task, or in a session that has one
+the person's reply to the last run's note; `session` picks a session, `new` starts one, else the
+shell's current one goes on. It returns an `aip.agent.Outcome` (`session`, `status`, `run_id`,
+`note`, `result`, `pause`, `error`, `reason`, `runs`, `calls`, `tokens`; `to_json()` is `aip agent
+--json`'s object). It raises `aip.agent.AgentError` (`invalid_input`) before anything runs when
+no model key is configured (`aip config agent --model-key KEY`, `AIP_AGENT_MODEL_KEY`);
+`aip.Client(agent_chat=...)` injects the chat client in tests. The runtime itself never calls a
+chat model. `on_step` receives each history
 entry's progress line the moment the run writes it, inside a batch of `For` passes too;
 `on_pause`, if given, answers pauses in-process: return the answers to go on, or None to stop
 and get the `Paused` back. Each result's `to_json()` is exactly the object the CLI prints
@@ -132,7 +118,6 @@ Everything raises a subclass of `aip.AipError`, whose `kind` uses the CLI's voca
 | `aip.NotFound` | a target that is neither a folder, a bundle file, nor a name the server knows. For a published name the message is the server's and the same from `run`, `describe`, `pull` and `get`: `no procedure 'billing-support'; did you mean `billing_support`?` (the hint when the name with `_` for `-` is published), `no revision 7 of billing_support`, `billing_support has no live revision` |
 | `aip.RetiredRevision` | `run("name@revision")` on a retired revision (`kind` `retired`); `run(..., force=True)` runs it anyway |
 | `aip.NoServer` | a catalog call, or a reference not in the cache, with no server configured |
-| `aip.DepthExceeded` | `runah` from a script, nested deeper than `aip config runah --max-depth` allows (`kind` `depth_exceeded`); refused before anything runs |
 | `aip.InvalidInput` | inputs or answers that are not usable, a run id with no run file, a run that has nothing to resume |
 | `aip.ServerError` | a call to the server failed: `status`, `kind`, `message` from its error envelope (`status` 0, kind `unreachable`, when nothing answered) |
 
@@ -150,7 +135,7 @@ catalog reference still runs from the bundle cache.
 | `list()` | `[Entry]`: `name`, `description`, `pinned`, `latest`, `resolves`, `revisions` | `aip list` |
 | `pull(ref)`, `pull_all()` | `Pulled`: `name`, `revision`, `bundle_id`, `path`, `fetched`; the bundle is in the cache, so `run` works offline | `aip pull`, `aip pull --all` |
 | `publish(target, draft=False)` | `Published`: `name`, `revision`, `bundle_id`, `existed`, `draft`; a folder is compiled here, an `.rl` taken as is. With `draft` the bundle is uploaded with no revision (`revision` None, `draft` True; `draft` False when the server already has it as a revision), and a later `publish` of the same bundle gives it one | `aip publish [--draft] [--json]` |
-| `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`, `build_procedure`, `edit_procedure`, `assist`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
+| `upgrade()` | `[Published]`: the procedures the package ships (`make_procedure`, `build_procedure`, `edit_procedure`), published to the server; one it already holds comes back with `existed` true | `aip upgrade` |
 | `get(ref, out, force=False)` | `Fetched`: `path`, `name`, `bundle_id`, `revision`; the program directory written at `out` | `aip get` |
 | `export_skill(target, out, force=False)` | `SkillExported`: `path`, `skill_file`, `name`, `skill` (the Agent Skills name), `bundle_id`, `revision`; the procedure as a plain Agent Skill at `out`, a `SKILL.md` that walks its steps for an agent with no runtime and the bundle's files. `target` is a folder, an `.rl` or a published name | `aip export <target> --skill DIR` |
 | `pin(name, revision)` | `Pinned` (`revision=None` clears it); a retired revision is refused (`ServerError`, kind `retired`) | `aip pin name@revision`, `aip pin name --clear` |
@@ -160,8 +145,8 @@ catalog reference still runs from the bundle cache.
 | `audit(query=None, **params)` | `[AuditQuery]` (`query`, `description`, `builtin`), or the query's rows; `params` are `name`, `agent`, `session`, `user`, `draft`, `window`, `limit`, `repeats`, `key` | `aip audit` |
 | `save_audit(name, cypher, description="")`, `delete_audit(name)` | `AuditQuery`; a query of your own kept on the server and run by name | `aip audit --save`, `--delete` |
 | `export_runs(output, name=None, *, since=None, agent=None, session=None, user=None, draft=None, force=False)` | `Exported`: `path`, `runs`, `procedures`, `bundles` (a procedure's revisions and drafts are a bundle each); the runs that match and the procedures they ran, as one Relate file | `aip export runs` |
-| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear, *, script_timeout)` | `Settings`: `server` (the URL), `local` (it is this machine's, started on demand), `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch`, `script_timeout` (seconds, None for no cap), and runah's `runah_model_endpoint`, `runah_model`, `runah_configured`, `max_tool_calls_per_task`, `max_tokens_per_task` (the secrets are on it but never in its text) | `aip config` |
-| `aip.configure_runah(model_uri, model_name, model_key, max_tool_calls_per_task, max_tokens_per_task)` | `Settings`; an argument left None is unchanged, an empty string forgets it | `aip config runah` |
+| `aip.settings()`, `aip.configure(server, token, decision_model, decision_model_key, batch, clear, *, script_timeout)` | `Settings`: `server` (the URL), `local` (it is this machine's, started on demand), `token_set`, `decision_model_endpoint`, `decision_model_key_set`, `decision_model_configured`, `batch`, `script_timeout` (seconds, None for no cap), and `aip agent`'s `agent_model_endpoint`, `agent_model`, `agent_configured` (the secrets are on it but never in its text) | `aip config` |
+| `aip.configure_agent(model_uri, model_name, model_key)` | `Settings`; an argument left None is unchanged, an empty string forgets it | `aip config agent` |
 
 Records from the server keep the object as sent in `data`, which is what the CLI prints under
 `--json`. `aip export <bundle.rl>` and `aip fmt` are the language's tooling, and `aip server` serves: none
@@ -205,5 +190,5 @@ def answer_procedure(run_id: str, answers: dict | None = None) -> str:
 The model sees exactly the CLI's JSON (`docs/cli-json.md`), so the `aip` skill's guidance
 applies unchanged. Pass `tools=[run_procedure, answer_procedure]` to `create_react_agent` or
 bind them to a chat model. `aip mcp` exposes the same calls as an MCP server for frameworks
-that speak it (`docs/mcp.md`): `search`, `describe`, `compile`, `run`, `resume`, `runah` and `pull` as
+that speak it (`docs/mcp.md`): `search`, `describe`, `compile`, `run`, `resume`, `agent` and `pull` as
 tools, with the MCP client's name as the run's `agent`.

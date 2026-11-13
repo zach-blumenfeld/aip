@@ -17,15 +17,14 @@ Every stop writes the run file (`aip.client.runs`), so a run started here can be
 `aip resume <run id>` and the other way round. When a server is configured the run is recorded
 there at every stop, a folder or file run as a run of a *draft* bundle; when none is, the run
 works and the result says `recorded=None`. `run` and `resume` pause at every `Task_Agent`
-for the caller to answer; `runah` (run ahead) has a chat model answer them, one tool-using chat
-per task (`aip.model.answerer`, `docs/runah.md`), except at the steps named in `human`. Every
-method returns a typed value and raises an `AipError` subclass.
+for the caller to answer: the runtime never calls a chat model. `agent` is the one caller this
+package ships (`aip.agent`, `docs/agent.md`): a chat model outside the run answering each pause
+of the `assist` procedure (`ask`). Every method returns a typed value and raises an `AipError` subclass.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,16 +35,14 @@ from aip.compiler import (Bundle, BundleError, Diagnostic, compile_folder, expor
 from aip.compiler.bundle import BUNDLE_SUFFIX, SOURCE_FILE
 
 from aip.client import bundles, config
-from aip.client.config import CONFIGURE_HINT, Settings, configure, configure_runah, settings
-from aip.client.runs import (RunFile, add_child, answer_hint, children_tokens, error_outcome, local_runs, new_run_id, outcome,
-                             own_tokens, progress_line, run_path, RUN_ID)
+from aip.client.config import CONFIGURE_HINT, Settings, configure, configure_agent, settings
+from aip.client.runs import RunFile, error_outcome, local_runs, new_run_id, outcome, progress_line, run_path, RUN_ID
 from aip.client.server import Server, ServerError, connect
 from aip.errors import AipError
 from aip.model import DONE, FAILED, PAUSED, Engine, InvalidOutput, NotPaused, Procedure, Run, StepError, TypeSafeResolver
 from aip.model.engine import _where, utc_now
-from aip.model.steps import BUDGET_ENV, DEPTH_ENV, PASS_ENV, RUN_ENV, STEP_ENV
-from aip.model.steps import start as check_inputs
-from aip.model.types import BudgetExhausted, StepError as _StepError, resumable
+from aip.model.steps import RUN_ENV, start as check_inputs
+from aip.model.types import resumable
 
 JSON = dict[str, Any]
 EXAMPLE_VALUES = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "list": [], "object": {}}
@@ -96,13 +93,6 @@ class InvalidBundle(AipError):
 
     def __init__(self, error: BundleError):
         super().__init__(error.message, error.code)
-
-
-class DepthExceeded(AipError):
-    """A runah run that would start deeper than `aip config runah --max-depth` allows: started
-    from a script of a run that was itself started from a script, and so on (`AIP_RUNAH_DEPTH`).
-    Refused before anything runs."""
-    kind = "depth_exceeded"
 
 
 class RunError(AipError):
@@ -165,9 +155,8 @@ class Paused:
     pass waiting at `step`, all answered in one `resume`. `hint` is one line on the shape of an
     answer. `recorded` is True when the server has this stop, False when the post failed, None
     when no server is configured. `warning` is what `run` had to say before the first step (a
-    `Decide` ahead and no decision model configured), else None. `answerer` is there when the
-    run was `runah`'s and stopped there anyway: `{"answered": false, "step",
-    "reason"}`, with what the model spent when it tried. `to_json()` is the CLI's paused object."""
+    `Decide` ahead and no decision model configured), else None. `to_json()` is the CLI's
+    paused object."""
     kind: str
     step: str
     tasks: list[Task]
@@ -183,10 +172,6 @@ class Paused:
     @property
     def warning(self) -> str | None:
         return self.body.get("warning")
-
-    @property
-    def answerer(self) -> JSON | None:
-        return self.body.get("answerer")
 
     @property
     def task(self) -> Task:
@@ -241,9 +226,8 @@ class Description:
     types; `steps` lists name, kind and description in source order; `data` is the whole
     object, the server's for a catalog reference. In `data`, `result_on_some_paths` lists the
     result keys only some paths produce (a result has them when its path did), `retired` is
-    true for a retired revision, `human_steps` names the `Task_Agent` steps written for a person
-    (the ones `runah` stops at when not told otherwise), and `warning` is there when the
-    procedure has a `Decide` and this client has no decision model configured."""
+    true for a retired revision, and `warning` is there when the procedure has a `Decide` and
+    this client has no decision model configured."""
     name: str
     bundle_id: str
     description: str
@@ -465,55 +449,6 @@ OnStep = Callable[[JSON], None]
 OnPause = Callable[[Paused], Any]
 
 
-@dataclass
-class _Lineage:
-    """A run among the runs around it (`docs/runah.md`, The orchestrator): its id, its depth, its
-    token budget, who runs it. It gives the engine what a script of the run is started with
-    (`env`), so a run the script starts knows its parent, is one deeper, inherits who runs it
-    and what is left of the budget; and checks the budget before every step (`guard`)."""
-    run_id: str
-    depth: int
-    budget: int | None
-    identity: JSON
-    home: Path | None
-
-    def spent(self, run: Run) -> tuple[int, int]:
-        """The tokens runah's model spent in this run, and those of the runs started from it."""
-        return own_tokens(run.to_dict()), children_tokens(self.run_id, self.home)
-
-    def env(self, run: Run) -> JSON:
-        env = {RUN_ENV: self.run_id, DEPTH_ENV: str(self.depth + 1)}
-        if self.home is not None:
-            env["AIP_HOME"] = str(Path(self.home).absolute())
-        for key, var in (("agent", config.AGENT_ENV), ("session", config.SESSION_ENV)):
-            if self.identity.get(key):
-                env[var] = str(self.identity[key])
-        if self.budget is not None:
-            env[BUDGET_ENV] = str(max(self.budget - sum(self.spent(run)), 1))
-        return env
-
-    def guard(self, run: Run, step: str | None) -> None:
-        if self.budget is None:
-            return
-        spent = sum(self.spent(run))
-        if spent > self.budget:
-            raise BudgetExhausted(step, self.budget, spent)
-
-
-def _parent_from_environment() -> tuple[JSON | None, int]:
-    """The parent a new run has when a script of another run starts it (the engine sets
-    `AIP_RUN_ID`, `AIP_STEP`, `AIP_PASS` and `AIP_RUNAH_DEPTH` for its scripts), and its depth."""
-    parent_id = os.environ.get(RUN_ENV, "").strip()
-    parent = None
-    if parent_id and RUN_ID.fullmatch(parent_id):
-        raw_pass = os.environ.get(PASS_ENV, "").strip()
-        parent = {"run_id": parent_id, "step": os.environ.get(STEP_ENV) or None,
-                  "pass": int(raw_pass) if raw_pass.isdigit() else None}
-    raw_depth = os.environ.get(DEPTH_ENV, "").strip()
-    depth = int(raw_depth) if raw_depth.isdigit() else (1 if parent else 0)
-    return parent, depth
-
-
 # --------------------------------------------------------------------------- client
 
 
@@ -529,9 +464,9 @@ class Client:
     and `AIP_DECISION_MODEL_KEY` override), and with neither a `Decide` fails the run
     (`no_decision_model`). `session` is an httpx-style client to send requests through. `home`
     moves `~/.aip` (default `AIP_HOME`). `agent` is the identity's `agent` when neither a call
-    nor `AIP_AGENT` names one. `agent_chat` injects runah's chat client (an
-    `aip.model.answerer.ChatClient`; tests); otherwise `runah` speaks to the configured
-    endpoint (`aip config runah --model-key KEY`).
+    nor `AIP_AGENT` names one. `agent_chat` injects the chat client `agent` asks (an
+    `aip.chat.ChatClient`; tests); otherwise `agent` speaks to the configured endpoint (`aip
+    config agent --model-key KEY`).
     """
 
     def __init__(self, server: str | Server | None = None, token: str | None = None, *, decision_client: Any = None,
@@ -666,9 +601,7 @@ class Client:
         bundle, origin = self._open(target, cache=False)
         with Procedure.load(bundle) as procedure:
             data = describe_procedure(procedure)
-        from aip.model.answerer import human_steps
-
-        data.update(target=origin["target"], revision=origin["revision"], draft=origin["kind"] != "name", human_steps=human_steps(bundle))
+        data.update(target=origin["target"], revision=origin["revision"], draft=origin["kind"] != "name")
         data = self._model_warned(data)
         return Description(data["name"], data["bundle_id"], data["description"], data["inputs"], data["result"], data["steps"],
                            text, origin["revision"], data)
@@ -692,25 +625,35 @@ class Client:
     # ------------------------------------------------------------------ runs
 
     def _engine(self, workdir: Path, batch: int | None, on_step: OnStep | None = None, scripts: bool = True,
-                lineage: _Lineage | None = None) -> Engine:
+                handle: RunFile | None = None) -> Engine:
         """The engine for one call. `on_step` gets each history entry's progress line the
         moment the entry is written, so a batch of `For` passes reports as it goes. A script
         may run `aip config --script-timeout` seconds (`AIP_SCRIPT_TIMEOUT`; 300 by default).
-        `lineage` is the run's place among others: the variables its scripts get, its budget."""
+        `handle` is the run, whose scripts are told which run they are part of and who runs it."""
         s = self.settings
         resolver = TypeSafeResolver.from_environment(client=self.decision_client, api_key=s.decision_model_key, url=s.decision_model_url)
         on_entry = (lambda entry: on_step(progress_line(entry))) if on_step is not None else None
         return Engine(resolver, home=self.home, workdir=workdir, batch=batch or s.batch, on_entry=on_entry, timeout=s.script_timeout,
-                      scripts=scripts, script_env=lineage.env if lineage else None,
-                      guard=lineage.guard if lineage and lineage.budget is not None else None)
+                      scripts=scripts, script_env=(lambda run: self._script_env(handle)) if handle is not None else None)
 
-    def _lineage(self, handle: RunFile) -> _Lineage:
-        return _Lineage(handle.run_id, handle.depth, handle.budget_tokens, dict(handle.run.get("identity") or {}), self.home)
+    def _script_env(self, handle: RunFile) -> JSON:
+        """What a script of this run is started with beyond this process's environment: the run
+        id, this client's `AIP_HOME`, and the run's agent and session, so that a run the script
+        starts through the client (`assist`'s `act`) is recorded as the same agent's, in the
+        same session."""
+        env = {RUN_ENV: handle.run_id}
+        if self.home is not None:
+            env["AIP_HOME"] = str(Path(self.home).absolute())
+        identity = handle.run.get("identity") or {}
+        for key, var in (("agent", config.AGENT_ENV), ("session", config.SESSION_ENV)):
+            if identity.get(key):
+                env[var] = str(identity[key])
+        return env
 
     def run(self, target: str | Path, inputs: JSON, *, batch: int | None = None, agent: str | None = None,
             session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
             on_pause: OnPause | None = None, force: bool = False, agent_version: str | None = None,
-            on_warning: Callable[[str], None] | None = None, scripts: bool = True, run_id: str | None = None) -> Result:
+            on_warning: Callable[[str], None] | None = None, scripts: bool = True) -> Result:
         """Run `target` (a program directory, an `.rl`, or `name[@rev]`) on `inputs`, the Start
         step's object, until it pauses or is done. `workdir` is where its scripts read and write
         files (default the current directory); `batch` how many `For` passes run at once;
@@ -724,51 +667,22 @@ class Client:
         False the run executes no script: it stops at the first `Execute`, before its script
         starts, with the error `script_not_run` (not resumable), while `Decide`, routes and
         loops run and a `Task_Agent` pauses as usual; such a run is a trial and is not recorded
-        on the server. `run_id` is the id to give the new run, for a caller that must know it before
-        the call returns (a script that starts a run in another process and waits on its run
-        file); a fresh one by default. A run started from a script of another run is its child:
-        it carries `parent` and `depth` (`docs/runah.md`, The orchestrator). Raises `RunError` when
-        the run stops on an error, `CompileError`, `InvalidBundle`, `NotFound`, `RetiredRevision`
-        or `NoServer` when the target cannot be run."""
-        return self._start(target, inputs, batch=batch, agent=agent, session=session, workdir=workdir, on_step=on_step,
-                           on_pause=on_pause, force=force, agent_version=agent_version, on_warning=on_warning, scripts=scripts,
-                           run_id=run_id)
-
-    def _start(self, target: str | Path, inputs: JSON, *, batch: int | None, agent: str | None, session: str | None,
-               workdir: str | Path | None, on_step: OnStep | None, on_pause: OnPause | None, force: bool,
-               agent_version: str | None, on_warning: Callable[[str], None] | None, scripts: bool = True,
-               human: list[str] | None = None, runah: bool = False, run_id: str | None = None,
-               budget_tokens: int | None = None) -> Result:
-        """`run` and `runah` from a target: open it, start the run, settle it."""
+        on the server. Raises `RunError` when the run stops on an error, `CompileError`,
+        `InvalidBundle`, `NotFound`, `RetiredRevision` or `NoServer` when the target cannot be run."""
         if not isinstance(inputs, dict):
             raise InvalidInput(f"the inputs are a JSON object, got {type(inputs).__name__}")
         if batch is not None and batch < 1:
             raise InvalidInput(f"the batch size is at least 1, not {batch}")
-        if run_id is not None and (not RUN_ID.fullmatch(run_id) or run_path(run_id, self.home).exists()):
-            raise InvalidInput(f"{run_id!r} cannot be a new run's id: it is 4 to 64 letters, digits, - or _, and no run here has it")
-        parent, depth = _parent_from_environment()
-        if runah and depth > self.settings.max_depth:
-            raise DepthExceeded(f"this runah run would be {depth} deep (started from a script of run {(parent or {}).get('run_id')}, "
-                                f"itself {depth - 1} deep), past the max depth of {self.settings.max_depth}; "
-                                "`aip config runah --max-depth N` bounds runah runs started inside other runs")
-        if budget_tokens is not None and budget_tokens < 1:
-            raise InvalidInput(f"the token budget is at least 1, not {budget_tokens}")
-        budget = (budget_tokens if budget_tokens is not None else self.settings.budget_tokens) if runah else None
         bundle, origin = self._open(target)
         if origin.get("retired") and not force:
             raise RetiredRevision(f"{bundle.name}@{origin['revision']} is retired: it is kept for the runs that reference it and no "
                           "longer runs by default; run it anyway with force (`aip run ... --force`), or publish it again to bring it back")
         where = Path(workdir if workdir is not None else Path.cwd()).resolve()
         identity = config.identity(agent, session, default_agent=self.agent, agent_version=agent_version)
-        run_id = run_id or new_run_id()
-        lineage = _Lineage(run_id, depth, budget, identity, self.home)
-        engine = self._engine(where, batch, on_step, scripts=scripts, lineage=lineage)
-        if parent:
-            add_child(parent["run_id"], run_id, self.home)
-        human, human_source = _human_steps(bundle, human) if runah else (None, None)
+        handle = RunFile(new_run_id(), bundle.id, bundle.name, origin["target"], origin["kind"], {"identity": identity}, str(where),
+                         origin["revision"], server=self.server.url if self.server and scripts else None, scripts=scripts)
+        engine = self._engine(where, batch, on_step, scripts=scripts, handle=handle)
         with Procedure.load(bundle) as procedure:
-            if runah:
-                self._check_human(procedure, human or [])
             try:
                 check_inputs(procedure.step(procedure.start), inputs)
                 warning = self.model_warning(procedure.describe()["steps"])
@@ -777,12 +691,7 @@ class Client:
                 run = engine.start(procedure, inputs, identity=identity)
             except StepError as exc:  # the inputs do not fit: nothing ran, nothing to resume
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc
-            handle = RunFile(run_id, bundle.id, bundle.name, origin["target"], origin["kind"], run.to_dict(), str(where),
-                             origin["revision"], server=self.server.url if self.server and scripts else None,
-                             human=human or None, human_source=human_source, scripts=scripts, parent=parent, depth=depth,
-                             budget_tokens=budget)
-            answerer = self._answerer(engine, procedure, where, on_step, lineage) if runah else None
-            return self._settle(engine, run, handle, on_pause, warning, answerer)
+            return self._settle(engine, run, handle, on_pause, warning)
 
     def resume(self, run: str | Path | Paused | RunError, answers: Any = None, *, agent: str | None = None,
                session: str | None = None, on_step: OnStep | None = None, on_pause: OnPause | None = None,
@@ -801,87 +710,24 @@ class Client:
         answers, kept on each task's entry marked `reported` (`model`, `tool_calls`, `tokens`,
         `seconds`; one object for a one-task pause, else keyed by task index like the answers)."""
         handle, path, bundle = self._reopen(run)
-        engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts,
-                              lineage=self._lineage(handle))
+        engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts, handle=handle)
         with Procedure.load(bundle) as procedure:
             state = Run.from_dict(procedure, handle.run)
             state = self._apply(engine, state, answers, handle, path, agent, session, work=work)
             return self._settle(engine, state, handle, on_pause, None)
 
-    def runah(self, target: str | Path | Paused | RunError, inputs: JSON | None = None, answers: Any = None, *,
-              human: list[str] | str | None = None, batch: int | None = None, agent: str | None = None,
-              session: str | None = None, workdir: str | Path | None = None, on_step: OnStep | None = None,
-              force: bool = False, agent_version: str | None = None,
-              on_warning: Callable[[str], None] | None = None, budget_tokens: int | None = None,
-              run_id: str | None = None) -> Result:
-        """Run ahead: run `target` as `run` does, or carry on the run a run id, a run file or a
-        result names, and keep going. Scripts, `Decide`, routes and loops run exactly as in
-        `run`; at a `Task_Agent` pause runah's chat model answers each task in one tool-using
-        chat confined to the run's working directory (`aip.model.answerer`, `docs/runah.md`),
-        each answer checked as `resume` checks one, a refusal sent back up to three times, and
-        the run carries on. It stops at a step named in `human` (names, or one comma-separated
-        string; a run keeps them for its later calls, and passing them again replaces them; `none`
-        or `[]` for none), or with no `human` at the steps written for a person
-        (`aip.model.answerer.human_steps`: the prompt opens "This is a task for a person, not for
-        you", or the description says a person does it), at
-        the end, at an error, or when the model gives up, and returns the same `Paused`, `Done`
-        or `RunError` as `run`; a `Paused` it returns says why under `answerer`. For a run,
-        `answers` go into the standing pause first (with none, the model answers it, or a failed
-        run's step is retried). Each task the model answers is recorded `answered_by: {"agent":
-        "runah", "model": <the id the endpoint reported>}` with its tool calls and tokens,
-        marked `observed`; the run's own identity stays whoever launched it (`agent`, `session`).
-        Refused before anything runs when runah has no model key (`aip config runah
-        --model-key KEY`, `AIP_RUNAH_MODEL_KEY`).
+    def ask(self, text: str, *, session: str | None = None, new: bool = False, shell: str | None = None,
+              on_event: Callable[[JSON], None] | None = None, procedure: str | Path | None = None) -> Any:
+        """`aip agent`: a chat model outside the run answers the pauses of `assist` until it is
+        done (`aip.agent`, `docs/agent.md`). `text` is the task, or in a session that has one,
+        the person's reply to the last run's note. `session` picks a session, `new` starts one,
+        else this shell's current one goes on (`shell` names the shell; its parent process by
+        default). Returns an `aip.agent.Outcome`. Raises `aip.agent.AgentError` when no model
+        key is configured (`aip config agent --model-key KEY`) and `agent_chat` was not given."""
+        from aip.agent import ASSIST, Agent
 
-        `budget_tokens` bounds the model tokens the run may spend, its children's included (the
-        runs its scripts start; default `aip config runah --budget-tokens`, `AIP_RUNAH_BUDGET_TOKENS`,
-        else none): past it the run fails with `budget_exhausted` before its next step, and a
-        later call with a larger budget carries it on. A run started from a script of another run
-        is one deeper than it, and one deeper than `aip config runah --max-depth` (2) is refused
-        (`DepthExceeded`). `run_id` names a new run, as for `run`."""
-        if self.agent_chat is None and not self.settings.runah_configured:
-            raise InvalidInput(f"aip runah needs a chat model to answer the tasks: {config.RUNAH_HINT}")
-        if self._names_run(target):
-            if inputs is not None:
-                raise InvalidInput("inputs start a run; a run that is already going takes answers, not inputs")
-            if run_id is not None:
-                raise InvalidInput("run_id names a new run; this one has its id")
-            handle, path, bundle = self._reopen(target)
-            if human is not None or handle.human_source is None:
-                listed, handle.human_source = _human_steps(bundle, _human(human))
-                handle.human = listed or None
-            if budget_tokens is not None:
-                if budget_tokens < 1:
-                    raise InvalidInput(f"the token budget is at least 1, not {budget_tokens}")
-                handle.budget_tokens = budget_tokens
-            engine = self._engine(Path(handle.workdir), handle.run.get("batch"), on_step, scripts=handle.scripts,
-                                  lineage=self._lineage(handle))
-            with Procedure.load(bundle) as procedure:
-                self._check_human(procedure, handle.human or [])
-                state = Run.from_dict(procedure, handle.run)
-                answerer = self._answerer(engine, procedure, Path(handle.workdir), on_step, self._lineage(handle))
-                if answers is None and state.status == PAUSED:
-                    return self._settle(engine, state, handle, None, None, answerer, ask=True)  # the model answers the pause that stands
-                state = self._apply(engine, state, answers, handle, path, agent, session)
-                return self._settle(engine, state, handle, None, None, answerer)
-        if answers is not None:
-            raise InvalidInput("answers go to a run that is paused: give its run id, not a procedure")
-        return self._start(target, {} if inputs is None else inputs, batch=batch, agent=agent, session=session, workdir=workdir,
-                           on_step=on_step, on_pause=None, force=force, agent_version=agent_version, on_warning=on_warning,
-                           human=_human(human), runah=True, run_id=run_id, budget_tokens=budget_tokens)
-
-    def _names_run(self, target: Any) -> bool:
-        """Whether a `runah` target is a run (a result, a run id with a run file here, or a run
-        file's path) rather than a procedure (a folder, an `.rl`, a published name)."""
-        if isinstance(target, (Paused, Done, RunError)):
-            return True
-        text = str(target)
-        path = Path(text)
-        if path.is_dir() or path.suffix == BUNDLE_SUFFIX or path.name == SOURCE_FILE:
-            return False
-        if path.is_file():
-            return True
-        return bool(RUN_ID.fullmatch(text)) and run_path(text, self.home).is_file()
+        return Agent(self, self.agent_chat, on_event=on_event, procedure=procedure or ASSIST).ask(
+            text, session=session, new=new, shell=shell)
 
     def _reopen(self, run: str | Path | Paused | RunError) -> tuple[RunFile, Path, Bundle]:
         """A run's file, its path and its bundle, from the bundle cache."""
@@ -935,18 +781,12 @@ class Client:
         except (InvalidOutput, NotPaused) as exc:
             raise RunError(error_outcome({**exc.to_dict(), **_where(run)}, handle.run_id, path, recorded, True), exc, stopped=False) from exc
 
-    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None, warning: str | None = None,
-                answerer: Any = None, ask: bool = False) -> Result:
+    def _settle(self, engine: Engine, run: Run, handle: RunFile, on_pause: OnPause | None, warning: str | None = None) -> Result:
         """Record the stop (server and run file), and return it as a result or raise it; with
-        `answerer` (runah), the chat model answers each pause not at a human step (with `ask`,
-        the pause that stands even at a human step: the caller gave no answers and asked runah
-        to carry on); with `on_pause`, answer pauses in-process and go on. `warning` is `run`'s,
-        carried on the object of the stop it leads to."""
-        stopped: JSON | None = None
+        `on_pause`, answer pauses in-process and go on. `warning` is `run`'s, carried on the
+        object of the stop it leads to."""
         while True:
             handle.run = run.to_dict()
-            own, children = own_tokens(handle.run), children_tokens(handle.run_id, self.home)
-            handle.tokens = {"own": own, "children": children, "total": own + children} if own or children else None
             recorded = self._record(handle)
             path = handle.save(home=self.home)
             block = outcome(run, handle.run_id, path, recorded)
@@ -956,77 +796,14 @@ class Client:
                 raise RunError(block)
             if run.status == DONE:
                 return Done(handle.run_id, run.result or {}, path, recorded, block)
-            if answerer is not None and stopped is None:
-                if run.pause["step"] in (handle.human or []) and not ask:
-                    why = "written for a person" if handle.human_source == "marked" else "listed in --human"
-                    stopped = {"answered": False, "step": run.pause["step"], "human": handle.human_source or "listed",
-                               "reason": f"{run.pause['step']} is a human step ({why}): answer it with `aip runah {handle.run_id} "
-                                         "--answers JSON`"}
-                else:
-                    ask = False
-                    answered, stopped = self._model_answers(engine, run, answerer)
-                    if answered is not None:
-                        run, stopped = answered, None
-                        continue
-            if stopped is not None:
-                block["answerer"] = stopped
             paused = Paused(run.pause["kind"], run.pause["step"], [Task.from_dict(t) for t in run.pause["tasks"]], handle.run_id,
                             path, recorded, block)
-            stopped = None
             if on_pause is None:
                 return paused
             answers = on_pause(paused)
             if answers is None:
                 return paused
             run = self._apply(engine, run, answers, handle, path)
-
-    # ------------------------------------------------------------------ runah's model
-
-    def _answerer(self, engine: Engine, procedure: Procedure, workdir: Path, on_step: OnStep | None,
-                  lineage: _Lineage | None = None) -> Any:
-        from aip.model.answerer import ChatClient, ModelAnswerer
-
-        s = self.settings
-        chat = self.agent_chat if self.agent_chat is not None else ChatClient(s.runah_model_endpoint, s.runah_model_key)
-        answerer = ModelAnswerer(chat, s.runah_model, workdir, engine.files(procedure), max_tool_calls=s.max_tool_calls_per_task,
-                                 max_tokens=s.max_tokens_per_task, on_event=on_step)
-        answerer.lineage = lineage
-        return answerer
-
-    def _check_human(self, procedure: Procedure, human: list[str]) -> None:
-        """Every human step names a `Task_Agent` of the procedure."""
-        tasks = [s["name"] for s in procedure.describe()["steps"] if s["kind"] == "Task_Agent"]
-        wrong = [h for h in human if h not in tasks]
-        if wrong:
-            raise InvalidInput(f"--human names {', '.join(wrong)}, which {'is' if len(wrong) == 1 else 'are'} not a Task_Agent of "
-                               f"{procedure.name}; its Task_Agent steps are {', '.join(tasks) or 'none'}")
-
-    def _model_answers(self, engine: Engine, run: Run, answerer: Any) -> tuple[Run | None, JSON | None]:
-        """runah's model answers every task of the pause, one chat each, in order; then the
-        answers go in as one resume. A task it gives up on leaves the pause standing (the
-        answers it made before are not kept: a resume answers every task at once)."""
-        from aip.model.answerer import GaveUp
-
-        pause = run.pause
-        answers: JSON = {}
-        details: dict[int, JSON] = {}
-        lineage: _Lineage | None = getattr(answerer, "lineage", None)
-        for task in pause["tasks"]:
-            if lineage is not None:
-                try:
-                    lineage.guard(run, pause["step"])       # the budget, before each chat
-                except _StepError as err:
-                    run.status, run.error = FAILED, {**err.to_dict(), **_where(run)}
-                    return run, None
-            began = time.monotonic()
-            try:
-                done = answerer.answer(pause["step"], task, len(pause["tasks"]), answer_hint([task]),
-                                       lambda answer, task=task: engine.check_answer(run, task, answer))
-            except GaveUp as exc:
-                return None, {"answered": False, "step": pause["step"], "task": task["index"], "reason": exc.reason, **exc.record}
-            answers[str(task["index"])] = done.answer
-            details[task["index"]] = {**done.record, "answer_seconds": time.monotonic() - began}
-        return engine.resume(run, answers, answered=details), None
 
     def _record(self, handle: RunFile) -> bool | None:
         """Post the run where it stopped. None without a server, and for a trial (a run that
@@ -1088,7 +865,7 @@ class Client:
         """One run: the local run file when this machine has it, else the server's record."""
         known = RUN_ID.fullmatch(run_id) is not None
         if known and run_path(run_id, self.home).is_file():
-            return _record(RunRecord, RunFile.load(run_path(run_id, self.home)).record(self.home))
+            return _record(RunRecord, RunFile.load(run_path(run_id, self.home)).record())
         if self.server is None:
             raise InvalidInput(f"no run {run_id} on this machine" + (f" (looked for {run_path(run_id, self.home)})" if known else ""))
         return _record(RunRecord, self.server.run(run_id))
@@ -1134,7 +911,7 @@ class Client:
         return Published(reply["name"], str(reply["revision"]), reply["bundle_id"], bool(reply.get("existed")))
 
     def upgrade(self) -> list[Published]:
-        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`, `build_procedure`, `edit_procedure`, `assist`) to
+        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`, `build_procedure`, `edit_procedure`) to
         the server, as `publish` would: a bundle the server already holds keeps its revision. A
         server does this for itself when it first starts; this is for one that runs an older
         package than this client."""
@@ -1212,26 +989,6 @@ class Client:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return Exported(path, runs, exported, procedures)
-
-
-def _human(human: list[str] | str | None) -> list[str] | None:
-    """The human steps: names, or one comma-separated string; `none` (or nothing) for none.
-    None when not given, which leaves the choice to the steps marked for a person."""
-    if human is None:
-        return None
-    names = human.split(",") if isinstance(human, str) else list(human)
-    names = [n.strip() for n in names if n and n.strip()]
-    return [] if [n.lower() for n in names] == ["none"] else names
-
-
-def _human_steps(bundle: Bundle, human: list[str] | None) -> tuple[list[str], str]:
-    """The steps a runah run stops at for a person, and why: those listed, or with no list the
-    ones written for a person (`aip.model.answerer.human_steps`)."""
-    if human is not None:
-        return human, "listed"
-    from aip.model.answerer import human_steps
-
-    return human_steps(bundle), "marked"
 
 
 WORK_KEYS = ("model", "tool_calls", "tokens", "seconds")
@@ -1318,8 +1075,8 @@ def describe_procedure(procedure: Procedure) -> JSON:
 
 
 __all__ = [
-    "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "DepthExceeded", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
+    "AipError", "AuditQuery", "Client", "Compiled", "CompileError", "Description", "Done", "Entry", "Exported", "Fetched", "Hit",
     "InvalidBundle", "InvalidInput", "NoServer", "NotFound", "Paused", "Pinned", "Published", "Pulled", "Result", "Retired", "RetiredRevision",
-    "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "SkillExported", "Task", "configure", "configure_runah",
+    "RunError", "RunRecord", "RunSummary", "ServerError", "Settings", "SkillExported", "Task", "configure", "configure_agent",
     "describe_procedure", "reported_work", "settings",
 ]

@@ -1,84 +1,67 @@
 # assist/procedure.aip
 #
-# The orchestrator: a task in, the catalog's procedures run one after another until the task is
-# done, a procedure built when none fits, and the person asked when it is stuck. It is the
-# harness of examples/harness/assist.py written as a procedure, so the top loop is recorded and
-# audited like every run beneath it, and `aip runah assist -i '{"task": "...", "outcome": ""}'`
-# needs no Python of its own.
+# Do a task with the catalog's procedures. `aip agent "<task>"` drives it: a chat model outside
+# the run answers each pause of `plan`, one call each and no tools, and the runtime does the rest.
+# The procedure is the whole of what that model can do: `plan` says one aip verb at a time, and
+# `act` (scripts/act.py) is the allow-list that carries it out: search the catalog, read this
+# session's runs, run a procedure, resume one (a child run's pause comes back as the outcome and
+# the next `plan` answers it), publish a new procedure, finish. Nothing retires, pins or
+# publishes over a name, and assist never runs itself. One flat loop: no run is started from a
+# run's model, and no depth.
 #
-# One model call per pass (`plan`, which has no aip verbs) and one script (`act`), which holds
-# the only verbs there are: run a procedure, carry on a run it started, and, when
-# build_procedure has built one, publish it under its new name. It never retires, pins or
-# publishes over a name, and it refuses to run assist. Each run it starts is a child of this one
-# (`parent` on its record), one level deeper (`aip config runah --max-depth`), and spends from
-# this run's budget (`aip runah --budget-tokens`). `act` waits on the child by its run file, never
-# longer than the script cap allows: a child that is still going comes back as `running`, and
-# the next pass waits again.
+# A procedure that is missing is built with build_procedure, run like any other: its pauses
+# (draft the folder, fix what the compiler says) come back to `plan` and are answered there.
 #
 # It ships inside the package as a bundle (src/aip/server/bundles/assist.rl, compiled from this
 # folder), as build_procedure does.
 
 Procedure assist
-  "Do a task with the catalog's procedures: run the one that fits, build one when none does, answer what the runs ask, and ask the person when stuck."
+  "Do a task with the catalog's procedures; build one when none fits; finish with the result or a question."
 
   Use_When
-    "A task is to be done with the procedures in the catalog, or with one built for it, run ahead by runah."
-    "Run it with `aip runah assist -i '{\"task\": \"...\", \"outcome\": \"\"}'`; on a continuation, outcome is the person's answer."
+    "A task is to be done with the procedures in the catalog, or with one built for it: `aip agent \"<task>\"` runs this."
   Do_Not_Use_When
-    "The procedure to run is already known: run it with `aip runah` directly."
+    "The procedure to run is already known: run it with `aip run` and answer its pauses."
   Requires python 3.10
   Avoid
     "Changing the catalog: retiring, pinning, or publishing over a name that exists."
-    "Finishing with an answer the outcomes of the runs do not support."
+    "Inventing data to make a run succeed, or finishing with an answer the runs' outcomes do not support."
 
-Start "The task; outcome is empty at first, the person's answer on a continuation." {
+Start "The task; outcome is empty at first, and on a later turn of the session says what was asked and what the person answered." {
   task: string    "What is to be done, in the requester's words."
-  outcome: string "Empty to begin; when the person is answering a question this run asked before, their answer."
+  outcome: string "Empty to begin; on a later turn, the question this session asked and the person's answer."
   Next_Step search
 }
 
-Execute search "List the catalog's procedures that may fit the task, with what each takes." {
+Execute search "List the catalog's procedures that may fit the task, and this session's runs so far." {
   Read task
   Run_Script scripts/search.py
-  Produce catalog: string "The procedures that may fit, best first: name, what it does, when to use it, its inputs."
+  Produce catalog: string "The procedures that may fit, best first, with what each takes; then this session's runs."
   Next_Step work
 }
 
-Loop work Until action == done, At_Most 50, Else_Exit {
-  Task_Agent plan "One model call: which procedure to run next and with what inputs, what to ask, or done." {
-    Read task, outcome, catalog
+Loop work Until done, At_Most 50, Else_Exit {
+  Task_Agent plan "Say the next aip verb to use and its arguments, or finish with the result or a question for the person." {
+    Read task, catalog, outcome
     Prompt assets/plan.md
-    Produce run:    string                  "A procedure name, a folder, or the run id of a run to carry on; empty otherwise."
-            inputs: string                  "Its inputs as a JSON object; for a run id, {\"answers\": ...} or {} to wait."
-            note:   string                  "The question for the person, or the answer to the task when done; empty otherwise."
-            action: choice [run, ask, done] "run what run names, ask the person the question in note, or done."
-    Next_Step next_move
+    Use references/aip-skill.md "The six verbs, their arguments and what each answers with."
+    Produce verb: choice [search, runs, run, resume, publish, finish] "The verb to use next."
+            args: object                                              "The verb's arguments, as the reference says; {} for finish."
+            note: string                                              "When finishing: the result, or the question for the person; otherwise empty."
+            done: true_or_false                                       "True exactly when the verb is finish."
+    Next_Step act
   }
 
-  Route next_move "Run what plan chose, or stop to ask the person." {
-    Read action
-    run  -> act
-    ask  -> ask_person
-    done -> Continue
-  }
-
-  Execute act "Run it through the aip client: start the run, or carry one on, and wait on it within the script cap." {
-    Read run, inputs
-    Run_Script scripts/runah.py
-    Produce outcome: string "What the run came to, as JSON: status, run_id, and the result, the pause or the error."
-    Continue
-  }
-
-  Task_Agent ask_person "This is a task for a person, not for you: answer the question the orchestrator asks." {
-    Read task, note
-    Prompt assets/ask.md
-    Produce outcome: string "The person's answer, in their words."
+  Execute act "Carry out the one verb plan said, through the aip client; no model is called here." {
+    Read verb, args
+    Run_Script scripts/act.py
+    Produce outcome: string "What the verb came to, as JSON: a run's status and its result, pause or error; the hits; the runs; or why it was refused."
     Continue
   }
 
   Next_Step end
 }
 
-End "The answer to the task." {
+End "The result of the task, or the question for the person." {
   Read note
 }

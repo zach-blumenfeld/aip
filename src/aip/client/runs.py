@@ -14,15 +14,7 @@ prints when no server is configured.
 A run stops one of three ways, and `outcome(run)` is the object the CLI prints for each: paused
 (`"paused": "task"`, the one kind), done (`"done": true`) or error (`"error": <kind>`).
 `progress_line(entry)` is the `--progress` line for one history entry, and `run_table(record)`
-the text `aip runs <run id>` prints: one row per entry, with the runs a step started (its
-children) under it.
-
-**Runs started from runs.** A run started by a script of another run (the orchestrator,
-`docs/runah.md`) carries `parent` (`{run_id, step, pass}`, from the variables the engine gives
-the script) and `depth` (one more than its parent's), and is listed in the parent's children
-index, `~/.aip/runs/children/<parent run id>`, one run id a line, so the parent's record can show
-it and its budget can count its tokens. `tokens` on a run file is what runah's model spent:
-`own` (the tasks it answered in this run), `children` (the `total` of every child) and `total`.
+the text `aip runs <run id>` prints: one row per entry.
 """
 
 from __future__ import annotations
@@ -32,7 +24,7 @@ import os
 import re
 import uuid
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -76,13 +68,7 @@ class RunFile:
     revision: str | None = None            # the catalog revision: the one a name resolved to, or the one the server holds the bundle as
     server: str | None = None              # where the run is recorded
     recorded: bool = False                 # whether the last stop reached the server
-    human: list[str] | None = None         # the steps runah leaves to a person (`aip runah --human`), for its later calls
-    human_source: str | None = None        # how they were chosen: `marked` (no --human: the steps written for a person) or `listed`
     scripts: bool = True                   # False for a trial, which executes no script and is not recorded
-    parent: JSON | None = None             # the run, step and pass whose script started this run: `{run_id, step, pass}`
-    depth: int = 0                         # how many runs up the parent chain goes
-    budget_tokens: int | None = None       # runah's budget for this run, its children's tokens included (`--budget-tokens`)
-    tokens: JSON | None = None             # what runah's model spent: `{own, children, total}`, written at every stop
     created: str = field(default_factory=utc_now)
     updated: str = field(default_factory=utc_now)
 
@@ -117,7 +103,8 @@ class RunFile:
     def load(cls, path: Path) -> "RunFile":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         data["run"] = {"bundle_id": data["bundle_id"], **data["run"]}
-        return cls(**data)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})   # a file an earlier 0.9 wrote may hold keys that went
 
     def recording(self) -> JSON:
         """What is posted to the server at every stop (`POST /runs`): the whole run, so the
@@ -125,82 +112,21 @@ class RunFile:
         a run paused inside a `For` shows the passes it has made."""
         return {"run_id": self.run_id, **self.run, "history": recorded_history(self.run), "name": self.name,
                 "revision": self.revision, "draft": self.draft, "workdir": self.workdir, "created": self.created,
-                "updated": self.updated, **self.lineage()}
+                "updated": self.updated}
 
-    def lineage(self) -> JSON:
-        """What a run says of the runs around it: its parent and depth when a script of another
-        run started it, its budget when it has one, and its tokens when runah's model spent any."""
-        out: JSON = {}
-        if self.parent:
-            out.update(parent=self.parent, depth=self.depth)
-        if self.budget_tokens is not None:
-            out["budget_tokens"] = self.budget_tokens
-        if self.tokens and self.tokens.get("total"):
-            out["tokens"] = self.tokens
-        return out
-
-    def record(self, home: Path | None = None) -> JSON:
+    def record(self) -> JSON:
         """The run as `aip runs <run id> --json` prints it: the run file, flat, with the history
-        as the record shows it (`recorded_history`), and `children`, the runs its scripts
-        started that this machine has run files for, when there are any."""
-        children = [child_row(c) for c in children_of(self.run_id, home)]
+        as the record shows it (`recorded_history`)."""
         return {"run_id": self.run_id, "name": self.name, "revision": self.revision, "draft": self.draft, "target": self.target,
                 "workdir": self.workdir, "server": self.server, "recorded": self.recorded, "created": self.created,
-                "updated": self.updated, **self.run, **self.lineage(),
-                "history": recorded_history(self.run), **({"children": children} if children else {})}
+                "updated": self.updated, **self.run,
+                "history": recorded_history(self.run)}
 
     def summary(self) -> JSON:
         """One row of `aip runs`: what the server's list holds for a run, from the run file."""
         return {"run_id": self.run_id, "name": self.name, "revision": self.revision, "status": self.status, "draft": self.draft,
                 "identity": self.run.get("identity"), "started": self.run.get("started") or self.created,
                 "finished": self.run.get("finished"), "created": self.created, "updated": self.updated, "target": self.target}
-
-
-def own_tokens(run: JSON) -> int:
-    """The model tokens runah spent answering tasks in a run (`Run.to_dict()`): the `total` of
-    every entry whose work it observed."""
-    return sum(int((e.get("tokens") or {}).get("total") or 0) for e in recorded_history(run)
-               if e.get("work") == "observed" and isinstance(e.get("tokens"), dict))
-
-
-def children_path(run_id: str, home: Path | None = None) -> Path:
-    return runs_dir(home) / "children" / run_id
-
-
-def add_child(parent: str, child: str, home: Path | None = None) -> None:
-    """Note in the parent's children index that `child` was started from it."""
-    path = children_path(parent, home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as out:
-        out.write(child + "\n")
-
-
-def children_of(run_id: str, home: Path | None = None) -> list[RunFile]:
-    """The runs started from a run's scripts, in the order they started, that have a run file
-    here (a child writes its file at its first stop)."""
-    path = children_path(run_id, home)
-    if not RUN_ID.fullmatch(run_id) or not path.is_file():
-        return []
-    found = []
-    for child in dict.fromkeys(path.read_text(encoding="utf-8").split()):
-        try:
-            found.append(RunFile.load(run_path(child, home)))
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return found
-
-
-def children_tokens(run_id: str, home: Path | None = None) -> int:
-    """What the runs started from a run spent, each its own `total` (which holds its children's)."""
-    return sum(int((c.tokens or {}).get("total") or 0) for c in children_of(run_id, home))
-
-
-def child_row(child: RunFile) -> JSON:
-    """A child as its parent's record lists it."""
-    parent = child.parent or {}
-    return {"run_id": child.run_id, "name": child.name, "status": child.status, "draft": child.draft,
-            "step": parent.get("step"), "pass": parent.get("pass"), "tokens": (child.tokens or {}).get("total") or 0,
-            "started": child.run.get("started") or child.created}
 
 
 def local_runs(home: Path | None = None) -> list[RunFile]:
@@ -338,7 +264,7 @@ def _what(entry: JSON) -> str:
     if kind == "Execute":
         return f"{entry.get('script')} -> {_produced(result) or 'nothing'}"
     if kind == "Task_Agent" and entry.get("work"):
-        # what answering took: `observed` by runah of its own model, or `reported` by an outside agent
+        # what answering took, as the agent reported it (`aip resume --work`; `aip agent` reports its model's)
         by = entry.get("answered_by") or {}
         calls = entry.get("tool_calls")
         if isinstance(calls, list):
@@ -369,11 +295,6 @@ def _when(at: str | None) -> str:
     return at[11:23] if isinstance(at, str) and len(at) >= 23 else (at or "")
 
 
-def _child(child: JSON) -> str:
-    tokens = f", {child['tokens']} tokens" if child.get("tokens") else ""
-    return f"{child.get('run_id')}  {child.get('name')}{' (draft)' if child.get('draft') else ''}  {child.get('status')}{tokens}"
-
-
 def run_table(record: JSON) -> str:
     """`aip runs <run id>`: the run's header, one row per history entry (step, kind, pass, when,
     +ms, who answered or where it went and why), and how it stands. `+ms` is the step's own time
@@ -387,32 +308,16 @@ def run_table(record: JSON) -> str:
     version = f" {identity['agent_version']}" if identity.get("agent") and identity.get("agent_version") else ""
     lines.append(f"  agent     {identity.get('agent') or '-'}{version}   session {identity.get('session') or '-'}   user {identity.get('user') or '-'}")
     lines.append(f"  started   {record.get('started') or record.get('created') or '-'}   finished {record.get('finished') or '-'}")
-    parent = record.get("parent") or {}
-    if parent:
-        at = f"{parent.get('step')}" + (f" pass {parent['pass']}" if parent.get("pass") is not None else "")
-        lines.append(f"  parent    run {parent.get('run_id')} at {at}   depth {record.get('depth') or 1}")
-    tokens = record.get("tokens") or {}
-    if tokens.get("total") or record.get("budget_tokens") is not None:
-        budget = f"   budget {record['budget_tokens']}" if record.get("budget_tokens") is not None else ""
-        lines.append(f"  tokens    {tokens.get('total') or 0} (own {tokens.get('own') or 0}, children {tokens.get('children') or 0}){budget}")
-    children = list(record.get("children") or [])
     rows = [("STEP", "KIND", "PASS", "WHEN", "+MS", "WHAT")]
-    spawned: list[tuple[int, JSON]] = []           # (row, child): a child goes under the entry of the step and pass that started it
     for e in record.get("history") or []:
         passes = " / ".join(f"{p['loop']} {p['pass']}" for p in e.get("passes") or []) or "-"
         ms = str(round(e["seconds"] * 1000)) if isinstance(e.get("seconds"), (int, float)) else ""
         rows.append((e["step"], e["kind"], passes, _when(e.get("at")), ms, _what(e)))
-        if e["kind"] == "Execute":
-            for child in [c for c in children if c.get("step") == e["step"] and c.get("pass") == e.get("pass")]:
-                spawned.append((len(rows) - 1, child))
-                children.remove(child)
     widths = [max(len(r[i]) for r in rows) for i in range(5)]
     lines.append("")
-    for i, r in enumerate(rows):
+    for r in rows:
         lines.append(f"{r[0].ljust(widths[0])}  {r[1].ljust(widths[1])}  {r[2].ljust(widths[2])}  {r[3].ljust(widths[3])}  "
                      f"{r[4].rjust(widths[4])}  {r[5]}".rstrip())
-        lines += [f"  -> run {_child(c)}" for row, c in spawned if row == i]
-    lines += [f"  -> run {_child(c)}  (started at {c.get('step')}, whose entry is not written)" for c in children]
     lines.append("")
     status = record.get("status")
     if status == PAUSED and record.get("pause"):
@@ -430,5 +335,4 @@ def run_table(record: JSON) -> str:
 
 
 __all__ = ["EXIT_OK", "EXIT_ERROR", "RUN_ID", "RunFile", "runs_dir", "run_path", "new_run_id", "local_runs", "outcome",
-           "own_tokens", "children_path", "add_child", "children_of", "children_tokens", "child_row",
            "error_outcome", "answer_hint", "progress_line", "run_table"]

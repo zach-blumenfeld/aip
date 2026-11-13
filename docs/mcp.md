@@ -45,7 +45,7 @@ run started over MCP can be resumed with `aip resume <run_id>` and read with `ai
 | `compile` | `folder`, `output` (a path ending in `.rl`, optional; any other name is refused) | `ok`, `name`, `bundle_id`, `diagnostics`, `output` | `Client.compile` |
 | `run` | `target`, `inputs`, and optionally `session`, `batch`, `workdir` | where the run stopped: paused, done or error | `Client.run` |
 | `resume` | `run_id`, `answers` (none: retry a failed step), and optionally `work` (what answering cost you: `model`, `tool_calls`, `tokens`, `seconds`; kept marked `reported`) | where the run stopped | `Client.resume` |
-| `runah` | `target` (or a `run_id` to carry on), `inputs`, and optionally `answers`, `human`, `session`, `workdir` | where the run stopped; this server's chat model (`aip config runah`) answered the tasks it could (`docs/runah.md`) | `Client.runah` |
+| `agent` | `task`, and optionally `session` (one an earlier reply gave: `task` is then the person's reply to its note) | `aip agent --json`'s outcome: `session`, `status`, `note`, `run_id`, `runs`; this server's chat model (`aip config agent`) drove `assist` (`docs/agent.md`), recorded as agent `agent` | `Client.ask` |
 | `pull` | `ref` (none: every published name) | `pulled`: `ref`, `name`, `revision`, `bundle_id`, `path`, `fetched` | `Client.pull`, `pull_all` |
 
 A `target` is what `aip run` takes: a published name (`name`, `name@rev`), a program directory,

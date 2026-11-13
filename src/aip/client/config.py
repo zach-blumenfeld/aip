@@ -11,18 +11,11 @@ to run without the configured model. The decision model is an endpoint with the 
 shape (plan question 7): the URL defaults to TypeSafe's and the key is the endpoint's; a model
 is configured when either is set, and with none every `Decide` fails the run
 (`no_decision_model`) until one is. With no server, runs work but are not recorded; `AIP_SERVER=none`
-says so for one command whatever the file holds. `aip runah` has its own block (`runah: {model_uri,
-model_name, model_key, max_tool_calls_per_task, max_tokens_per_task}`; `AIP_RUNAH_MODEL_URI`,
-`AIP_RUNAH_MODEL_NAME`, `AIP_RUNAH_MODEL_KEY`): the chat model that answers `Task_Agent` pauses
-in a run started or carried on with `aip runah` (`aip.model.answerer`, `docs/runah.md`), an
-endpoint with the OpenAI Chat Completions shape, Anthropic's by default. Nothing else calls it.
-A file written before runah had a name keeps the block as `agent_model: {url, api_key, name}`,
-which is read as the same block and moved on the next `aip config runah`. The same block holds
-the orchestrator's two bounds (`docs/runah.md`, The orchestrator): `max_depth`, how deep runah
-runs may nest when a script or the SDK starts one inside another (2 by default; a run started
-from a script is one deeper than the run whose script started it, `AIP_RUNAH_DEPTH`), and
-`budget_tokens`, the model tokens a runah run may spend, its children's included (unlimited by
-default; `AIP_RUNAH_BUDGET_TOKENS`, which a run's scripts are given as what is left). `script_timeout`
+says so for one command whatever the file holds. `aip agent` has its own block (`agent: {model_uri,
+model_name, model_key}`; `AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`, `AIP_AGENT_MODEL_KEY`): the
+chat model `aip agent` asks at each pause of the runs it drives (`aip.agent`, `docs/agent.md`), an
+endpoint with the OpenAI Chat Completions shape, Anthropic's by default. The runtime never calls
+it. `script_timeout`
 (`AIP_SCRIPT_TIMEOUT`) is the seconds one script may run, wherever a script runs; 300 by
 default. The identity
 of a run (`agent`, `session`; runtime.md, The record) comes from `--agent` / `AIP_AGENT` and
@@ -47,15 +40,11 @@ CONFIG_ENV = "AIP_CONFIG"
 SERVER_ENV, TOKEN_ENV, BATCH_ENV = "AIP_SERVER", "AIP_TOKEN", "AIP_BATCH"
 AGENT_ENV, SESSION_ENV = "AIP_AGENT", "AIP_SESSION"
 DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV = URL_ENV, KEY_ENV
-RUNAH_MODEL_URI_ENV, RUNAH_MODEL_NAME_ENV, RUNAH_MODEL_KEY_ENV = "AIP_RUNAH_MODEL_URI", "AIP_RUNAH_MODEL_NAME", "AIP_RUNAH_MODEL_KEY"
-RUNAH_BUDGET_ENV = "AIP_RUNAH_BUDGET_TOKENS"
-DEFAULT_MAX_DEPTH = 2
-DEFAULT_RUNAH_MODEL_URI = "https://api.anthropic.com/v1"
-DEFAULT_RUNAH_MODEL_NAME = "claude-opus-5-5"        # pinned, not an alias: two runs never record one name for two models
-DEFAULT_MAX_TOOL_CALLS_PER_TASK = 40
-DEFAULT_MAX_TOKENS_PER_TASK = 500_000
-RUNAH_HINT = ("`aip config runah --model-key KEY` (and `--model-uri URL --model-name NAME` for an endpoint other than "
-              "Anthropic's), or AIP_RUNAH_MODEL_KEY")
+AGENT_MODEL_URI_ENV, AGENT_MODEL_NAME_ENV, AGENT_MODEL_KEY_ENV = "AIP_AGENT_MODEL_URI", "AIP_AGENT_MODEL_NAME", "AIP_AGENT_MODEL_KEY"
+DEFAULT_AGENT_MODEL_URI = "https://api.anthropic.com/v1"
+DEFAULT_AGENT_MODEL_NAME = "claude-opus-5-5"        # pinned, not an alias: two runs never record one name for two models
+AGENT_HINT = ("`aip config agent --model-key KEY` (and `--model-uri URL --model-name NAME` for an endpoint other than "
+              "Anthropic's), or AIP_AGENT_MODEL_KEY")
 CONFIGURE_HINT = "run `aip config server local` to record runs on this machine, or `aip config server URL` for a server elsewhere"
 LOCAL, NONE = "local", "none"
 
@@ -100,16 +89,11 @@ class Settings:
     batch: int
     path: Path
     local: bool = False                # the server is this machine's, started on demand (`aip config server local`)
-    runah_model_uri: str | None = None   # runah's chat endpoint as configured; None means Anthropic's
-    runah_model_key: str | None = None
-    runah_model_name: str | None = None  # None means DEFAULT_RUNAH_MODEL_NAME
-    runah_source: str | None = None
-    max_tool_calls_per_task: int = DEFAULT_MAX_TOOL_CALLS_PER_TASK   # per task runah's model answers
-    max_tokens_per_task: int = DEFAULT_MAX_TOKENS_PER_TASK           # per task: prompt and completion tokens over every call of its chat
+    agent_model_uri: str | None = None   # `aip agent`'s chat endpoint as configured; None means Anthropic's
+    agent_model_key: str | None = None
+    agent_model_name: str | None = None  # None means DEFAULT_AGENT_MODEL_NAME
+    agent_source: str | None = None
     script_timeout: float | None = 300.0  # seconds one script may run, wherever a script runs; None: no cap
-    max_depth: int = DEFAULT_MAX_DEPTH    # how deep runah runs may nest, started from a script or the SDK inside another run
-    budget_tokens: int | None = None      # model tokens a runah run may spend, its children's included; None: no budget
-    budget_source: str | None = None
 
     @property
     def token_set(self) -> bool:
@@ -139,30 +123,25 @@ class Settings:
         return f"decision model: {where}  key: {key}  (from {self.decision_model_source})"
 
     @property
-    def runah_configured(self) -> bool:
-        """runah can run when its model key is set: the endpoint and the name have defaults."""
-        return bool(self.runah_model_key)
+    def agent_configured(self) -> bool:
+        """`aip agent` can run when its model key is set: the endpoint and the name have defaults."""
+        return bool(self.agent_model_key)
 
     @property
-    def runah_model_endpoint(self) -> str:
-        return self.runah_model_uri or DEFAULT_RUNAH_MODEL_URI
+    def agent_model_endpoint(self) -> str:
+        return self.agent_model_uri or DEFAULT_AGENT_MODEL_URI
 
     @property
-    def runah_model(self) -> str:
-        return self.runah_model_name or DEFAULT_RUNAH_MODEL_NAME
+    def agent_model(self) -> str:
+        return self.agent_model_name or DEFAULT_AGENT_MODEL_NAME
 
     @property
-    def runah(self) -> str:
-        """The `aip config` block for runah: endpoint, model, whether a key is set, the caps."""
-        key = "set" if self.runah_model_key else f"none (`aip runah` refuses to start; {RUNAH_HINT})"
-        source = f"  (from {self.runah_source})" if self.runah_source else ""
-        budget = "none" if self.budget_tokens is None else f"{self.budget_tokens} tokens per run, its children's included"
-        if self.budget_tokens is not None and self.budget_source:
-            budget += f"  (from {self.budget_source})"
-        return (f"runah:{source}\n  model uri:   {self.runah_model_endpoint}\n  model name:  {self.runah_model}\n"
-                f"  model key:   {key}\n  per task:    at most {self.max_tool_calls_per_task} tool calls, "
-                f"{self.max_tokens_per_task} tokens\n  max depth:   {self.max_depth} (runah runs started inside another run)\n"
-                f"  budget:      {budget}")
+    def agent(self) -> str:
+        """The `aip config` block for `aip agent`: endpoint, model, whether a key is set."""
+        key = "set" if self.agent_model_key else f"none (`aip agent` refuses to start; {AGENT_HINT})"
+        source = f"  (from {self.agent_source})" if self.agent_source else ""
+        return (f"agent:{source}\n  model uri:   {self.agent_model_endpoint}\n  model name:  {self.agent_model}\n"
+                f"  model key:   {key}")
 
     @property
     def script_cap(self) -> str:
@@ -190,39 +169,27 @@ def settings() -> Settings:
     from_env = [v for v in (DECISION_MODEL_ENV, DECISION_MODEL_KEY_ENV) if os.environ.get(v)]
     model_source = ", ".join(from_env) if from_env else (str(config_path()) if url or key else None)
     batch = _int(os.environ.get(BATCH_ENV)) or _int(config.get("batch")) or DEFAULT_BATCH
-    runah = _runah_block(config)
+    block = _agent_block(config)
     values = {}
-    for field, env in (("model_uri", RUNAH_MODEL_URI_ENV), ("model_key", RUNAH_MODEL_KEY_ENV), ("model_name", RUNAH_MODEL_NAME_ENV)):
-        values[field] = (os.environ[env] if env in os.environ else runah.get(field)) or None
-    runah_env = [v for v in (RUNAH_MODEL_URI_ENV, RUNAH_MODEL_NAME_ENV, RUNAH_MODEL_KEY_ENV) if os.environ.get(v)]
-    runah_source = ", ".join(runah_env) if runah_env else (str(config_path()) if any(values.values()) else None)
+    for field, env in (("model_uri", AGENT_MODEL_URI_ENV), ("model_key", AGENT_MODEL_KEY_ENV), ("model_name", AGENT_MODEL_NAME_ENV)):
+        values[field] = (os.environ[env] if env in os.environ else block.get(field)) or None
+    agent_env = [v for v in (AGENT_MODEL_URI_ENV, AGENT_MODEL_NAME_ENV, AGENT_MODEL_KEY_ENV) if os.environ.get(v)]
+    agent_source = ", ".join(agent_env) if agent_env else (str(config_path()) if any(values.values()) else None)
     uri = values["model_uri"]
     from aip.model.environment import script_timeout
 
-    env_budget = os.environ.get(RUNAH_BUDGET_ENV, "").strip()
-    budget = _int(env_budget) if env_budget else _int(runah.get("budget_tokens"))
-    budget_source = RUNAH_BUDGET_ENV if env_budget else (str(config_path()) if budget else None)
-    depth = runah.get("max_depth")
-    max_depth = depth if isinstance(depth, int) and not isinstance(depth, bool) and depth >= 0 else DEFAULT_MAX_DEPTH
-
     return Settings(server.rstrip("/") if server else None, source, token, url.rstrip("/") if url else None, key, model_source,
                     batch, config_path(), local, uri.rstrip("/") if uri else None, values["model_key"], values["model_name"],
-                    runah_source, _int(runah.get("max_tool_calls_per_task")) or DEFAULT_MAX_TOOL_CALLS_PER_TASK,
-                    _int(runah.get("max_tokens_per_task")) or DEFAULT_MAX_TOKENS_PER_TASK, script_timeout(config.get("script_timeout")),
-                    max_depth, budget, budget_source)
+                    agent_source, script_timeout(config.get("script_timeout")))
 
 
-LEGACY_RUNAH = {"url": "model_uri", "api_key": "model_key", "name": "model_name", "max_tool_calls": "max_tool_calls_per_task",
-                "max_tokens": "max_tokens_per_task"}
+AGENT_FIELDS = ("model_uri", "model_name", "model_key")
 
 
-def _runah_block(config: JSON) -> JSON:
-    """The file's `runah` block; a file written before runah had a name holds it as `agent_model`
-    under the old field names."""
-    if isinstance(config.get("runah"), dict):
-        return dict(config["runah"])
-    old = config.get("agent_model") if isinstance(config.get("agent_model"), dict) else {}
-    return {LEGACY_RUNAH[k]: v for k, v in old.items() if k in LEGACY_RUNAH}
+def _agent_block(config: JSON) -> JSON:
+    """The file's `agent` block."""
+    block = config.get("agent")
+    return {k: v for k, v in block.items() if k in AGENT_FIELDS} if isinstance(block, dict) else {}
 
 
 def _int(value: Any) -> int | None:
@@ -240,8 +207,8 @@ def configure(server: str | None = None, token: str | None = None, decision_mode
     value, `clear` forgets everything. `server` is a URL, `local` for this machine's server
     started on demand, or `none` (the same as an empty string). `decision_model` is the
     endpoint's URL, `decision_model_key` its key. `script_timeout` is the seconds one script
-    may run (`0` or `none`: no cap; an empty string forgets it, back to 300). runah's block is
-    written by `configure_runah`."""
+    may run (`0` or `none`: no cap; an empty string forgets it, back to 300). `aip agent`'s block
+    is written by `configure_agent`."""
     if clear:
         save_config({})
         return settings()
@@ -279,42 +246,21 @@ def configure(server: str | None = None, token: str | None = None, decision_mode
     return settings()
 
 
-def configure_runah(model_uri: str | None = None, model_name: str | None = None, model_key: str | None = None,
-                    max_tool_calls_per_task: int | None = None, max_tokens_per_task: int | None = None,
-                    max_depth: int | None = None, budget_tokens: int | None = None) -> Settings:
-    """Write runah's block (`aip config runah`): arguments left None are unchanged, an empty
-    string forgets the value (back to its default; for the key, no key). `max_depth` is how
-    deep runah runs may nest (0: none may start inside another run); `budget_tokens` the model
-    tokens one runah run may spend, its children's included (0 forgets it: no budget)."""
+def configure_agent(model_uri: str | None = None, model_name: str | None = None, model_key: str | None = None) -> Settings:
+    """Write `aip agent`'s block (`aip config agent`): arguments left None are unchanged, an
+    empty string forgets the value (back to its default; for the key, no key)."""
     config = load_config()
-    block = _runah_block(config)
+    block = _agent_block(config)
     for key, value in (("model_uri", model_uri.rstrip("/") if model_uri else model_uri), ("model_name", model_name),
                        ("model_key", model_key)):
         if value:
             block[key] = value
         elif value is not None:
             block.pop(key, None)
-    for key, value in (("max_tool_calls_per_task", max_tool_calls_per_task), ("max_tokens_per_task", max_tokens_per_task)):
-        if value is not None:
-            if value < 1:
-                raise ValueError(f"--{key.replace('_', '-')} is at least 1, not {value}")
-            block[key] = value
-    if max_depth is not None:
-        if max_depth < 0:
-            raise ValueError(f"--max-depth is at least 0, not {max_depth}")
-        block["max_depth"] = max_depth
-    if budget_tokens is not None:
-        if budget_tokens < 0:
-            raise ValueError(f"--budget-tokens is at least 0 (0: no budget), not {budget_tokens}")
-        if budget_tokens:
-            block["budget_tokens"] = budget_tokens
-        else:
-            block.pop("budget_tokens", None)
-    config.pop("agent_model", None)
     if block:
-        config["runah"] = block
+        config["agent"] = block
     else:
-        config.pop("runah", None)
+        config.pop("agent", None)
     save_config(config)
     return settings()
 
@@ -332,6 +278,6 @@ def identity(agent: str | None = None, session: str | None = None, default_agent
 
 
 __all__ = ["CONFIG_ENV", "SERVER_ENV", "TOKEN_ENV", "BATCH_ENV", "AGENT_ENV", "SESSION_ENV", "DECISION_MODEL_ENV", "LOCAL", "NONE",
-           "DECISION_MODEL_KEY_ENV", "CONFIGURE_HINT", "RUNAH_MODEL_URI_ENV", "RUNAH_MODEL_NAME_ENV", "RUNAH_MODEL_KEY_ENV",
-           "RUNAH_HINT", "RUNAH_BUDGET_ENV", "DEFAULT_MAX_DEPTH", "DEFAULT_RUNAH_MODEL_URI", "DEFAULT_RUNAH_MODEL_NAME", "DECISION_MODEL_HINT", "Settings", "config_path",
-           "load_config", "save_config", "settings", "configure", "configure_runah", "identity"]
+           "DECISION_MODEL_KEY_ENV", "CONFIGURE_HINT", "AGENT_MODEL_URI_ENV", "AGENT_MODEL_NAME_ENV", "AGENT_MODEL_KEY_ENV",
+           "AGENT_HINT", "DEFAULT_AGENT_MODEL_URI", "DEFAULT_AGENT_MODEL_NAME", "DECISION_MODEL_HINT", "Settings", "config_path",
+           "load_config", "save_config", "settings", "configure", "configure_agent", "identity"]
