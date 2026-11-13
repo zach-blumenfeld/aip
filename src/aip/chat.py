@@ -118,7 +118,7 @@ class ChatClient:
 
 # --------------------------------------------------------------------------- aip agent's plumbing
 
-COMPLETION_TOKENS = 32000
+COMPLETION_TOKENS = 64000   # thinking counts against this on Anthropic's OpenAI-compatible endpoint; 32000 left Claude 5.5 no room to answer
 ASSIST, ANSWERS = "assist", 4          # the procedure `aip agent` drives; one answer, up to three corrections, as `aip.agent` has it
 REFUSED = "That answer was refused: {}. Reply with the corrected JSON object only."
 
