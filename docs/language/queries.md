@@ -214,7 +214,7 @@ ORDER BY confidence, procedure, step, question, run
 ### Aggregations that fail most often
 
 Per aggregation: how often it was computed, how often it did not hold, and how many of the
-answers it judged were turned by its bar (`With Confidence_Above`).
+answers it judged were turned by its bar (`With Probability_Above`).
 
 ```cypher
 MATCH (p:Procedure)-[:HAS_STEP]->(s:Aggregate)-[:AGGREGATES]->(g:Aggregation)<-[:ANSWERS]-(a:Answer)

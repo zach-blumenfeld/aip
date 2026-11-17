@@ -295,12 +295,56 @@ def test_a_run_is_upserted_whole_at_every_stop(served, tmp_path):
     assert stored["status"] == "done" and stored["history"] == more and stored["pause"] is None
     count = served.store.rows("MATCH (r:Run {run_id: 'run-0001'})-[:HAS_ENTRY]->(e:Entry) RETURN count(e) AS entries")
     assert count == [{"entries": 3}] and len(api.runs()) == 1
+    assert api.runs()[0]["result"] == {"message": CALM}, "the listing says what a finished run ended with"
 
     rewritten = [more[0], {**more[1], "seconds": 0.5}]                                # not what a client does; the store still follows
     api.record(run_of(bundle_id, history=rewritten))
     assert api.run("run-0001")["history"] == rewritten
     path = served.store.rows("MATCH (a:Entry {run_id: 'run-0001'})-[:THEN]->(b:Entry) RETURN a.seq AS a, b.seq AS b, b.seconds AS seconds")
     assert path == [{"a": 0, "b": 1, "seconds": 0.5}]
+
+
+def test_a_bare_name_is_the_catalog_even_beside_a_folder_of_that_name(served, tmp_path, monkeypatch):
+    """What the loan rehearsal hit: a build had left `./<name>/` in the working directory, and
+    `aip run <name>` ran the folder as a draft five times where the published procedure was
+    meant. A bare name the catalog has is the catalog's; `./<name>` is the folder."""
+    me = client(served, model=BillingModel())
+    me.publish(EXAMPLE)
+    folder = tmp_path / "billing_support"
+    shutil.copytree(reworded(tmp_path), folder)                                  # another bundle under the published name
+    monkeypatch.chdir(tmp_path)
+    published, local = me.describe("billing_support"), me.describe("./billing_support")
+    assert (published.revision, published.data["draft"]) == ("1", False) and local.data["draft"] is True
+    assert published.bundle_id != local.bundle_id
+
+    said: list[str] = []
+    result = me.run("billing_support", {"message": CALM}, workdir=tmp_path, on_warning=said.append)
+    assert served.store.rows("MATCH (r:Run) RETURN r.revision AS revision, r.draft AS draft") == [{"revision": "1", "draft": False}]
+    assert said and "running the published billing_support@1" in said[0] and "`aip run ./billing_support`" in said[0]
+    assert result.warning and said[0] in result.warning
+
+    (tmp_path / "ticket_triage").mkdir()                                         # a name the catalog lacks is still the folder
+    with pytest.raises(aip.NotFound, match="has no procedure.aip"):
+        me.describe("ticket_triage")
+    assert me.publish("billing_support").revision == "2", "publish names a folder, never the catalog"
+
+
+def test_text_outside_ascii_is_stored_as_written(served, tmp_path):
+    """#26: a key or a value in Vietnamese is those characters in the node's JSON property, not
+    `\\uXXXX`, so a Browser shows the record as it was written; what comes back is unchanged."""
+    api = server(served)
+    bundle_id, data = rl(EXAMPLE, tmp_path)
+    api.publish(data)
+    state = {"Cần chạy research": False, "path": "C:/Công ty/guide.md"}
+    entry = {"step": "start", "kind": "Start", "pass": None, "passes": [], "at": "2026-11-09T12:00:00.000+00:00", "seconds": 0.0,
+             "input": state, "result": state}
+    posted = run_of(bundle_id, status="done", pause=None, position=None, result={"Tóm tắt kết quả": "xong"}, history=[entry])
+    api.record(posted)
+    assert api.runs()[0]["result"] == {"Tóm tắt kết quả": "xong"}
+    assert api.run("run-0001")["history"] == [entry]
+    kept = served.store.rows("MATCH (r:Run {run_id: 'run-0001'})-[:HAS_ENTRY]->(e:Entry) RETURN r.json AS run, e.json AS entry")
+    assert "Tóm tắt kết quả" in kept[0]["run"] and "Cần chạy research" in kept[0]["entry"] and "C:/Công ty/guide.md" in kept[0]["entry"]
+    assert "\\u" not in kept[0]["run"] + kept[0]["entry"]
 
 
 def test_runs_through_the_client_carry_identity_and_drafts(served, tmp_path):

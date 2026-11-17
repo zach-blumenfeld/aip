@@ -329,7 +329,7 @@ class _Builder:
                 cond = a.condition
                 self.node(aid, ("Aggregation",), {
                     "name": a.name, "mode": a.mode, "source": cond.answer.dotted, "operator": cond.operator,
-                    "value": cond.value, "confidence_above": cond.confidence_above, "order": order, **_span(a)})
+                    "value": cond.value, "probability_above": cond.probability_above, "order": order, **_span(a)})
                 self.edge("AGGREGATES", id, aid, {"order": order})
                 self.edge("OVER", aid, self.key(cond.answer.name), {"field": ".".join(cond.answer.path[1:]) or None})
         elif st.kind == "Task_Agent" and st.prompt is None:
@@ -409,7 +409,7 @@ class _Builder:
                      "times": loop.times, "at_cap": loop.at_cap,
                      "until_answer": cond.answer.dotted if cond else None, "until_operator": cond.operator if cond else None,
                      "until_value": cond.value if cond else None,
-                     "until_confidence_above": cond.confidence_above if cond else None, **_span(loop)}
+                     "until_probability_above": cond.probability_above if cond else None, **_span(loop)}
             labels = ("Loop",)
         self.node(id, labels, props)
         self.edge("HAS_LOOP", PROCEDURE_ID, id)
@@ -425,7 +425,7 @@ class _Builder:
             cond = loop.until
             self.edge("WATCHES", id, self.key(cond.answer.name), {
                 "field": ".".join(cond.answer.path[1:]) or None, "operator": cond.operator, "value": cond.value,
-                "confidence_above": cond.confidence_above}, at=cond)
+                "probability_above": cond.probability_above}, at=cond)
         body = [i for i in loop.body if not isinstance(i, s.NamedString)]
         for order, item in enumerate(body):
             self.edge("CONTAINS", id, _node_id(item), {"order": order})

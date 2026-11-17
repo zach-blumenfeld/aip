@@ -7,7 +7,7 @@
    ],
    "properties": {
     "id": "procedure",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "dynamic_policy",
     "description": "Do a task the requester describes, checked against the policies the requester supplies.",
     "language_version": "0.9",
@@ -31,7 +31,7 @@
    ],
    "properties": {
     "id": "file:assets/fix.md",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "path": "assets/fix.md",
     "size": 679,
     "mode": 420,
@@ -45,7 +45,7 @@
    ],
    "properties": {
     "id": "file:assets/task.md",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "path": "assets/task.md",
     "size": 180,
     "mode": 420,
@@ -60,7 +60,7 @@
    ],
    "properties": {
     "id": "step:start",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "start",
     "kind": "Start",
     "description": "The task and the policies, from the requester.",
@@ -77,7 +77,7 @@
    ],
    "properties": {
     "id": "data:task",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "task",
     "type": "string",
     "description": "What to do, as the requester wrote it."
@@ -90,7 +90,7 @@
    ],
    "properties": {
     "id": "data:policies",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "policies",
     "type": "list",
     "description": "The policies the work must follow, one string each."
@@ -104,7 +104,7 @@
    ],
    "properties": {
     "id": "step:draft",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "draft",
     "kind": "Task_Agent",
     "description": "Do the task, following every policy.",
@@ -122,7 +122,7 @@
    ],
    "properties": {
     "id": "data:work",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "work",
     "type": "string",
     "description": "The result of the task."
@@ -135,7 +135,7 @@
    ],
    "properties": {
     "id": "loop:revise",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "revise",
     "kind": "Loop",
     "mode": "Until",
@@ -155,7 +155,7 @@
    ],
    "properties": {
     "id": "data:check_summary",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "check_summary",
     "type": "aggregation"
    }
@@ -168,7 +168,7 @@
    ],
    "properties": {
     "id": "loop:review",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "review",
     "kind": "For",
     "mode": "Over",
@@ -189,7 +189,7 @@
    ],
    "properties": {
     "id": "data:policy",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "policy"
    }
   },
@@ -200,7 +200,7 @@
    ],
    "properties": {
     "id": "data:verdict",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "verdict",
     "type": "decision"
    }
@@ -212,7 +212,7 @@
    ],
    "properties": {
     "id": "data:verdicts",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "verdicts",
     "type": "list"
    }
@@ -225,7 +225,7 @@
    ],
    "properties": {
     "id": "step:check",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "check",
     "kind": "Decide",
     "description": "Does the work follow this one policy? The policy is written into the question.",
@@ -244,7 +244,7 @@
    ],
    "properties": {
     "id": "question:check.follows",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "follows",
     "type": "true_or_false",
     "instruction": "\nDoes the work follow the policy described below? Read the policy as written; do not infer\npolicies it does not state.\n\n{policy}\n",
@@ -263,7 +263,7 @@
    ],
    "properties": {
     "id": "step:summarize_check",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "summarize_check",
     "kind": "Aggregate",
     "description": "Every policy holds, and the model was sure of each.",
@@ -281,15 +281,15 @@
    ],
    "properties": {
     "id": "aggregation:summarize_check.all_hold",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "all_hold",
     "mode": "All",
-    "confidence_above": 0.7,
+    "probability_above": 0.7,
     "order": 0,
     "line": 55,
     "column": 7,
     "end_line": 55,
-    "end_column": 63
+    "end_column": 64
    }
   },
   {
@@ -300,7 +300,7 @@
    ],
    "properties": {
     "id": "step:fix",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "fix",
     "kind": "Task_Agent",
     "description": "Revise the work so the failed policies pass.",
@@ -319,7 +319,7 @@
    ],
    "properties": {
     "id": "step:end",
-    "bundle_id": "07420962eadf06eb42081a2e0cb3b7f34eeb625c2f7b985dca7f3702ad7f5938",
+    "bundle_id": "40ce7b21c9908ba77b51752f344a936e22da1828fbf45151bdb458e870ef569e",
     "name": "end",
     "kind": "End",
     "description": "The work, and the verdict for every policy.",

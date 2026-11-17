@@ -63,8 +63,8 @@ CASES = [
     ("aggregation mode", 'Aggregate a "x" {\n  Aggregations {\n    all: Every d.q\n  }\n}\n', 4, 10, "expected 'All', 'Any' or 'None', got 'Every'"),
     ("aggregation source", 'Aggregate a "x" {\n  Aggregations {\n    all: All == true\n  }\n}\n', 4, 14, "expected the answers to aggregate, got '=='"),
     ("condition value", 'Aggregate a "x" {\n  Aggregations {\n    all: All d.q == \n  }\n}\n', 5, 3, "expected a value (a label, a level, true or false) after '==', got '}'"),
-    ("condition confidence", 'Aggregate a "x" {\n  Aggregations {\n    all: All d.q With 0.7\n  }\n}\n', 4, 23, "expected 'Confidence_Above' after 'With', got '0.7'"),
-    ("condition probability", 'Aggregate a "x" {\n  Aggregations {\n    all: All d.q With Confidence_Above high\n  }\n}\n', 4, 40, "expected a probability after 'Confidence_Above', such as 0.7, got 'high'"),
+    ("condition confidence", 'Aggregate a "x" {\n  Aggregations {\n    all: All d.q With 0.7\n  }\n}\n', 4, 23, "expected 'Probability_Above' after 'With', got '0.7'"),
+    ("condition probability", 'Aggregate a "x" {\n  Aggregations {\n    all: All d.q With Probability_Above high\n  }\n}\n', 4, 41, "expected a probability after 'Probability_Above', such as 0.7, got 'high'"),
     ("script path", 'Execute e "x" {\n  Run_Script\n  Produce o: string\n}\n', 4, 3, "expected the script's path after 'Run_Script', got 'Produce'"),
     ("use path", 'Execute e "x" {\n  Use\n}\n', 4, 1, "expected a file path after 'Use', got '}'"),
     # `python` stands where a string may: a named string. The stray word after it is the error.
@@ -89,7 +89,9 @@ CASES = [
     ("misspelt alias", 'Task_Agent t "x" {\n  Reads m\n  Produces o: string\n  Nxt end\n}\n', 5, 3, "got 'Nxt'; did you mean Next_Step?"),
     ("misspelt loop option", "Loop l Until d.q, At_Mos 3 {\n}\n", 2, 19, "got 'At_Mos'; did you mean At_Most?"),
     ("procedure misspelt", "Procedur p \"x\"\n", 1, 1, "got 'Procedur'; did you mean Procedure?"),
-    ("misspelt confidence_above", 'Loop l Until d.q With Confidence_Abov 0.7, At_Most 3 {\n}\n', 2, 23, "got 'Confidence_Abov'; did you mean Confidence_Above?"),
+    ("misspelt probability_above", 'Loop l Until d.q With Probability_Abov 0.7, At_Most 3 {\n}\n', 2, 23, "got 'Probability_Abov'; did you mean Probability_Above?"),
+    ("the bar's old name", 'Loop l Until d.q With Confidence_Above 0.7, At_Most 3 {\n}\n', 2, 23,
+     "a bar is on the probability of the condition and is written 'With Probability_Above'; 'Confidence_Above' was its name before 0.9.0 and is not a keyword"),
     # a header clause below the header says where it belongs
     ("header clause after a step", 'Start "s" { m: string  Next_Step end }\nUse_When "late"\n', 3, 1,
      "'Use_When' belongs in the header, before the first step"),

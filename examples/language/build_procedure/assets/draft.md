@@ -33,7 +33,7 @@ What the documents say:
     claim) is a `Decide`: one question, answered with a confidence.
   - A policy with several rules is a `For` over the rules (a list in an asset, or an input) with
     one `Decide` per rule inside it, `Collect`ing the verdicts, then an `Aggregate` with a
-    confidence bar (`All verdicts.follows With Confidence_Above 0.8`) and a `Route` on it; so a
+    probability bar (`All verdicts.follows With Probability_Above 0.8`) and a `Route` on it; so a
     rule added to the policy is covered without editing the steps. Never one script or one
     agent step that checks every rule in turn.
   - A `Task_Agent` is for reading or writing prose (a receipt's text, a rationale, a reply) and

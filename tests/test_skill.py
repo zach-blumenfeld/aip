@@ -168,6 +168,34 @@ def test_skill_prune_removes_only_our_retired_folders(tmp_path):
     assert (tmp_path / "aip" / "SKILL.md").is_file(), "the skill itself is not a retired name"
 
 
+def test_aip_says_once_when_an_agent_is_here_without_the_skill(tmp_path, monkeypatch):
+    """A `pip install` leaves the command and no skill: the help says so, and a command typed at
+    a terminal says so once per machine; a program reading `aip` is told nothing."""
+    from aip.client.cli import SKILL_REMINDER
+
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    def typed(*argv: str) -> str:
+        err = Terminal()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            main(list(argv))
+        return err.getvalue()
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert SKILL_REMINDER not in call("--help")[1], "no agent on the machine: nothing to say"
+    (tmp_path / ".claude").mkdir()
+    assert SKILL_REMINDER in call("--help")[1]
+    for quiet in (("runs", "--json"), ("skill", "list")):
+        assert SKILL_REMINDER not in typed(*quiet)
+    assert SKILL_REMINDER not in call("config")[2], "not a terminal"
+    assert SKILL_REMINDER in typed("config")
+    assert SKILL_REMINDER not in typed("config"), "said once"
+    assert call("skill", "install")[0] == 0
+    assert SKILL_REMINDER not in call("--help")[1]
+
+
 def test_skill_list_and_an_unknown_agent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".claude").mkdir()

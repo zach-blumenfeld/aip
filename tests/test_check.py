@@ -272,12 +272,12 @@ class Conditions(unittest.TestCase):
         self.assertEqual([d.code for d in check_path(EXAMPLES / "ticket-triage")[1]], [])
 
     def test_a_confidence_bar_is_allowed_on_a_script_answer_and_an_error_on_an_aggregation_an_agent_or_an_input(self):
-        scripted = ('Requires python 3.10\nStart "s" { m: string  Next_Step l }\nLoop l Until passed With Confidence_Above 0.8, At_Most 3 {\n'
+        scripted = ('Requires python 3.10\nStart "s" { m: string  Next_Step l }\nLoop l Until passed With Probability_Above 0.8, At_Most 3 {\n'
                     '  Execute e "e" { Read m  Run_Script scripts/x.py  Produce passed: true_or_false  Continue }\n  Next_Step end\n}\nEnd "e" { Read passed }\n')
         self.assertEqual(codes(scripted), [], "a script may supply a confidence, so a bar on its answer is allowed")
         body = (START + NOUL.replace("Next_Step r", "Next_Step a")
                 + 'Aggregate a "a" { Read dec  Aggregations { all: All dec }  Produce agg  Next_Step b }\n'
-                'Aggregate b "b" { Read agg  Aggregations { again: All agg.all With Confidence_Above 0.5 }  Produce agg2  Next_Step end }\nEnd "e" { Read agg2 }\n')
+                'Aggregate b "b" { Read agg  Aggregations { again: All agg.all With Probability_Above 0.5 }  Produce agg2  Next_Step end }\nEnd "e" { Read agg2 }\n')
         [d] = diagnostics(body)
         self.assertEqual((d.code, d.step), ("confidence_on_aggregate", "b"))
         agent = scripted.replace('Execute e "e" { Read m  Run_Script scripts/x.py ', 'Task_Agent e "e" { Read m ')
@@ -285,7 +285,7 @@ class Conditions(unittest.TestCase):
         self.assertEqual((d.code, d.severity, d.step, d.line), ("confidence_on_agent_answer", "error", "l", 4))
         self.assertIn("the agent's answer (produced by e)", d.message)
         inp = ('Start "s" { items: list  ok: true_or_false  Next_Step a }\n'
-               'Aggregate a "a" { Read ok  Aggregations { all: All ok With Confidence_Above 0.5 }  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n')
+               'Aggregate a "a" { Read ok  Aggregations { all: All ok With Probability_Above 0.5 }  Produce agg  Next_Step end }\nEnd "e" { Read agg }\n')
         [d] = diagnostics(inp)
         self.assertEqual((d.code, d.step), ("confidence_on_input", "a"))
 
@@ -347,7 +347,7 @@ class Conditions(unittest.TestCase):
     def test_aggregation_sources(self):
         loop = ('Start "s" { items: list  Next_Step f }\nFor f Over items As i, At_Most 5, Collect verdict Into verdicts {\n'
                 '  Decide d "d" { Read i  Answer_Questions { q: true_or_false "?"  c: choice [a, b] "?" }  Produce verdict  Continue }\n  Next_Step agg\n}\n')
-        ok = loop + 'Aggregate agg "a" { Read verdicts  Aggregations { all: All verdicts.q  none: None verdicts.c == a With Confidence_Above 0.7 }  Produce s  Next_Step end }\nEnd "e" { Read s }\n'
+        ok = loop + 'Aggregate agg "a" { Read verdicts  Aggregations { all: All verdicts.q  none: None verdicts.c == a With Probability_Above 0.7 }  Produce s  Next_Step end }\nEnd "e" { Read s }\n'
         self.assertEqual(codes(ok), [])
         whole = loop + 'Aggregate agg "a" { Read verdicts  Aggregations { all: All verdicts }  Produce s  Next_Step end }\nEnd "e" { Read s }\n'
         [d] = diagnostics(whole)

@@ -18,8 +18,8 @@ The store is the one `aip server` opens by default, so a server started by hand 
 the same catalog and the same record; only one process may hold the file at a time. `ensure()`
 tells an aip server from whatever else may answer on the port by `GET /health`.
 
-A run never fails because of this: when the local server cannot be started (the server extra
-or Relate is not installed, the port is taken), the stop is reported as not recorded, with why.
+A run never fails because of this: when the local server cannot be started (a broken
+install, the port is taken), the stop is reported as not recorded, with why.
 """
 
 from __future__ import annotations

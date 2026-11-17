@@ -241,10 +241,10 @@ function loopHeader(source: string, graph: Graph, loop: string): { from: number;
 }
 
 /** Change what a `Loop ... Until` watches: the condition between `Until` and the next clause, written as given
- *  (`passed`, `review.verdict == approved With Confidence_Above 0.8`). The compiler says whether it is one. */
+ *  (`passed`, `review.verdict == approved With Probability_Above 0.8`). The compiler says whether it is one. */
 export function setUntil(source: string, graph: Graph, loop: string, condition: string): TextEdit[] {
   const clean = condition.replace(/\s+/g, " ").trim();
-  if (!clean || /[,{}]/.test(clean)) throw new EditError("a condition is one answer, optionally `== value` and `With Confidence_Above p`, with no comma or brace");
+  if (!clean || /[,{}]/.test(clean)) throw new EditError("a condition is one answer, optionally `== value` and `With Probability_Above p`, with no comma or brace");
   const header = loopHeader(source, graph, loop);
   const m = /(Until\s+)([^,]*?)(\s*(?:,|$))/i.exec(header.text);
   if (!m) throw new EditError(`${nameOf(graph, loop)} has no Until: a loop of a fixed count runs its passes`);

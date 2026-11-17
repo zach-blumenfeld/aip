@@ -144,7 +144,7 @@ function LoopFields({ graph, source, id, busy, run }: { graph: Graph; source: st
   const until = p.until_answer ? [
     str(p.until_answer),
     p.until_operator ? `${str(p.until_operator)} ${str(p.until_value)}` : "",
-    p.until_confidence_above !== undefined && p.until_confidence_above !== null ? `With Confidence_Above ${str(p.until_confidence_above)}` : "",
+    p.until_probability_above !== undefined && p.until_probability_above !== null ? `With Probability_Above ${str(p.until_probability_above)}` : "",
   ].filter(Boolean).join(" ") : null;
   const [c, setC] = useState(str(cap));
   useEffect(() => setC(str(cap)), [cap]);
@@ -161,7 +161,7 @@ function LoopFields({ graph, source, id, busy, run }: { graph: Graph; source: st
       )}
       {until !== null && (
         <>
-          <TextField label="until (an answer, optionally == a label and With Confidence_Above a bar)" value={until} rows={1} testid="form-until" busy={busy}
+          <TextField label="until (an answer, optionally == a label and With Probability_Above a bar)" value={until} rows={1} testid="form-until" busy={busy}
                      onSave={(v) => run(`until of ${name}`, () => setUntil(source, graph, id, v))} />
           <Row label="when the cap is reached first">
             <select value={str(p.at_cap) || "Else_Fail"} disabled={busy} data-testid="form-at-cap"

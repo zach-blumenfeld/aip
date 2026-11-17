@@ -280,6 +280,33 @@ def test_dynamic_policy_by_name_end_to_end_recorded_under_the_client(store, tmp_
 # ------------------------------------------------------------------------ the command
 
 
+def test_an_allow_list_registers_only_the_tools_it_names(tmp_path):
+    """`aip mcp --tools search,describe,run,resume`: an agent "whose only tools are search, describe,
+    run and resume" is that by the server's doing, not by a filter in its framework. A tool left
+    out is not listed and cannot be called."""
+    from aip.mcp import tools_named
+
+    async def script(call, client):
+        listed = [t.name for t in (await client.list_tools()).tools]
+        described = await call("describe", target=str(example_dir("billing-support")))
+        try:
+            refused = (await client.call_tool("compile", {"folder": str(tmp_path)})).is_error
+        except Exception:                                  # the SDK's client may raise for a tool the server does not have
+            refused = True
+        return listed, described, refused
+    listed, described, refused = over(build(aip.Client(), tools="resume, run,describe,search"), script)
+    assert listed == ["search", "describe", "run", "resume"], "in the server's order, whatever order they were named in"
+    assert described["name"] == "billing_support" and refused
+    assert tools_named(None) == TOOLS and tools_named(["pull"]) == ("pull",)
+    for bad, why in (("search,delete", "'delete' is not a tool"), ("", "no tool is named")):
+        with pytest.raises(ValueError, match=why):
+            tools_named(bad)
+    err = io.StringIO()
+    with redirect_stderr(err), pytest.raises(SystemExit) as stop:
+        main(["mcp", "--tools", "search,delete"])
+    assert stop.value.code == 2 and "'delete' is not a tool; the tools are search, describe, compile, run, resume, agent, pull" in err.getvalue()
+
+
 def test_aip_mcp_is_a_command():
     assert "mcp" in COMMANDS
     out = io.StringIO()

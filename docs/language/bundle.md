@@ -57,10 +57,10 @@ carry the span of that clause. A property whose value would be null is left out.
 |---|---|
 | `Procedure` | `name`, `description`, `language_version`, `compiler_version`, `bundle_id`, `source` (the text of `procedure.aip`), `use_when`, `do_not_use_when`, `avoid` (lists of strings), `requires_interpreter`, `requires_version` |
 | `Step` and the kind: `Start`, `Decide`, `Route`, `Aggregate`, `Execute`, `Task_Agent`, `End` | `name`, `kind`, `description`; a `Decide`: `history`, `produces` (the decision key); a `Route`: `check_below`; an `Aggregate`: `produces`; an `Execute`: `script`, `command`; a `Task_Agent`: `prompt` (a path; absent, the description is the prompt) |
-| `Loop`, and `For` on a `For` loop | `name`, `kind` (`For` or `Loop`), `mode` (`Over`, `Until` or `Times`), `item`, `at_most`, `times`, `at_cap` (`Else_Fail` or `Else_Exit`), `collect_key`, `collect_into`, `until_answer` (dotted), `until_operator`, `until_value`, `until_confidence_above` |
+| `Loop`, and `For` on a `For` loop | `name`, `kind` (`For` or `Loop`), `mode` (`Over`, `Until` or `Times`), `item`, `at_most`, `times`, `at_cap` (`Else_Fail` or `Else_Exit`), `collect_key`, `collect_into`, `until_answer` (dotted), `until_operator`, `until_value`, `until_probability_above` |
 | `Data` | one per key of the state: `name`, `type` (a word of the type vocabulary when the program says it: `decision` for a decision key, `aggregation`, `list` for a collected list), `description`, `labels` (the values of a `choice` or the levels of a `score` declared where the key is produced, `Produce tone: choice [angry, calm]`; a decision's labels are on its `Question`s); `runtime: true` on `index` and `iterations` |
 | `Question` | `name`, `type`, `labels`, `instruction` (the text, named strings resolved), `criteria_labels`, `criteria_texts`, `order` |
-| `Aggregation` | `name`, `mode` (`All`, `Any`, `None`), `source` (dotted), `operator`, `value`, `confidence_above`, `order` |
+| `Aggregation` | `name`, `mode` (`All`, `Any`, `None`), `source` (dotted), `operator`, `value`, `probability_above`, `order` |
 | `File` | `path`, `size`, `mode` (the permission bits), `sha256`, and the contents: `text` when the bytes are UTF-8, else `base64` |
 
 ## Edges
@@ -80,7 +80,7 @@ carry the span of that clause. A property whose value would be null is left out.
 | `OVER` | `Aggregation` → `Data`; `Loop` → `Data` | `field`; span on a loop | an aggregation's source; the list a `For` or a fold iterates |
 | `BINDS` | `Loop` → `Data` | | the item key (`As <item>`) |
 | `COLLECTS` | `For` → `Data` | span | the per-pass key gathered by `Collect` |
-| `WATCHES` | `Loop` → `Data` | `field`, `operator`, `value`, `confidence_above`; span | the `Until` condition's answer |
+| `WATCHES` | `Loop` → `Data` | `field`, `operator`, `value`, `probability_above`; span | the `Until` condition's answer |
 | `CONTAINS` | `Loop` → `Step` or `Loop` | `order` | the body, in written order |
 | `ENTERS` | `Loop` → `Step` or `Loop` | | the first node of the body, where a pass starts |
 | `RUNS` | `Execute` → `File` | | `Run_Script` |

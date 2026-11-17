@@ -1,7 +1,10 @@
 """The server's tests run the one app over each backend: Relate in memory, and Neo4j when
 `NEO4J_URI` names a database to use (with `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`).
 The Neo4j half deletes every node the store writes, before and after each test, so point it at
-a database kept for tests. Everything here needs Relate, which a bundle is written in."""
+a database kept for tests. `NEO4J_URI` may also name a scratch Relate store served over Bolt
+(`relate serve --database scratch.rl --bolt PORT --auth neo4j:<password>`), which is how the
+setup in `docs/server-design.md`, "A Relate store over Bolt", is checked. Everything here needs
+Relate, which a bundle is written in."""
 
 import os
 

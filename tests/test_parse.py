@@ -175,7 +175,7 @@ class Loops(unittest.TestCase):
             Start "x" { items: list  Next_Step a }
             Loop a 3 Times { Task_Agent t "x" { Read items  Produce out: string  Continue }  Next_Step b }
             Loop b Over items As item, At_Most 5 { Task_Agent u "x" { Read item  Produce out: string  Continue }  Next_Step c }
-            Loop c Until verdict.ok == true With Confidence_Above 0.8, Max 2, Else_Exit {
+            Loop c Until verdict.ok == true With Probability_Above 0.8, Max 2, Else_Exit {
               Decide d "x" { Read out  Questions { ok: true_or_false "Fine?" }  Produce verdict  Continue }
               Next_Step e
             }
@@ -216,7 +216,7 @@ class Aliases(unittest.TestCase):
               go_to r
             }
             route on r "r" { input dec.c  when x -> e  y -> agg }
-            aggregate agg "g" { read dec  aggregations { all: all dec.q w/ conf 0.5  none: none dec.c != x }  produces summary  next e }
+            aggregate agg "g" { read dec  aggregations { all: all dec.q w/ prob 0.5  none: none dec.c != x }  produces summary  next e }
             execute e "e" { read m  run scripts/x.py  command "python3 x.py"  asset assets/a.json "cfg"  output o: number  next t }
             agent_task t "t" { read o  template assets/p.md  reference references/r.md "when"  produce z: string  next end }
             end "e" { read z }
@@ -228,7 +228,7 @@ class Aliases(unittest.TestCase):
         self.assertTrue(a.flag("History"))
         self.assertEqual((a.produces[0].key.dotted, a.flow), ("dec", s.Flow("Next_Step", "r")))
         self.assertEqual((r.particle, [b.value for b in r.branches]), ("On", ["x", "y"]))
-        self.assertEqual([(g.mode, g.condition.operator, g.condition.value, g.condition.confidence_above) for g in agg.aggregations],
+        self.assertEqual([(g.mode, g.condition.operator, g.condition.value, g.condition.probability_above) for g in agg.aggregations],
                          [("All", None, None, 0.5), ("None", "!=", "x", None)])
         self.assertEqual((e.script, e.command.value, e.uses[0].description.value, e.produces[0].type),
                          ("scripts/x.py", "python3 x.py", "cfg", "float"))

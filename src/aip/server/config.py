@@ -17,11 +17,11 @@ their `user`. `[backend]` picks the store: `kind` (`relate`, the default, or `ne
 for the Relate store file, `uri`, `user`, `password`, `database` for Neo4j. The Neo4j values
 are applied by setting their `NEO4J_*` environment variables when unset, since the Neo4j
 connection reads those; that is what makes rule 2 beat rule 3 for them too. The filesystem
-backend of 0.8 is gone: `kind = "filesystem"` and `root` are refused with where the store is
-now. The server holds no decision-model key: every run is local to its client, which calls the
+backend of 0.8 is gone: `kind = "filesystem"` is refused with where the store is now, and its
+`root` and `cache_dir` are ignored with a warning. The server holds no decision-model key: every run is local to its client, which calls the
 model (`aip config --decision-model`), so a `[decision_model]` table is refused with that
-instruction. The server serves no UI either, so `server.inspector` is refused
-with a pointer to the console (`npx aip-console`).
+instruction. The server serves no UI either, so `server.inspector` is ignored
+with a warning that points to the console (`npx aip-console`).
 
 The file is looked up as `--config FILE`, then `$AIP_SERVER_CONFIG`, then `./aip-server.toml`,
 then the per-user `~/.config/aip/server.toml` (`user_config_path`, beside the client's
@@ -33,6 +33,7 @@ names, run `aip server`. `--example-config` prints the same text.
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any, Dict
@@ -91,7 +92,8 @@ log_level = "info"
 [backend]
 kind = "relate"           # one file this server alone writes; or "neo4j" for a shared database
 path = "~/.local/share/aip/server/store.rl"   # relate: the store file
-# uri = "neo4j://localhost:7687"   # neo4j: or NEO4J_URI
+# uri = "neo4j://localhost:7687"   # neo4j: or NEO4J_URI; also a Relate store served with
+#                                  # `relate serve --bolt PORT`, to share it with a Browser
 # user = "neo4j"                   # or NEO4J_USERNAME
 # password = "..."                 # or NEO4J_PASSWORD
 # database = "neo4j"               # or NEO4J_DATABASE
@@ -99,6 +101,16 @@ path = "~/.local/share/aip/server/store.rl"   # relate: the store file
 # No decision model here: every run is local to its client, which calls the model itself
 # (`aip config --decision-model URL --decision-model-key KEY` on the client).
 """
+
+
+# Keys an older `aip` wrote into this file that change nothing now. A file that still holds one
+# is read with a warning: refusing it kept a server from starting over a line that does no harm.
+# `backend.kind = "filesystem"` is not here, since ignoring it would quietly move the store.
+RETIRED = {
+    ("server", "inspector"): "the server serves no UI since 0.6a0; the console is `npx aip-console --server URL`",
+    ("backend", "root"): "the filesystem backend is gone since 0.9 and the store is one Relate file, `backend.path`",
+    ("backend", "cache_dir"): "the server materialises nothing since 0.9",
+}
 
 
 class ConfigError(ValueError):
@@ -203,14 +215,10 @@ def read_config(path: Path) -> JSON:
         if not isinstance(values, dict):
             raise ConfigError(f"{path}: [{table}] must be a table")
         for key in values:
-            if table == "backend" and key in ("root", "cache_dir"):
-                raise ConfigError(f"{path}: backend.{key} is not a setting since 0.9: the filesystem backend is gone and "
-                                  "the server materialises nothing; the default store is one Relate file, `path` "
-                                  f"(default {DEFAULT_STORE}); publish your procedures to it again with `aip publish`")
-            if table == "server" and key == "inspector":
-                raise ConfigError(f"{path}: server.inspector is not a server setting since 0.6a0: the server "
-                                  "serves no UI; remove the key and run the console (formerly inspector) "
-                                  "with `npx aip-console --server URL`")
+            if (table, key) in RETIRED:
+                print(f"aip server: warning: {path}: {table}.{key} is ignored: {RETIRED[table, key]}; remove the key",
+                      file=sys.stderr)
+                continue
             if key not in _KNOWN[table]:
                 raise ConfigError(f"{path}: unknown key {table}.{key}; expected one of {sorted(_KNOWN[table])}")
     kind = data.get("backend", {}).get("kind")
@@ -219,7 +227,8 @@ def read_config(path: Path) -> JSON:
                           f"(kind \"relate\", `path` default {DEFAULT_STORE}); publish your procedures to it again with `aip publish`")
     if kind is not None and kind not in ("relate", "neo4j"):
         raise ConfigError(f"{path}: backend.kind must be \"relate\" or \"neo4j\", not {kind!r}")
-    return data
+    return {table: {k: v for k, v in values.items() if (table, k) not in RETIRED} if table in _KNOWN else values
+            for table, values in data.items()}
 
 
 def apply_config(config: JSON, environ: Dict[str, str] | None = None) -> JSON:

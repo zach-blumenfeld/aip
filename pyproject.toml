@@ -7,19 +7,27 @@ license = "Apache-2.0"
 requires-python = ">=3.14"
 # Relate (`relate-db` on PyPI, `import relate`), the engine a bundle is written in;
 # `aip/compiler/relate.py` is the one module that imports it.
+# The server's packages (`fastapi`, `uvicorn`, the `neo4j` driver) are here too: recording runs
+# on this machine (`aip config server local`, what the installer sets) starts `aip server`, so an
+# install without them could compile and not record.
 dependencies = [
+    "fastapi>=0.115",
     "httpx>=0.28",
     "jsonschema>=4.26.0",
-    "mcp>=1.20",
+    "mcp>=2.3,<3",
+    "neo4j>=6.0",
     "pydantic>=2.11",
     "pyyaml>=6.0.3",
-    "relate-db>=1.0,<2",
+    "relate-db>=1.1,<2",
     "typesafe-sdk>=0.7.1",
+    "uvicorn>=0.30",
 ]
 
+# Empty since 0.9: both were how the server's packages were asked for through 0.8, and every
+# install line that names them (`agent-instruction-protocol[server]`) still works.
 [project.optional-dependencies]
-neo4j = ["neo4j>=6.0"]
-server = ["fastapi>=0.115", "uvicorn>=0.30", "neo4j>=6.0"]
+neo4j = []
+server = []
 
 [dependency-groups]
 dev = ["pytest>=8", "neo4j>=6", "fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.28"]
@@ -46,9 +54,10 @@ packages = ["src/aip"]
 
 # The console (`console/`) is an npm package with its own version and release workflow
 # (`.github/workflows/console-release.yml`); nothing of it goes to PyPI. The wheel never held it
-# (it carries `src/aip` and the force-includes above); this keeps it out of the sdist too.
+# (it carries `src/aip` and the force-includes above); this keeps it out of the sdist too. The
+# slides, the figures and the README's images are for GitHub, not for a source build.
 [tool.hatch.build.targets.sdist]
-exclude = ["/console"]
+exclude = ["/console", "/docs/slides", "/docs/slides.zip", "/docs/figures", "/img"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -63,7 +63,7 @@ test("a loop is a frame around its body, with its header and its own way out", (
   assert.equal(model.cards["step:fix"].parent, "loop:revise");
   assert.deepEqual(model.cards["step:fix"].ports.map((p) => [p.kind, p.target, p.quote]), [["continue", "loop:revise", "the next pass of revise"]]);
   assert.equal(model.cards["step:draft"].ports[0].quote, "loop revise");
-  assert.deepEqual(model.cards["step:summarize_check"].sections[1], { label: "aggregates", rows: ["all_hold: All policy_check With Confidence_Above 0.7"] });
+  assert.deepEqual(model.cards["step:summarize_check"].sections[1], { label: "aggregates", rows: ["all_hold: All policy_check With Probability_Above 0.7"] });
 });
 
 test("loops nest: a Loop inside a For, its check and fix inside it, a For's header", () => {

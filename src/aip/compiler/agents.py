@@ -94,6 +94,13 @@ def detected_agents() -> list[Agent]:
     return [a for a in AGENTS.values() if a.detected()]
 
 
+def skill_missing(skill_name: str) -> bool:
+    """An agent is on this machine and none has the skill: the state a `pip install` leaves, since
+    only the installer (`install.sh`) and `aip skill install` write it."""
+    found = detected_agents()
+    return bool(found) and not any(a.installed(skill_name) for a in found)
+
+
 def frontmatter(folder: Path) -> dict:
     """The folder's `SKILL.md` frontmatter as a dict; empty when there is none to read."""
     import yaml

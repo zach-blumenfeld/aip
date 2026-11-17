@@ -22,7 +22,8 @@ aip config          # where runs are recorded (server: local, a URL, or none) an
 
 A procedure is named three ways, and every command takes any of them: a published name
 (`billing_support`, `billing_support@2`), a program folder (the directory holding
-`procedure.aip`), or a compiled bundle (`file.rl`).
+`procedure.aip`), or a compiled bundle (`file.rl`). A name on its own means the published
+procedure. To run a folder, write it as a path: `./billing_support`.
 
 ## Run a procedure
 
@@ -122,7 +123,7 @@ Then, or when editing an existing `procedure.aip`:
 ```
 aip compile --check <folder>      # every mistake with its line; exit 0 when it compiles
 aip fmt <folder>                  # the canonical form
-aip run <folder> --inputs ...     # try it; a folder runs as a draft
+aip run ./<folder> --inputs ...   # try it; a folder runs as a draft. Keep the `./`: a name on its own is the published one
 aip publish <folder>              # only when asked: name@revision in the catalog
 ```
 

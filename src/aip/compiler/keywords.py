@@ -33,7 +33,7 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "Answer_Questions": ("Questions",),
     "History": (),
     "Confidence_Below": (),
-    "Confidence_Above": ("Confidence", "Conf"),
+    "Probability_Above": ("Probability", "Prob"),
     "Aggregations": (),
     "Produce": ("Produces", "Return", "Output"),
     "When": (),

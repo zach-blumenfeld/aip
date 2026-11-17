@@ -68,7 +68,7 @@ Loop revise Until check_summary.all_hold, At_Most 3, Else_Fail {
   Aggregate summarize_check "Every policy holds, and the model was sure of each." {
     Read policy_check
     Aggregations {
-      all_hold: All policy_check With Confidence_Above 0.7
+      all_hold: All policy_check With Probability_Above 0.7
     }
     Produce check_summary
     Next_Step fix

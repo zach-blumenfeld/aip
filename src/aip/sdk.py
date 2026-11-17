@@ -470,6 +470,17 @@ OnPause = Callable[[Paused], Any]
 # --------------------------------------------------------------------------- client
 
 
+def shadow_warning(name: str, origin: JSON) -> str | None:
+    """What to say when a bare name ran the catalog's procedure although a folder of that name
+    is in the working directory (`Client._open`, `catalog_first`)."""
+    folder = origin.get("shadowed")
+    if not folder:
+        return None
+    revision = f"@{origin['revision']}" if origin.get("revision") else ""
+    return (f"running the published {name}{revision}. A folder named {folder} is also here and is not what runs; "
+            f"to run the folder, write it as a path: `aip run ./{folder}`.")
+
+
 class Client:
     """The AIP client.
 
@@ -542,12 +553,26 @@ class Client:
 
     # ------------------------------------------------------------------ targets
 
-    def _open(self, target: str | Path, cache: bool = True) -> tuple[Bundle, JSON]:
+    def _open(self, target: str | Path, cache: bool = True, catalog_first: bool = False) -> tuple[Bundle, JSON]:
         """The bundle a target names and where it came from: `{"kind": folder | file | name,
         "target", "revision"}`. A folder is compiled, an `.rl` verified, a reference fetched;
-        with `cache` each is put in the bundle cache."""
+        with `cache` each is put in the bundle cache.
+
+        With `catalog_first` (what `run` and `describe` ask for) a bare name the catalog has is
+        the catalog's even when a folder of that name is in the working directory, and the origin
+        says so (`shadowed`, the folder): "the published procedure" must not turn into a draft
+        run of a folder that happens to be there. `./name` is the folder; so is the bare name
+        when the catalog has no such procedure, or no server answers."""
         text = str(target)
         path = Path(target)
+        if catalog_first and isinstance(target, str) and path.is_dir() and bundles.is_ref(text) and self.server is not None:
+            try:
+                bundle, revision, _ = self._fetch(text)
+            except (NotFound, ServerError):
+                pass
+            else:
+                return bundle, {"kind": "name", "target": text, "revision": revision, "retired": self._retired.get(text, False),
+                                "shadowed": str(path)}
         if path.is_dir() or (path.is_file() and path.name == SOURCE_FILE):
             folder = path if path.is_dir() else path.parent
             if not (folder / SOURCE_FILE).is_file():
@@ -632,7 +657,7 @@ class Client:
             data = self._model_warned(self._described(text))
             return Description(data["name"], data["bundle_id"], data.get("description") or "", data.get("inputs") or {},
                                data.get("result") or {}, data.get("steps") or [], text, data.get("revision"), data)
-        bundle, origin = self._open(target, cache=False)
+        bundle, origin = self._open(target, cache=False, catalog_first=True)
         with Procedure.load(bundle) as procedure:
             data = describe_procedure(procedure)
         data.update(target=origin["target"], revision=origin["revision"], draft=origin["kind"] != "name")
@@ -710,7 +735,10 @@ class Client:
             raise InvalidInput(f"the inputs are a JSON object, got {type(inputs).__name__}")
         if batch is not None and batch < 1:
             raise InvalidInput(f"the batch size is at least 1, not {batch}")
-        bundle, origin = self._open(target)
+        bundle, origin = self._open(target, catalog_first=True)
+        shadowed = shadow_warning(bundle.name, origin)
+        if shadowed and on_warning is not None:
+            on_warning(shadowed)
         if origin.get("retired") and not force:
             raise RetiredRevision(f"{bundle.name}@{origin['revision']} is retired: it is kept for the runs that reference it and no "
                           "longer runs by default; run it anyway with force (`aip run ... --force`), or publish it again to bring it back")
@@ -725,6 +753,7 @@ class Client:
                 warning = self.model_warning(procedure.describe()["steps"])
                 if warning and on_warning is not None:   # said before the first step, and only for a run that starts
                     on_warning(warning)
+                warning = " ".join(w for w in (shadowed, warning) if w) or None
                 run = engine.start(procedure, inputs, identity=identity)
             except StepError as exc:  # the inputs do not fit: nothing ran, nothing to resume
                 raise RunError(error_outcome({**exc.to_dict(), "pass": None, "passes": []}, None, None, None, False), exc) from exc

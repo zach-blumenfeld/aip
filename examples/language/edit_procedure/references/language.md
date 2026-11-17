@@ -115,7 +115,7 @@ End "Every ticket has a reply or an escalation, and the lead has a summary." {
 | `Start "..." { ... }` | the caller | inputs, one per line, `key: type "description"`; then `Next_Step` |
 | `Decide <name> "..." { ... }` | a decision model, never the agent | `Answer_Questions { ... }`, one question per line; `Produce <key>` with no type: the key's fields are the questions |
 | `Route <name> "..." { ... }` | the runtime | `Read` of exactly one answer, then one `<value> -> <target>` line for every value it can take, and optionally `Confidence_Below 0.8 -> <target>`; no `Produce`, no `Next_Step` |
-| `Aggregate <name> "..." { ... }` | the runtime | `Aggregations { all_hold: All verdicts.follows With Confidence_Above 0.7 }` (`All`, `Any` or `None` over answers); `Produce <key>` with no type |
+| `Aggregate <name> "..." { ... }` | the runtime | `Aggregations { all_hold: All verdicts.follows With Probability_Above 0.7 }` (`All`, `Any` or `None` over answers); `Produce <key>` with no type |
 | `Execute <name> "..." { ... }` | a script | `Run_Script scripts/x.py`; optional `Use assets/config.json` |
 | `Task_Agent <name> "..." { ... }` | the agent running the procedure | the description is the prompt, or `Prompt assets/task.md`; optional `Use assets/policy.md` and `Use references/help.md "when to load it"` |
 | `End "..." { Read ... }` | nobody | `Read` names the result keys; nothing else |
@@ -152,8 +152,15 @@ Only an **answer** can be branched on or tested: a `true_or_false`, a `choice` o
   an agent's, an input or an aggregation.
 - A condition, used by `Until` and by each line of `Aggregations`, is on one answer:
   `<answer>` (a `true_or_false`, meaning it is true), `<answer> == <label>` or `<answer> !=
-  <label>`, optionally `With Confidence_Above 0.7`. Two answers are never combined in a
+  <label>`, optionally `With Probability_Above 0.7`. Two answers are never combined in a
   condition; an `Aggregate` step combines many into one, and a route or a loop reads that.
+- The two checks read two numbers, and each is named for its own. A route's `Confidence_Below`
+  reads the answer's `confidence`, how settled the answer is: for a `true_or_false` that is the
+  distance from a coin flip, so `true` at a probability of 0.88 has a confidence of 0.76.
+  `With Probability_Above` reads the probability of the condition: `noul` for a `true_or_false`
+  (one minus it for `== false`), the label's entry in `probabilities` for a `choice` or a
+  `score`, and one minus that for `!=`. When a prompt tells a person or an agent what a bar
+  means, name the probability, not the confidence.
 - A `Read` may name a whole key (`classification`), one answer (`classification.tone`) or its
   plain value (`classification.tone.value`). A route reads the answer itself, never `.value`.
 
@@ -165,7 +172,7 @@ question, `follows`:
 Aggregate summarize_check "Every policy holds, and the model was sure of each." {
   Read verdicts
   Aggregations {
-    all_hold: All verdicts.follows With Confidence_Above 0.7
+    all_hold: All verdicts.follows With Probability_Above 0.7
   }
   Produce check_summary
   Next_Step fix
@@ -174,7 +181,7 @@ Aggregate summarize_check "Every policy holds, and the model was sure of each." 
 
 The source's key must be in the step's `Read`. The result is read as `check_summary.all_hold`,
 by a route or by `Loop revise Until check_summary.all_hold`; it is true or false and has no
-confidence, so nothing puts a `Confidence_Below` or a `With Confidence_Above` on it.
+confidence, so nothing puts a `Confidence_Below` or a `With Probability_Above` on it.
 
 ## Loops
 
@@ -212,7 +219,10 @@ is never checked: for `n` checked fixes write `At_Most n+1`.
 - A script is launched with one JSON object on stdin, `{"state": {<the Read keys>}, "assets":
   {<stem>: <text of each Use file>}, "expects": {<its Produce keys and types>}}`, and prints one
   JSON object on stdout holding exactly its `Produce` keys. A non-zero exit fails the step. An
-  answer-typed key is written as the bare value (`{"passed": true}`). Files it reads or writes
+  answer-typed key is written as the bare value (`{"passed": true}`), but an answer it reads in
+  `state` (a `Decide`'s, or a `choice` an agent produced) is the answer object, `{"value":
+  "declined"}` with the model's fields when it has them: read `state["status"]["value"]`, not
+  `state["status"]`. Files it reads or writes
   by relative path belong under the directory in the `AIP_WORKDIR` environment variable, which
   is where it starts: a relative path it opens is the run's file.
 - Every `Run_Script`, `Prompt` and `Use` path must exist under `scripts/`, `assets/` or

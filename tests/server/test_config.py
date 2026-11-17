@@ -73,11 +73,22 @@ def test_the_filesystem_backend_is_gone_and_says_where_the_store_is(tmp_path: Pa
     f.write_text('[backend]\nkind = "filesystem"\n')
     with pytest.raises(ConfigError, match="one Relate file"):
         read_config(f)
-    f.write_text('[backend]\nroot = "~/x"\n')
-    with pytest.raises(ConfigError, match="backend.root is not a setting since 0.9"):
+    f.write_text('[backend]\nroot = "~/x"\ncache_dir = "~/y"\nkind = "filesystem"\n')
+    with pytest.raises(ConfigError, match="one Relate file"):                     # `root` beside it changes nothing
         read_config(f)
     f.write_text('[backend]\nkind = "relate"\npath = "~/s/store.rl"\n')
     assert apply_config(read_config(f), {}) == {"backend": "relate", "path": Path("~/s/store.rl").expanduser()}
+
+
+@pytest.mark.parametrize("argv", [["--backend", "filesystem"], ["--backend=filesystem", "--port", "8000"]])
+def test_the_filesystem_flag_says_what_replaced_it(argv, capsys):
+    """The command issue #24 was told to run: it answers in a sentence, not as an invalid choice."""
+    from aip.client.cli import main
+
+    assert main(["server", *argv]) == 2
+    err = capsys.readouterr().err
+    assert "the filesystem backend is gone since 0.9" in err and "Run `aip server` (or `--backend relate`)" in err
+    assert "invalid choice" not in err
 
 
 def test_named_tokens_are_a_table_of_names(tmp_path: Path):
@@ -132,11 +143,18 @@ def test_init_writes_the_user_file_and_the_server_finds_it(tmp_path: Path, monke
     assert "already exists" in capsys.readouterr().err
 
 
-def test_the_server_serves_no_ui(tmp_path: Path):
-    """The console ships on its own: a leftover `inspector` key says where it went."""
+def test_a_retired_key_is_a_warning_and_the_server_still_starts(tmp_path: Path, capsys):
+    """A file an older aip wrote: `server.inspector` (the console ships on its own since 0.6a0) and
+    the filesystem backend's `root` and `cache_dir` are ignored, each with a line saying why.
+    Until 0.9.0 they were refused, which kept a server from starting over a line that does nothing."""
     f = tmp_path / "c.toml"
-    f.write_text("[server]\ninspector = true\n")
-    with pytest.raises(ConfigError, match="npx aip-console"):
+    f.write_text('[server]\ninspector = true\nport = 9000\n[backend]\nroot = "~/x"\ncache_dir = "~/y"\n')
+    assert apply_config(read_config(f), {}) == {"port": 9000}
+    err = capsys.readouterr().err
+    assert "warning" in err and "server.inspector is ignored" in err and "npx aip-console" in err
+    assert "backend.root is ignored" in err and "backend.cache_dir is ignored" in err
+    f.write_text("[server]\nbogus = 1\n")
+    with pytest.raises(ConfigError, match="unknown key server.bogus"):         # a key that never was is still an error
         read_config(f)
 
 

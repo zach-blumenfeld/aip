@@ -95,12 +95,12 @@ class Declaration(Node):
 
 @dataclass
 class Condition(Node):
-    """`<answer> [== value | != value] [With Confidence_Above p]`: a loop's `Until`, and the
+    """`<answer> [== value | != value] [With Probability_Above p]`: a loop's `Until`, and the
     test on every answer of an aggregation line."""
     answer: KeyRef
     operator: str | None = None  # "==" or "!="
     value: str | None = None
-    confidence_above: float | None = None
+    probability_above: float | None = None
 
 
 # ---------------------------------------------------------------- clauses

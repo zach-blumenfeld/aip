@@ -115,6 +115,11 @@ file, or `-` for stdin. Every run runs on this machine, whatever the target: a f
 an `.rl` verified, a name fetched from the server (or taken from the cache, where `aip pull` put
 it earlier), and the bundle is kept in `~/.aip/bundles/<bundle id>.rl` (`AIP_HOME` moves
 `~/.aip`). A run stays on the exact bundle it started on, whatever happens to the folder after.
+A name on its own means the published procedure: `aip run billing_support` runs the catalog's
+`billing_support`. To run a folder, write it as a path: `aip run ./billing_support`. When both
+exist, the name runs the published one and a line on stderr says the folder is not what ran.
+(A name the catalog does not have falls back to a folder of that name. `aip info` reads a name
+the same way; `aip publish`, `aip compile` and `aip fmt` always mean the folder.)
 
 The run goes step by step until it pauses, ends, or fails, and prints one JSON object on stdout
 for how it stopped:

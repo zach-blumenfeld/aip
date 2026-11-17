@@ -270,7 +270,7 @@ LIST_RUNS = RUN_FILTER + """
 RETURN r.run_id AS run_id, r.name AS name, r.revision AS revision, r.bundle_id AS bundle_id, r.status AS status, r.draft AS draft,
        r.agent AS agent, r.agent_version AS agent_version, r.session AS session, r.user AS user, r.started AS started,
        r.finished AS finished,
-       r.created AS created, r.updated AS updated, r.entries AS entries
+       r.created AS created, r.updated AS updated, r.entries AS entries, r.json AS json
 ORDER BY coalesce(started, created, updated) DESC, run_id
 LIMIT $limit
 """
@@ -308,7 +308,13 @@ CLEAR = "MATCH (n) WHERE " + " OR ".join(f"n:{label}" for label in SERVER_LABELS
 
 def _scalar(value: Any) -> Any:
     """A value as a node property: a scalar as it is, anything else as JSON text."""
-    return value if value is None or isinstance(value, (str, int, float, bool)) else json.dumps(value, sort_keys=True)
+    return value if value is None or isinstance(value, (str, int, float, bool)) else _json(value)
+
+
+def _json(value: Any) -> str:
+    """A value as the JSON text a node property holds: keys sorted, and characters outside ASCII
+    as themselves, so a name or a path in Vietnamese reads as it was written in a Browser (#26)."""
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
 def _clean(properties: JSON) -> JSON:
@@ -330,7 +336,7 @@ def run_properties(run: JSON) -> JSON:
         "entries": len(run.get("history") or []),
         "paused_at": pause.get("step"), "paused_since": pause.get("since"), "tasks": len(pause.get("tasks") or []) or None,
         "error": error.get("error"), "error_step": error.get("step") or error.get("loop"), "error_message": error.get("message"),
-        "json": json.dumps(head, sort_keys=True),
+        "json": _json(head),
     })
 
 
@@ -338,7 +344,7 @@ def entry_properties(run_id: str, bundle_id: str, seq: int, entry: JSON) -> JSON
     """The `Entry` node of one history entry: every field of the record that is a single value
     (the timings, who answered, where a route went and what its check found, why a loop exited,
     what the head of the pass found of `Until`), and the entry as JSON."""
-    text = json.dumps(entry, sort_keys=True)
+    text = _json(entry)
     by, check, exit, until = (entry.get(k) or {} for k in ("answered_by", "check", "exit", "until"))
     passes = entry.get("passes") or []
     return _clean({
@@ -421,7 +427,7 @@ class Store:
             return True
         write_graph(tx, bundle.graph, bundle.id)
         tx.run(HOLD, bundle=bundle.id, name=bundle.name, description=described.get("description") or "", at=at,
-               described=json.dumps(described, sort_keys=True))
+               described=_json(described))
         return False
 
     def draft(self, bundle: Bundle, described: JSON) -> JSON:
@@ -669,14 +675,15 @@ class Store:
 
     def runs(self, name: str | None = None, status: str | None = None, agent: str | None = None, session: str | None = None,
              user: str | None = None, draft: bool | None = None, limit: int = 50) -> list[JSON]:
-        """Runs, most recently started first: one row each, with `identity` as the record has it."""
+        """Runs, most recently started first: one row each, with `identity` as the record has it and
+        `result`, what the run ended with (null until it is done)."""
         rows = self.graph.read(LIST_RUNS, name=name, status=status, agent=agent, session=session, user=user, draft=draft, limit=limit)
         return [{"run_id": r["run_id"], "name": r["name"], "revision": r["revision"], "bundle_id": r["bundle_id"], "status": r["status"],
                  "draft": bool(r["draft"]),
                  "identity": {"agent": r["agent"], "session": r["session"], "user": r["user"],
                               **({"agent_version": r["agent_version"]} if r.get("agent_version") else {})},
                  "started": r["started"], "finished": r["finished"], "created": r["created"], "updated": r["updated"],
-                 "entries": r["entries"]} for r in rows]
+                 "entries": r["entries"], "result": json.loads(r["json"]).get("result")} for r in rows]
 
     # ---------------------------------------------------------------- export
 

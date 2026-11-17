@@ -23,7 +23,8 @@ that design is in the git history of this file. The filesystem backend, its file
 - **It serves no UI.** The console is a client like the `aip` command.
 
 One process writes a store. With the Relate backend that is a rule of the engine (the server is
-the only writer of its file); with Neo4j several servers may share a database.
+the only process on its file, readers included); with Neo4j several servers may share a database.
+Section 3's "A Relate store over Bolt" is how a Bolt client and the server share a Relate file.
 
 ## 2. The HTTP API
 
@@ -57,7 +58,7 @@ unless forced (`aip run name@rev --force`). Publishing its bundle again brings i
 | `GET /bundles/{bundle_id}` | describe a bundle by id, or with `Accept: application/octet-stream` hand it back |
 | `GET /catalog/{ref}/graph`, `GET /bundles/{bundle_id}/graph` | the bundle's own graph as JSON: `name`, `revision`, `draft`, `bundle_id` and `graph`, the `nodes` and `edges` of `docs/language/bundle.md` in the shape `aip compile --json` prints, here with the source (`Procedure.source`) and each file's contents (`File.text`, or `base64`). What a page draws a procedure from and shows as its source, without opening an `.rl` |
 | `POST /runs` (the run as JSON) | record a run where it stopped: the whole run each time, upserted by `run_id`. The bundle it names must be held (404 `unknown_bundle` otherwise). Replies `{"run_id", "user", "draft", "revision"}`: who the token stands for, and what the store holds the bundle as |
-| `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently started first (a run answered later keeps its place): `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries` |
+| `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently started first (a run answered later keeps its place): `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries`, and `result`, what a finished run ended with (null otherwise) |
 | `GET /runs/{run_id}` | one run's record, as it was posted |
 | `GET /audit` | the audit queries: the built-ins of `aip.server.audit`, then the ones stored here, each `query`, `description`, `builtin`, `needs` (parameters it cannot run without) and `path` |
 | `GET /audit/{query}?name=&agent=&session=&user=&draft=&window=&limit=&repeats=&key=` | one query's rows (section 4) |
@@ -152,8 +153,10 @@ same on both backends; an exact name wins outright.
 
 - **Relate** (the default, `aip.server.backends.relate`). One file under the data directory,
   `~/.local/share/aip/server/store.rl` unless `--path` or `backend.path` says otherwise. No other process is needed. A connection belongs to the thread that opened it, so one
-  worker thread owns it and runs every transaction in turn. Look inside with the engine's own
-  CLI or a Browser on `relate serve --read-only`, and `docs/language/queries.md`.
+  worker thread owns it and runs every transaction in turn. **Nothing else can open the file
+  while the server runs**, not even read-only: Relate allows one process on a single-file
+  store, so `relate query` and `relate serve` on it answer `storage locked` until the server
+  stops. To look inside a live store over Bolt, use the setup below.
 - **Neo4j** (`aip.server.backends.neo4j`, `--backend neo4j`, `NEO4J_URI`, `NEO4J_USERNAME`,
   `NEO4J_PASSWORD`, `NEO4J_DATABASE`). For a shared deployment, Aura included. The driver's
   managed transactions; uniqueness constraints on the server's nodes and an index on
@@ -162,6 +165,27 @@ same on both backends; an exact name wins outright.
 `tests/server/` runs one suite over both (`NEO4J_URI` unset skips the Neo4j half):
 `test_contract.py` is the API through the client, `test_queries.py` runs every query of
 `docs/language/queries.md` and checks what the store kept of each kind of run.
+
+### A Relate store over Bolt
+
+To have the server and a Bolt client (Neo4j Browser, a driver, a notebook) on the same Relate
+store at once, let Relate own the file and make the server one of its clients. This is Relate's
+own answer to a second process needing the data: its CLI serves the store over Bolt and
+serializes access. It needs the `relate` command (`curl -sSfL https://relatedb.ai/install.sh |
+bash`); the `relate-db` package aip installs has no Bolt server.
+
+```bash
+relate serve --database ~/.local/share/aip/server/store.rl --bolt 7687 --auth neo4j:<password>
+aip server --backend neo4j --uri bolt://127.0.0.1:7687 --user neo4j --password <password>
+```
+
+The server runs its Neo4j adapter, since Bolt is what that speaks, so `GET /health` says
+`backend: neo4j`; the store is still the one `.rl` file, and a store the Relate backend wrote
+opens this way unchanged. Anything else connects to the same `bolt://127.0.0.1:7687` with the
+same credentials and may read and write, so treat it as you would the server's own database.
+`relate serve` binds loopback and has no TLS: keep it there. The suite passes this way
+(`NEO4J_URI=bolt://127.0.0.1:<port>` with `relate serve` on a scratch file, 70 passed on
+2026-11-17 with `relate` 1.0.1); CI does not run it, since the CLI is not in the wheel.
 
 ### Built-in bundles
 
@@ -231,8 +255,9 @@ does here, with no server. `since` is a date or a timestamp a run started at or 
 without overriding), the file, defaults (`src/aip/server/config.py`). `[server]` is the listener
 (`host`, `port`, `token`, `read_token`, `localhost_open`, `log_level`, `allow_origins`),
 `[tokens]` names people, `[backend]` picks the store (`kind = "relate"` with `path`, or `"neo4j"`
-with `uri`, `user`, `password`, `database`). A file that still says `kind = "filesystem"` or
-`root` is refused with where the store is now.
+with `uri`, `user`, `password`, `database`). A file that still says `kind = "filesystem"` is
+refused with where the store is now; keys an older `aip` wrote that change nothing
+(`server.inspector`, `backend.root`, `backend.cache_dir`) are ignored with a warning.
 
 ## 6. The local server
 

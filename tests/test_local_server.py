@@ -5,8 +5,7 @@ server starts `aip server --local` as a process of its own, later commands reuse
 when idle, and the next command starts it again over the same store. These tests run the real
 process on a port of their own with its store in a temp directory, through the real `aip`
 command: a folder's run is recorded as a draft and `aip runs --agent cli` lists it, which is the
-milestone's proof, and `aip export runs` writes a file the engine opens. They need Relate and
-the server extra."""
+milestone's proof, and `aip export runs` writes a file the engine opens. They need Relate."""
 
 from __future__ import annotations
 

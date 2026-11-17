@@ -296,7 +296,7 @@ def _until(w: _Walk, id: str) -> list[str]:
     for loop, e in w.watchers(id):
         p = loop.properties
         answer = w.name(e.end) + ("." + e.properties["field"] if e.properties.get("field") else "")
-        cond = _condition(answer, e.properties.get("operator"), e.properties.get("value"), e.properties.get("confidence_above"))
+        cond = _condition(answer, e.properties.get("operator"), e.properties.get("value"), e.properties.get("probability_above"))
         exits = w.edges(loop.id, "NEXT", "CONTINUES")
         where = w.go(exits[0]) if exits else "leave it"
         out.append(f"- Now test the loop {_code(p['name'])}: if {cond}, leave the loop: {where}.")
@@ -387,7 +387,7 @@ def _aggregate(w: _Walk, id: str) -> list[str]:
     out = []
     for e in sorted(w.edges(id, "AGGREGATES"), key=lambda e: e.properties.get("order", 0)):
         a = w.nodes[e.end].properties
-        cond = _condition("it", a.get("operator"), a.get("value"), a.get("confidence_above")).replace("`it`", "it", 1)
+        cond = _condition("it", a.get("operator"), a.get("value"), a.get("probability_above")).replace("`it`", "it", 1)
         out.append(f"  - {_code(a['name'])}: true when {words.get(a.get('mode'), a.get('mode'))} answer in {_code(a['source'])} "
                    f"holds, where an answer holds when {cond}; otherwise false.")
     produced = p.get("produces")
@@ -472,7 +472,7 @@ def _loop(w: _Walk, id: str, hashes: str) -> list[str]:
     else:
         e = w.edges(id, "WATCHES")[0]
         answer = w.name(e.end) + ("." + e.properties["field"] if e.properties.get("field") else "")
-        cond = _condition(answer, e.properties.get("operator"), e.properties.get("value"), e.properties.get("confidence_above"))
+        cond = _condition(answer, e.properties.get("operator"), e.properties.get("value"), e.properties.get("probability_above"))
         cap = "stop: the procedure fails" if p.get("at_cap", "Else_Fail") == "Else_Fail" else after
         out += [f"Repeat {steps}, until {cond}, at most {p.get('at_most')} passes. Each pass sees what the one before it "
                 "produced. Test the condition before every pass, the first included, and again where a step below says so.", "",

@@ -820,14 +820,22 @@ def mcp_command(argv: list[str]) -> int:
                         "(with neither: AIP_AGENT, else `mcp`)")
     parser.add_argument("--session", default=None, help="the session of every run a call gives none (default AIP_SESSION, "
                         "else an id made when this server starts)")
+    parser.add_argument("--tools", default=None, metavar="NAMES",
+                        help="offer only these tools, comma-separated (e.g. search,describe,run,resume): the others are "
+                             "not registered, so no client can list or call them (default: all seven)")
     args = parser.parse_args(argv)
     if args.http is None and args.host != "127.0.0.1":
         parser.error("--host goes with --http PORT")
-    from aip.mcp import serve
+    from aip.mcp import serve, tools_named
     from aip.sdk import Client
 
     try:
-        serve(Client(_server()), http=args.http, host=args.host, agent=args.agent, session=args.session)
+        tools_named(args.tools)
+    except ValueError as exc:
+        parser.error(f"--tools: {exc}")
+
+    try:
+        serve(Client(_server()), http=args.http, host=args.host, agent=args.agent, session=args.session, tools=args.tools)
     except KeyboardInterrupt:
         pass
     return 0
@@ -857,7 +865,8 @@ def server_command(argv: list[str]) -> int:
     parser.add_argument("--backend", choices=["relate", "neo4j"], default="relate",
                         help="where the store is: one Relate file this server alone writes (the default), or a Neo4j database")
     parser.add_argument("--path", type=Path, default=None, help=f"relate backend: the store file (default {DEFAULT_STORE})")
-    parser.add_argument("--uri", default=None, help="neo4j backend: bolt URI; default $NEO4J_URI or neo4j://localhost:7687")
+    parser.add_argument("--uri", default=None, help="neo4j backend: bolt URI (a Neo4j database, or a Relate store served with "
+                             "`relate serve --bolt PORT`); default $NEO4J_URI or neo4j://localhost:7687")
     parser.add_argument("--user", default=None, help="neo4j: default $NEO4J_USERNAME or neo4j")
     parser.add_argument("--password", default=None, help="neo4j: default $NEO4J_PASSWORD")
     parser.add_argument("--database", default=None, help="neo4j: default $NEO4J_DATABASE or neo4j")
@@ -877,6 +886,11 @@ def server_command(argv: list[str]) -> int:
     parser.add_argument("--stop", action="store_true", help="with --local: stop the local server if it is running, and exit")
     parser.add_argument("--idle-exit", type=float, default=None, metavar="SECONDS",
                         help="stop when no request has arrived for this long (--local: AIP_LOCAL_IDLE, default 900; 0 never stops)")
+
+    if any(arg == "--backend=filesystem" or (arg == "--backend" and argv[i + 1:i + 2] == ["filesystem"]) for i, arg in enumerate(argv)):
+        print("aip server: the filesystem backend is gone since 0.9: Relate, an embedded graph database kept in one file, "
+              "is used as the default instead. Run `aip server` (or `--backend relate`).", file=sys.stderr)
+        return 2
 
     # Files first, so their values become the defaults the flags override.
     pre, _ = parser.parse_known_args(argv)
@@ -928,8 +942,8 @@ def server_command(argv: list[str]) -> int:
         import uvicorn
         from aip.server.app import create_app
     except ImportError:
-        print("aip server needs the server extra: `uv sync --extra server` (or `pip install 'agent-instruction-protocol[server]'`)",
-              file=sys.stderr)
+        print("aip server cannot import fastapi or uvicorn, which this package depends on: install it again with "
+              "`uv tool install --force agent-instruction-protocol` (in a checkout, `uv sync`)", file=sys.stderr)
         return 1
 
     if args.backend == "relate":
@@ -1058,6 +1072,35 @@ def version_line() -> str:
     return f"aip {version('agent-instruction-protocol')} language {LANGUAGE_VERSION}"
 
 
+SKILL_REMINDER = "aip: no agent on this machine has the aip skill, which tells it how to use aip; run `aip skill install`"
+
+
+def skill_reminder(command: str | None, rest: list[str]) -> str | None:
+    """The line to say when an agent is on this machine and none has the skill, else None.
+
+    The help (`command` None) always carries it. A command says it once per machine (a marker
+    under `AIP_HOME`), on a terminal only, and never for `skill`, `mcp`, `server` or `--json`:
+    what a program reads from `aip` stays as it was."""
+    from aip.compiler import agents
+    from aip.compiler.resources import SKILL_NAME
+    from aip.model.cache import aip_home
+
+    if command is not None and (command in ("skill", "mcp", "server") or "--json" in rest or not sys.stderr.isatty()):
+        return None
+    try:
+        if not agents.skill_missing(SKILL_NAME):
+            return None
+        if command is not None:
+            marker = aip_home() / "skill-reminder"
+            if marker.exists():
+                return None
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("said once; `aip skill install` is the command\n", encoding="utf-8")
+    except OSError:
+        return None
+    return SKILL_REMINDER
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "--version":
@@ -1070,9 +1113,15 @@ def main(argv: list[str] | None = None) -> int:
               + "\n\n`run` and `info` take a program directory, an .rl bundle, or a published name "
               "(`aip pull` caches one; `aip config server local` records runs on this machine, "
               "`aip config server URL` on a server elsewhere).")
+        reminder = skill_reminder(None, [])
+        if reminder:
+            print("\n" + reminder)
         return 0
     command, rest = ALIASES.get(argv[0], argv[0]), argv[1:]
     if command in COMMANDS:
+        reminder = skill_reminder(command, rest)
+        if reminder:
+            print(reminder, file=sys.stderr)
         return COMMANDS[command](rest)
     if command in RENAMED:
         print(f"aip: `aip {command}` is `aip {RENAMED[command]}` since 0.9", file=sys.stderr)

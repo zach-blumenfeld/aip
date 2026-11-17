@@ -9,7 +9,15 @@ thing (`docs/cli-json.md`). The module is `aip.mcp`.
 ```
 aip mcp [--agent A] [--session S]             over stdio: the command an MCP client is given
 aip mcp --http PORT [--host HOST]             over streamable HTTP, at http://HOST:PORT/mcp
+aip mcp --tools search,describe,run,resume    offer only these tools (default: all seven)
 ```
+
+`--tools` is an allow-list kept by the server: a tool it does not name is not registered, so a
+client can neither list it nor call it, whatever filter its framework has. An agent that should
+only find and run published procedures gets `search,describe,run,resume`; without `compile` and
+`pull` it cannot build one or fetch the catalog, and without `agent` it cannot hand the task to
+another model. A name that is not a tool is refused when the server starts. (`build(...,
+tools=...)` and `serve(..., tools=...)` in `aip.mcp` take the same list.)
 
 An MCP client's configuration names the command, and the environment `aip` should see:
 

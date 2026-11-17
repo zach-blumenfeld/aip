@@ -61,7 +61,7 @@ procedure means; this page says what running one entails.
 - `Aggregate`: for each aggregation, the runtime tests each answer in its source against the
   line's condition (`== value`, `!= value`, or `== true` for a bare `true_or_false`), takes the
   probability the model put on that condition from the answer's probabilities, and, when the
-  line has `With Confidence_Above` and that probability is not strictly above it, or absent, counts the
+  line has `With Probability_Above` and that probability is not strictly above it, or absent, counts the
   answer as the value that fails the aggregation; then applies `All`, `Any` or `None`, and writes the one key
   with one answer per aggregation, each `{value}` and nothing else. It records each answer's
   resolution.
@@ -130,7 +130,7 @@ run waited.
   tests the condition on its answer at the head of each pass and again the moment a step of the
   body produces the answer, or a loop in the body exits having produced it; when it holds the
   loop ends at that point, the pass counts, and the rest of the pass does not run. An absent
-  answer does not hold, and with `With Confidence_Above` neither does one whose probability on the
+  answer does not hold, and with `With Probability_Above` neither does one whose probability on the
   condition is not strictly above the bar, or missing. The head test comes before the first pass
   too: a loop whose answer already holds when it is reached runs no pass and exits with
   `iterations` 0.

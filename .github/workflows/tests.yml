@@ -50,8 +50,11 @@ jobs:
         if: runner.os == 'Linux'
         run: uv run aip fmt --check examples/language
 
-      - name: A fresh venv compiles an example (L3's proof)
-        if: runner.os == 'Linux'
+      - name: A fresh install compiles an example and serves the catalog
+        # The package installed as a user gets it, not the checkout: L3's proof, and since 0.9.0
+        # `aip server` started from that install with the four shipped procedures in its catalog.
+        # On Windows too (#24 was a server that could not start there); Git Bash runs the script.
+        shell: bash
         run: scripts/fresh-venv.sh
 
   # The VS Code extension (E1's and E2's proofs): esbuild bundles it and its graph preview (the

@@ -181,7 +181,7 @@ class TheGraph(unittest.TestCase):
         watches = one(g, "WATCHES", "loop:revise", "data:check_summary")
         self.assertEqual(watches["field"], "all_hold")
         agg = props(g, "aggregation:summarize_check.all_hold")
-        self.assertEqual((agg["mode"], agg["source"], agg["confidence_above"]), ("All", "verdicts.follows", 0.7))
+        self.assertEqual((agg["mode"], agg["source"], agg["probability_above"]), ("All", "verdicts.follows", 0.7))
         self.assertEqual(one(g, "OVER", "aggregation:summarize_check.all_hold", "data:verdicts")["field"], "follows")
         self.assertEqual(props(g, "data:verdicts")["type"], "list")
         self.assertEqual(props(g, "data:verdict")["type"], "decision")

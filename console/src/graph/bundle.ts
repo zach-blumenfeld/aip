@@ -87,11 +87,11 @@ function typed(name: string, node: GraphNode | undefined): string {
   return `${name}${type ? `: ${type}` : ""}${labels.length ? ` [${labels.join(", ")}]` : ""}`;
 }
 
-/** A condition's tail: ` == value`, ` With Confidence_Above 0.7`. */
+/** A condition's tail: ` == value`, ` With Probability_Above 0.7`. */
 function condition(p: Record<string, unknown>, operator: string, value: string, above: string): string {
   const op = text(p[operator]);
   const bar = p[above];
-  return `${op ? ` ${op} ${text(p[value])}` : ""}${bar !== undefined && bar !== null ? ` With Confidence_Above ${text(bar)}` : ""}`;
+  return `${op ? ` ${op} ${text(p[value])}` : ""}${bar !== undefined && bar !== null ? ` With Probability_Above ${text(bar)}` : ""}`;
 }
 
 /** The model of a graph. A graph with no `Procedure` node gives an empty model. */
@@ -157,7 +157,7 @@ export function modelOf(graph: Graph): Model {
         const a = nodes.get(e.end)?.properties ?? {};
         const over = from(e.end, "OVER")[0];
         const source = text(a.source) || (over ? dotted(nameOf(over.end), over.properties.field) : "");
-        return `${nameOf(e.end)}: ${text(a.mode)} ${source}${condition(a, "operator", "value", "confidence_above")}`;
+        return `${nameOf(e.end)}: ${text(a.mode)} ${source}${condition(a, "operator", "value", "probability_above")}`;
       }));
       push("runs", from(node.id, "RUNS").map((e) => text(nodes.get(e.end)?.properties.path)));
       push("prompt", from(node.id, "PROMPTED_BY").map((e) => text(nodes.get(e.end)?.properties.path)));
@@ -174,7 +174,7 @@ export function modelOf(graph: Graph): Model {
       const parts: string[] = [];
       const over = from(node.id, "OVER")[0];
       if (over) parts.push(`Over ${dotted(nameOf(over.end), over.properties.field)}${p.item ? ` As ${text(p.item)}` : ""}`);
-      if (p.until_answer) parts.push(`Until ${text(p.until_answer)}${condition(p, "until_operator", "until_value", "until_confidence_above")}`);
+      if (p.until_answer) parts.push(`Until ${text(p.until_answer)}${condition(p, "until_operator", "until_value", "until_probability_above")}`);
       if (p.times !== undefined && p.times !== null) parts.push(`${text(p.times)} Times`);
       if (p.at_most !== undefined && p.at_most !== null) parts.push(`At_Most ${text(p.at_most)}`);
       if (p.collect_key) parts.push(`Collect ${text(p.collect_key)}${p.collect_into ? ` Into ${text(p.collect_into)}` : ""}`);

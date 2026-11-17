@@ -22,7 +22,8 @@ serves the page on `http://localhost:4280/` (`--port`), and:
   the CLI prints (aip's `docs/cli-json.md`: one per history entry, then the paused, done or error
   object) is relayed to the page as it arrives, over a server-sent event stream. Cancel kills the CLI
   and the scripts it started. So scripts run here, next to the data: their files land in the working
-  directory (`--workdir`, default the current one); a `Decide` is answered by the decision model this
+  directory (`--workdir`, default the current one: start the console in the folder a procedure's
+  files are in, or name it, since a run started from `console/` looks for `source/` there); a `Decide` is answered by the decision model this
   machine's `aip config` names; and the CLI records the run on the server itself, as agent `console`
   in the browser tab's session. The CLI is started from an empty directory and given the working
   directory as `--workdir`, so a folder there named like a published procedure does not turn a

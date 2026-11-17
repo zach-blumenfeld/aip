@@ -8,9 +8,10 @@ run through.
 One process at a time holds the file. Within the process a connection belongs to the thread
 that opened it, and the server answers requests on a thread pool, so one worker thread opens the
 connection and runs every statement and transaction in turn: a transaction's reads and writes
-are atomic because nothing else runs between them. Anyone else reads the file through the
-engine's own tools (`relate query`, `relate serve --read-only`), which open a frozen view
-beside the writer.
+are atomic because nothing else runs between them. Nothing else can open the file meanwhile,
+read-only included: Relate allows one process on a single-file store (`storage locked`). For
+Bolt beside the server, Relate serves the file and the server connects as a client
+(`docs/server-design.md`, "A Relate store over Bolt").
 """
 
 from __future__ import annotations

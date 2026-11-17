@@ -46,8 +46,8 @@ def _condition(c: s.Condition) -> str:
     text = c.answer.dotted
     if c.operator:
         text += f" {c.operator} {c.value}"
-    if c.confidence_above is not None:
-        text += f" With Confidence_Above {_num(c.confidence_above)}"
+    if c.probability_above is not None:
+        text += f" With Probability_Above {_num(c.probability_above)}"
     return text
 
 

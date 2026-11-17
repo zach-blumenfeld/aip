@@ -4,7 +4,9 @@ The graph and every statement are `aip.server.store`'s, the same as the Relate b
 this module supplies the adapter over the Neo4j driver and the connection settings. A bundle
 published here is the same nodes and edges as in its `.rl`, so a Browser pointed at the database
 shows the procedures beside their runs and the queries of `docs/language/queries.md` work as
-written.
+written. The URI may also be a Relate store served over Bolt (`relate serve --bolt PORT`), which
+is how a Browser and the server share one `.rl` file (`docs/server-design.md`, "A Relate store
+over Bolt").
 
 Transactions are the driver's managed ones (`execute_read`, `execute_write`), which retry on a
 transient error; the store's transaction functions only read and write the graph, so a retry
@@ -34,8 +36,8 @@ class Connection:
         try:
             from neo4j import GraphDatabase
         except ImportError as exc:  # pragma: no cover
-            raise RuntimeError("the Neo4j driver is not installed; install `agent-instruction-protocol[server]` "
-                               "(or `uv sync --extra neo4j` in the repo)") from exc
+            raise RuntimeError("the Neo4j driver is not installed, and this package depends on it: install it again with "
+                               "`uv tool install --force agent-instruction-protocol` (in a checkout, `uv sync`)") from exc
         # notifications off: an empty database otherwise logs a warning per unknown label on every read
         return GraphDatabase.driver(self.uri, auth=(self.user, self.password), notifications_min_severity="OFF")
 

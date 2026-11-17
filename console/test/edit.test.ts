@@ -41,8 +41,8 @@ test("bars and caps: a route's check, a loop's cap", () => {
 });
 
 test("a loop's Until and what it does at its cap", () => {
-  const until = applyEdits(TRIAGE, setUntil(TRIAGE, triage, "loop:revise", "passed With  Confidence_Above 0.8"));
-  assert.ok(until.includes("Loop revise Until passed With Confidence_Above 0.8, At_Most 4, Else_Fail {"), until);
+  const until = applyEdits(TRIAGE, setUntil(TRIAGE, triage, "loop:revise", "passed With  Probability_Above 0.8"));
+  assert.ok(until.includes("Loop revise Until passed With Probability_Above 0.8, At_Most 4, Else_Fail {"), until);
   assert.ok(applyEdits(TRIAGE, setAtCap(TRIAGE, triage, "loop:revise", "Else_Exit")).includes("Loop revise Until passed, At_Most 4, Else_Exit {"));
   assert.throws(() => setUntil(TRIAGE, triage, "loop:each_ticket", "passed"), /no Until/);
   assert.throws(() => setUntil(TRIAGE, triage, "loop:revise", "a, b"), /no comma/);

@@ -13,7 +13,7 @@ compiler (`aip.compiler`: parser, checker, formatter, graph, bundle), the engine
 `agent-instruction-protocol` (PyPI blocks `aip` as a look-alike of an existing project); its
 module and command are `aip`. Until 0.9 the language was a second package, `aip-spec`, in a uv
 workspace under `packages/`; it folded in at plan milestone L5 (2026-11-09) and the `aip-spec`
-distribution stays at 0.8 on PyPI with no further release. The web console, the npm package
+distribution stays on PyPI at 0.7.0, its last release (0.8.0 was never published), with no further release. The web console, the npm package
 `aip-console`, is `console/` in this repository since plan milestone C1 (2026-11-09; it was the
 repository [aip-console](https://github.com/zach-blumenfeld/aip-console) through 0.8, and its
 history came with it): its own npm version, changelog and release workflow, and nothing of it in
@@ -60,7 +60,7 @@ and the branch moved here with its history. Rules:
 | `examples/billing-support/` | the bundled example skill; validation fails on `aip_version_mismatch` if the format moves without it |
 | `docs/` | design and reference: `running.md` (0.9 since A2), `agent.md`, `run-modes.md`, `state.md`, `client-execution.md`, `server-design.md`, `sdk.md`, `mcp.md`, `cli-json.md`, `upgrading.md` |
 | `CHANGELOG.md` | one changelog for both packages; before `0.7.0` the two histories are interleaved and marked `(aip)` or `(aip-spec)` |
-| `install.sh` | the one-command installer: uv, `agent-instruction-protocol[server]`, the `aip` skill, `aip skill prune` |
+| `install.sh` | the one-command installer: uv, `agent-instruction-protocol` (the `[server]` extra it names is empty since 0.9: the server's packages are base dependencies), the `aip` skill, `aip skill prune` |
 | `.github/workflows/release.yml` | the release workflow, below |
 | `.github/workflows/console-release.yml` | the console's release workflow: builds from `console/`, tags `console-vX.Y.Z`, stages `aip-console` on npm for the maintainer's approval (`console/AGENTS.md`) |
 | `.github/workflows/tests.yml` | CI: pytest on Linux and Windows, the extension's build and tests, the console's build and unit tests |

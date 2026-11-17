@@ -176,11 +176,31 @@ class Server(MCPServer):
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(body, indent=2))], structured_content=body)
 
 
-def build(client: Client | None = None, *, agent: str | None = None, session: str | None = None) -> MCPServer:
+def tools_named(names: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    """The tools a server offers, in `TOOLS`' order: every one for None, else the ones named
+    (a list, or `"search,describe,run,resume"`). A name that is not a tool, or none at all, is a
+    `ValueError` that lists the tools."""
+    if names is None:
+        return tuple(TOOLS)
+    wanted = [n.strip() for n in names.split(",")] if isinstance(names, str) else list(names)
+    wanted = [n for n in wanted if n]
+    unknown = [n for n in wanted if n not in TOOLS]
+    if unknown or not wanted:
+        what = f"{', '.join(repr(n) for n in unknown)} is not a tool" if unknown else "no tool is named"
+        raise ValueError(f"{what}; the tools are {', '.join(TOOLS)}")
+    return tuple(t for t in TOOLS if t in wanted)
+
+
+def build(client: Client | None = None, *, agent: str | None = None, session: str | None = None,
+          tools: str | list[str] | tuple[str, ...] | None = None) -> MCPServer:
     """The MCP server over `client` (default: the configured one, `aip config`). `agent`
     replaces the MCP client's own name in the record; `session` is the session of every run a
-    call does not give one (default `AIP_SESSION`, else an id made here)."""
+    call does not give one (default `AIP_SESSION`, else an id made here). `tools` is the
+    allow-list (`aip mcp --tools`): only those are registered, so a client can neither list nor
+    call another, whatever its own filter says."""
     from aip.client.cli import version_line
+
+    offered = tools_named(tools)
 
     client = client if client is not None else Client()
     default_session = session or os.environ.get(SESSION_ENV) or f"mcp-{uuid.uuid4().hex[:8]}"
@@ -188,6 +208,10 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
                     version=version_line().split()[1], log_level="WARNING")
 
     named = agent                      # the `agent` tool below takes the name in this scope
+
+    def tool(fn):
+        """Register `fn` as the tool of its name when this server offers it."""
+        return server.tool()(fn) if fn.__name__ in offered else fn
 
     def who(ctx: Context) -> str:
         return named or client_name(ctx) or os.environ.get(AGENT_ENV) or MCP_AGENT
@@ -238,7 +262,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
                   file=sys.stderr)
         return stopped(result.to_json())
 
-    @server.tool()
+    @tool
     def search(query: str, limit: int = 10) -> dict[str, Any]:
         """Find published procedures by what they do. Returns `hits`, best first: each has the
         `name` to give `describe` and `run`, its `revision`, its `bundle_id`, a `score` and its
@@ -252,7 +276,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         except AipError as exc:
             return failure(exc)
 
-    @server.tool()
+    @tool
     def describe(target: str) -> dict[str, Any]:
         """What a procedure does and what to give it. `target` is a published name (`name` or
         `name@revision`), a program directory (the folder holding `procedure.aip`) or an `.rl`
@@ -267,7 +291,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         except AipError as exc:
             return failure(exc)
 
-    @server.tool()
+    @tool
     def compile(folder: str, output: str | None = None) -> dict[str, Any]:
         """Check a program directory (the folder holding `procedure.aip`). Returns `ok`, the
         procedure's `name`, its `bundle_id` when it compiles, and every diagnostic (`code`,
@@ -283,7 +307,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         return {"ok": c.ok, "name": c.name, "bundle_id": c.bundle_id, "diagnostics": [d.to_dict() for d in c.diagnostics],
                 "output": str(c.output) if c.output else None}
 
-    @server.tool()
+    @tool
     def run(ctx: Context, target: str, inputs: dict[str, Any] | None = None, session: str | None = None,
             batch: int | None = None, workdir: str | None = None) -> dict[str, Any]:
         """Run a procedure until it pauses or is done. `target` is a published name (`name` or
@@ -300,7 +324,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
                                                       session=session or default_session, workdir=workdir, on_step=on_step,
                                                       agent_version=version_of(ctx)))
 
-    @server.tool()
+    @tool
     def resume(ctx: Context, run_id: str, answers: dict[str, Any] | list[Any] | None = None,
                work: dict[str, Any] | list[Any] | None = None) -> dict[str, Any]:
         """Answer a paused run, or retry a failed one. `run_id` is the one `run` returned.
@@ -317,7 +341,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         returns."""
         return driven(ctx, lambda on_step: client.resume(run_id, answers, agent=who(ctx), on_step=on_step, work=work))
 
-    @server.tool()
+    @tool
     def agent(ctx: Context, task: str, session: str | None = None) -> dict[str, Any]:
         """Hand a whole task to this server's own chat model (`aip config agent`), which drives
         the `assist` procedure: it searches the catalog, runs what fits, builds a procedure when
@@ -334,7 +358,7 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         out = driven(ctx, lambda on_step: client.ask(task, session=session, on_step=on_step))
         return {**out, "session": session}
 
-    @server.tool()
+    @tool
     def pull(ref: str | None = None) -> dict[str, Any]:
         """Put a published procedure's bundle in this machine's cache, so `run` works on it
         when the server cannot be reached. `ref` is `name` or `name@revision`; with none, every
@@ -351,11 +375,11 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
 
 
 def serve(client: Client | None = None, *, http: int | None = None, host: str = "127.0.0.1", agent: str | None = None,
-          session: str | None = None) -> None:
+          session: str | None = None, tools: str | list[str] | tuple[str, ...] | None = None) -> None:
     """Serve until the client goes away: over stdio, or with `http` (a port) over streamable
     HTTP at `http://<host>:<port>/mcp`. Over stdio, stdout is the protocol's: this process
     prints nothing else there."""
-    server = build(client, agent=agent, session=session)
+    server = build(client, agent=agent, session=session, tools=tools)
     if http is None:
         server.run("stdio")
     else:

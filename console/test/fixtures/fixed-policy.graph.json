@@ -7,7 +7,7 @@
    ],
    "properties": {
     "id": "procedure",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "fixed_policy",
     "description": "Do a writing task the way the house policy says, and do not hand it over until it does.",
     "language_version": "0.9",
@@ -35,7 +35,7 @@
    ],
    "properties": {
     "id": "file:assets/claims.md",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "path": "assets/claims.md",
     "size": 548,
     "mode": 420,
@@ -49,7 +49,7 @@
    ],
    "properties": {
     "id": "file:assets/fix.md",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "path": "assets/fix.md",
     "size": 726,
     "mode": 420,
@@ -63,7 +63,7 @@
    ],
    "properties": {
     "id": "file:assets/policy.md",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "path": "assets/policy.md",
     "size": 392,
     "mode": 420,
@@ -77,7 +77,7 @@
    ],
    "properties": {
     "id": "file:assets/task.md",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "path": "assets/task.md",
     "size": 224,
     "mode": 420,
@@ -92,7 +92,7 @@
    ],
    "properties": {
     "id": "step:start",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "start",
     "kind": "Start",
     "description": "What the requester wants written.",
@@ -109,7 +109,7 @@
    ],
    "properties": {
     "id": "data:request",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "request",
     "type": "string",
     "description": "The task, as the requester wrote it."
@@ -123,7 +123,7 @@
    ],
    "properties": {
     "id": "step:draft",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "draft",
     "kind": "Task_Agent",
     "description": "Write the work from the task template, following the policy.",
@@ -141,7 +141,7 @@
    ],
    "properties": {
     "id": "data:work",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "work",
     "type": "string",
     "description": "The written work."
@@ -154,7 +154,7 @@
    ],
    "properties": {
     "id": "loop:revise",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "revise",
     "kind": "Loop",
     "mode": "Until",
@@ -174,7 +174,7 @@
    ],
    "properties": {
     "id": "data:check_summary",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "check_summary",
     "type": "aggregation"
    }
@@ -187,7 +187,7 @@
    ],
    "properties": {
     "id": "step:check",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "check",
     "kind": "Decide",
     "description": "Does the work follow each policy?",
@@ -206,7 +206,7 @@
    ],
    "properties": {
     "id": "data:policy_check",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "policy_check",
     "type": "decision"
    }
@@ -218,7 +218,7 @@
    ],
    "properties": {
     "id": "question:check.pii",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "pii",
     "type": "true_or_false",
     "instruction": "The work contains no personal data: no names of private individuals, no account numbers, no addresses.",
@@ -236,7 +236,7 @@
    ],
    "properties": {
     "id": "question:check.claims",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "claims",
     "type": "true_or_false",
     "instruction": "The work stays within the approved claims about the product: every factual claim it makes about the product is one of the approved claims below, or follows from one, and it promises nothing beyond them. Work that makes no claim about the product stays within them.\n\nApproved claims:\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.",
@@ -254,7 +254,7 @@
    ],
    "properties": {
     "id": "question:check.tone",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "tone",
     "type": "true_or_false",
     "instruction": "The tone is plain and courteous: no superlatives, no pressure, no blame.",
@@ -272,7 +272,7 @@
    ],
    "properties": {
     "id": "question:check.length",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "length",
     "type": "true_or_false",
     "instruction": "The work is under 300 words.",
@@ -291,7 +291,7 @@
    ],
    "properties": {
     "id": "step:summarize_check",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "summarize_check",
     "kind": "Aggregate",
     "description": "Every policy holds, and the model was sure of each.",
@@ -309,15 +309,15 @@
    ],
    "properties": {
     "id": "aggregation:summarize_check.all_hold",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "all_hold",
     "mode": "All",
-    "confidence_above": 0.7,
+    "probability_above": 0.7,
     "order": 0,
     "line": 71,
     "column": 7,
     "end_line": 71,
-    "end_column": 59
+    "end_column": 60
    }
   },
   {
@@ -328,7 +328,7 @@
    ],
    "properties": {
     "id": "step:fix",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "fix",
     "kind": "Task_Agent",
     "description": "Revise the work so the failed policies pass.",
@@ -347,7 +347,7 @@
    ],
    "properties": {
     "id": "step:end",
-    "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+    "bundle_id": "0da80fed1609d9bf4091b1f3cee905f17185f86621f2250adda6d01cd52471ab",
     "name": "end",
     "kind": "End",
     "description": "The work, and the check that passed it.",

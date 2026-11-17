@@ -383,7 +383,7 @@ def aggregate(procedure: Procedure, step: Step, state: JSON) -> tuple[JSON, JSON
         fails_as = agg.mode == "None"
         rows = []
         for label, answer in leaves:
-            resolution = resolve_condition(answer, _answer_type(answer), agg.operator, agg.value, agg.confidence_above, fails_as)
+            resolution = resolve_condition(answer, _answer_type(answer), agg.operator, agg.value, agg.probability_above, fails_as)
             rows.append({"source": label, **resolution})
         held = [r["holds"] for r in rows]
         value = all(held) if agg.mode == "All" else any(held) if agg.mode == "Any" else not any(held)
@@ -414,7 +414,7 @@ def until_holds(procedure: Procedure, loop: Loop, state: JSON) -> tuple[bool, JS
     """Whether a `Loop`'s `Until` condition holds on the state, and the answer's resolution for
     the record. An absent answer does not hold and resolves to None; otherwise the condition is
     the spec's (2.1, Conditions): `== value`, `!= value`, `== true` for a bare `true_or_false`,
-    and with `With Confidence_Above` only a probability strictly above the bar holds."""
+    and with `With Probability_Above` only a probability strictly above the bar holds."""
     until = loop.until
     assert until is not None
     try:
@@ -423,7 +423,7 @@ def until_holds(procedure: Procedure, loop: Loop, state: JSON) -> tuple[bool, JS
         return False, None
     if not isinstance(answer, dict) or "value" not in answer:
         raise InvalidInput(loop.name, [f"{until.dotted} is {describe(answer)}, not an answer with a value"], invalid=[until.dotted])
-    resolution = resolve_condition(answer, _answer_type(answer), until.operator, until.value, until.confidence_above, fails_as=False)
+    resolution = resolve_condition(answer, _answer_type(answer), until.operator, until.value, until.probability_above, fails_as=False)
     return bool(resolution["holds"]), {"answer": until.dotted, **resolution}
 
 

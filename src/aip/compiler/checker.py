@@ -128,7 +128,7 @@ class Diagnostic:
 # ---------------------------------------------------------------- source classes
 
 # The class of an answer by the kind of the step that produced it (spec 2.2): what a route's
-# `Confidence_Below` or a condition's `With Confidence_Above` may sit on is `measured` (a
+# `Confidence_Below` or a condition's `With Probability_Above` may sit on is `measured` (a
 # decision model's answer, which always carries a confidence) or `scripted` (a script's, which
 # may); an `agent`'s answer, an `input` and an `aggregated` answer never carry one, so a check
 # on them is an error. The order is the precedence when the arms of a route produce one key
@@ -860,7 +860,7 @@ class Checker:
         return classes
 
     def check_confidence(self, node: s.Node, dotted: str, classes: dict[str, list[str]], step: str, what: str, where: str):
-        """A `Confidence_Below` or `With Confidence_Above` on an answer: allowed on a decision
+        """A `Confidence_Below` or `With Probability_Above` on an answer: allowed on a decision
         model's or a script's, an error on an agent's, an input or an aggregation (spec 2.4)."""
         on_a_path = " on one path" if len(classes) > 1 else ""
         for cls, culprits in classes.items():
@@ -966,8 +966,8 @@ class Checker:
                             f"{dotted} == <{word}> or != <{word}>{have}", step)
             elif t.labels is not None and cond.value not in t.labels:
                 self.report("unknown_label", cond, f"{cond.value} is not a {word} of {dotted}; its {word}s are {_list(t.labels)}", step)
-        if cond.confidence_above is not None:
-            self.check_confidence(cond, dotted, self.classify(t.sources), step, "With Confidence_Above",
+        if cond.probability_above is not None:
+            self.check_confidence(cond, dotted, self.classify(t.sources), step, "With Probability_Above",
                                   f"drop the bar and let every answer count as it is in {where}")
 
     # ------------------------------------------------------------ loops

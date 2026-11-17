@@ -40,7 +40,7 @@ def program(source: str, files: dict[str, str] | None = None):
 
 
 def calm():
-    return {"billing": answers.true_or_false(0.97), "tone": answers.choice({"calm": 0.9, "angry": 0.1})}
+    return {"billing": answers.true_or_false(0.97), "tone": answers.choice({"calm": 0.95, "angry": 0.05})}
 
 
 def angry():
@@ -135,7 +135,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(run.state["queue"], "tier2")
         self.assertTrue((self.home / "cache" / self.bundle.id / "scripts" / "escalate.py").is_file())
         route = run.history[2]
-        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.95, "fired": False})
+        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.9, "fired": False})
         self.assertEqual((route["value"], route["to"]), ("angry", "escalate"))
 
     def test_the_confidence_arm_escalates_an_unsure_calm(self):
@@ -145,7 +145,7 @@ class BillingSupport(EngineCase):
         self.assertEqual(self.steps_of(run), ["start", "triage", "by_tone", "escalate", "end"])
         route = run.history[2]
         self.assertEqual(route["read"], "triage_decision.tone")
-        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.55, "fired": True, "reason": "below"})
+        self.assertEqual(route["check"], {"below": 0.9, "confidence": 0.1, "fired": True, "reason": "below"})
         self.assertEqual((route["value"], route["to"], route["result"]), (None, "escalate", {}), "a route says where it went once")
         self.assertEqual(route["input"], {"tone": run.state["triage_decision"]["tone"]}, "the answer under the name a step reads it by")
 
@@ -353,10 +353,10 @@ Aggregate summarize "Combine." {
   Read policy_check, judgement
   Aggregations {
     all_hold:   All policy_check.pii
-    both:       All policy_check With Confidence_Above 0.7
+    both:       All policy_check With Probability_Above 0.7
     any_fails:  Any policy_check.claims == false
-    none_angry: None judgement.tone == angry With Confidence_Above 0.8
-    not_high:   All judgement.risk != high With Confidence_Above 0.5
+    none_angry: None judgement.tone == angry With Probability_Above 0.8
+    not_high:   All judgement.risk != high With Probability_Above 0.5
   }
   Produce summary
   Next_Step by_all
@@ -455,7 +455,7 @@ class Aggregations(EngineCase):
         self.assertEqual((run.status, run.error["error"], run.error["invalid"]), (FAILED, "invalid_output", ["risk"]))
 
     def test_a_bar_holds_only_strictly_above_it(self):
-        """Spec 2.5: `With Confidence_Above 0.7` is above 0.7; an answer at the bar is barred."""
+        """Spec 2.5: `With Probability_Above 0.7` is above 0.7; an answer at the bar is barred."""
         _, _, run = self.run_with({"pii": answers.true_or_false(0.95), "claims": answers.true_or_false(0.7)},
                                   {"tone": answers.choice({"calm": 0.9, "angry": 0.1}), "risk": answers.score({"low": 0.9, "medium": 0.05, "high": 0.05})})
         self.assertEqual(run.history[3]["resolutions"]["both"][1],
@@ -629,10 +629,10 @@ End "Done." {
 @needs_relate
 class Scores(EngineCase):
     def test_a_score_branches_by_the_label_of_its_level(self):
-        engine = self.engine(ScriptedResolver({"rate": {"urgency": answers.score({"low": 0.1, "medium": 0.2, "high": 0.7})}}))
+        engine = self.engine(ScriptedResolver({"rate": {"urgency": answers.score({"low": 0.0, "medium": 0.1, "high": 0.9})}}))
         run = engine.start(self.load(program(SCORED)), {"text": "server down"})
         self.assertEqual((run.status, run.pause["step"]), (PAUSED, "escalate"))
-        self.assertEqual(run.state["rating"]["urgency"], {"value": "high", "confidence": 0.7, "score": 1.6, "probabilities": {"low": 0.1, "medium": 0.2, "high": 0.7}},
+        self.assertEqual(run.state["rating"]["urgency"], {"value": "high", "confidence": 0.85, "score": 1.9, "probabilities": {"low": 0.0, "medium": 0.1, "high": 0.9}},
                          "the value is the level's label, the expected level stays beside it as score")
         self.assertEqual((run.history[2]["value"], run.history[2]["to"]), ("high", "escalate"))
         self.assertEqual(run.pause["tasks"][0]["prompt"], "Escalate: urgency high.")
@@ -1050,7 +1050,7 @@ Loop total Over items As item, At_Most 5 {
   Next_Step poll
 }
 
-Loop poll Until ready With Confidence_Above 0.5, At_Most 2, Else_Exit {
+Loop poll Until ready With Probability_Above 0.5, At_Most 2, Else_Exit {
   Execute probe "Never sure." {
     Read n
     Run_Script scripts/probe.py
@@ -1257,7 +1257,8 @@ class Independence(EngineCase):
             self.assertEqual([len(r.questions) for r in resolver.requests], [1, 1, 1], "the Decide reads the item: one call per pass")
             self.assertEqual([[e["step"] for e in r.history] for r in resolver.requests], [["start"]] * 3)
             seen[batch] = run.history
-        self.assertEqual(seen[1], seen[10])
+        # less the timings: `seconds` is measured, and compared whole this failed about one run in five (0.0 against 0.001)
+        self.assertEqual(without_timestamps(seen[1]), without_timestamps(seen[10]))
         self.assertEqual([j["ok"]["value"] for j in run.state["judgements"]], [True, False, True])
 
 
@@ -1400,9 +1401,25 @@ class Answers(unittest.TestCase):
     def test_answer_objects(self):
         self.assertEqual(answers.true_or_false(0.98), {"value": True, "confidence": 0.96, "noul": 0.98})
         self.assertEqual(answers.true_or_false(0.3)["value"], False)
-        self.assertEqual(answers.choice({"angry": 0.9, "calm": 0.1}), {"value": "angry", "confidence": 0.9, "probabilities": {"angry": 0.9, "calm": 0.1}})
+        self.assertEqual(answers.choice({"angry": 0.9, "calm": 0.1}), {"value": "angry", "confidence": 0.8, "probabilities": {"angry": 0.9, "calm": 0.1}})
         self.assertEqual(answers.score({"low": 0.1, "medium": 0.1, "high": 0.8}),
-                         {"value": "high", "confidence": 0.8, "score": 1.7, "probabilities": {"low": 0.1, "medium": 0.1, "high": 0.8}})
+                         {"value": "high", "confidence": 0.55, "score": 1.7, "probabilities": {"low": 0.1, "medium": 0.1, "high": 0.8}})
+
+    def test_the_confidence_is_the_decision_models_own(self):
+        """Spec 2.4 and https://docs.typesafe.ai/confidence, whose examples these are: an answer built here carries the
+        confidence TypeSafe would give the same probabilities."""
+        # a choice: how far the top probability sits above an even split, whatever the rest of the spread
+        self.assertEqual(answers.choice({"a": 0.6, "b": 0.3, "c": 0.1})["confidence"], 0.4)
+        self.assertEqual(answers.choice({"a": 0.6, "b": 0.2, "c": 0.2})["confidence"], 0.4)
+        self.assertEqual(answers.choice({"a": 0.75, "b": 0.25})["confidence"], 0.5, "two labels: |2p − 1|, the true_or_false number")
+        self.assertEqual(answers.choice_confidence(0.55, 10), 0.5)
+        self.assertEqual(answers.choice({"a": 0.33, "b": 0.30, "c": 0.37})["confidence"], 0.055)
+        # a score: the spread around the most likely level against an even spread, so it reads the whole distribution
+        self.assertEqual(answers.score({"low": 0.0, "medium": 0.5, "high": 0.5}, "medium")["confidence"], 0.25, "torn between neighbours")
+        self.assertEqual(answers.score({"low": 0.5, "medium": 0.0, "high": 0.5}, "low")["confidence"], 0.0, "torn between the ends")
+        self.assertEqual(answers.score({"low": 0.0, "medium": 0.57, "high": 0.43})["confidence"], 0.355)
+        self.assertEqual(answers.score_confidence([0.2] * 5, 2), 0.0)
+        self.assertEqual((answers.choice({"only": 1.0})["confidence"], answers.score({"only": 1.0})["confidence"]), (1.0, 1.0))
         self.assertEqual(answers.probability_of(answers.true_or_false(0.98), "true_or_false", False), 1 - 0.98)
         self.assertEqual(answers.probability_of(answers.choice({"a": 0.6, "b": 0.4}), "choice", "b"), 0.4)
         self.assertEqual(answers.probability_of(answers.score({"low": 0.6, "high": 0.4}), "score", "high"), 0.4)

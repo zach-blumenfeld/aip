@@ -86,7 +86,7 @@ class Aggregation:
     source: list[str]
     operator: str | None
     value: str | None
-    confidence_above: float | None
+    probability_above: float | None
     order: int
 
     @property
@@ -116,7 +116,7 @@ class Until:
     path: list[str]
     operator: str | None
     value: str | None
-    confidence_above: float | None
+    probability_above: float | None
 
     @property
     def dotted(self) -> str:
@@ -302,7 +302,7 @@ class Procedure:
         if watch is not None:
             w = watch["w"]
             loop.until = Until([watch["name"], *(w["field"].split(".") if w.get("field") else [])], w.get("operator"), w.get("value"),
-                               w.get("confidence_above"))
+                               w.get("probability_above"))
         enters = self._one("MATCH (l {bundle_id: $b, id: $id})-[:ENTERS]->(t) RETURN t.id AS id", id=id)
         loop.enters = enters["id"] if enters else None
         loop.body = [r["id"] for r in self._rows("MATCH (l {bundle_id: $b, id: $id})-[c:CONTAINS]->(t) RETURN t.id AS id ORDER BY c.order",
@@ -334,7 +334,7 @@ class Procedure:
                           for q in (r["q"] for r in self._rows(
                               "MATCH (s {bundle_id: $b, id: $id})-[a:ASKS]->(q:Question) RETURN properties(q) AS q ORDER BY a.order", id=id))]
         step.aggregations = [Aggregation(a["name"], a["mode"], a["source"].split("."), a.get("operator"), a.get("value"),
-                                         a.get("confidence_above"), a["order"])
+                                         a.get("probability_above"), a["order"])
                              for a in (r["a"] for r in self._rows(
                                  "MATCH (s {bundle_id: $b, id: $id})-[e:AGGREGATES]->(a:Aggregation) RETURN properties(a) AS a "
                                  "ORDER BY e.order", id=id))]
@@ -418,8 +418,8 @@ def loop_header(loop: Loop) -> str:
         head = f"Until {until.dotted}"
         if until.operator:
             head += f" {until.operator} {until.value}"
-        if until.confidence_above is not None:
-            head += f" With Confidence_Above {until.confidence_above:g}"
+        if until.probability_above is not None:
+            head += f" With Probability_Above {until.probability_above:g}"
     elif loop.mode == "Times":
         head = f"{loop.times} Times"
     else:

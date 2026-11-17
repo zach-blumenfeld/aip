@@ -588,8 +588,11 @@ class Parser:
             condition.value = self.value(f"a value (a label, a level, true or false) after '{condition.operator}'")
         if self.kw() == "With":
             self.next()
-            self.expect_kw("Confidence_Above", "after 'With'")
-            condition.confidence_above = self.number("a probability after 'Confidence_Above', such as 0.7")
+            if self.peek().text.lower() in ("confidence_above", "confidence", "conf"):   # its name until 0.9.0 was released
+                raise self.fail("a bar is on the probability of the condition and is written 'With Probability_Above'; "
+                                f"'{self.peek().text}' was its name before 0.9.0 and is not a keyword")
+            self.expect_kw("Probability_Above", "after 'With'")
+            condition.probability_above = self.number("a probability after 'Probability_Above', such as 0.7")
         return self.at(condition, tok)
 
     # ------------------------------------------------------------ loops

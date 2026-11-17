@@ -72,6 +72,18 @@ to stderr first. `--progress` prints the run's own step lines as they are writte
 `--model-name`, `--model-key`; `AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`,
 `AIP_AGENT_MODEL_KEY`); any endpoint with the OpenAI Chat Completions shape works.
 
+**A model that thinks spends the reply on it.** Each call asks for at most 64000 tokens
+(`aip.chat.COMPLETION_TOKENS`), and the request carries `model`, `messages` and `max_tokens` and
+nothing else. On Anthropic's OpenAI-compatible endpoint the Claude 5 models think by default, the
+thinking counts against that cap and is not returned, and nothing sent through that endpoint limits
+it: it ignores `reasoning_effort`, and effort is a setting of Anthropic's own Messages API, which
+`aip agent` does not speak yet
+(https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk, read 2026-11-17). A
+reply that is all thinking comes back empty, and `aip agent` gives up after four tries with `the
+reply holds no JSON object`; at 32000 tokens `build_procedure`'s `draft` did exactly that on
+Claude 5.5, which is why the cap is 64000. If it happens, name a model that does not think by
+default (`aip config agent --model-name ...`).
+
 The SDK's call is `Client.ask(text, session=None, on_step=None)`, which calls `agent(client, chat,
 text, session)` and returns what it returns (`Done` or `Paused`; a run that fails raises
 `RunError`, the endpoint failing `aip.chat.ChatError`); `Client.chat()` is the configured model,

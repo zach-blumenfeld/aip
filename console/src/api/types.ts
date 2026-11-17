@@ -129,7 +129,7 @@ export interface Resolution {
   answer?: string;
   value: unknown;
   holds: boolean;
-  /** The probability the answer put on the condition, which a `With Confidence_Above` bar reads. */
+  /** The probability the answer put on the condition, which a `With Probability_Above` bar reads. */
   probability: number | null;
   barred: boolean;
 }
@@ -244,6 +244,8 @@ export interface RunSummary {
   created: string | null;
   updated: string | null;
   entries?: number;
+  /** What a finished run ended with (its `End` keys); null until then. Since aip 0.9.0. */
+  result?: Record<string, unknown> | null;
 }
 
 /** A run, whole: `GET /runs/{id}`, or `aip runs <id> --json` from this machine's run file. */

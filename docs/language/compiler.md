@@ -115,7 +115,7 @@ finding, code `syntax_error`; `compile_folder` reports a source that is not UTF-
 **Source classes.** Every `Type` carries `sources`, the steps whose answer it is, merged at
 joins. `classify()` maps them through `SOURCE_CLASSES` by step kind (spec 2.2), and
 `check_confidence()` reports `confidence_on_agent_answer`, `confidence_on_input` or
-`confidence_on_aggregate` for a `Confidence_Below` or a `With Confidence_Above` on a class that
+`confidence_on_aggregate` for a `Confidence_Below` or a `With Probability_Above` on a class that
 cannot carry one. `source_class()` picks the least measured class in `SOURCE_PRECEDENCE` when a
 route's arms produced one key from steps of different kinds; `check_route` records it in
 `self.sources[route]`, which `check(..., sources=)` fills for the graph.
