@@ -126,7 +126,8 @@ class RunFile:
         """One row of `aip runs`: what the server's list holds for a run, from the run file."""
         return {"run_id": self.run_id, "name": self.name, "revision": self.revision, "status": self.status, "draft": self.draft,
                 "identity": self.run.get("identity"), "started": self.run.get("started") or self.created,
-                "finished": self.run.get("finished"), "created": self.created, "updated": self.updated, "target": self.target}
+                "finished": self.run.get("finished"), "created": self.created, "updated": self.updated, "target": self.target,
+                "result": self.run.get("result")}
 
 
 def local_runs(home: Path | None = None) -> list[RunFile]:

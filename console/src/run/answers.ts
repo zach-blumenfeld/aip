@@ -68,8 +68,7 @@ export function answersFor(tasks: Task[], byTask: Record<number, Record<string, 
   return Object.fromEntries(tasks.map((t) => [String(t.index), byTask[t.index] ?? {}]));
 }
 
-/** The rows a `list` answer is picked from, when the task carries them: the one list in the state it reads (as
- *  make_procedure's `approve` reads `folders`). Null when there is none, or more than one to choose between. */
+/** The rows a `list` answer is picked from, when the task carries them: the one list in the state it reads. Null when there is none, or more than one to choose between. */
 export function candidatesOf(type: string | null | undefined, state: Record<string, unknown>): unknown[] | null {
   if (type !== "list" && type !== "array") return null;
   const lists = Object.values(state).filter((v) => Array.isArray(v) && v.length > 0) as unknown[][];

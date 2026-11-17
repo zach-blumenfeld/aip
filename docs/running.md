@@ -14,7 +14,7 @@ configured. Run ids, times and paths will differ on yours; the run id is shown a
 ## Install and configure
 
 ```sh
-curl -LsSf https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 aip --version
 ```
 
@@ -67,7 +67,9 @@ each pause with one call to the model you configured, and the record says it ans
 `aip run` takes a target in any of three forms: a program folder (the directory holding
 `procedure.aip`), a bundle (`file.rl`), or a published name (`billing_support`, or
 `billing_support@2` for one revision). `aip info <target>` says what it does, what it needs and
-what it returns, and `--example-inputs` prints the inputs to fill in:
+what it returns, and `--example-inputs` prints the inputs to fill in. The examples used below are
+in the repository under `examples/language/` and in the installed package: `aip example` lists
+them and `aip example billing-support-agent` writes one out as `./billing-support-agent`.
 
 ```
 $ aip info examples/language/billing-support-agent --example-inputs

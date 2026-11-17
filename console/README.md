@@ -69,12 +69,14 @@ Routes are hash-based.
 
 ### The step graph
 
-The procedure page's main view. Steps are nodes with their kind; a `For` or a `Loop` is a frame
-around the steps of its body, with its header; the arrows are the bundle's control edges: `NEXT`,
+The procedure page's main view. Steps are nodes that say their kind in plain words with a glyph
+("model decides", "runs a script", "agent task", "branches", "combines answers"; the keyword is the
+tooltip); a `For` or a `Loop` is a node of its own ("for each item", "repeats until") with the steps
+of its body beside it; the arrows are the bundle's control edges: `NEXT`,
 a route's `BRANCH`es and its `BELOW` (the confidence check) labelled, the way into a loop's body,
 `CONTINUES` along a rail back to the loop. Every cycle is a loop node, so no other arrow goes back.
 Two ways between the same two steps are one arrow that names both (`< 0.9 · angry`). Click a node,
-or a frame's header, to read what it reads and produces and the lines of `procedure.aip` that wrote
+a step's or a loop's, to read what it reads and produces and the lines of `procedure.aip` that wrote
 it. It has three modes:
 
 - **control flow**: the above.
@@ -149,7 +151,7 @@ reader to work out. Every step says how long it took, and the run where its time
 the model, waiting on agents). A decision says which model answered and how sure it was of each
 answer; a task says which agent and session answered it and after how long; a route says what it
 read, where it went, and whether its confidence check fired and on what numbers; an aggregate says
-how each answer counted and which the confidence bar turned. The passes of a loop are nested under
+how each answer counted and which the probability bar turned. The passes of a loop are nested under
 the loop, each with the test that let it run, and the loop says why it ended (its condition held,
 its items ran out, it hit its cap). A run of a draft wears a `draft` badge, in the list and on its
 page.

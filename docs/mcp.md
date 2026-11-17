@@ -29,7 +29,8 @@ An MCP client's configuration names the command, and the environment `aip` shoul
 **A stdio client must forward its environment.** An MCP client starts `aip mcp` with a minimal
 environment of its own, not the shell's: whatever `AIP_*` variables you set where the agent runs
 (`AIP_SERVER`, `AIP_TOKEN`, `AIP_HOME`, `AIP_CONFIG`, `AIP_DECISION_MODEL`,
-`AIP_DECISION_MODEL_KEY`, `AIP_AGENT`, `AIP_SESSION`) do not reach it unless the configuration
+`AIP_DECISION_MODEL_KEY`, `AIP_AGENT`, `AIP_SESSION`, `AIP_SCRIPT_TIMEOUT`, and for the `agent`
+tool `AIP_AGENT_MODEL_URI`, `AIP_AGENT_MODEL_NAME`, `AIP_AGENT_MODEL_KEY`) do not reach it unless the configuration
 passes them, in its `env` block or, from Python, with `StdioServerParameters(command="aip",
 args=["mcp"], env=dict(os.environ))` as `examples/agents/mcp-smoke/run.py` does. A client that
 does not is talking to a different `aip` than the shell beside it: the one the user's config

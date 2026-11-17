@@ -58,7 +58,7 @@ and the branch moved here with its history. Rules:
 | `skills/aip/` | the one skill (since K1; it replaced `aip-runtime` and `aip-compile`): `SKILL.md`, how an agent finds and runs a procedure, answers a pause and writes one, and `references/language.md`, the language on one page. `aip skill install` writes it into an agent. Reviewed line by line, keep diffs small. `examples/language/make_procedure/assets/language.md` is a copy of the language page (a bundle carries only its own folder's files); `tests/test_skill.py` fails when they differ, and a change to it means compiling `make_procedure` again |
 | `examples/language/` | the example programs, which must compile and be in the formatter's form; `make_procedure`, `build_procedure` and `edit_procedure` also ship as built-in bundles |
 | `examples/billing-support/` | the bundled example skill; validation fails on `aip_version_mismatch` if the format moves without it |
-| `docs/` | design and reference: `running.md` (0.9 since A2), `agent.md`, `run-modes.md`, `state.md`, `client-execution.md`, `server-design.md`, `sdk.md`, `mcp.md`, `cli-json.md`, `upgrading.md` |
+| `docs/` | design and reference: `running.md` (0.9 since A2), `agent.md`, `server-design.md` (with why every run is local to its client), `sdk.md`, `mcp.md`, `cli-json.md`, `upgrading.md` |
 | `CHANGELOG.md` | one changelog for both packages; before `0.7.0` the two histories are interleaved and marked `(aip)` or `(aip-spec)` |
 | `install.sh` | the one-command installer: uv, `agent-instruction-protocol` (the `[server]` extra it names is empty since 0.9: the server's packages are base dependencies), the `aip` skill, `aip skill prune` |
 | `.github/workflows/release.yml` | the release workflow, below |
@@ -100,7 +100,7 @@ places below and change them in the same commit; the drift tests catch some, not
 | `docs/language/spec.md` and `docs/language/runtime.md` | the language and what running it requires: the same rule in words. This is the language: it moves `LANGUAGE_VERSION` unless the release is still unreleased |
 | `skills/aip/SKILL.md` and `skills/aip/references/language.md` | the skill: what an agent is told a pause, an answer and an error look like, including the worked example at the end; and the language page, with its copy under `examples/language/make_procedure/assets/` (then compile `make_procedure` again) |
 | `examples/billing-support/SKILL.md` | the runtime block copy and the comments that explain the run |
-| `docs/running.md`, `docs/state.md`, `docs/cli-json.md`, `docs/client-execution.md`, `README.md` | every walkthrough that narrates the old behaviour; grep for the old history `reason` values and the old wording |
+| `docs/running.md`, `docs/cli-json.md`, `docs/server-design.md`, `README.md` | every walkthrough that narrates the old behaviour; grep for the old history `reason` values and the old wording |
 | `tests/` | the assertions on history entries, `--progress` lines, and the checker's diagnostics |
 | `CHANGELOG.md` | under `## [Unreleased]`, in the user's terms |
 
@@ -162,8 +162,9 @@ Never move or force-push a published tag.
 
 - For what a procedure may contain, `docs/language/spec.md` is the law and `aip/compiler/syntax.py`
   is the tree it parses to.
-- For how a run moves, `docs/language/runtime.md` and `docs/cli-json.md` (`docs/state.md`,
-  `docs/run-modes.md` and `docs/client-execution.md` still describe 0.8, until D4); for the server and its store, `docs/server-design.md`.
+- For how a run moves, `docs/language/runtime.md` and `docs/cli-json.md`, with `docs/running.md` as the tour; for the server and its store, and why
+  a run is local to its client, `docs/server-design.md`. (`docs/state.md`, `docs/run-modes.md` and
+  `docs/client-execution.md` described 0.8 and went on 2026-11-17; they are in the git history.)
 - For what the console reads, the same three: `docs/cli-json.md` (the launcher relays the CLI's
   JSON), `docs/server-design.md` (the page calls the API) and `docs/language/bundle.md` (the
   step graph draws it). A change to any of them that the console shows changes `console/` in

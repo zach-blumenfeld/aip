@@ -13,7 +13,7 @@ first-time user sees them: `~/.config/aip/config.json`, port 8247, the default s
 ## 0. Install
 
 ```sh
-curl -LsSf https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 aip --version
 ```
 

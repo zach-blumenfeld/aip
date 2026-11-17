@@ -37,7 +37,7 @@ by interpolation, so the model judges the work against a question that carries t
 
 ## No expressions
 
-By design and not changing: no arithmetic, no comparisons beyond the confidence check, no
+By design and not changing: no arithmetic, no comparisons beyond a condition's `==` and `!=`, a route's confidence check and a bar, no
 logical operators, no string building beyond `{key}` interpolation in prompts and questions, no
 function calls. Computation is an `Execute` step. The reasoning, including why a limited
 logical grammar with per-atom confidence was designed and rejected, is in

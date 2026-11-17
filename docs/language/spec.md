@@ -2,7 +2,7 @@
 
 The text form of an AIP procedure: a small, readable file that a person can follow like a runbook, an agent can write one step at a time, and a compiler can check completely before anything runs. This document is the language on its own terms. How it lands in the AIP runtime, server and console is the AIP repository's business; see `AGENTS.md` for where the two meet.
 
-Written 2026-11-03, revised 2026-11-09. Examples: `examples/language/`. What the language does not do yet: `docs/language/limitations.md`. Why it has no expressions, decided and not to be re-derived: `docs/language/no-expressions.md`. What running a bundle requires of a runtime: `docs/language/runtime.md`.
+Written 2026-11-03, revised 2026-11-17. Examples: `examples/language/`. What the language does not do yet: `docs/language/limitations.md`. Why it has no expressions, decided and not to be re-derived: `docs/language/no-expressions.md`. What running a bundle requires of a runtime: `docs/language/runtime.md`.
 
 ---
 
@@ -343,7 +343,7 @@ Aggregate summarize_check "Every policy holds, and the model was sure of each." 
 
 An `Aggregate` does not branch. A `Route` reads an aggregation (`Read check_summary.all_hold`) and branches on its value; a `Confidence_Below` on that route is a compile error, `confidence_on_aggregate`. A `Loop Until` may watch an aggregation (`Until check_summary.all_hold`), reading its value, so a check-then-fix loop is check, aggregate, fix with no route (`examples/language/fixed-policy`).
 
-The record keeps each answer's resolution (its value, its confidence, and whether a bar turned it), so governance can ask which answer fails most. For routing, an aggregation is its own source class, *aggregated*: deterministic given the answers, and never guarded by a confidence check.
+The record keeps each answer's resolution (its value, whether it held, the probability on the condition, and whether a bar turned it), so governance can ask which answer fails most. For routing, an aggregation is its own source class, *aggregated*: deterministic given the answers, and never guarded by a confidence check.
 
 Every condition is on one answer, and every probability is one answer's. Nothing in an `Aggregate` combines two confidences, which is the line `docs/language/no-expressions.md` draws: `==` and `!=` are per-answer tests, not an expression language, and there is no `&&`, `||` or nesting.
 

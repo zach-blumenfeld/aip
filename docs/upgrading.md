@@ -1,5 +1,42 @@
 # Upgrading
 
+## 0.8 to 0.9
+
+0.9 (2026-11) is a new way of writing a procedure, not a new version of the old one. **A 0.8
+skill does not load in 0.9, and there is no tool that converts one.** Rewrite a procedure worth
+keeping: by hand in the language ([`docs/language/spec.md`](language/spec.md)), or by giving
+`make_procedure` or `build_procedure` the old skill folder as its material.
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash   # or: uv tool install --force agent-instruction-protocol
+aip --version                       # aip 0.9.0 language 0.9
+aip skill install                   # the one `aip` skill; removes aip-compile and aip-runtime where an earlier aip put them
+```
+
+What is different:
+
+| 0.8 | 0.9 |
+|---|---|
+| A procedure is a YAML block inside `SKILL.md` | A folder holding `procedure.aip`, compiled to a bundle, one `.rl` file |
+| Two packages and commands, `aip` and `aip-spec` | One, `aip`. `aip-spec` stays on PyPI at 0.7.0 and is not updated; the installer removes the old tool |
+| `aip validate`, `aip-spec validate` | `aip compile --check <folder>` |
+| `aip-spec example NAME --out .` | `aip example NAME` |
+| Two skills, `aip-compile` and `aip-runtime` | One, `aip` |
+| `aip upgrade <folder>` rewrote a skill | Gone. `aip upgrade`, with no folder, publishes the procedures the package ships |
+| `aip server --backend filesystem` | Gone. The default store is one Relate file (`--backend relate`); `--backend neo4j` is as before |
+| The server stepped a served run | Every run steps on the client; the server keeps the catalog and the record ([`server-design.md`](server-design.md), section 1) |
+| `fallback: true` let a person answer a decision | A `Decide` is always a decision model's. An agent or a person decides in a `Task_Agent` step |
+| `aip config --server URL` | `aip config server URL`, or `aip config server local` for a server on this machine that starts on demand |
+| `aip run --input`, `aip resume --input`, `--interactive` | `aip run --inputs` (`-i`), `aip resume --answers`; no interactive mode |
+| The server extra, `agent-instruction-protocol[server]` | Not needed: the server's packages are installed with the package. The extra still resolves |
+| The console in its own repository | In this one, under `console/`; still `npx aip-console --server URL` |
+
+A `server.toml` from 0.8 starts a 0.9 server unless it says `kind = "filesystem"`, which is
+refused with where the store is now; `backend.root`, `backend.cache_dir` and `server.inspector`
+are ignored with a warning. A store from 0.8, on either backend, is not read: publish your
+rewritten procedures to a fresh one. Everything below this section describes older releases and
+their commands, for a machine still on one.
+
 ## 0.6a1 to 0.8
 
 Format `0.8` (release 0.8.0, 2026-11-03) is breaking: a skill written for `0.6a1` no longer
@@ -280,6 +317,6 @@ Not edits to a skill, but visible after upgrading the runtime (`CHANGELOG.md` ha
 - Run files live in `~/.aip/runs/<run-id>.json`; `aip resume <run-id>` works from any directory.
 - On a served run the server holds the run's state and history and never runs a script or calls a
   decision model: the client runs every script and resolves every decision, and reports each with
-  attribution ([`run-modes.md`](run-modes.md)). The server's `[decision_model]` table, the
+  attribution (that was 0.8; since 0.9 every run steps on the client and the server records it: [`server-design.md`](server-design.md), section 1). The server's `[decision_model]` table, the
   per-name threshold overrides, and `aip server --inspector` are gone; the decision-model key is
   `aip config --decision-model` on the client, and the UI is `npx aip-console`.

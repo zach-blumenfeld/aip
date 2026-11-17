@@ -46,10 +46,12 @@ governance reader can read in full.
 
 - A `Route` branches on **one** value and checks **one** confidence. A procedure that needs
   two conditions writes two routes, and a reader sees two decisions with two confidences.
-- Anything that combines answers is an `Execute` step with a script. The script's output is a
-  plain `boolean` with **no confidence**, and the language cannot attach one to it. The
-  combination is visible in the source, it is attributed to a script in the record, and it never
-  claims a certainty it does not have.
+- Anything that combines answers is its own step: an `Aggregate` for `All`, `Any` or `None`
+  over answers (below), or an `Execute` step with a script for anything else. Either way the
+  result carries **no confidence** of the language's making: an aggregation's answer has none,
+  and a script's has one only if the script measured it. The combination is visible in the
+  source, it is attributed to that step in the record, and it never claims a certainty it does
+  not have.
 - The record keeps every answer's confidence and probabilities, so governance can ask the
   question per answer, which is the only level at which the number means something.
 
@@ -57,7 +59,7 @@ governance reader can read in full.
 
 The rule to apply when this comes back: **the language never produces a confidence from more
 than one answer.** A confidence belongs to one answer from one model. Anything derived from
-several answers is a boolean, and the derivation is a script.
+several answers is a yes or no with no confidence, and the derivation is a step of its own.
 
 An `Aggregate` step that resolves each `true_or_false` answer against its own bar and then
 combines the resulting booleans with `All`, `Any` or `None` into an answer that carries **no

@@ -728,7 +728,7 @@ def config_agent_command(argv: list[str]) -> int:
 
 
 def upgrade_command(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) "
+    parser = argparse.ArgumentParser(prog="aip upgrade", description="Publish the procedures this package ships (assist, build_procedure, edit_procedure, make_procedure) "
                                      "to the configured server. A server publishes them itself when it first starts; this is "
                                      "for a server that runs an older aip than this one. A bundle the server already holds "
                                      "is left as it is.")
@@ -745,6 +745,54 @@ def upgrade_command(argv: list[str]) -> int:
 
 
 # ------------------------------------------------------------------ the skill
+
+
+def example_command(argv: list[str]) -> int:
+    """`aip example [NAME] [--out DIR]`: the example programs the package carries
+    (`examples/language/` in the repository), listed, or one written out as a folder to read,
+    run and change. Nothing here needs a server or Relate."""
+    import shutil
+
+    from aip.compiler import ParseError, example_dir, example_names, parse
+    from aip.compiler.resources import SOURCE_FILE
+
+    parser = argparse.ArgumentParser(prog="aip example", description="List the example programs that ship with aip, or write one "
+                                     "out as a folder: `aip example billing-support` writes ./billing-support, ready for "
+                                     "`aip info`, `aip run` and `aip publish`.")
+    parser.add_argument("name", nargs="?", default=None, help="the example to write; with none, list them")
+    parser.add_argument("--out", type=Path, default=Path("."), metavar="DIR", help="the directory to write the folder into (default the current one)")
+    parser.add_argument("--force", action="store_true", help="replace a folder of that name that is already there")
+    args = parser.parse_args(argv)
+
+    def said(name: str) -> str:
+        """The first sentence of an example's description."""
+        try:
+            text = " ".join(parse((example_dir(name) / SOURCE_FILE).read_text(encoding="utf-8"), SOURCE_FILE).description.value.split())
+        except (ParseError, OSError):
+            return ""
+        return text.split(". ")[0].rstrip(".") + "." if text else ""
+
+    names = example_names()
+    if args.name is None:
+        width = max(len(n) for n in names)
+        print("\n".join(f"{n.ljust(width)}  {said(n)}" for n in names))
+        print("\nwrite one out with `aip example <name>`", file=sys.stderr)
+        return 0
+    if args.name not in names:
+        print(f"aip example: no example {args.name!r}; the examples are {', '.join(names)}", file=sys.stderr)
+        return 1
+    target = args.out / args.name
+    if (any(target.iterdir()) if target.is_dir() else target.exists()):
+        if not args.force:
+            print(f"aip example: {target} is already there; --force replaces it, --out DIR writes elsewhere", file=sys.stderr)
+            return 1
+        shutil.rmtree(target) if target.is_dir() else target.unlink()
+    shutil.copytree(example_dir(args.name), target, ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"), dirs_exist_ok=True)
+    files = sum(1 for p in target.rglob("*") if p.is_file()) - 1
+    print(f"wrote {target}: {SOURCE_FILE} and {files} file{'s' if files != 1 else ''}")
+    shown = target if target.is_absolute() or str(target).startswith(".") else f"./{target}"      # a path, never a catalog name
+    print(f"next: aip info {shown}    aip run {shown} -i '{{...}}'    aip publish {shown}", file=sys.stderr)
+    return 0
 
 
 def skill_command(argv: list[str]) -> int:
@@ -1031,6 +1079,7 @@ COMMANDS = {
     "server": server_command,
     "mcp": mcp_command,
     "skill": skill_command,
+    "example": example_command,
     "upgrade": upgrade_command,
 }
 ALIASES = {"describe": "info"}
@@ -1059,7 +1108,8 @@ SUMMARIES = {
     "server": "serve the catalog and the record of runs over HTTP",
     "mcp": "serve this client to an MCP client: search, describe, compile, run, resume, agent and pull as tools",
     "skill": "install the aip skill, the page an agent reads to run and write procedures, into the agents here",
-    "upgrade": "publish the procedures this package ships (make_procedure, build_procedure, edit_procedure) to the server",
+    "example": "list the example programs that ship with aip, or write one out as a folder to run and change",
+    "upgrade": "publish the procedures this package ships (assist, build_procedure, edit_procedure, make_procedure) to the server",
 }
 
 

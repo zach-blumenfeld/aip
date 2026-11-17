@@ -1046,7 +1046,7 @@ class Client:
         return Published(reply["name"], str(reply["revision"]), reply["bundle_id"], bool(reply.get("existed")))
 
     def upgrade(self) -> list[Published]:
-        """Publish the procedures this package ships (`aip.server.builtins`: `make_procedure`, `build_procedure`, `edit_procedure`) to
+        """Publish the procedures this package ships (`aip.server.builtins`: `assist`, `build_procedure`, `edit_procedure`, `make_procedure`) to
         the server, as `publish` would: a bundle the server already holds keeps its revision. A
         server does this for itself when it first starts; this is for one that runs an older
         package than this client."""

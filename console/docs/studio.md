@@ -115,7 +115,7 @@ aip's or of the page (C5's marker in the prompt, and aip's `human_steps`, went a
 
 A pause is answered through a form built from the step's `Produce` fields: a `true_or_false` is two
 buttons, a string a text box, a choice or a score its labels, and a `list` whose rows the task carries
-(the one list in the state it reads, as `make_procedure`'s `approve` reads `folders`) a checklist.
+(the one list in the state it reads) a checklist.
 The answer as hand-typed JSON stays behind the form. The person's answers go back through `aip resume`,
 and the model goes on to the next ticked step or the end.
 

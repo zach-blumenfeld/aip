@@ -196,6 +196,29 @@ def test_aip_says_once_when_an_agent_is_here_without_the_skill(tmp_path, monkeyp
     assert SKILL_REMINDER not in call("--help")[1]
 
 
+def test_aip_example_lists_the_examples_and_writes_one_that_compiles(tmp_path, monkeypatch):
+    """`aip example`: what `aip-spec example` was through 0.8. The quick start needs a folder to
+    run, and the examples are in the installed package, so no clone is needed."""
+    from aip.compiler import compile_folder, example_names
+
+    monkeypatch.chdir(tmp_path)
+    code, out, err = call("example")
+    assert code == 0 and [line.split()[0] for line in out.splitlines()] == example_names()
+    assert "billing-support-agent  Turn an inbound billing message" in out and "aip example <name>" in err
+    code, out, err = call("example", "billing-support-agent")
+    assert code == 0 and out == "wrote billing-support-agent: procedure.aip and 5 files\n"
+    assert "aip run ./billing-support-agent" in err, "the hint names a path: a bare name could be the catalog's"
+    bundle, diagnostics = compile_folder(tmp_path / "billing-support-agent")
+    assert bundle is not None and bundle.name == "billing_support_agent" and not has_errors(diagnostics)
+    code, _, err = call("example", "billing-support-agent")
+    assert code == 1 and "is already there; --force replaces it" in err
+    assert call("example", "billing-support-agent", "--force")[0] == 0
+    assert call("example", "ticket-triage", "--out", str(tmp_path / "elsewhere"))[0] == 0
+    assert (tmp_path / "elsewhere" / "ticket-triage" / "procedure.aip").is_file()
+    code, _, err = call("example", "nope")
+    assert code == 1 and "no example 'nope'; the examples are assist, billing-support," in err
+
+
 def test_skill_list_and_an_unknown_agent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".claude").mkdir()

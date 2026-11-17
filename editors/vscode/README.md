@@ -120,7 +120,7 @@ change a color, override the scope in your own `settings.json` under
 
 ## What it colors
 
-Step verbs (`Decide`, `Route`, `Execute`, `Task_Agent`, `Start`, `End`, `Procedure`, `For`,
+Step verbs (`Decide`, `Route`, `Aggregate`, `Execute`, `Task_Agent`, `Start`, `End`, `Procedure`, `For`,
 `Loop`) and the step name after them; clauses (`Read`, `Produce`, `Next_Step`, `Answer_Questions`,
 `Run_Script`, `Use`, `Prompt`, `Confidence_Below`, loop words); `->` and branch
 labels; types; `key: type` declarations; `name = "..."` named strings; `decision.question` field

@@ -3,7 +3,7 @@
 A compiled procedure is a graph (spec section 3, schema in `bundle.md`), and anything that opens
 the `.rl` can ask it questions in Cypher: the Relate CLI on the file, a Neo4j Browser pointed at
 `relate serve --bolt`, or the aip server's store, where every published revision sits beside its
-runs. These are the queries worth knowing, each verified against the five examples. Swap the
+runs. These are the queries worth knowing, each verified against the example programs under `examples/language/`. Swap the
 procedure name; every node carries `bundle_id`, so one store holds many bundles without a clash.
 The queries over runs and revisions, which only a server's store can answer, are the second half
 (The server's store).
@@ -119,7 +119,7 @@ in Neo4j alike; `docs/server-design.md` has the properties):
 (:Run {run_id, name, revision, draft, status, agent, session, user, started, finished})-[:OF]->(:Bundle)
 (:Run)-[:HAS_ENTRY]->(:Entry {seq, step, kind, at, seconds, ...})-[:THEN]->(:Entry)
 (:Entry)-[:AT]->(:Step or :Loop)
-(:Entry)-[:GAVE]->(:Answer {name, value, confidence, source})-[:ANSWERS]->(:Question or :Aggregation)
+(:Entry)-[:GAVE]->(:Answer {name, value, confidence, source, ...})-[:ANSWERS]->(:Question or :Aggregation)
 ```
 
 A run's `draft` and `revision` are the server's word: a run is a draft's when the bundle it ran

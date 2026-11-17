@@ -22,6 +22,34 @@ that design is in the git history of this file. The filesystem backend, its file
   the steps of the procedure they ran (`docs/language/queries.md`).
 - **It serves no UI.** The console is a client like the `aip` command.
 
+### Why every run is local to its client
+
+The server once ran a procedure's scripts (through 0.5) and stepped its runs (through 0.8). Both
+moved to the client, for one reason: **work runs next to the data, and what is central is the
+catalog and the record.** It is the split every CI system uses by design.
+
+- **A script's files are on the client's machine.** A script reads `data/claims.csv` and writes
+  `results/`. Run on a server of its own, as a real deployment has it, it reads files that are
+  not there and writes results the client never sees; the run's state carries only the JSON a
+  script returns. Server-side scripts worked only while the server and the agent shared a disk.
+- **The client is a program, not the agent.** `aip` runs a script, asks the decision model and
+  follows a route without involving the agent, which sees `aip run` take a while and then finish
+  or stop at a step that is its own. A model's key and a person's credentials stay on the machine
+  that already holds them; the server holds neither.
+- **The client always calls; the server never calls back.** The same direction MCP settled on.
+  With a run's state in the client's run file and its record in the store, the server keeps
+  nothing in memory per run, so any replica can answer any request.
+- **Trust is the catalog's, and it is checked.** A client runs the code a catalog hands it, as
+  installing a skill does. Two things bound that: a bundle is addressed by an id that is the hash
+  of its source and files, which the client verifies before it runs anything, and the server is
+  one the client was pointed at (`aip config server`). So give the `publish` scope to people
+  whose code your clients would run, and pin a revision where that matters. A catalog you do not
+  trust, or a client you do not, is outside this design.
+
+(This was the design note `docs/client-execution.md`, accepted 2026-10-17 for 0.6a0; its
+reasoning is kept here and the note is gone. `docs/running.md`, "Scripts", has what a script is
+given and what limits it.)
+
 One process writes a store. With the Relate backend that is a rule of the engine (the server is
 the only process on its file, readers included); with Neo4j several servers may share a database.
 Section 3's "A Relate store over Bolt" is how a Bolt client and the server share a Relate file.
@@ -192,10 +220,11 @@ same credentials and may read and write, so treat it as you would the server's o
 `aip.server.builtins.publish_builtins` runs when the app is built: each `.rl` shipped under
 `aip/server/bundles/` that the store has not been offered before is published, and the store
 remembers the ids it has been offered, so a built-in appears on a store's first start and is not
-brought back after someone retires it. One ships: `make_procedure`, the procedure that writes a
-procedure from a description (`examples/language/make_procedure/` is its source; the `.rl` in
-the package is that folder compiled, and a test fails when the two disagree). So `aip list` on a
-store that has just been created shows `make_procedure@1`, and a package upgrade that carries a
+brought back after someone retires it. Four ship: `assist` (what `aip agent` drives), `build_procedure`
+and `edit_procedure` (the Studio's and `assist`'s builders), and `make_procedure`, which has an
+agent write a procedure from a description (each has its source under `examples/language/`; the
+`.rl` in the package is that folder compiled, and a test fails when the two disagree). So `aip
+list` on a store that has just been created shows the four at revision 1, and a package upgrade that carries a
 changed one publishes it as the next revision on the server's next start. `aip upgrade` publishes
 the same bundles from a client, as `aip publish` would, for a server that runs an older package
 than the client; a bundle the server already holds keeps its revision.
@@ -279,8 +308,8 @@ so it is the same server whichever directory the client stood in. The port is no
 `aip server` listens by default, so a server started by hand and the local one do not collide;
 they do share the default store file, which one process holds at a time. A client tells its
 server from anything else on the port by `GET /health`, and reports what it found when it is not
-one. A run never fails because of this: when the local server cannot be started (the server
-extra or Relate is missing, the port is taken, another process holds the store), the stop is
+one. A run never fails because of this: when the local server cannot be started (a broken
+install, the port is taken, another process holds the store), the stop is
 reported as not recorded with the reason, and the last line of the log. `aip server --local
 --stop` stops it by hand, which an upgrade needs: a running server keeps the code it started
 with. A remote server is `aip config server URL --token T`; the token's name on the server is
