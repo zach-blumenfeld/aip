@@ -223,16 +223,20 @@ Use the **largest frontier model available** when building a procedure. The work
 
 For *running* the resulting procedure, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
 
-### Looking at the store with Neo4j Browser
+### Explore the data with Cypher
 
-`aip server` keeps its catalog and runs in one Relate file and is the only process that can open it. To query it over Bolt while the server runs, let Relate serve the file and point the server at it:
+The catalog and every run are one graph. Out of the box it lives in a file only `aip server` can open; to look at it in Neo4j Browser, or from any Bolt driver, follow [Explore the data with Cypher](docs/deploying.md#explore-the-data-with-cypher): install the `relate` command, stop the server, and start the two again connected over Bolt. It is the same store before and after.
+
+### Share Across Teams
+
+`aip server` connects over Bolt to any Neo4j database. [Neo4j Aura](https://console.neo4j.io) is the easiest to host, because it is fully managed:
 
 ```bash
-relate serve --database ~/.local/share/aip/server/store.rl --bolt 7687 --auth neo4j:<password>
-aip server --backend neo4j --uri bolt://127.0.0.1:7687 --user neo4j --password <password>
+export NEO4J_PASSWORD=<password>
+aip server --backend neo4j --uri neo4j+s://xxxxxxxx.databases.neo4j.io --user neo4j
 ```
 
-Neo4j Browser and any driver connect to the same address. This needs the `relate` command ([relatedb.ai](https://relatedb.ai)). For a shared deployment, use Neo4j or Aura with `--backend neo4j`. Details are in [`docs/server-design.md`](docs/server-design.md), and the queries in [`docs/language/queries.md`](docs/language/queries.md).
+[Share Across Teams](docs/deploying.md#share-across-teams) has the steps, and what running one server for everyone adds: named tokens, so the record says who made each run, and the database password in one place.
 
 ## Reference
 
@@ -240,6 +244,7 @@ Neo4j Browser and any driver connect to the same address. This needs the `relate
 - [`docs/demo/local.md`](docs/demo/local.md): an end-to-end walkthrough with Claude Code, Codex and the console.
 - [`docs/language/spec.md`](docs/language/spec.md): the language. [`skills/aip/references/language.md`](skills/aip/references/language.md) is the same on one page.
 - [`docs/agent.md`](docs/agent.md): `aip agent`. [`docs/mcp.md`](docs/mcp.md): `aip mcp`, for agent frameworks. [`docs/sdk.md`](docs/sdk.md): the Python SDK.
+- [`docs/deploying.md`](docs/deploying.md): where the catalog and the runs live: on your machine, with Neo4j Browser looking in, or shared across teams.
 - [`docs/server-design.md`](docs/server-design.md): the server, its API and its two backends.
 - [`docs/cli-json.md`](docs/cli-json.md): every JSON object the CLI prints.
 - [`console/README.md`](console/README.md): the console.

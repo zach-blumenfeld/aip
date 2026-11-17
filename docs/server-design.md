@@ -196,6 +196,9 @@ same on both backends; an exact name wins outright.
 
 ### A Relate store over Bolt
 
+(The steps for a person, in order, with how to go back: [`deploying.md`](deploying.md), "Explore the
+data with Cypher". This section is why it works.)
+
 To have the server and a Bolt client (Neo4j Browser, a driver, a notebook) on the same Relate
 store at once, let Relate own the file and make the server one of its clients. This is Relate's
 own answer to a second process needing the data: its CLI serves the store over Bolt and
