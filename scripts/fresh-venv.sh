@@ -18,7 +18,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 program="${1:-$root/examples/language/billing-support}"
 work=$(mktemp -d)
 server=""
-cleanup() { if [ -n "$server" ]; then kill "$server" 2>/dev/null; wait "$server" 2>/dev/null; fi; rm -rf "$work"; }
+# `wait` answers with the stopped server's status (143, it was sent TERM); under `set -e` that
+# would end the trap, and the script, with it, after every check has passed.
+cleanup() { if [ -n "$server" ]; then kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; fi; rm -rf "$work"; }
 trap cleanup EXIT
 export AIP_HOME="$work/home" AIP_CONFIG="$work/config.json"
 
