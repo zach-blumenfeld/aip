@@ -1,5 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from "react";
 import type { DataEdge } from "../graph/dataflow.ts";
+import { kindLook, loopWords, wordsWidth } from "../graph/kinds.ts";
 import { layoutOf, SIZE, type Box, type Direction, type GraphLayout } from "../graph/layout.ts";
 import { edgeKey, edgeLabel, type StepGraph as Model } from "../graph/model.ts";
 import type { RunPath, Traffic } from "../graph/traffic.ts";
@@ -118,17 +119,24 @@ export function StepGraph({ graph, direction = "down", flow, traffic, path, onSe
         const reached = path?.visited.has(step.id);
         const state = path?.waiting === step.id ? "waiting" : path?.failed === step.id ? "failed" : null;
         const W = SIZE.nodeWidth, H = SIZE.nodeHeight;
+        // What the step is, in words, with its glyph to the left of them; the keyword is the tooltip's and `data-kind`'s.
+        const look = kindLook(step.kind);
+        const wordsAt = W / 2 + (look.icon ? 9 : 0);
         return (
           <g key={step.id} className={`node kind-${step.kind}${reached ? " visited" : ""}${selected === step.id ? " selected" : ""}${state ? ` ${state}` : ""}`}
              transform={`translate(${box.x}, ${box.y})`} data-testid="step-node" data-step={step.name} data-kind={step.kind}
              data-visited={path ? String(!!reached) : undefined} data-state={state ?? undefined}
              data-runs={traffic ? traffic.nodes.get(step.id) ?? 0 : undefined} aria-label={`${step.name} (${step.kind})`} {...pick(step.id)}>
-            <title>{step.title}</title>
+            <title>{`${step.kind}: ${step.title}`}</title>
             <rect width={W} height={H} rx={step.kind === "Route" || step.kind === "Start" ? H / 2 : 6} />
             {step.kind === "End" && <rect x={3} y={3} width={W - 6} height={H - 6} rx={4} className="end-ring" />}
             {step.kind === "Start" && <circle cx={0} cy={H / 2} r={5} className="start-dot" />}
             <text x={W / 2} y={H / 2 - 4} textAnchor="middle" className="node-name">{clip(step.name, W - 12, 7.6)}</text>
-            <text x={W / 2} y={H / 2 + 13} textAnchor="middle" className="node-kind">{step.kind}</text>
+            {look.icon && (
+              <path d={look.icon} className={`kind-icon${look.filled ? " filled" : ""}`} data-testid="kind-icon"
+                    transform={`translate(${wordsAt - wordsWidth(look.words) / 2 - 18}, ${H / 2 + 2})`} />
+            )}
+            <text x={wordsAt} y={H / 2 + 13} textAnchor="middle" className="node-kind" data-testid="kind-words">{look.words}</text>
             {traffic && <Badge x={W} y={0} runs={traffic.nodes.get(step.id) ?? 0} failed={traffic.failed.get(step.id) ?? 0} total={traffic.runs} />}
             {state && <Mark x={W} y={0} kind={state} />}
             {notes?.[step.id] && <Note x={W} y={H} text={notes[step.id]} />}
@@ -151,7 +159,7 @@ export function StepGraph({ graph, direction = "down", flow, traffic, path, onSe
             <title>{`${loop.kind} ${loop.name} ${loop.title}`}</title>
             <rect width={box.w} height={box.h} rx={6} />
             <text x={box.w / 2} y={20} textAnchor="middle" className="node-name">{clip(loop.name, box.w - 12, 7.6)}</text>
-            <text x={box.w / 2} y={36} textAnchor="middle" className="node-kind">↻ {loop.kind}</text>
+            <text x={box.w / 2} y={36} textAnchor="middle" className="node-kind" data-testid="kind-words">↻ {loopWords(loop.kind, loop.summary.split(" ")[0])}</text>
             <text x={box.w / 2} y={53} textAnchor="middle" className="loop-summary" data-testid="loop-summary">{clip(loop.summary, box.w - 16, 6.5)}</text>
             {traffic && <Badge x={box.w} y={0} runs={traffic.nodes.get(loop.id) ?? 0} failed={traffic.failed.get(loop.id) ?? 0} total={traffic.runs} />}
             {passes !== null && passes > 0 && <Passes x={box.w} y={failed ? box.h : 0} passes={passes} />}

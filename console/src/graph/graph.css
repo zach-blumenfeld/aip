@@ -16,6 +16,9 @@
 .step-graph .node .start-dot { fill: var(--kind); stroke: none; }
 .step-graph .node-name { font-weight: 600; font-size: 13px; fill: currentColor; }
 .step-graph .node-kind { font-size: 11px; fill: var(--kind); }
+/* The kind's glyph, beside its words (graph/kinds.ts): so a step's kind does not rest on its colour alone. */
+.step-graph .kind-icon { fill: none; stroke: var(--kind); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.step-graph .kind-icon.filled { fill: var(--kind); }
 .step-graph .node[role="button"] { cursor: pointer; }
 .step-graph .node:focus-visible { outline: none; }
 .step-graph .node.selected > rect:first-of-type, .step-graph .node:focus-visible > rect:first-of-type { stroke-width: 3.5; fill: color-mix(in srgb, var(--kind) 14%, Canvas); }
