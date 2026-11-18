@@ -165,53 +165,54 @@ The ticket-triage example ([`examples/language/ticket-triage`](examples/language
 
 The state is the one JSON object a run carries. Each step says which keys it reads (`Read`) and which it adds (`Produce`), with their types; keys accumulate, and a later step may overwrite one.
 
-### Procedure Distillation
-
-Procedures can be written by hand, but the recommended workflow is to distill them from material that already exists. Most domain know-how is already written somewhere; just not in an executable form. It sits in runbooks and SOPs, policy documents, post-mortems and incident reviews, decision logs and design deliberations, existing freeform Agent Skills, wiki pages, ticket threads, etc.
-
-AIP ships procedures that build procedures. `make_procedure` has your agent write a procedure from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. The console's Studio and `aip agent` run the last two for you. Step 2 of the [Quick Start](#quick-start) does this end to end.
-
-### Runtime Protocol
-
-The runtime protocol is how a procedure gets executed: the step kinds, the state that flows between steps, and the pauses where a client must act.
-
-1. **Every run is local to its client.** The `aip` command (or the Python SDK, or `aip mcp`) loads the bundle and walks the graph on your machine: it checks each step's inputs and outputs against their types, runs scripts next to your data, asks the decision model, follows routes and loops.
-2. **A server keeps the catalog and the record.** `aip server` holds published procedures and every run, step by step. It never runs a step, a script or a model, and holds no model key. The installer sets up a local one that starts on demand; a team points its clients at a shared one.
-3. **A run pauses only where a step is the client's.** That is a `Task_Agent` step: the pause carries a prompt, the state the step reads, and the keys to answer with. Whoever resumes the run answers it.
-
-For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
-
 ## How It Works
 
-```mermaid
-flowchart LR
-    subgraph building["Building (once, with a frontier model)"]
-        doc["runbook, policy,<br/>freeform SKILL.md"] --> build["make_procedure / build_procedure<br/>write a procedure.aip folder"]
-        build --> compile["aip compile<br/>checks it, writes a bundle (.rl)"]
-        compile --> publish["aip publish"]
-    end
-    subgraph clients["Clients (every run happens here)"]
-        agent["any agent + the aip skill,<br/>or an agent framework over aip mcp"] --> cli["aip<br/>search · info · run · resume"]
-        chat["aip agent<br/>a chat model drives a run"] --> cli
-        cli --> engine["engine<br/>steps · routes · loops · type checks"]
-        engine --> scripts["scripts run here,<br/>next to the data"]
-        engine --> model["decision model (TypeSafe)<br/>answers questions with a confidence"]
-        insp["aip-console<br/>catalog · Studio · run console · history · audit"]
-    end
-    subgraph server["aip server (one HTTP API)"]
-        api["/catalog · /runs · /audit"]
-    end
-    subgraph backend["Store (one graph)"]
-        relate["Relate<br/>one file, the default"]
-        neo["Neo4j or Aura<br/>a shared deployment"]
-    end
-    publish --> api
-    cli --> api
-    insp --> api
-    api --> backend
-```
+A procedure goes through five stages: it is written, compiled, run, stored and audited.
 
-The agent never decides anything the procedure can decide. It starts a run, and the `aip` client walks the graph: it checks each step's input, runs the scripts, asks the decision model and follows the routes. It stops only at a step that is the agent's to do. Nothing is put to the agent to confirm: a decision's answer carries the model's confidence, and a route checks it and sends an unsure run where the author says. Every step, answer and pause is recorded against the exact bundle that ran, which is what the history and audit views read.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/aip-end-to-end-dark.png">
+  <img src="docs/figures/aip-end-to-end-light.png" alt="AIP end to end: Write (editors, coding agents, built-in procedures, the console's Studio), Compile (a folder becomes one .rl bundle), Run (any agent through the CLI, MCP or the SDK), Store (files, a local or remote server, Relate or Neo4j) and Audit (aip audit, the console, an export)">
+</picture>
+
+### Write
+
+Procedures can be written by hand, but most know-how is already written somewhere, in runbooks and SOPs, policy documents, post-mortems, existing Agent Skills, wiki pages and ticket threads, so the usual way is to have an agent distill one from that material. There are four ways in, and each ends at the same folder, checked by the same compiler:
+
+- **An editor.** The VS Code extension ([`editors/vscode`](editors/vscode)) colours `procedure.aip`, shows the compiler's errors as you type and previews the graph. Cursor and Windsurf take the same extension.
+- **A coding agent.** Any agent with the `aip` skill, which carries the language on one page: it writes, compiles and fixes until the procedure compiles.
+- **A built-in procedure.** AIP ships procedures that build procedures. `make_procedure` has your agent write one from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. Step 2 of the [Quick Start](#quick-start) does this end to end.
+- **The console's Studio.** A chat that runs `build_procedure` and `edit_procedure` for you, with the step graph beside it.
+
+### Compile
+
+`aip compile` checks the folder and writes one file, the bundle. Nothing runs unchecked: running a folder compiles it first, and a bundle is verified again every time it is opened.
+
+- **What the checker catches**, each as one error at its line: a step nothing leads to, a key some path never produces, a route that misses a value, a loop with no cap, a script or prompt that is not in the folder.
+- **What the bundle holds:** the source byte for byte, every file the procedure uses, and the graph. Its id is the hash of the source and the files, so the same folder always gives the same id, and `aip export` writes the folder back.
+
+### Run
+
+Every run happens on the machine that starts it. The `aip` client loads the bundle and walks the graph one step at a time: it checks each step's inputs and outputs against their types, runs an `Execute` step's script next to your data, sends a `Decide` step's questions to the decision model, and follows routes and loops.
+
+A run pauses only at a `Task_Agent` step, which is the agent's to do. The pause carries a prompt, the state the step reads and the keys to answer with; the agent answers with `aip resume`, and the answer is checked before anything moves. Nothing else is put to the agent: a decision's answer carries the model's confidence, and a route checks it and sends an unsure run where the author says.
+
+Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` is a built-in harness for when there is no agent yet: a chat model outside the run answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
+
+### Store
+
+Every run writes its files on the machine that ran it. Point the client at a server and procedures and runs also land in one graph: a catalog to search and a record to audit.
+
+- **`aip server` keeps the catalog and the record.** It never runs a step, a script or a model, and holds no model key. The installer sets up a local one that starts on demand; a team points its clients at a shared one.
+- **The catalog** gives each published bundle a name and a revision; agents find procedures with `aip search`, and a revision can be pinned or retired.
+- **The store is one graph**, in a single [Relate](https://relatedb.ai) file by default, or in Neo4j or Aura for a shared deployment ([`docs/deploying.md`](docs/deploying.md)).
+
+### Audit
+
+Every step, answer and pause is recorded against the exact bundle that ran.
+
+- **`aip audit`** runs named queries over the record, such as which routes fired their confidence check, which scripts failed and which branches no run took, or your own Cypher.
+- **The console** draws the record over the step graph: how many runs took each edge, one run's path, every decision's confidence, and the history by procedure, agent and user.
+- **`aip export runs`** writes the runs and the procedures they ran into one file that anyone can query with no server.
 
 ## Project Structure
 
