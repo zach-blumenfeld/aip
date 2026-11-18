@@ -165,6 +165,14 @@ The ticket-triage example ([`examples/language/ticket-triage`](examples/language
 
 The state is the one JSON object a run carries. Each step says which keys it reads (`Read`) and which it adds (`Produce`), with their types; keys accumulate, and a later step may overwrite one.
 
+### Decision Models
+
+A `Decide` step is answered by a decision model, not by the agent. A decision model, also called a System One model after the fast, intuitive kind of thinking, is a small model that answers typed questions (yes or no, a choice, a score) in one pass. It returns each answer with a confidence and a probability for each value.
+
+A procedure can act on how sure the model was: a `Route` can check the confidence and send an unsure case elsewhere, and an `Aggregate` can set a probability bar. This lets a procedure make judgment calls quickly and cheaply, and keeps a large model's slower reasoning for the steps that need it.
+
+AIP is currently tested with [TypeSafe](https://typesafe.ai), and more providers are being considered. Setup is one key, `aip config --decision-model-key KEY` ([`docs/running.md`](docs/running.md)). A decision model is optional: without one, a procedure has the agent decide in a `Task_Agent` step under fixed labels, and its route checks no confidence, as [`examples/language/billing-support-agent`](examples/language/billing-support-agent) does.
+
 ## How It Works
 
 A procedure goes through five stages: it is written, compiled, run, stored and audited.
@@ -195,6 +203,8 @@ Procedures can be written by hand, but most know-how is already written somewher
 Every run happens on the machine that starts it. The `aip` client loads the bundle and walks the graph one step at a time: it checks each step's inputs and outputs against their types, runs an `Execute` step's script next to your data, sends a `Decide` step's questions to the decision model, and follows routes and loops.
 
 A run pauses only at a `Task_Agent` step, which is the agent's to do. The pause carries a prompt, the state the step reads and the keys to answer with; the agent answers with `aip resume`, and the answer is checked before anything moves. Nothing else is put to the agent: a decision's answer carries the model's confidence, and a route checks it and sends an unsure run where the author says.
+
+A `For` loop is the map and reduce of a procedure: it runs its steps once per item of a list, in batches, and collects the results into one list for the steps that follow. A batch of decisions is one call to the decision model, and a batch of agent tasks is one pause.
 
 Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` is a built-in harness for when there is no agent yet: a chat model outside the run answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
 
