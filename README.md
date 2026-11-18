@@ -101,11 +101,25 @@ npx aip-console --server http://127.0.0.1:8247
 
 ## Where AIP Fits
 
-Teams give agents know-how in two forms today. Written instructions, such as skills and prompts, are standard and portable, and the model decides how to follow them. Code in a harness or orchestration framework is enforced, and it belongs to the stack it was written for. Many teams use both, and keep the same process in two places.
+AI Engineers give agents their "know-how" (procedural knowledge) in two forms today. 
 
-AIP is a third form that works with both. A procedure is portable like a skill and enforced like code, and it still leaves the model's judgment to the steps that need it.
+1. As Written instructions, such as skills and prompts that are standard and portable. They are easy to read & update and any agent can use them. However, the agent decides how to follow them. Nothing strictly holds the agent to the steps; it reads them and may still do something else. 
+2. Code in a harness or orchestration framework that is enforced and belongs to the stack it was written for. They garantee workflow processes and gaurdrails, but cannot easily move, remain difficult to read, write, and update, and add stack complexity and vendor lockin.
 
-AIP is not a harness or a framework, and it does not replace yours. The agent you already have drives the run through the command line, MCP or the Python SDK, and a procedure can be exported as a plain Agent Skill for an agent that has no `aip`.
+
+Most teams use both together, which gives two partial copies of procedure knowledge and neither standard portabability or enforcability in full. We believe this is the crux of most Agent reliability and governance problems today.
+
+AIP is a third form. An AIP procedure is portable like a skill and enforced like code, and it still leaves the model's judgment to the steps that need it.
+
+| | Written | Built | AIP |
+|---|---|---|---|
+| | Skills and prompts | Harnesses, frameworks and workflow platforms | Procedures, compiled |
+| **Standard and portable** | Yes: any agent can use it. | No: it runs in the stack it was built in. | Yes: any agent can run it. |
+| **Enforced** | No: the agent decides how to follow it. | Yes: the steps are guaranteed. | Yes: the runtime runs the steps as written. |
+
+AIP is not a harness or a framework, and it does not replace yours. The agent you have today can use AIP - driving the run through the command line, MCP or the Python SDK.
+
+
 
 A procedure that triages support tickets, as the AIP console draws it:\
 <img src="console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
