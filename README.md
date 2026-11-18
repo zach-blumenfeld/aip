@@ -14,14 +14,15 @@ Agent Instruction Protocol (AIP) is an open standard for writing a task down as 
 
 ## Quick Start
 
-**1. Install.** One command installs the `aip` command and the `aip` skill into every coding agent it finds. The server starts on its own when a command first needs it.
 
 ```bash
+# Install
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
-aip list          # the four procedures aip ships
 ```
 
-**2. Build.** Ask your coding agent to write a procedure and publish it:
+<img src="console/docs/screenshots/quickstart/build-run-audit.gif" alt="Build, run, audit: an agent builds and publishes a procedure, an agent runs it, and the console shows the runs">
+
+**2. Build.** Ask your coding agent to write a procedure for any task and publish it. For example:
 
 ```
 Build an AIP procedure for handling a billing complaint: decide whether the message
@@ -29,7 +30,11 @@ is about billing and whether the customer is angry; escalate angry customers to 
 human, draft a reply for calm ones. Publish it as billing_support.
 ```
 
-The agent writes a folder with `procedure.aip` in it, compiles it until it is clean, and publishes it to the catalog.
+The result is a procedure: a graph of steps whose control flow AIP enforces. This one has agent tasks, a route and a script:
+
+<img src="console/docs/screenshots/quickstart/billing-support.png" alt="The billing_support procedure as a graph: start, a triage task for the agent, a route on tone, then a script that escalates or a reply task, then end">
+
+A procedure can also have decisions made by a decision model with a confidence (when one is configured), loops, and steps run in parallel batches.
 
 **3. Run.** Give the agent a task the procedure covers:
 
@@ -37,9 +42,9 @@ The agent writes a folder with `procedure.aip` in it, compiles it until it is cl
 A customer wrote: "I was charged twice for March. Could you check?" Handle it.
 ```
 
-It finds `billing_support` in the catalog, starts a run, and answers only the steps that are its own; the routing and the script are the procedure's.
+It finds `billing_support` in the AIP catalog and runs it, pausing only where a step needs the agent.
 
-Any other client does the same three things: search, run, resume.
+Any agent can run the same procedure, with the same enforced control flow, from the CLI, the MCP server or the Python SDK: search to find it, run, and resume. The catalog can also be served remotely, to [share procedures across teams](#share-across-teams).
 
 <table>
 <tr><th>CLI</th><td>
