@@ -94,7 +94,7 @@ DIR` writes the program directory back for people.)
 
 ## Scene 8: bring an existing procedure across
 
-Dropped on 2026-11-08 (`plan-questions.md`, item 20): there is no converter from the YAML
+Dropped on 2026-11-08 (`docs/archive/plan-questions-0.9.md`, item 20): there is no converter from the YAML
 format. An old procedure worth keeping is rewritten by hand or with `make_procedure`, given the
 old skill folder as its `materials`. (`aip upgrade` is a different thing since 0.9: it publishes
 the procedures the package ships to the configured server.)

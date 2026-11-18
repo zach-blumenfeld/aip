@@ -32,7 +32,7 @@ e2e harness runs this checkout's (`AIP_REPO`, default `..`) behind `uv run`.
 | `test/` | `npm test`: node's test runner over the modules above that need no browser, on fixtures written by the real compiler and server (`test/fixtures/`) |
 | `e2e/` | `npm run e2e`: Playwright specs and the harness. `prepare.mjs` writes `.aip-e2e/` from `../examples/language`, `model.mjs` is a decision model that answers from marks in the text (`[angry]`, `[unsure]`, `[break:WORD]`), `agent.mjs` a stand-in chat model for `aip agent --answer` (the console's driven runs; `AIP_AGENT_MODEL_*` point at it) that answers build_procedure's and edit_procedure's tasks from a script, `aip.ts` runs the checkout's CLI, `global-setup.ts` publishes; `playwright.config.ts` starts the two models, the aip server and two consoles |
 | `docs/studio.md` | the Studio's design: the chat that runs procedures, the forms, the boundary, the backend seam |
-| `docs/plans/` | the historical plans; current plans are issues |
+| `../docs/archive/console/` | the historical plans; current plans are issues |
 | `CHANGELOG.md` | the console's changelog |
 
 ## Conventions that differ

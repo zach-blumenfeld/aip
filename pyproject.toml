@@ -57,7 +57,7 @@ packages = ["src/aip"]
 # (it carries `src/aip` and the force-includes above); this keeps it out of the sdist too. The
 # slides, the figures and the README's images are for GitHub, not for a source build.
 [tool.hatch.build.targets.sdist]
-exclude = ["/console", "/docs/slides", "/docs/slides.zip", "/docs/figures", "/img"]
+exclude = ["/console", "/docs/slides", "/docs/slides.zip", "/docs/figures", "/docs/archive", "/img"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

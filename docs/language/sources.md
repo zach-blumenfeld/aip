@@ -13,7 +13,7 @@ Every pointer here was checked on 2026-11-09 (the Relate section on 2026-11-11).
   under `src/aip/server/`, the Neo4j backend at `src/aip/server/backends/neo4j.py`, the skills
   under `skills/`, the examples under `examples/`. The language is `src/aip/compiler/` (until L5,
   2026-11-09, it was the separate package `aip-spec` under `packages/`; the old format's prose
-  is `docs/specification-0.8.md`).
+  is `docs/archive/specification-0.8.md`).
   AGENTS.md's repo map describes it. Read the piece you replace before replacing it; the records,
   the governance queries and the HTTP contract carry over in shape.
 - **The server is on the new store since S1** (2026-11-09): `src/aip/server/store.py` and the two
@@ -27,7 +27,7 @@ Every pointer here was checked on 2026-11-09 (the Relate section on 2026-11-11).
   the store writes there, so never point `NEO4J_URI` at a database that matters.
 - **The language**: `docs/language/spec.md` (and `docs/language/queries.md`, the Cypher queries over a bundle) (the law), `docs/language/runtime.md`,
   `docs/language/limitations.md`, `docs/language/no-expressions.md`, `docs/language/end-to-end.md`,
-  `docs/language/plan-questions.md` (the 26 decisions and why). Programs under
+  `docs/archive/plan-questions-0.9.md` (the 26 decisions and why). Programs under
   `examples/language/`. The VS Code grammar under `editors/vscode`.
 - The design archive is the private repo `zach-blumenfeld/aip-lang` (copied at its commit
   9845671). Nothing there is newer than this tree.
@@ -127,7 +127,7 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 
 - **`Again` is gone; every cycle is a loop node.** A check and its fix are both in the loop
   body (spec 2.6, plan question 46). Old material still shows the other shape: the reviews
-  under `docs/language/reviews/`, the C3 screenshots in `console/docs/screenshots/c3/`, and the
+  under `docs/archive/reviews-0.9/`, the C3 screenshots in `console/docs/screenshots/c3/`, and the
   K1 and S3 comments on the plan. `console/docs/screenshots/loops/` is current.
 - **The console's unit tests read `console/test/fixtures/<example>.graph.json`**, which is the
   `graph` of `aip compile --check --json examples/language/<example>` written with
