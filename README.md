@@ -5,24 +5,25 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>The open standard for enforceable agent know-how, making dependability and governance the default rather than something you build.</em></p>
+      <p><em>The open standard for reliable agent workflows: portable like a skill, enforced like code.</em></p>
     </td>
   </tr>
 </table>
 
-Agent Instruction Protocol (AIP) is an open standard for writing a task down as a procedure that any agent runs step by step, exactly as written, with every run recorded.
+Write any task once as an AIP procedure: any agent follows the steps as written, and every run is recorded by default, regardless of harness, platform, or orchestration framework.
 
 ## Quick Start
 
-
+### Install
 ```bash
 # Install
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 ```
-
+### Video
 <img src="console/docs/screenshots/quickstart/build-run-audit.gif" alt="Build, run, audit: an agent builds and publishes a procedure, an agent runs it, and the console shows the runs">
 
-**2. Build.** Ask your coding agent to write a procedure for any task and publish it. For example:
+### Steps
+**1. Build.** Ask your coding agent to write a procedure for any task and publish it. For example:
 
 ```
 Build an AIP procedure for handling a billing complaint: decide whether the message
@@ -36,7 +37,7 @@ The result is a procedure: a graph of steps whose control flow AIP enforces. Thi
 
 A procedure can also have decisions made by a decision model with a confidence (when one is configured), loops, and steps run in parallel batches.
 
-**3. Run.** Give the agent a task the procedure covers:
+**2. Run.** Give the agent a task the procedure covers:
 
 ```
 A customer wrote: "I was charged twice for March. Could you check?" Handle it.
@@ -88,7 +89,7 @@ def resume(run_id: str, answers: dict) -> dict:
 </td></tr>
 </table>
 
-**4. Audit.** Open the console to see every run, from every client, step by step:
+**3. Audit.** Open the console to see every run, from every client, step by step:
 
 ```bash
 npx aip-console --server http://127.0.0.1:8247
@@ -98,15 +99,13 @@ npx aip-console --server http://127.0.0.1:8247
 
 [More ways to install and deploy](#install-and-deploy) are below.
 
-## What Is AIP?
+## Where AIP Fits
 
-AIP is used to distill domain knowledge into procedures that even small, inexpensive agents follow step by step, with explicit control flow and a record of every run for auditing.
+Teams give agents know-how in two forms today. Written instructions, such as skills and prompts, are standard and portable, and the model decides how to follow them. Code in a harness or orchestration framework is enforced, and it belongs to the stack it was written for. Many teams use both, and keep the same process in two places.
 
-As an open protocol, AIP works with any model, agent harness, or orchestration stack. It was designed for agentic AI, but an AIP client can be any application or a human operator.
+AIP is a third form that works with both. A procedure is portable like a skill and enforced like code, and it still leaves the model's judgment to the steps that need it.
 
-Two open standards cover parts of this today. [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) decouples tools, data, and other assets into a service any agent can call. [Agent Skills](https://agentskills.io/) represent procedural knowledge in a portable form that humans can read and maintain.
-
-AIP fills the gap between them. A procedure is written in a small, readable language and adds what a freeform skill lacks: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. An agent reaches it through one Agent Skill (`aip`) or over MCP, and a procedure can be exported as a plain Agent Skill for an agent that has no `aip`. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
+AIP is not a harness or a framework, and it does not replace yours. The agent you already have drives the run through the command line, MCP or the Python SDK, and a procedure can be exported as a plain Agent Skill for an agent that has no `aip`.
 
 A procedure that triages support tickets, as the AIP console draws it:\
 <img src="console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
@@ -126,7 +125,7 @@ A procedure that triages support tickets, as the AIP console draws it:\
 
 ### Procedures
 
-An AIP _procedure_ is step-by-step know-how in an executable form: a small graph of steps that guides an agent through a task, with its tools, its decisions and its branches written down.
+An AIP _procedure_ is step-by-step know-how in a declarative workflow form: a small graph of steps that guides an agent through a task, with its tools, its decisions and its branches written down.
 
 A procedure is a folder holding `procedure.aip`, written in the AIP language ([`docs/language/spec.md`](docs/language/spec.md)), with any `scripts/`, `assets/` and `references/` beside it. The compiler checks it and turns it into a _bundle_, one `.rl` file that holds the procedure as a graph and every file it needs. A bundle is what runs, what a server publishes under a name and a revision, and what every run is recorded against.
 
