@@ -5,7 +5,7 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>The open protocol for governed agent workflows</em></p>
+      <p><em>The open standard for enforceable agent know-how, making dependability and governance the default rather than something you build.</em></p>
     </td>
   </tr>
 </table>
@@ -39,41 +39,43 @@ A customer wrote: "I was charged twice for March. Could you check?" Handle it.
 
 It finds `billing_support` in the catalog, starts a run, and answers only the steps that are its own; the routing and the script are the procedure's.
 
-Any other client runs the same procedure:
+Any other client does the same three things: search, run, resume.
 
 <table>
-<tr><th>CLI</th><th>MCP</th><th>Python SDK</th></tr>
-<tr valign="top"><td>
+<tr><th>CLI</th><td>
 
 ```bash
-aip run billing_support \
-  -i '{"message": "I was charged twice."}'
-aip resume <run_id> \
-  --answers '{"billing": true, "tone": "calm"}'
+aip search "customer charged twice"
+aip run billing_support -i '{"message": "I was charged twice for March."}'
+aip resume <run_id> --answers '{"billing": true, "tone": "calm"}'
 ```
 
-</td><td>
+</td></tr>
+<tr><th>MCP</th><td>
 
 ```json
-{"mcpServers": {"aip": {
-  "command": "aip",
-  "args": ["mcp"]}}}
+{"mcpServers": {"aip": {"command": "aip", "args": ["mcp"]}}}
 ```
 
-Tools to `search`, `describe`, `run` and `resume`; with `aip mcp --publish`, one to publish ([`docs/mcp.md`](docs/mcp.md)).
+Any agent framework gets the tools `search`, `describe`, `run` and `resume`; with `aip mcp --publish`, one to publish ([`docs/mcp.md`](docs/mcp.md)).
 
-</td><td>
+</td></tr>
+<tr><th>Python SDK</th><td>
 
 ```python
 import aip
 
 client = aip.Client(agent="support-app")
-result = client.run("billing_support",
-    {"message": "I was charged twice."})
-while isinstance(result, aip.Paused):
-    # your code, a model, or a person
-    result = client.resume(result, answer(result.task))
-print(result.result)
+
+# Three tools for any agent, good for every procedure in the catalog.
+def search(query: str) -> list[dict]:
+    return [{"name": hit.name, "description": hit.description} for hit in client.search(query)]
+
+def run(procedure: str, inputs: dict) -> dict:
+    return client.run(procedure, inputs).to_json()      # done with a result, or paused with a task
+
+def resume(run_id: str, answers: dict) -> dict:
+    return client.resume(run_id, answers).to_json()
 ```
 
 [`docs/sdk.md`](docs/sdk.md)
