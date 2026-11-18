@@ -10,7 +10,7 @@
   </tr>
 </table>
 
-Write any task once as an AIP procedure: any agent follows the steps as written, and every run is recorded by default, regardless of harness, platform, or orchestration framework.
+Write any task once as an AIP procedure: any agent follows the steps as written, and every run is recorded by default, regardless of your harness or orchestration framework.
 
 ## Quick Start
 
@@ -101,37 +101,34 @@ npx aip-console --server http://127.0.0.1:8247
 
 ## Where AIP Fits
 
-AI Engineers give agents their "know-how" (procedural knowledge) in two forms today. 
+Agents need to know how you work. We express that know-how, called “procedural knowledge”, in two ways: by writing it or by coding it.
 
-1. As Written instructions, such as skills and prompts that are standard and portable. They are easy to read & update and any agent can use them. However, the agent decides how to follow them. Nothing strictly holds the agent to the steps; it reads them and may still do something else. 
-2. Code in a harness or orchestration framework that is enforced and belongs to the stack it was written for. They garantee workflow processes and gaurdrails, but cannot easily move, remain difficult to read, write, and update, and add stack complexity and vendor lockin.
+1. **Writing** instructions in skills and prompts, which are easy to read, update and standardize, and which any agent can use. However, the agent decides how to follow them, so they are not enforceable.
+2. **Coding** them into a harness or orchestration framework, which makes them enforceable and deterministic. However, the steps are hard-coded into one stack, so they are not portable, and in most cases they are more complicated to understand, maintain and update.
 
 
-Most teams use both together, which gives two partial copies of procedure knowledge and neither standard portabability or enforcability in full. We believe this is the crux of most Agent reliability and governance problems today.
+Most teams use both together, so know-how lives in two places: part in skills, part in code. Neither copy is both portable and enforced, and it is hard to observe or evaluate what the agent actually followed. We believe this is behind most agent reliability and governance problems today.
 
-AIP is a third form. An AIP procedure is portable like a skill and enforced like code, and it still leaves the model's judgment to the steps that need it.
+AIP is a third form that keeps the know-how in one place. A procedure is readable, standard and portable like skills, enforced like code, and recorded on every run so it can be observed and evaluated. The model's judgment stays in the steps that need it.
 
-| | Written | Built | AIP |
+| | Written | Coded | AIP |
 |---|---|---|---|
-| | Skills and prompts | Harnesses, frameworks and workflow platforms | Procedures, compiled |
-| **Standard and portable** | Yes: any agent can use it. | No: it runs in the stack it was built in. | Yes: any agent can run it. |
-| **Enforced** | No: the agent decides how to follow it. | Yes: the steps are guaranteed. | Yes: the runtime runs the steps as written. |
+| | Skills and prompts | Harnesses and orchestration frameworks | Procedures |
+| **Standard and portable** | Yes: any agent can use it. | No: hard-coded into one stack. | Yes: any agent can run it. |
+| **Easy to read and update** | Yes | In most cases, less so. | Yes |
+| **Enforced** | No: the agent decides how to follow it. | Yes: the steps are deterministic. | Yes: the runtime runs the steps as written. |
+| **Observable** | No: nothing records what the agent followed. | Where you add tracing. | Yes: every run is recorded by default. |
 
 AIP is not a harness or a framework, and it does not replace yours. The agent you have today can use AIP - driving the run through the command line, MCP or the Python SDK.
-
-
-
-A procedure that triages support tickets, as the AIP console draws it:\
-<img src="console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
 
 ## Contents
 
 - [Quick Start](#quick-start)
 - [Key Concepts](#key-concepts)
 - [How It Works](#how-it-works)
-- [Research and Evidence So Far](#research-and-evidence-so-far)
 - [Project Structure](#project-structure)
 - [Install and Deploy](#install-and-deploy)
+- [Research and Evidence So Far](#research-and-evidence-so-far)
 - [Reference](#reference)
 - [Development & Contributing](#development--contributing)
 
@@ -143,26 +140,9 @@ An AIP _procedure_ is step-by-step know-how in a declarative workflow form: a sm
 
 A procedure is a folder holding `procedure.aip`, written in the AIP language ([`docs/language/spec.md`](docs/language/spec.md)), with any `scripts/`, `assets/` and `references/` beside it. The compiler checks it and turns it into a _bundle_, one `.rl` file that holds the procedure as a graph and every file it needs. A bundle is what runs, what a server publishes under a name and a revision, and what every run is recorded against.
 
-Part of the billing-support example:
+The billing-support example ([`examples/language/billing-support`](examples/language/billing-support)), open in VS Code with the AIP extension. On the left is the folder: `procedure.aip` with its `assets/`, `references/` and `scripts/`. In the middle is the procedure: a `Start`, a `Decide` that classifies the message, a `Route` that sends angry or uncertain cases to a script and calm ones to the agent, and an `End`. On the right is the graph the compiler makes of it.
 
-```
-Decide triage "Classify whether the message is about billing and how upset the customer is." {
-  Read message
-  Answer_Questions {
-    billing: true_or_false "Is this message about a charge, invoice, refund, or subscription payment?"
-    tone:    choice [angry, calm] tone_question
-  }
-  Produce triage_decision
-  Next_Step by_tone
-}
-
-Route On by_tone "Angry customers, and those the model is unsure of, go to a human queue; calm ones get a drafted reply." {
-  Read triage_decision.tone
-  Confidence_Below 0.9 -> escalate
-  angry -> escalate
-  calm  -> reply
-}
-```
+<img src="img/billing-support-vscode.png" alt="The billing-support procedure in VS Code: the folder's files, procedure.aip, and its step graph (start, triage, by_tone, then escalate or reply, then end)">
 
 ### Steps and State
 
@@ -178,6 +158,10 @@ There are seven kinds of step, and two kinds of loop:
 | `Task_Agent` | hands work to whoever is running the procedure, an agent or a person, with a prompt and the keys to produce |
 | `End` | declares which keys are the procedure's result |
 | `For`, `Loop` | repeat a body of steps: once per item of a list, or until an answer holds, up to a cap |
+
+The ticket-triage example ([`examples/language/ticket-triage`](examples/language/ticket-triage)) uses every kind but `Aggregate`, with a `For` over the tickets and a review `Loop` inside it, as the AIP console draws it:
+
+<img src="console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
 
 The state is the one JSON object a run carries. Each step says which keys it reads (`Read`) and which it adds (`Produce`), with their types; keys accumulate, and a later step may overwrite one.
 
@@ -228,19 +212,6 @@ flowchart LR
 ```
 
 The agent never decides anything the procedure can decide. It starts a run, and the `aip` client walks the graph: it checks each step's input, runs the scripts, asks the decision model and follows the routes. It stops only at a step that is the agent's to do. Nothing is put to the agent to confirm: a decision's answer carries the model's confidence, and a route checks it and sends an unsure run where the author says. Every step, answer and pause is recorded against the exact bundle that ran, which is what the history and audit views read.
-
-## Research and Evidence So Far
-
-Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills.
-
-Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](https://arxiv.org/pdf/2606.04781), published at a VLDB 2026 workshop, measured the previous format (`0.3a3`, skills as structured YAML loaded into context, before the server existed) on a stratified core of 24 [SkillsBench](https://www.skillsbench.ai) tasks. Each task's human-curated skill was converted to AIP once by Claude Opus; Claude Sonnet 4.6 then solved the task with either the original or the conversion, five trials per task.
-
-| Skill given to the solver | Pass rate | Mean reward |
-|---|---|---|
-| Human-curated Agent Skill | 50.8% | 0.567 |
-| The same skill converted to AIP | **63.3%** | **0.668** |
-
-Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. AIP has moved on since: procedures are now written in a small language and compiled, steps are typed, a decision model answers the questions and a route checks its confidence, and every run is recorded. Measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
 
 ## Project Structure
 
@@ -316,6 +287,19 @@ aip server --backend neo4j --uri neo4j+s://xxxxxxxx.databases.neo4j.io --user ne
 ```
 
 [Share Across Teams](docs/deploying.md#share-across-teams) has the steps, and what running one server for everyone adds: named tokens, so the record says who made each run, and the database password in one place.
+
+## Research and Evidence So Far
+
+Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills.
+
+Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](https://arxiv.org/pdf/2606.04781), published at a VLDB 2026 workshop, measured the previous format (`0.3a3`, skills as structured YAML loaded into context, before the server existed) on a stratified core of 24 [SkillsBench](https://www.skillsbench.ai) tasks. Each task's human-curated skill was converted to AIP once by Claude Opus; Claude Sonnet 4.6 then solved the task with either the original or the conversion, five trials per task.
+
+| Skill given to the solver | Pass rate | Mean reward |
+|---|---|---|
+| Human-curated Agent Skill | 50.8% | 0.567 |
+| The same skill converted to AIP | **63.3%** | **0.668** |
+
+Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. AIP has moved on since: procedures are now written in a small language and compiled, steps are typed, a decision model answers the questions and a route checks its confidence, and every run is recorded. Measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
 
 ## Reference
 
