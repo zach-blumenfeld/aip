@@ -4,7 +4,8 @@ agents that reach tools over the Model Context Protocol.
     aip mcp                  over stdio, the process an MCP client starts
     aip mcp --http 8765      over streamable HTTP, at http://127.0.0.1:8765/mcp
 
-It is `aip.Client` in a process and nothing more: seven tools, each one SDK call, each answering
+It is `aip.Client` in a process and nothing more: seven tools and an eighth that is off unless
+asked for, each one SDK call, each answering
 with the object the CLI prints for the same thing (`docs/cli-json.md`).
 
     search    published procedures by what they do          Client.search
@@ -14,6 +15,7 @@ with the object the CLI prints for the same thing (`docs/cli-json.md`).
     resume    answer a pause, or retry a failed step        Client.resume
     agent     do a task with this server's own chat model   Client.agent
     pull      put a published procedure in the cache        Client.pull, pull_all
+    publish   put a folder or bundle in the catalog         Client.publish   (only with --publish, or named in --tools)
 
 A run that pauses, a run that fails and a call that cannot be made all answer with an ordinary
 result, not an MCP error: the object's first key says which (`paused`, `done`, `error`), exactly
@@ -53,7 +55,9 @@ from aip.sdk import Client, CompileError, RunError
 
 JSON = dict[str, Any]
 MCP_AGENT = "mcp"                  # the record's `agent` when nobody says who is calling
-TOOLS = ("search", "describe", "compile", "run", "resume", "agent", "pull")
+TOOLS = ("search", "describe", "compile", "run", "resume", "agent", "pull")     # what a server offers by default
+OPTIONAL = ("publish",)           # offered only when asked for: publishing changes the catalog for everyone
+ALL_TOOLS = TOOLS + OPTIONAL
 
 INSTRUCTIONS = """\
 AIP runs procedures: reviewed, step-by-step instructions (a runbook, a workflow, a decision
@@ -176,31 +180,36 @@ class Server(MCPServer):
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(body, indent=2))], structured_content=body)
 
 
-def tools_named(names: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
-    """The tools a server offers, in `TOOLS`' order: every one for None, else the ones named
-    (a list, or `"search,describe,run,resume"`). A name that is not a tool, or none at all, is a
-    `ValueError` that lists the tools."""
+def tools_named(names: str | list[str] | tuple[str, ...] | None, publish: bool = False) -> tuple[str, ...]:
+    """The tools a server offers, in `ALL_TOOLS`' order: the seven of `TOOLS` for None, else the
+    ones named (a list, or `"search,describe,run,resume"`). `publish` is offered only when it is
+    named or `publish` is true (`aip mcp --publish`). A name that is not a tool, or none at all,
+    is a `ValueError` that lists the tools."""
     if names is None:
-        return tuple(TOOLS)
-    wanted = [n.strip() for n in names.split(",")] if isinstance(names, str) else list(names)
-    wanted = [n for n in wanted if n]
-    unknown = [n for n in wanted if n not in TOOLS]
+        wanted = list(TOOLS)
+    else:
+        wanted = [n.strip() for n in names.split(",")] if isinstance(names, str) else list(names)
+        wanted = [n for n in wanted if n]
+    unknown = [n for n in wanted if n not in ALL_TOOLS]
     if unknown or not wanted:
         what = f"{', '.join(repr(n) for n in unknown)} is not a tool" if unknown else "no tool is named"
-        raise ValueError(f"{what}; the tools are {', '.join(TOOLS)}")
-    return tuple(t for t in TOOLS if t in wanted)
+        raise ValueError(f"{what}; the tools are {', '.join(ALL_TOOLS)}")
+    if publish:
+        wanted.append("publish")
+    return tuple(t for t in ALL_TOOLS if t in wanted)
 
 
 def build(client: Client | None = None, *, agent: str | None = None, session: str | None = None,
-          tools: str | list[str] | tuple[str, ...] | None = None) -> MCPServer:
+          tools: str | list[str] | tuple[str, ...] | None = None, publish: bool = False) -> MCPServer:
     """The MCP server over `client` (default: the configured one, `aip config`). `agent`
     replaces the MCP client's own name in the record; `session` is the session of every run a
     call does not give one (default `AIP_SESSION`, else an id made here). `tools` is the
     allow-list (`aip mcp --tools`): only those are registered, so a client can neither list nor
-    call another, whatever its own filter says."""
+    call another, whatever its own filter says. `publish` adds the `publish` tool, which is
+    otherwise offered only when `tools` names it."""
     from aip.client.cli import version_line
 
-    offered = tools_named(tools)
+    offered = tools_named(tools, publish)
 
     client = client if client is not None else Client()
     default_session = session or os.environ.get(SESSION_ENV) or f"mcp-{uuid.uuid4().hex[:8]}"
@@ -371,15 +380,28 @@ def build(client: Client | None = None, *, agent: str | None = None, session: st
         return {"pulled": [{"ref": p.ref, "name": p.name, "revision": p.revision, "bundle_id": p.bundle_id, "path": str(p.path),
                             "fetched": p.fetched} for p in pulled]}
 
+    @tool
+    def publish(target: str) -> dict[str, Any]:
+        """Put a procedure in the catalog, where every client of this server finds and runs it.
+        Only when the user asked for it to be published. `target` is a program directory (the
+        folder holding `procedure.aip`, compiled here) or an `.rl` bundle. Returns `name`,
+        `revision` (the next one, or the one this very bundle already has), `bundle_id` and
+        `existed` (the server already held this bundle)."""
+        try:
+            p = client.publish(target)
+        except AipError as exc:
+            return failure(exc)
+        return {"name": p.name, "revision": p.revision, "bundle_id": p.bundle_id, "existed": p.existed}
+
     return server
 
 
 def serve(client: Client | None = None, *, http: int | None = None, host: str = "127.0.0.1", agent: str | None = None,
-          session: str | None = None, tools: str | list[str] | tuple[str, ...] | None = None) -> None:
+          session: str | None = None, tools: str | list[str] | tuple[str, ...] | None = None, publish: bool = False) -> None:
     """Serve until the client goes away: over stdio, or with `http` (a port) over streamable
     HTTP at `http://<host>:<port>/mcp`. Over stdio, stdout is the protocol's: this process
     prints nothing else there."""
-    server = build(client, agent=agent, session=session, tools=tools)
+    server = build(client, agent=agent, session=session, tools=tools, publish=publish)
     if http is None:
         server.run("stdio")
     else:
@@ -398,5 +420,5 @@ def result_object(result: Any) -> JSON:
     return json.loads(text)
 
 
-__all__ = ["INSTRUCTIONS", "MCP_AGENT", "TOOLS", "Server", "argument_errors", "build", "client_name", "client_version", "failure",
+__all__ = ["ALL_TOOLS", "INSTRUCTIONS", "MCP_AGENT", "OPTIONAL", "TOOLS", "Server", "argument_errors", "build", "client_name", "client_version", "failure",
            "result_object", "serve", "step_message", "stop_message"]

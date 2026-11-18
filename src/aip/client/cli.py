@@ -870,7 +870,10 @@ def mcp_command(argv: list[str]) -> int:
                         "else an id made when this server starts)")
     parser.add_argument("--tools", default=None, metavar="NAMES",
                         help="offer only these tools, comma-separated (e.g. search,describe,run,resume): the others are "
-                             "not registered, so no client can list or call them (default: all seven)")
+                             "not registered, so no client can list or call them (default: those seven; `publish` may be named too)")
+    parser.add_argument("--publish", action="store_true",
+                        help="also offer the `publish` tool, which puts a folder or bundle in the catalog; off by default, "
+                             "since publishing changes what every client of the server runs")
     args = parser.parse_args(argv)
     if args.http is None and args.host != "127.0.0.1":
         parser.error("--host goes with --http PORT")
@@ -878,12 +881,12 @@ def mcp_command(argv: list[str]) -> int:
     from aip.sdk import Client
 
     try:
-        tools_named(args.tools)
+        tools_named(args.tools, args.publish)
     except ValueError as exc:
         parser.error(f"--tools: {exc}")
 
     try:
-        serve(Client(_server()), http=args.http, host=args.host, agent=args.agent, session=args.session, tools=args.tools)
+        serve(Client(_server()), http=args.http, host=args.host, agent=args.agent, session=args.session, tools=args.tools, publish=args.publish)
     except KeyboardInterrupt:
         pass
     return 0

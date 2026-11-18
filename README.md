@@ -1,7 +1,7 @@
 <table>
   <tr>
     <td width="200" align="center" valign="middle">
-      <img src="https://raw.githubusercontent.com/zach-blumenfeld/aip/main/img/aip-logo.png" alt="aip logo" width="200" />
+      <img src="img/aip-logo.png" alt="aip logo" width="200" />
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
@@ -10,8 +10,88 @@
   </tr>
 </table>
 
+Agent Instruction Protocol (AIP) is an open standard for writing a task down as a procedure that any agent runs step by step, exactly as written, with every run recorded.
+
+## Quick Start
+
+**1. Install.** One command installs the `aip` command and the `aip` skill into every coding agent it finds. The server starts on its own when a command first needs it.
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
+aip list          # the four procedures aip ships
+```
+
+**2. Build.** Ask your coding agent to write a procedure and publish it:
+
+```
+Build an AIP procedure for handling a billing complaint: decide whether the message
+is about billing and whether the customer is angry; escalate angry customers to a
+human, draft a reply for calm ones. Publish it as billing_support.
+```
+
+The agent writes a folder with `procedure.aip` in it, compiles it until it is clean, and publishes it to the catalog.
+
+**3. Run.** Give the agent a task the procedure covers:
+
+```
+A customer wrote: "I was charged twice for March. Could you check?" Handle it.
+```
+
+It finds `billing_support` in the catalog, starts a run, and answers only the steps that are its own; the routing and the script are the procedure's.
+
+Any other client runs the same procedure:
+
+<table>
+<tr><th>CLI</th><th>MCP</th><th>Python SDK</th></tr>
+<tr valign="top"><td>
+
+```bash
+aip run billing_support \
+  -i '{"message": "I was charged twice."}'
+aip resume <run_id> \
+  --answers '{"billing": true, "tone": "calm"}'
+```
+
+</td><td>
+
+```json
+{"mcpServers": {"aip": {
+  "command": "aip",
+  "args": ["mcp"]}}}
+```
+
+Tools to `search`, `describe`, `run` and `resume`; with `aip mcp --publish`, one to publish ([`docs/mcp.md`](docs/mcp.md)).
+
+</td><td>
+
+```python
+import aip
+
+client = aip.Client(agent="support-app")
+result = client.run("billing_support",
+    {"message": "I was charged twice."})
+while isinstance(result, aip.Paused):
+    # your code, a model, or a person
+    result = client.resume(result, answer(result.task))
+print(result.result)
+```
+
+[`docs/sdk.md`](docs/sdk.md)
+
+</td></tr>
+</table>
+
+**4. Audit.** Open the console to see every run, from every client, step by step:
+
+```bash
+npx aip-console --server http://127.0.0.1:8247
+```
+
+<img src="console/docs/screenshots/quickstart/console.gif" alt="The AIP console: the billing_support procedure as a graph, the traffic of nine runs made from the command line, the Python SDK and MCP, and two of those runs step by step">
+
+[More ways to install and deploy](#install-and-deploy) are below.
+
 ## What Is AIP?
-Agent Instruction Protocol (AIP) is an open protocol for creating and running governed agent workflows.
 
 AIP is used to distill domain knowledge into procedures that even small, inexpensive agents follow step by step, with explicit control flow and a record of every run for auditing.
 
@@ -22,15 +102,16 @@ Two open standards cover parts of this today. [Model Context Protocol (MCP)](htt
 AIP fills the gap between them. A procedure is written in a small, readable language and adds what a freeform skill lacks: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. An agent reaches it through one Agent Skill (`aip`) or over MCP, and a procedure can be exported as a plain Agent Skill for an agent that has no `aip`. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
 
 A procedure that triages support tickets, as the AIP console draws it:\
-<img src="https://raw.githubusercontent.com/zach-blumenfeld/aip/main/console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
+<img src="console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
 
 ## Contents
 
+- [Quick Start](#quick-start)
 - [Key Concepts](#key-concepts)
 - [How It Works](#how-it-works)
 - [Research and Evidence So Far](#research-and-evidence-so-far)
 - [Project Structure](#project-structure)
-- [Quick Start](#quick-start)
+- [Install and Deploy](#install-and-deploy)
 - [Reference](#reference)
 - [Development & Contributing](#development--contributing)
 
@@ -84,7 +165,7 @@ The state is the one JSON object a run carries. Each step says which keys it rea
 
 Procedures can be written by hand, but the recommended workflow is to distill them from material that already exists. Most domain know-how is already written somewhere; just not in an executable form. It sits in runbooks and SOPs, policy documents, post-mortems and incident reviews, decision logs and design deliberations, existing freeform Agent Skills, wiki pages, ticket threads, etc.
 
-AIP ships procedures that build procedures. `make_procedure` has your agent write a procedure from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. The console's Studio and `aip agent` run the last two for you. Step 5 of the [Quick Start](#quick-start) does this end to end.
+AIP ships procedures that build procedures. `make_procedure` has your agent write a procedure from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. The console's Studio and `aip agent` run the last two for you. Step 2 of the [Quick Start](#quick-start) does this end to end.
 
 ### Runtime Protocol
 
@@ -152,48 +233,26 @@ Everything is in this repository:
 
 The VS Code extension for `procedure.aip` is [`editors/vscode/`](editors/vscode/).
 
-## Quick Start
+## Install and Deploy
 
-**1. Install or upgrade.** One command does both; re-run it any time.
+The installer in the [Quick Start](#quick-start) installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` command, and the `aip` skill into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). It also sets `aip config server local`, so runs are recorded on this machine with nothing to start. Re-run it any time to upgrade. Open a new terminal afterwards if `aip` is not found.
 
-```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
-```
+### Try a shipped example
 
-It installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` command, and the `aip` skill into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). It also sets `aip config server local`, so runs are recorded on this machine with nothing to start. Open a new terminal afterwards if `aip` is not found.
-
-```bash
-aip --version     # aip 0.9.0 language 0.9
-aip list          # the four procedures aip ships: assist, build_procedure, edit_procedure, make_procedure
-```
-
-**2. Run an example.** `aip example` lists the example programs that come with the package. `billing-support-agent` needs no model key: it hands its one decision to whoever is running.
+`aip example` lists the example programs that come with the package. `billing-support-agent` needs no model key: it hands its one decision to whoever is running.
 
 ```bash
 aip example billing-support-agent        # writes ./billing-support-agent
 aip info ./billing-support-agent         # what it does, the inputs it expects, how it flows
 aip run ./billing-support-agent -i '{"message": "I was charged twice for March. Could you check?"}'
+aip publish ./billing-support-agent      # compiles, uploads, prints billing_support_agent@1
 ```
 
 The run pauses with a task and a `run_id`. Answer it with `aip resume <run_id> --answers '{...}'`, giving the keys the pause names. `aip runs` lists the runs; `aip runs <run_id>` shows one step by step.
 
-**3. Publish it.**
+### Build from a document
 
-```bash
-aip publish ./billing-support-agent      # compiles, uploads, prints billing_support_agent@1
-aip search "billing"
-aip run billing_support_agent -i '{"message": "..."}'    # the published procedure, by name
-```
-
-**4. Let an agent run it.** The installer put the `aip` skill into your agent. In Claude Code, ask:
-
-```
-A customer wrote: "I was charged twice! Refund me today or I'm gone." Handle it.
-```
-
-The agent searches the catalog, finds the procedure, starts the run and answers each pause, instead of improvising the steps.
-
-**5. Build your own.** Put a runbook, SOP or policy in a folder and ask your agent:
+Put a runbook, SOP or policy in a folder and ask your agent:
 
 ```
 Build an AIP procedure from ./refund-runbook.md
@@ -201,10 +260,10 @@ Build an AIP procedure from ./refund-runbook.md
 
 The skill runs `make_procedure`, which has the agent write the folder and compiles it until it is clean. Then `aip run ./<folder>` tries it as a draft and `aip publish ./<folder>` puts it in the catalog.
 
-**Optional.**
+### Optional
+
 - `aip config --decision-model-key KEY` with a [TypeSafe](https://typesafe.ai) key lets `Decide` steps run: a decision model answers their questions, and each answer carries a confidence a route can check. The `billing-support` example uses one.
 - `aip config agent --model-key KEY` lets `aip agent "<task>"` hand a whole task to a chat model that finds, runs or builds a procedure for it ([`docs/agent.md`](docs/agent.md)).
-- `npx aip-console --server http://127.0.0.1:8247` opens the console on the local server.
 
 ### Other ways to install
 

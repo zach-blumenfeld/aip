@@ -304,7 +304,40 @@ def test_an_allow_list_registers_only_the_tools_it_names(tmp_path):
     err = io.StringIO()
     with redirect_stderr(err), pytest.raises(SystemExit) as stop:
         main(["mcp", "--tools", "search,delete"])
-    assert stop.value.code == 2 and "'delete' is not a tool; the tools are search, describe, compile, run, resume, agent, pull" in err.getvalue()
+    assert stop.value.code == 2 and "'delete' is not a tool; the tools are search, describe, compile, run, resume, agent, pull, publish" in err.getvalue()
+
+
+def test_publish_is_a_tool_only_when_asked_for(store, tmp_path):
+    """Publishing changes what every client of the server runs, so no server offers it by
+    default: `aip mcp --publish` adds it, as does naming it in `--tools`. It answers as
+    `aip publish --json` does, and a folder that does not compile as every tool does."""
+    from aip.mcp import ALL_TOOLS, tools_named
+
+    assert "publish" not in TOOLS and ALL_TOOLS == TOOLS + ("publish",)
+    assert tools_named(None, publish=True) == ALL_TOOLS
+    assert tools_named("run,publish") == ("run", "publish") == tools_named("run", publish=True)
+
+    async def names(call, client):
+        return [t.name for t in (await client.list_tools()).tools]
+    assert "publish" not in over(build(aip.Client()), names)
+
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "procedure.aip").write_text("Procedure broken\n")
+
+    async def script(call, client):
+        listed = [t.name for t in (await client.list_tools()).tools]
+        first = await call("publish", target=str(example_dir("billing-support-agent")))
+        again = await call("publish", target=str(example_dir("billing-support-agent")))
+        found = await call("describe", target="billing_support_agent")
+        return listed, first, again, found, await call("publish", target=str(broken))
+    client = aip.Client(Server("http://testserver", token="secret", session=store), home=tmp_path / "home")
+    listed, first, again, found, refused = over(build(client, publish=True), script)
+    assert listed == list(ALL_TOOLS)
+    assert first["name"] == "billing_support_agent" and first["revision"] == "1" and not first["existed"]
+    assert again["revision"] == "1" and again["existed"] and again["bundle_id"] == first["bundle_id"]
+    assert found["name"] == "billing_support_agent"
+    assert refused["error"] == "invalid_input" and refused["kind"] == "compile_error" and refused["diagnostics"]
 
 
 def test_aip_mcp_is_a_command():

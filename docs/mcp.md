@@ -3,13 +3,14 @@
 `aip mcp` is the SDK (`aip.Client`, `docs/sdk.md`) in a process that speaks the
 [Model Context Protocol](https://modelcontextprotocol.io/), so an agent framework or a coding
 agent reaches procedures with the MCP client it already has. It adds nothing of its own: seven
-tools, each one SDK call, each answering with the object the `aip` command prints for the same
+tools, and an eighth, `publish`, that is off unless asked for, each one SDK call, each answering with the object the `aip` command prints for the same
 thing (`docs/cli-json.md`). The module is `aip.mcp`.
 
 ```
 aip mcp [--agent A] [--session S]             over stdio: the command an MCP client is given
 aip mcp --http PORT [--host HOST]             over streamable HTTP, at http://HOST:PORT/mcp
-aip mcp --tools search,describe,run,resume    offer only these tools (default: all seven)
+aip mcp --tools search,describe,run,resume    offer only these tools (default: the seven below)
+aip mcp --publish                             also offer `publish`, which is off by default
 ```
 
 `--tools` is an allow-list kept by the server: a tool it does not name is not registered, so a
@@ -18,6 +19,12 @@ only find and run published procedures gets `search,describe,run,resume`; withou
 `pull` it cannot build one or fetch the catalog, and without `agent` it cannot hand the task to
 another model. A name that is not a tool is refused when the server starts. (`build(...,
 tools=...)` and `serve(..., tools=...)` in `aip.mcp` take the same list.)
+
+`publish` is the one tool a server does not offer by default, because publishing changes what
+every client of the server runs. `aip mcp --publish` adds it to whatever `--tools` gives, and
+naming it in the list (`--tools search,describe,compile,run,resume,publish`) does the same;
+`build(..., publish=True)` from Python. The server it publishes to still decides: the token
+`aip mcp` holds needs the `publish` scope (`docs/deploying.md`, Tokens and what each can do).
 
 An MCP client's configuration names the command, and the environment `aip` should see:
 
@@ -56,6 +63,7 @@ run started over MCP can be resumed with `aip resume <run_id>` and read with `ai
 | `resume` | `run_id`, `answers` (none: retry a failed step), and optionally `work` (what answering cost you: `model`, `tool_calls`, `tokens`, `seconds`; kept marked `reported`) | where the run stopped | `Client.resume` |
 | `agent` | `task`, and optionally `session` (one an earlier reply gave: `task` is then the person's reply to its note) | what `run` returns for the run of `assist` this server's chat model (`aip config agent`) drove (`docs/agent.md`), with the `session`; recorded as agent `agent` | `Client.ask` |
 | `pull` | `ref` (none: every published name) | `pulled`: `ref`, `name`, `revision`, `bundle_id`, `path`, `fetched` | `Client.pull`, `pull_all` |
+| `publish` (only with `--publish`, or named in `--tools`) | `target`: a program directory or an `.rl` bundle | `name`, `revision`, `bundle_id`, `existed`; a folder that does not compile answers `invalid_input` with `kind` `compile_error` and the `diagnostics` | `Client.publish` |
 
 A `target` is what `aip run` takes: a published name (`name`, `name@rev`), a program directory,
 or an `.rl` bundle; paths are the server's machine's. `run` and `resume` answer with exactly the

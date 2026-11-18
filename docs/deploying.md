@@ -180,15 +180,47 @@ What that buys:
 
 What to know before relying on it:
 
-- **A named token can do everything**, publishing included, and publishing decides what code
-  other people's clients run. The read-only token is the only narrower one the config file
-  offers today.
+- **A named token can do everything** ([above](#tokens-and-what-each-can-do)), publishing
+  included, and publishing decides what code other people's clients run.
 - **`aip server` serves plain HTTP.** Put it behind something that terminates TLS (a reverse
   proxy, a load balancer) before it leaves a private network, and keep `--host` on `127.0.0.1`
   until a token is set.
 - **The server runs no procedure.** Runs still happen on each person's machine, with their
   files, their decision-model key and their credentials; the server is where they are published
   and recorded.
+
+### Tokens and what each can do
+
+A client proves who it is with a bearer token (`aip config server URL --token T`, or `AIP_TOKEN`;
+the console takes one on its server page). The server knows three kinds:
+
+| Token | Where it is set | What it can do | How its runs are recorded |
+|---|---|---|---|
+| A named token, one per person | `[tokens]` in the config file: `zach = "..."` | everything below | `user` is the name |
+| The shared token | `aip server --token T`, or `token` under `[server]` | everything below | no `user` |
+| The read-only token | `aip server --read-token T`, or `read_token` under `[server]` | read only | it records nothing |
+
+And three permissions, which the server calls scopes:
+
+| Scope | What it allows | The commands that need it |
+|---|---|---|
+| `read` | see the catalog, a procedure, the runs and the audit queries | `aip list`, `search`, `info`, `get`, `pull`, `runs`, `audit`; every page of the console |
+| `run` | record a run, and upload the draft a run of a folder is recorded against | `aip run`, `aip resume`, `aip agent` (the run itself is local; this is the recording) |
+| `publish` | publish, pin and retire a revision; store or remove an audit query | `aip publish`, `pin`, `retire`, `upgrade`, `aip audit --save` and `--delete` |
+
+Three rules go with them:
+
+- **With no token configured, the server is open**: anyone who can reach it can do everything,
+  and no run has a `user`. Set at least one token before the server listens anywhere but
+  `127.0.0.1`.
+- **A client on the server's own machine needs no token**, even when tokens are set, unless the
+  server was started with `--no-localhost` (or `localhost_open = false`).
+- **There is nothing between "everything" and "read only" today.** A named token cannot be
+  limited to recording runs without publishing; the scopes exist in the server and the config
+  file does not yet offer them one by one.
+
+The reference is [`server-design.md`](server-design.md), section 2 ("Auth" and "Identity"), and
+`aip server --example-config` prints every setting.
 
 What was checked: a server on the Neo4j backend was started, listed and published to on
 2026-11-17 against a local Neo4j, and the server's test suite runs over Neo4j as well as Relate.
