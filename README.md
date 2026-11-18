@@ -15,14 +15,17 @@ Write any task once as an AIP procedure: any agent follows the steps as written,
 ## Quick Start
 
 ### Install
+
 ```bash
-# Install
 curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
 ```
+
 ### Video
+
 <img src="console/docs/screenshots/quickstart/build-run-audit.gif" alt="Build, run, audit: an agent builds and publishes a procedure, an agent runs it, and the console shows the runs">
 
 ### Steps
+
 **1. Build.** Ask your coding agent to write a procedure for any task and publish it. For example:
 
 ```
@@ -35,7 +38,7 @@ The result is a procedure: a graph of steps whose control flow AIP enforces. Thi
 
 <img src="console/docs/screenshots/quickstart/billing-support.png" alt="The billing_support procedure as a graph: start, a triage task for the agent, a route on tone, then a script that escalates or a reply task, then end">
 
-A procedure can also have decisions made by a decision model with a confidence (when one is configured), loops, and steps run in parallel batches.
+A procedure can also have decisions made by a [decision model](#decision-models) with a confidence (when one is configured), and loops that run their steps in batches.
 
 **2. Run.** Give the agent a task the procedure covers:
 
@@ -63,7 +66,7 @@ aip resume <run_id> --answers '{"billing": true, "tone": "calm"}'
 {"mcpServers": {"aip": {"command": "aip", "args": ["mcp"]}}}
 ```
 
-Any agent framework gets the tools `search`, `describe`, `run` and `resume`; with `aip mcp --publish`, one to publish ([`docs/mcp.md`](docs/mcp.md)).
+Any agent framework gets tools to `search`, `describe`, `run` and `resume`, among others; with `aip mcp --publish`, one to publish ([`docs/mcp.md`](docs/mcp.md)).
 
 </td></tr>
 <tr><th>Python SDK</th><td>
@@ -106,7 +109,6 @@ Agents need to know how you work. We express that know-how, called “procedural
 1. **Writing** instructions in skills and prompts, which are easy to read, update and standardize, and which any agent can use. However, the agent decides how to follow them, so they are not enforceable.
 2. **Coding** them into a harness or orchestration framework, which makes them enforceable and deterministic. However, the steps are hard-coded into one stack, so they are not portable, and in most cases they are more complicated to understand, maintain and update.
 
-
 Most teams use both together, so know-how lives in two places: part in skills, part in code. Neither copy is both portable and enforced, and it is hard to observe or evaluate what the agent actually followed. We believe this is behind most agent reliability and governance problems today.
 
 AIP is a third form that keeps the know-how in one place. A procedure is readable, standard and portable like skills, enforced like code, and recorded on every run so it can be observed and evaluated. The model's judgment stays in the steps that need it.
@@ -119,11 +121,12 @@ AIP is a third form that keeps the know-how in one place. A procedure is readabl
 | **Enforced** | No: the agent decides how to follow it. | Yes: the steps are deterministic. | Yes: the runtime runs the steps as written. |
 | **Observable** | No: nothing records what the agent followed. | Where you add tracing. | Yes: every run is recorded by default. |
 
-AIP is not a harness or a framework, and it does not replace yours. The agent you have today can use AIP - driving the run through the command line, MCP or the Python SDK.
+AIP is not a harness or a framework, and it does not replace yours. The agent you have today can use AIP, driving the run through the command line, MCP or the Python SDK.
 
 ## Contents
 
 - [Quick Start](#quick-start)
+- [Where AIP Fits](#where-aip-fits)
 - [Key Concepts](#key-concepts)
 - [How It Works](#how-it-works)
 - [Project Structure](#project-structure)
@@ -140,7 +143,7 @@ An AIP _procedure_ is step-by-step know-how in a declarative workflow form: a sm
 
 A procedure is a folder holding `procedure.aip`, written in the AIP language ([`docs/language/spec.md`](docs/language/spec.md)), with any `scripts/`, `assets/` and `references/` beside it. The compiler checks it and turns it into a _bundle_, one `.rl` file that holds the procedure as a graph and every file it needs. A bundle is what runs, what a server publishes under a name and a revision, and what every run is recorded against.
 
-The billing-support example ([`examples/language/billing-support`](examples/language/billing-support)), open in VS Code with the AIP extension. On the left is the folder: `procedure.aip` with its `assets/`, `references/` and `scripts/`. In the middle is the procedure: a `Start`, a `Decide` that classifies the message, a `Route` that sends angry or uncertain cases to a script and calm ones to the agent, and an `End`. On the right is the graph the compiler makes of it.
+Below is the billing-support example ([`examples/language/billing-support`](examples/language/billing-support)), open in VS Code with the AIP extension. On the left is the folder: `procedure.aip` with its `assets/`, `references/` and `scripts/`. In the middle is the procedure: a `Start`, a `Decide` that classifies the message, a `Route` that sends angry or uncertain cases to a script and calm ones to the agent, and an `End`. On the right is the graph the compiler makes of it.
 
 <img src="img/billing-support-vscode.png" alt="The billing-support procedure in VS Code: the folder's files, procedure.aip, and its step graph (start, triage, by_tone, then escalate or reply, then end)">
 
@@ -188,7 +191,7 @@ Procedures can be written by hand, but most know-how is already written somewher
 
 - **An editor.** The VS Code extension ([`editors/vscode`](editors/vscode)) colours `procedure.aip`, shows the compiler's errors as you type and previews the graph. Cursor and Windsurf take the same extension.
 - **A coding agent.** Any agent with the `aip` skill, which carries the language on one page: it writes, compiles and fixes until the procedure compiles.
-- **A built-in procedure.** AIP ships procedures that build procedures. `make_procedure` has your agent write one from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. Step 2 of the [Quick Start](#quick-start) does this end to end.
+- **A built-in procedure.** AIP ships procedures that build procedures. `make_procedure` has your agent write one from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. Step 1 of the [Quick Start](#quick-start) does this end to end.
 - **The console's Studio.** A chat that runs `build_procedure` and `edit_procedure` for you, with the step graph beside it.
 
 ### Compile
@@ -206,7 +209,7 @@ A run pauses only at a `Task_Agent` step, which is the agent's to do. The pause 
 
 A `For` loop is the map and reduce of a procedure: it runs its steps once per item of a list, in batches, and collects the results into one list for the steps that follow. A batch of decisions is one call to the decision model, and a batch of agent tasks is one pause.
 
-Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` is a built-in harness for when there is no agent yet: a chat model outside the run answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
+Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` covers the case where there is no agent yet: a chat model outside the run answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
 
 ### Store
 
@@ -264,7 +267,7 @@ The skill runs `make_procedure`, which has the agent write the folder and compil
 
 ### Optional
 
-- `aip config --decision-model-key KEY` with a [TypeSafe](https://typesafe.ai) key lets `Decide` steps run: a decision model answers their questions, and each answer carries a confidence a route can check. The `billing-support` example uses one.
+- `aip config --decision-model-key KEY` with a [TypeSafe](https://typesafe.ai) key lets `Decide` steps run: a decision model answers their questions, and each answer carries a confidence a route can check ([Decision Models](#decision-models)). The `billing-support` example uses one.
 - `aip config agent --model-key KEY` lets `aip agent "<task>"` hand a whole task to a chat model that finds, runs or builds a procedure for it ([`docs/agent.md`](docs/agent.md)).
 
 ### Other ways to install
@@ -321,6 +324,8 @@ Tool-call counts were about equal, and wall clock was lower on the AIP side in t
 - [`docs/deploying.md`](docs/deploying.md): where the catalog and the runs live: on your machine, with Neo4j Browser looking in, or shared across teams.
 - [`docs/server-design.md`](docs/server-design.md): the server, its API and its two backends.
 - [`docs/cli-json.md`](docs/cli-json.md): every JSON object the CLI prints.
+- [`docs/language/queries.md`](docs/language/queries.md): Cypher over the procedures and the runs.
+- [`docs/upgrading.md`](docs/upgrading.md): moving from 0.8 to 0.9.
 - [`console/README.md`](console/README.md): the console.
 
 **Scripts and trust.** A procedure's `Execute` steps are scripts, and they run on the client, in the `aip` process's user account, never on the server. `aip` does not sandbox them; the script timeout (`aip config --script-timeout`, 300 seconds by default) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters.
