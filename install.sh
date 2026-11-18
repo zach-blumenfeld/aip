@@ -39,9 +39,11 @@ for old in aip aip-spec; do
   fi
 done
 
-# 3. agent-instruction-protocol, the `aip` command.
+# 3. agent-instruction-protocol, the `aip` command. It needs Python 3.14 or later, and `--python`
+#    says so: with a pinned version uv does not look past the machine's default Python on its
+#    own, and fails on one that is older. With it, uv uses a 3.14 it finds or downloads one.
 info "Installing agent-instruction-protocol ${AIP_REF} (the aip command)…"
-uv tool install --force "agent-instruction-protocol[server]==$AIP_REF"
+uv tool install --force --python ">=3.14" "agent-instruction-protocol[server]==$AIP_REF"
 hash -r 2>/dev/null || true
 
 # 3b. Record runs on this machine unless the user already points somewhere: `local` is a server

@@ -38,7 +38,7 @@ The result is a procedure: a graph of steps whose control flow AIP enforces. Thi
 
 <img src="console/docs/screenshots/quickstart/billing-support.png" alt="The billing_support procedure as a graph: start, a triage task for the agent, a route on tone, then a script that escalates or a reply task, then end">
 
-A procedure can also have decisions made by a [decision model](#decision-models) with a confidence (when one is configured), and loops that run their steps in batches.
+A procedure can also have decisions made by a [decision model](#decision-models) with a confidence (when one is configured), loops that repeat steps until an answer holds, and map-reduce style `For` loops that run steps over a list in batches and aggregate the results.
 
 **2. Run.** Give the agent a task the procedure covers:
 
@@ -209,7 +209,7 @@ A run pauses only at a `Task_Agent` step, which is the agent's to do. The pause 
 
 A `For` loop is the map and reduce of a procedure: it runs its steps once per item of a list, in batches, and collects the results into one list for the steps that follow. A batch of decisions is one call to the decision model, and a batch of agent tasks is one pause.
 
-Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` covers the case where there is no agent yet: a chat model outside the run answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
+Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` covers the case where there is no agent yet: it runs `aip` with a small, simple built-in agent, a chat model that answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
 
 ### Store
 
@@ -318,7 +318,6 @@ Tool-call counts were about equal, and wall clock was lower on the AIP side in t
 ## Reference
 
 - [`docs/running.md`](docs/running.md): running a procedure, pauses and answers, configuration.
-- [`docs/demo/local.md`](docs/demo/local.md): an end-to-end walkthrough with Claude Code, Codex and the console.
 - [`docs/language/spec.md`](docs/language/spec.md): the language. [`skills/aip/references/language.md`](skills/aip/references/language.md) is the same on one page.
 - [`docs/agent.md`](docs/agent.md): `aip agent`. [`docs/mcp.md`](docs/mcp.md): `aip mcp`, for agent frameworks. [`docs/sdk.md`](docs/sdk.md): the Python SDK.
 - [`docs/deploying.md`](docs/deploying.md): where the catalog and the runs live: on your machine, with Neo4j Browser looking in, or shared across teams.

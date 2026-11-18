@@ -167,7 +167,7 @@ resolver and a fake client (`tests/test_typesafe.py`), so no key is needed for a
 
 ## What D1 left (2026-11-09)
 
-- **`docs/demo/local.md` is the script.** Sections 0 to 4 and 6 ran on this machine from a clean
+- **`docs/demo/local.md` is the script** (removed 2026-11-18 as stale; it is in the git history). Sections 0 to 4 and 6 ran on this machine from a clean
   config (`AIP_CONFIG`, `AIP_LOCAL_PORT`, `AIP_LOCAL_DATA` pointed at `/tmp/aip-d1`, the key
   copied in from the real config without printing it). The session doing it was itself Claude
   Code, acting as the agent in the demo. **Section 5, Codex, has not run**: `codex` is not

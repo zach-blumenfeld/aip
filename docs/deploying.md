@@ -225,4 +225,4 @@ The reference is [`server-design.md`](server-design.md), section 2 ("Auth" and "
 What was checked: a server on the Neo4j backend was started, listed and published to on
 2026-11-17 against a local Neo4j, and the server's test suite runs over Neo4j as well as Relate.
 An Aura instance, a server on a remote machine, and the console pointed at one were not run for
-this page; that is milestone D3 of the 0.9 plan.
+this page; that is [#31](https://github.com/zach-blumenfeld/aip/issues/31).

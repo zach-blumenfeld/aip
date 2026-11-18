@@ -382,5 +382,3 @@ The same runs, the same run files and the same record, from elsewhere:
   calls ([`docs/sdk.md`](sdk.md)).
 - **MCP**: `aip mcp` serves `search`, `describe`, `compile`, `run`, `resume`, `agent` and `pull`
   as tools, each answering with the object the command prints ([`docs/mcp.md`](mcp.md)).
-- **A whole session**, from installing to two agents' runs side by side in the console, is
-  [`docs/demo/local.md`](demo/local.md).
