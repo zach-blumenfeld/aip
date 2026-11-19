@@ -1,0 +1,716 @@
+{
+ "nodes": [
+  {
+   "id": "procedure",
+   "labels": [
+    "Procedure"
+   ],
+   "properties": {
+    "id": "procedure",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "billing_support_agent",
+    "description": "Turn an inbound billing message into either a tier-2 ticket or a drafted reply.\n   The agent classifies the message; a script opens the ticket; the agent drafts\n   the reply against the refund policy.",
+    "language_version": "0.9",
+    "compiler_version": "0.9.0",
+    "use_when": [
+     "A customer message about a charge, invoice, refund, or subscription arrives.",
+     "Support asks to triage a billing complaint, and no decision model is configured."
+    ],
+    "do_not_use_when": [
+     "The message is about product bugs or feature requests rather than billing."
+    ],
+    "avoid": [
+     "Replying to an angry customer with a templated answer instead of escalating.",
+     "Promising a refund the policy does not cover."
+    ],
+    "requires_interpreter": "python",
+    "requires_version": "3.10",
+    "line": 11,
+    "column": 1,
+    "end_line": 74,
+    "end_column": 1
+   }
+  },
+  {
+   "id": "file:assets/config.json",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:assets/config.json",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "path": "assets/config.json",
+    "size": 35,
+    "mode": 420,
+    "sha256": "d5745041ae4e69bbf0cc7c7ef8eda6eea2d40f90b4b1fe6a6513e9155c648e88"
+   }
+  },
+  {
+   "id": "file:assets/policy.md",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:assets/policy.md",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "path": "assets/policy.md",
+    "size": 150,
+    "mode": 420,
+    "sha256": "f3f7a4bd5ebd3edfaa54ac105d19edd94dae7046222d8656af93a005487616fc"
+   }
+  },
+  {
+   "id": "file:assets/reply.md",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:assets/reply.md",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "path": "assets/reply.md",
+    "size": 243,
+    "mode": 420,
+    "sha256": "27ebb5372ff65405f815476ed469b91ac54a8069ee8b075fb91cde861eb30239"
+   }
+  },
+  {
+   "id": "file:references/help.md",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:references/help.md",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "path": "references/help.md",
+    "size": 198,
+    "mode": 420,
+    "sha256": "45f186e2200f21e1f9cf695d52593bd16a9565ffa0368c10c49c891f7d4cac22"
+   }
+  },
+  {
+   "id": "file:scripts/escalate.py",
+   "labels": [
+    "File"
+   ],
+   "properties": {
+    "id": "file:scripts/escalate.py",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "path": "scripts/escalate.py",
+    "size": 529,
+    "mode": 420,
+    "sha256": "962924ae2638ec7a2cfc26a10e025ae2cbe791dc197c4d9cf44e028cc91ed262"
+   }
+  },
+  {
+   "id": "step:start",
+   "labels": [
+    "Step",
+    "Start"
+   ],
+   "properties": {
+    "id": "step:start",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "start",
+    "kind": "Start",
+    "description": "The customer's message, as support received it.",
+    "line": 36,
+    "column": 1,
+    "end_line": 39,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:message",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:message",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "message",
+    "type": "string",
+    "description": "The customer's message, verbatim."
+   }
+  },
+  {
+   "id": "step:triage",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:triage",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "triage",
+    "kind": "Task_Agent",
+    "description": "Read the customer's message and classify it.\n\nCustomer message:\n{message}\n\nAnswer `billing` with true when the message is about a charge, invoice, refund, or\nsubscription payment, and `tone` with `angry` for explicit frustration, threats to cancel,\nor demands, else `calm`.",
+    "line": 41,
+    "column": 1,
+    "end_line": 46,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "data:billing",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:billing",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "billing",
+    "type": "true_or_false",
+    "description": "Whether the message is about billing."
+   }
+  },
+  {
+   "id": "data:tone",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:tone",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "tone",
+    "type": "choice",
+    "description": "How upset the customer is.",
+    "labels": [
+     "angry",
+     "calm"
+    ]
+   }
+  },
+  {
+   "id": "step:by_tone",
+   "labels": [
+    "Step",
+    "Route"
+   ],
+   "properties": {
+    "id": "step:by_tone",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "by_tone",
+    "kind": "Route",
+    "description": "Angry customers go to a human queue; calm ones get a drafted reply.",
+    "line": 48,
+    "column": 1,
+    "end_line": 52,
+    "end_column": 2
+   }
+  },
+  {
+   "id": "step:escalate",
+   "labels": [
+    "Step",
+    "Execute"
+   ],
+   "properties": {
+    "id": "step:escalate",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "escalate",
+    "kind": "Execute",
+    "description": "Open a tier-2 ticket for the message.",
+    "line": 54,
+    "column": 1,
+    "end_line": 61,
+    "end_column": 2,
+    "script": "scripts/escalate.py"
+   }
+  },
+  {
+   "id": "data:ticket_id",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:ticket_id",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "ticket_id",
+    "type": "integer",
+    "description": "The tier-2 ticket opened for the message."
+   }
+  },
+  {
+   "id": "data:queue",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:queue",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "queue",
+    "type": "string",
+    "description": "The queue the ticket was routed to."
+   }
+  },
+  {
+   "id": "step:reply",
+   "labels": [
+    "Step",
+    "Task_Agent"
+   ],
+   "properties": {
+    "id": "step:reply",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "reply",
+    "kind": "Task_Agent",
+    "description": "Draft a calm reply grounded in the refund policy.",
+    "line": 63,
+    "column": 1,
+    "end_line": 69,
+    "end_column": 2,
+    "prompt": "assets/reply.md"
+   }
+  },
+  {
+   "id": "data:reply",
+   "labels": [
+    "Data"
+   ],
+   "properties": {
+    "id": "data:reply",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "reply",
+    "type": "string",
+    "description": "The drafted reply to send the customer."
+   }
+  },
+  {
+   "id": "step:end",
+   "labels": [
+    "Step",
+    "End"
+   ],
+   "properties": {
+    "id": "step:end",
+    "bundle_id": "6e98638919e8fdeb81c8f0b06626162323fd8dd69ae6f95d7f0791ad9cbaaad2",
+    "name": "end",
+    "kind": "End",
+    "description": "The original message plus either a ticket or a drafted reply.",
+    "line": 71,
+    "column": 1,
+    "end_line": 73,
+    "end_column": 2
+   }
+  }
+ ],
+ "edges": [
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:assets/config.json",
+   "properties": {}
+  },
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:assets/policy.md",
+   "properties": {}
+  },
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:assets/reply.md",
+   "properties": {}
+  },
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:references/help.md",
+   "properties": {}
+  },
+  {
+   "type": "HAS_FILE",
+   "start": "procedure",
+   "end": "file:scripts/escalate.py",
+   "properties": {}
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:start",
+   "properties": {}
+  },
+  {
+   "type": "STARTS_AT",
+   "start": "procedure",
+   "end": "step:start",
+   "properties": {}
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:message",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:start",
+   "end": "data:message",
+   "properties": {
+    "line": 37,
+    "column": 3,
+    "end_line": 37,
+    "end_column": 54
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:start",
+   "end": "step:triage",
+   "properties": {
+    "line": 38,
+    "column": 3,
+    "end_line": 38,
+    "end_column": 19
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:triage",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:message",
+   "end": "step:triage",
+   "properties": {
+    "line": 42,
+    "column": 8,
+    "end_line": 42,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:billing",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:triage",
+   "end": "data:billing",
+   "properties": {
+    "line": 43,
+    "column": 11,
+    "end_line": 43,
+    "end_column": 80
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:tone",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:triage",
+   "end": "data:tone",
+   "properties": {
+    "line": 44,
+    "column": 11,
+    "end_line": 44,
+    "end_column": 69
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:message",
+   "end": "step:triage",
+   "properties": {
+    "interpolated": true,
+    "line": 29,
+    "column": 1,
+    "end_line": 29,
+    "end_column": 10
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:triage",
+   "end": "step:by_tone",
+   "properties": {
+    "line": 45,
+    "column": 3,
+    "end_line": 45,
+    "end_column": 20
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:by_tone",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:tone",
+   "end": "step:by_tone",
+   "properties": {
+    "source": "agent",
+    "line": 49,
+    "column": 8,
+    "end_line": 49,
+    "end_column": 12
+   }
+  },
+  {
+   "type": "BRANCH",
+   "start": "step:by_tone",
+   "end": "step:escalate",
+   "properties": {
+    "value": "angry",
+    "line": 50,
+    "column": 3,
+    "end_line": 50,
+    "end_column": 20
+   }
+  },
+  {
+   "type": "BRANCH",
+   "start": "step:by_tone",
+   "end": "step:reply",
+   "properties": {
+    "value": "calm",
+    "line": 51,
+    "column": 3,
+    "end_line": 51,
+    "end_column": 17
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:escalate",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:message",
+   "end": "step:escalate",
+   "properties": {
+    "line": 55,
+    "column": 8,
+    "end_line": 55,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:tone",
+   "end": "step:escalate",
+   "properties": {
+    "line": 55,
+    "column": 17,
+    "end_line": 55,
+    "end_column": 21
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:ticket_id",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:escalate",
+   "end": "data:ticket_id",
+   "properties": {
+    "line": 58,
+    "column": 11,
+    "end_line": 58,
+    "end_column": 73
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:queue",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:escalate",
+   "end": "data:queue",
+   "properties": {
+    "line": 59,
+    "column": 11,
+    "end_line": 59,
+    "end_column": 67
+   }
+  },
+  {
+   "type": "RUNS",
+   "start": "step:escalate",
+   "end": "file:scripts/escalate.py",
+   "properties": {}
+  },
+  {
+   "type": "USES",
+   "start": "step:escalate",
+   "end": "file:assets/config.json",
+   "properties": {
+    "line": 57,
+    "column": 7,
+    "end_line": 57,
+    "end_column": 25
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:escalate",
+   "end": "step:end",
+   "properties": {
+    "line": 60,
+    "column": 3,
+    "end_line": 60,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:reply",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:message",
+   "end": "step:reply",
+   "properties": {
+    "line": 64,
+    "column": 8,
+    "end_line": 64,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:tone",
+   "end": "step:reply",
+   "properties": {
+    "line": 64,
+    "column": 17,
+    "end_line": 64,
+    "end_column": 21
+   }
+  },
+  {
+   "type": "SUPPLIES",
+   "start": "procedure",
+   "end": "data:reply",
+   "properties": {}
+  },
+  {
+   "type": "PRODUCES",
+   "start": "step:reply",
+   "end": "data:reply",
+   "properties": {
+    "line": 67,
+    "column": 11,
+    "end_line": 67,
+    "end_column": 66
+   }
+  },
+  {
+   "type": "PROMPTED_BY",
+   "start": "step:reply",
+   "end": "file:assets/reply.md",
+   "properties": {}
+  },
+  {
+   "type": "USES",
+   "start": "step:reply",
+   "end": "file:assets/policy.md",
+   "properties": {
+    "line": 66,
+    "column": 7,
+    "end_line": 66,
+    "end_column": 23
+   }
+  },
+  {
+   "type": "USES",
+   "start": "step:reply",
+   "end": "file:references/help.md",
+   "properties": {
+    "description": "Escalation contacts and plan matrix. Only for plan changes, currency issues, or charges older than 30 days.",
+    "line": 66,
+    "column": 25,
+    "end_line": 66,
+    "end_column": 58
+   }
+  },
+  {
+   "type": "NEXT",
+   "start": "step:reply",
+   "end": "step:end",
+   "properties": {
+    "line": 68,
+    "column": 3,
+    "end_line": 68,
+    "end_column": 16
+   }
+  },
+  {
+   "type": "HAS_STEP",
+   "start": "procedure",
+   "end": "step:end",
+   "properties": {}
+  },
+  {
+   "type": "ENDS_AT",
+   "start": "procedure",
+   "end": "step:end",
+   "properties": {}
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:message",
+   "end": "step:end",
+   "properties": {
+    "line": 72,
+    "column": 8,
+    "end_line": 72,
+    "end_column": 15
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:ticket_id",
+   "end": "step:end",
+   "properties": {
+    "line": 72,
+    "column": 17,
+    "end_line": 72,
+    "end_column": 26
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:queue",
+   "end": "step:end",
+   "properties": {
+    "line": 72,
+    "column": 28,
+    "end_line": 72,
+    "end_column": 33
+   }
+  },
+  {
+   "type": "READ_BY",
+   "start": "data:reply",
+   "end": "step:end",
+   "properties": {
+    "line": 72,
+    "column": 35,
+    "end_line": 72,
+    "end_column": 40
+   }
+  }
+ ]
+}

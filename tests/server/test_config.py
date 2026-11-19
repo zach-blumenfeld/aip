@@ -3,6 +3,8 @@ environment and the flags (`aip.server.config`)."""
 
 from pathlib import Path
 
+import os
+
 import pytest
 
 from aip.server.config import EXAMPLE, ConfigError, apply_config, load_env_file, parse_env_file, read_config
@@ -36,7 +38,7 @@ def test_example_config_is_valid_and_complete(tmp_path: Path):
     assert set(config) == {"server", "backend"}
     env: dict = {}
     defaults = apply_config(config, env)
-    assert defaults["backend"] == "filesystem" and defaults["root"] == Path("~/.local/share/aip/server").expanduser()
+    assert defaults["backend"] == "relate" and defaults["path"] == Path("~/.local/share/aip/server/store.rl").expanduser()
     assert defaults["no_localhost"] is False
     assert env == {}                      # every secret in the example is commented out
 
@@ -57,18 +59,49 @@ def test_config_rejects_unknown_keys(tmp_path: Path):
 def test_config_fills_env_only_where_unset(tmp_path: Path):
     f = tmp_path / "c.toml"
     f.write_text(
-        '[backend]\nkind = "neo4j"\nuri = "neo4j://file"\npassword = "file-pw"\ncache_dir = "~/c"\n'
+        '[backend]\nkind = "neo4j"\nuri = "neo4j://file"\npassword = "file-pw"\n'
         '[server]\nport = 9000\nlocalhost_open = false\n'
     )
     env = {"NEO4J_URI": "neo4j://env"}
     defaults = apply_config(read_config(f), env)
     assert env == {"NEO4J_URI": "neo4j://env", "NEO4J_PASSWORD": "file-pw"}
-    assert defaults == {"backend": "neo4j", "cache_dir": Path("~/c").expanduser(), "port": 9000,
-                        "no_localhost": True}
+    assert defaults == {"backend": "neo4j", "port": 9000, "no_localhost": True}
+
+
+def test_the_filesystem_backend_is_gone_and_says_where_the_store_is(tmp_path: Path):
+    f = tmp_path / "c.toml"
+    f.write_text('[backend]\nkind = "filesystem"\n')
+    with pytest.raises(ConfigError, match="one Relate file"):
+        read_config(f)
+    f.write_text('[backend]\nroot = "~/x"\ncache_dir = "~/y"\nkind = "filesystem"\n')
+    with pytest.raises(ConfigError, match="one Relate file"):                     # `root` beside it changes nothing
+        read_config(f)
+    f.write_text('[backend]\nkind = "relate"\npath = "~/s/store.rl"\n')
+    assert apply_config(read_config(f), {}) == {"backend": "relate", "path": Path("~/s/store.rl").expanduser()}
+
+
+@pytest.mark.parametrize("argv", [["--backend", "filesystem"], ["--backend=filesystem", "--port", "8000"]])
+def test_the_filesystem_flag_says_what_replaced_it(argv, capsys):
+    """The command issue #24 was told to run: it answers in a sentence, not as an invalid choice."""
+    from aip.client.cli import main
+
+    assert main(["server", *argv]) == 2
+    err = capsys.readouterr().err
+    assert "the filesystem backend is gone since 0.9" in err and "Run `aip server` (or `--backend relate`)" in err
+    assert "invalid choice" not in err
+
+
+def test_named_tokens_are_a_table_of_names(tmp_path: Path):
+    f = tmp_path / "c.toml"
+    f.write_text('[tokens]\nzach = "s3cret"\nci = "other"\n')
+    assert apply_config(read_config(f), {}) == {"named_tokens": {"zach": "s3cret", "ci": "other"}}
+    f.write_text('[tokens]\nzach = 3\n')
+    with pytest.raises(ConfigError, match="one `name = \"token\"` line per person"):
+        read_config(f)
 
 
 def test_the_server_takes_no_decision_model_key(tmp_path: Path):
-    """Decisions are resolved by clients: a `[decision_model]` table says where the key goes now."""
+    """Every run is local to its client: a `[decision_model]` table says where the key goes now."""
     f = tmp_path / "c.toml"
     f.write_text('[decision_model]\napi_key = "file-key"\n')
     with pytest.raises(ConfigError, match="aip config --decision-model"):
@@ -99,7 +132,8 @@ def test_init_writes_the_user_file_and_the_server_finds_it(tmp_path: Path, monke
     assert server_command(["--init"]) == 0
     target = tmp_path / "cfg" / "server.toml"
     assert user_config_path() == target and target.read_text() == EXAMPLE
-    assert (target.stat().st_mode & 0o777) == 0o600
+    if os.name != "nt":                                   # Windows has no POSIX mode bits
+        assert (target.stat().st_mode & 0o777) == 0o600
     assert str(target) in capsys.readouterr().out
     assert find_config(None) == target
     (tmp_path / "aip-server.toml").write_text("")
@@ -109,11 +143,18 @@ def test_init_writes_the_user_file_and_the_server_finds_it(tmp_path: Path, monke
     assert "already exists" in capsys.readouterr().err
 
 
-def test_the_server_serves_no_ui(tmp_path: Path):
-    """The console ships on its own: a leftover `inspector` key says where it went."""
+def test_a_retired_key_is_a_warning_and_the_server_still_starts(tmp_path: Path, capsys):
+    """A file an older aip wrote: `server.inspector` (the console ships on its own since 0.6a0) and
+    the filesystem backend's `root` and `cache_dir` are ignored, each with a line saying why.
+    Until 0.9.0 they were refused, which kept a server from starting over a line that does nothing."""
     f = tmp_path / "c.toml"
-    f.write_text("[server]\ninspector = true\n")
-    with pytest.raises(ConfigError, match="npx aip-console"):
+    f.write_text('[server]\ninspector = true\nport = 9000\n[backend]\nroot = "~/x"\ncache_dir = "~/y"\n')
+    assert apply_config(read_config(f), {}) == {"port": 9000}
+    err = capsys.readouterr().err
+    assert "warning" in err and "server.inspector is ignored" in err and "npx aip-console" in err
+    assert "backend.root is ignored" in err and "backend.cache_dir is ignored" in err
+    f.write_text("[server]\nbogus = 1\n")
+    with pytest.raises(ConfigError, match="unknown key server.bogus"):         # a key that never was is still an error
         read_config(f)
 
 

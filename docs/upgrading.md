@@ -1,5 +1,150 @@
 # Upgrading
 
+## 0.8 to 0.9
+
+0.9 (2026-11) is a new way of writing a procedure, not a new version of the old one. **A 0.8
+skill does not load in 0.9, and there is no tool that converts one.** Rewrite a procedure worth
+keeping: by hand in the language ([`docs/language/spec.md`](language/spec.md)), or by giving
+`make_procedure` or `build_procedure` the old skill folder as its material.
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash   # or: uv tool install --force agent-instruction-protocol
+aip --version                       # aip 0.9.0 language 0.9
+aip skill install                   # the one `aip` skill; removes aip-compile and aip-runtime where an earlier aip put them
+```
+
+What is different:
+
+| 0.8 | 0.9 |
+|---|---|
+| A procedure is a YAML block inside `SKILL.md` | A folder holding `procedure.aip`, compiled to a bundle, one `.rl` file |
+| Two packages and commands, `aip` and `aip-spec` | One, `aip`. `aip-spec` stays on PyPI at 0.7.0 and is not updated; the installer removes the old tool |
+| `aip validate`, `aip-spec validate` | `aip compile --check <folder>` |
+| `aip-spec example NAME --out .` | `aip example NAME` |
+| Two skills, `aip-compile` and `aip-runtime` | One, `aip` |
+| `aip upgrade <folder>` rewrote a skill | Gone. `aip upgrade`, with no folder, publishes the procedures the package ships |
+| `aip server --backend filesystem` | Gone. The default store is one Relate file (`--backend relate`); `--backend neo4j` is as before |
+| The server stepped a served run | Every run steps on the client; the server keeps the catalog and the record ([`server-design.md`](server-design.md), section 1) |
+| `fallback: true` let a person answer a decision | A `Decide` is always a decision model's. An agent or a person decides in a `Task_Agent` step |
+| `aip config --server URL` | `aip config server URL`, or `aip config server local` for a server on this machine that starts on demand |
+| `aip run --input`, `aip resume --input`, `--interactive` | `aip run --inputs` (`-i`), `aip resume --answers`; no interactive mode |
+| The server extra, `agent-instruction-protocol[server]` | Not needed: the server's packages are installed with the package. The extra still resolves |
+| The console in its own repository | In this one, under `console/`; still `npx aip-console --server URL` |
+
+A `server.toml` from 0.8 starts a 0.9 server unless it says `kind = "filesystem"`, which is
+refused with where the store is now; `backend.root`, `backend.cache_dir` and `server.inspector`
+are ignored with a warning. A store from 0.8, on either backend, is not read: publish your
+rewritten procedures to a fresh one. Everything below this section describes older releases and
+their commands, for a machine still on one.
+
+## 0.6a1 to 0.8
+
+Format `0.8` (release 0.8.0, 2026-11-03) is breaking: a skill written for `0.6a1` no longer
+loads. Upgrade the install first, then each skill with one command.
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash   # or: uv tool install --force aip-spec agent-instruction-protocol
+aip --version                                           # aip 0.8.0 format 0.8
+aip upgrade ./billing-support                           # or: aip-spec upgrade ./billing-support
+```
+
+Four things changed in the format; the first three are mechanical and `aip upgrade` does them,
+the fourth is a decision only the author can take.
+
+1. **The start step is explicit.** A step of `kind: start` holds the procedure's `inputs` and
+   points at the first runnable step. Before, the first step was the start and its `inputs` were
+   the procedure's. The upgrade inserts a `start` step before the old first step, carrying its
+   inputs and pointing at it; the old step keeps its `inputs`, now consumed from the state.
+2. **`thresholds` are gone.** A decision no longer flags an uncertain answer for review, and the
+   `review` pause is gone with it. Instead a decision can list questions under `confidence`, and a
+   model's answer then writes `<question>_confidence` into the state (`[0, 1]`); a router can check
+   that key before it branches, `confidence: {key, below, to}`, and send a low or absent one where
+   the author wants it. The upgrade drops every `thresholds` block. It does not add the list and
+   the check: where the skill relied on review, add them by hand, and `aip-spec validate` then
+   says whether the route is measured.
+3. **Decisions opt in to being answered by hand.** `fallback: true` on a decision lets a client
+   with no decision model answer the questions itself; the default is `false`, and a run with no
+   model then stops at the decision with `no_decision_model`. A 0.6a1 run could always be answered
+   by hand, so the upgrade sets `fallback: true` on every decision and keeps that behaviour. Set
+   it back to `false` wherever a decision model is required: a decision answered by hand writes no
+   confidence, and a router fed by it is an unmeasured route, which the validator warns about.
+4. **Keys may be overwritten.** The one-producer rule is gone: a later step may produce a key an
+   earlier one produced, or a start input, and the value is overwritten. Nothing in a 0.6a1 skill
+   needs to change for this; the validator now says `duplicate_producer` as information, and a
+   script that echoed a start input is no longer an error.
+
+The runtime block is replaced and `metadata.aip-version` set to `"0.8"`. The rewrite is line
+edits, so comments and layout survive. The command prints each change and what it left by
+hand, writes the skill, and validates it: exit 0 when valid, 1 when the validator still names
+something, 2 (nothing written) on a layout the edits cannot follow. `--check` reports and writes
+nothing. On the 0.6a1 `billing-support`:
+
+```
+$ aip upgrade billing-support
+billing-support/SKILL.md: 0.6a1 -> 0.8
+  replaced the 0.6a1 runtime block with the 0.8 block
+  set `metadata.aip-version` to "0.8"
+  inserted a `start` step named `start` before `triage`, carrying its 1 input and pointing at it
+  `triage`: dropped `thresholds` (billing: 0.15, tone: 0.6)
+  `triage`: set `fallback: true`
+by hand:
+  `triage` reviewed its answers below those thresholds; if the skill relied on that, add `confidence: [billing, tone]` to the decision and a `confidence: {key: <question>_confidence, below: <bound>, to: <step>}` check to the router that branches on its answer
+  every decision now says `fallback: true`, as a run in the earlier format could always be answered by hand; set `fallback: false` where a decision model is required
+wrote billing-support/SKILL.md; VALID (name: billing-support) (1 warning(s) — see stderr)
+```
+
+The warning on stderr is `unmeasured_route`: `by-tone` branches on `tone`, which a client may
+have chosen by hand. The diff the upgrade wrote, with the runtime block elided:
+
+```diff
+--- a/billing-support/SKILL.md   (0.6a1)
++++ b/billing-support/SKILL.md   (0.8)
+ metadata:
+-  aip-version: "0.6a1"
++  aip-version: "0.8"
+ ---
+-# AIP runtime — format 0.6a1
++# AIP runtime — format 0.8
+ ... (the rest of the block, regenerated)
+
+ steps:
++  - name: start
++    kind: start
++    inputs:
++      - name: message
++        type: string
++        description: The customer's message, verbatim.
++    inputs_to: triage
++
+   - name: triage
+     kind: decision
+     ...
+-    thresholds:
+-      billing: 0.15
+-      tone: 0.6
++    fallback: true
+     inputs_to: by-tone
+```
+
+The shipped example goes one step further by hand, which is what step 2 above asks for: `triage`
+names `tone` in a `confidence` list and `by-tone` checks it, `confidence: {key: tone_confidence,
+below: 0.6, to: escalate}`, so a message the model is unsure about is escalated rather than
+replied to. It keeps `fallback: true` so the quickstart runs without a TypeSafe key, and says in a
+comment that a production skill turns it off; the validator therefore warns
+`confidence_on_unmeasured_source` on it, and a run answered by hand is escalated whatever tone was
+given, because a manual answer writes no confidence.
+
+A skill that was never upgraded past `0.5a1` or `0.6a0` takes the same command; for `0.5a1` it
+also names the `outputs` and `requires` to add by hand (the next sections).
+
+What else changed for people running skills, visible after upgrading the runtime
+(`CHANGELOG.md` has the detail): the `review` pause no longer exists, so a client with a key is
+never asked to confirm an answer; a decision pause carries `confidence` and `fallback` where it
+carried `thresholds`; a run with no key stops with `no_decision_model` at a decision that does not
+allow `fallback`; a router's history entry says whether its check fired and why (`low`, `absent`);
+the `overridden-decisions` governance query is replaced by `confidence-fired` and
+`unmeasured-routes`; and the console's `0.8.0` follows the same changes (it needs `aip` 0.8.0).
+
 ## 0.6a1 to 0.7.0
 
 In 0.7.0 the packages come from PyPI instead of git, and the authoring skill is named `aip-compile`
@@ -172,6 +317,6 @@ Not edits to a skill, but visible after upgrading the runtime (`CHANGELOG.md` ha
 - Run files live in `~/.aip/runs/<run-id>.json`; `aip resume <run-id>` works from any directory.
 - On a served run the server holds the run's state and history and never runs a script or calls a
   decision model: the client runs every script and resolves every decision, and reports each with
-  attribution ([`run-modes.md`](run-modes.md)). The server's `[decision_model]` table, the
+  attribution (that was 0.8; since 0.9 every run steps on the client and the server records it: [`server-design.md`](server-design.md), section 1). The server's `[decision_model]` table, the
   per-name threshold overrides, and `aip server --inspector` are gone; the decision-model key is
   `aip config --decision-model` on the client, and the UI is `npx aip-console`.

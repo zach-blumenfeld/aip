@@ -1,0 +1,10 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.aip-e2e/
+scratch/
+.DS_Store
+.idea/
+.claude
+*.tsbuildinfo

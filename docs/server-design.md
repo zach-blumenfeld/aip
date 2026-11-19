@@ -1,400 +1,327 @@
-# AIP server design
+# The AIP server
 
-Status: implemented in format 0.5a0, the client-server line; in 0.6a0 `client-execution.md` supersedes §6 and §7 (scripts and decisions run on the client) and the server holds each run's state. 0.4a0 is the last folder-only format. Companion to `running.md`, which
-describes the step protocol and the local runner this design extends.
+What `aip server` is in 0.9: the catalog of published procedures and the record of their runs,
+over one graph store. The language and what running it requires are `docs/language/spec.md` and
+`docs/language/runtime.md`; the client's side of every call below is `src/aip/client/server.py`.
+(Through 0.8 the server also stepped runs and stored skill folders, on Neo4j or a directory;
+that design is in the git history of this file. The filesystem backend, its file lock and
+`aip db` are gone.)
 
-## 1. Goal
+## 1. What the server does, and does not
 
-An agent should be able to use AIP with nothing but the `aip` client and one page of
-directions: find a procedure, read its contract, run it, resume at pauses. Today the
-client only works on skill folders it is handed, so discovery is done by the host
-agent's skill system (a `SKILL.md` under `~/.claude/skills/`), not by AIP. This design
-moves discovery and execution behind a server with one contract, lets the server pick
-its storage and search backend, and names the inspector that governs it.
+- **It holds bundles.** A bundle is the compiled procedure, one `.rl` file (`docs/language/bundle.md`).
+  The server stores its graph and gives it a *revision* under the procedure's name when it is
+  published, or holds it with no revision, a *draft*, so that a run of a folder or a file can be
+  recorded. A bundle is merged by its id, a hash of the source and files: storing one the store
+  holds changes nothing.
+- **It holds the record of runs.** Every run is local to its client: the client loads the bundle
+  from its cache, calls the decision model itself, runs the scripts next to its data, and posts
+  the run where it stopped. The server never runs a step, a script or a model, and holds no
+  decision-model key.
+- **It answers questions over both**, because they are one graph: a run's entries are tied to
+  the steps of the procedure they ran (`docs/language/queries.md`).
+- **It serves no UI.** The console is a client like the `aip` command.
 
-Principles, in order of priority:
+### Why every run is local to its client
 
-1. **The client decides nothing.** `aip search`, `aip info`, `aip run`, `aip resume`
-   are the same commands against any server. How search ranks, where files live, how
-   decisions are answered, and which revision a name resolves to are server concerns.
-2. **One contract, two backends.** The server exposes one HTTP API. Behind it, a
-   backend interface with a Neo4j implementation (default; local or remote) and a
-   filesystem implementation (a directory, nothing else). Both pass the same contract
-   test suite.
-3. **The server is the execution engine.** `Procedure.run` already is the whole
-   server operation (`running.md`). Scripts run where the server runs; client tasks
-   and manual decisions go to the client. State still travels in the request and
-   response; the server stays stateless per call, with run persistence as a backend
-   feature, not a protocol requirement.
-4. **The inspector is a client.** `aip-inspector` uses the same API as the CLI. No
-   endpoint exists for the UI that the CLI does not also have.
-5. **Nothing already in the step protocol changes.** `after`, `payload`, `history`,
-   `thresholds` in; `ran`, `kind`, `result`, `suggested`, `review`, `next`, `history`
-   out. The catalog is added beside it.
+The server once ran a procedure's scripts (through 0.5) and stepped its runs (through 0.8). Both
+moved to the client, for one reason: **work runs next to the data, and what is central is the
+catalog and the record.** It is the split every CI system uses by design.
 
-## 2. Terminology
+- **A script's files are on the client's machine.** A script reads `data/claims.csv` and writes
+  `results/`. Run on a server of its own, as a real deployment has it, it reads files that are
+  not there and writes results the client never sees; the run's state carries only the JSON a
+  script returns. Server-side scripts worked only while the server and the agent shared a disk.
+- **The client is a program, not the agent.** `aip` runs a script, asks the decision model and
+  follows a route without involving the agent, which sees `aip run` take a while and then finish
+  or stop at a step that is its own. A model's key and a person's credentials stay on the machine
+  that already holds them; the server holds neither.
+- **The client always calls; the server never calls back.** The same direction MCP settled on.
+  With a run's state in the client's run file and its record in the store, the server keeps
+  nothing in memory per run, so any replica can answer any request.
+- **Trust is the catalog's, and it is checked.** A client runs the code a catalog hands it, as
+  installing a skill does. Two things bound that: a bundle is addressed by an id that is the hash
+  of its source and files, which the client verifies before it runs anything, and the server is
+  one the client was pointed at (`aip config server`). So give the `publish` scope to people
+  whose code your clients would run, and pin a revision where that matters. A catalog you do not
+  trust, or a client you do not, is outside this design.
 
-- **Procedure**: one AIP skill's graph, as today.
-- **Skill**: the folder (SKILL.md plus scripts/assets/references/source). Published,
-  it becomes a **revision**, identified `name@revision` where `revision` is the
-  content hash the Neo4j projection already computes (`aip.db.neo4j._revision`).
-- **Name**: `name` from the frontmatter. One name, many revisions. The server pins
-  which revision `name` resolves to (default: newest published).
-- **Catalog**: the set of published revisions and their metadata.
-- **Run**: one traversal of a procedure, identified by a server-issued `run_id`,
-  holding the same `history` the local runner carries today.
-- **Backend**: the storage and search implementation behind the server.
-- **Client**: the CLI, the inspector, or any program speaking the API.
+(This was the design note `docs/client-execution.md`, accepted 2026-10-17 for 0.6a0; its
+reasoning is kept here and the note is gone. `docs/running.md`, "Scripts", has what a script is
+given and what limits it.)
 
-## 3. Architecture
+One process writes a store. With the Relate backend that is a rule of the engine (the server is
+the only process on its file, readers included); with Neo4j several servers may share a database.
+Section 3's "A Relate store over Bolt" is how a Bolt client and the server share a Relate file.
 
-```mermaid
-flowchart LR
-    subgraph clients
-        cli["aip CLI<br/>search · info · run · resume · publish"]
-        insp["aip-inspector<br/>catalog · run console · governance"]
-        agent["agent with the aip-runtime meta-skill"]
-    end
-    subgraph server["aip server (HTTP)"]
-        api["API<br/>/catalog · /procedures/{name}/step · /runs"]
-        engine["aip.model<br/>Procedure.run"]
-        exec["script execution<br/>per-skill interpreter"]
-        jev["decision model client<br/>(TYPESAFE_API_KEY held here)"]
-    end
-    subgraph backend["Backend (one interface)"]
-        neo["Neo4jBackend<br/>catalog + runs + search (full-text / vector / graph)"]
-        fs["FilesystemBackend<br/>a directory of published folders + JSON index"]
-    end
-    cli --> api
-    insp --> api
-    agent --> cli
-    api --> engine --> exec
-    engine --> jev
-    api --> backend
-    engine --> backend
+## 2. The HTTP API
+
+`ref` is `name` (the pinned revision, else the newest live one), `name@<revision>` (that one,
+retired or not) or `name@latest` (the newest live one, whatever is pinned). A reference the
+store does not have is 404 `not_found` in one of three sentences, which every client command
+passes on as it is: `no procedure 'billing-support'; did you mean `billing_support`?` (the
+question when the name with `_` for `-` is published: a folder is `billing-support`, its
+procedure `billing_support`), `no revision 7 of billing_support`, and `billing_support has no
+live revision: all 2 are retired`.
+
+**Retire wins over pin.** A retired revision does not resolve by name, pinned or not: retiring
+the pinned revision clears the pin, and pinning a retired one is refused (409 `retired`). A
+name whose every revision is retired stays in `GET /catalog` with `resolves` null and the
+description of its newest revision (`aip list` prints `@- (retired)`); search, which covers what
+names resolve to, no longer finds it. `name@<revision>` still names a retired revision, for the
+runs that reference it, and its description says `retired: true`; the client refuses to run one
+unless forced (`aip run name@rev --force`). Publishing its bundle again brings it back.
+
+| Call | What it does |
+|---|---|
+| `GET /catalog` | every published name: `name`, `description`, `pinned`, `latest`, `resolves`, and `revisions` newest first (`revision`, `bundle_id`, `published_at`, `retired`) |
+| `GET /catalog/search?q=&limit=` | published procedures by what they do, best first: `name`, `revision`, `bundle_id`, `score`, `description` |
+| `GET /catalog/{ref}` | the description `aip info` prints (header, inputs, result, steps, loops) with `name`, `revision`, `bundle_id`, `draft`, `published_at`, `retired` |
+| `GET /catalog/{ref}` with `Accept: application/octet-stream` | the bundle itself, an `.rl`, for `aip pull` and `aip get` |
+| `POST /catalog` (the `.rl` bytes) | publish: verify the bundle, merge it by id, assign the next revision under its procedure's name. `{"name", "revision", "bundle_id", "existed"}`; a bundle that already has a revision keeps it (and is live again if it was retired); `existed` says the store held the bundle before |
+| `POST /catalog/{name}/pin` `{"revision"}` | make the name resolve to a revision; `null` clears the pin; 409 `retired` for a retired one |
+| `POST /catalog/{name}/retire` `{"revision"}` | stop the name resolving to a revision, and clear a pin on it |
+| `POST /bundles` (the `.rl` bytes) | hold a bundle with no revision, a draft: `{"bundle_id", "name", "existed", "draft"}` |
+| `GET /bundles?drafts=` | every bundle held, newest first, each with `draft` and its `revision` if it has one; `drafts=true` for the drafts alone |
+| `GET /bundles/{bundle_id}` | describe a bundle by id, or with `Accept: application/octet-stream` hand it back |
+| `GET /catalog/{ref}/graph`, `GET /bundles/{bundle_id}/graph` | the bundle's own graph as JSON: `name`, `revision`, `draft`, `bundle_id` and `graph`, the `nodes` and `edges` of `docs/language/bundle.md` in the shape `aip compile --json` prints, here with the source (`Procedure.source`) and each file's contents (`File.text`, or `base64`). What a page draws a procedure from and shows as its source, without opening an `.rl` |
+| `POST /runs` (the run as JSON) | record a run where it stopped: the whole run each time, upserted by `run_id`. The bundle it names must be held (404 `unknown_bundle` otherwise). Replies `{"run_id", "user", "draft", "revision"}`: who the token stands for, and what the store holds the bundle as |
+| `GET /runs?name=&status=&agent=&session=&user=&draft=&limit=` | runs, most recently started first (a run answered later keeps its place): `run_id`, `name`, `revision`, `bundle_id`, `status`, `draft`, `identity`, `started`, `finished`, `created`, `updated`, `entries`, and `result`, what a finished run ended with (null otherwise) |
+| `GET /runs/{run_id}` | one run's record, as it was posted |
+| `GET /audit` | the audit queries: the built-ins of `aip.server.audit`, then the ones stored here, each `query`, `description`, `builtin`, `needs` (parameters it cannot run without) and `path` |
+| `GET /audit/{query}?name=&agent=&session=&user=&draft=&window=&limit=&repeats=&key=` | one query's rows (section 4) |
+| `PUT /audit/{name}` `{"description", "cypher"}`, `DELETE /audit/{name}` | store a query of one's own (422 when it writes or does not parse), remove it |
+| `GET /export/runs?name=&since=&agent=&session=&user=&draft=` | one Relate file holding the runs that match and the procedures they ran (`aip export runs`); `X-AIP-Runs`, `X-AIP-Procedures` and `X-AIP-Bundles` count them (a procedure's revisions and drafts are a bundle each); 404 when no run matches |
+| `GET /health` | `{"aip", "language", "backend", "local"}`, with no token: how a client tells an aip server from whatever else answers on a port. A local server (section 6) adds its `pid` |
+
+**An upload is read as a bundle is read anywhere** (`aip.compiler.read_bundle`): every file's
+bytes against its hash, the source and files against the bundle id, and the stored graph against
+the one the stored source compiles to. A file that is not a bundle, was edited by hand, or is of
+another language version is refused with the bundle error's own kind (422 `not_a_bundle`,
+`bundle_tampered`, `bundle_language_version`, `bundle_format`), and nothing is stored.
+
+**A bundle handed back is the bundle's own subgraph**, read out of the store and written to a
+new `.rl`. Its bytes differ from the file that was uploaded, and its id does not: the id is the
+content's, and the client verifies what it receives the same way.
+
+**Errors** are `{"error": {"kind", "message", "location"?, ...}}` with the status: 401
+`missing_token` or `invalid_token`, 403 `forbidden`, 404 `not_found` or `unknown_bundle`, 422
+`invalid_request` or a bundle error's kind, 500 `internal`.
+
+**Auth** is a bearer token. A token has scopes, `read` (every GET), `run` (upload a draft, record
+a run) and `publish` (publish, pin, retire, store or remove an audit query), and may have a name. `--token` grants all three and
+`--read-token` only `read`; the config file's `[tokens]` table gives one token per person
+(`zach = "..."`), with every scope, and that name is the `user` of the runs recorded with it.
+With no token configured the server is open, and a loopback client needs none either way
+(`--no-localhost` turns that off). The server answers CORS for pages on a loopback origin, where
+the console runs, and for the origins in `allow_origins`.
+
+**Identity.** A run says who ran it: `agent` and `session` are the client's claim (`--agent`,
+`AIP_AGENT`, `--session`, `AIP_SESSION`); `user` is the server's, the name of the token the run
+was posted with, written into the record whatever the client sent, and `null` on an open server.
+`agent_version` is beside them when the client gave one (`aip mcp` sends the MCP client's own
+version): it is kept on the run and shown with it, and runs are filtered by `agent` alone.
+
+**Draft or published** is the server's to say as well. A run is a *draft's* when the bundle it
+ran has no revision in the store, and otherwise it is a run of the revision the bundle is
+published as, whether the client ran it by name or from a folder that compiles to the same id:
+`draft` and `revision` are written into the record at every stop from what the store holds, and
+the reply carries them, so the client's run file says the same. A run recorded while its bundle
+was a draft stays a draft's run once it is over; publishing the bundle later does not rewrite it.
+
+## 3. The store
+
+One graph. `src/aip/server/store.py` holds every statement, and both backends run them
+unchanged.
+
+A bundle's graph is stored exactly as `aip compile` wrote it (`aip.compiler.write_graph`: the
+nodes and edges of `docs/language/bundle.md`, each node with `bundle_id` and `id`). Beside it the
+server writes its own nodes, told from a bundle's by label:
+
+| Node | Properties |
+|---|---|
+| `Name` | `name`, `pinned` (a revision, when one is pinned) |
+| `Revision` | `id` (`name@revision`), `name`, `revision` (text), `number`, `bundle_id`, `published_at`, `retired` |
+| `Bundle` | `bundle_id`, `name`, `description`, `stored_at`, `draft` (true until published), `described` (the description `GET /catalog/{ref}` returns, as JSON) |
+| `Run` | `run_id`, `bundle_id`, `name`, `revision`, `draft`, `status`, `agent`, `agent_version` (when given), `session`, `user`, `started`, `finished`, `created`, `updated`, `position`, `batch`, `entries` (how many); when paused `paused_at`, `paused_since`, `tasks`; when failed `error` (the kind), `error_step`, `error_message`; `json` (the run without its history) |
+| `Entry` | one per history entry: `run_id`, `bundle_id`, `seq`, `step`, `kind`, `pass`, `loop` (the innermost), `loops` (each enclosing loop and pass, `revise 0`), `at`, `seconds`; a `Decide`: `model`, `endpoint`, `model_seconds`, `history_sent`, `batched`, `batch_size`; a `Task_Agent`: `agent`, `session`, `waited_seconds`, and when what answering took is known, `work` (`reported` when the agent said so with `aip resume --work`, as `aip agent` does; `observed` only in a record an earlier 0.9 wrote), `model`, `tool_calls` (how many), `tokens` (the total), and `work_seconds`; a `Route`: `read`, `value`, `to`, `check_fired`, `check_reason`, `check_confidence`, `check_below`; an `Execute`: `script`; a loop's exit: `exit` (`until`, `items`, `times`, `cap`), `exit_where`, `iterations`; the first entry of a `Loop` pass: `until_holds`, `until_where`; `sha` and `json` (the entry as posted) |
+| `Answer` | one per answer object an entry produced: `run_id`, `bundle_id`, `seq`, `step`, `name`, `value`, `source` (`measured`, `scripted`, `agent`, `aggregated`), `confidence`, `score`, `probabilities` (JSON); an aggregation's: `answers` (how many it judged), `held`, `barred` |
+| `Meta` | `key: 'builtins'`, `offered` (the ids of the built-in bundles this store has been offered) |
+| `AuditQuery` | a stored audit query: `name`, `description`, `cypher`, `stored_at` |
+
+| Edge | From → to | Meaning |
+|---|---|---|
+| `HAS_REVISION` | `Name` → `Revision` | |
+| `OF` | `Revision` → `Bundle`; `Run` → `Bundle` | the bundle a revision is, the bundle a run ran |
+| `HOLDS` | `Bundle` → `Procedure` | into the bundle's own graph |
+| `HAS_ENTRY` | `Run` → `Entry` | |
+| `THEN` | `Entry` → `Entry` | the next entry of the same run |
+| `AT` | `Entry` → `Step` or `Loop` | the node of the procedure the entry ran |
+| `GAVE` | `Entry` → `Answer` | |
+| `ANSWERS` | `Answer` → `Question` or `Aggregation` | a decision's answer to its question; an aggregation's result |
+
+A property whose value would be null is left out. A run is upserted whole at every stop: the
+`Run` node is rewritten, and of the history only the entries that are new or changed are
+written (each carries the hash of its JSON), so recording a long run is not quadratic in its
+length. `GET /runs/{run_id}` rebuilds the record from `Run.json` and the entries' `json`, so
+what comes back is what was posted, with the server's `user`.
+
+A run paused inside a `For` is posted with the entries its passes have written so far, pass by
+pass in input order, although the engine itself appends a pass's entries to the history only
+when its batch completes (`docs/language/runtime.md`, The record). So a paused loop's work is
+in the store while the run waits: its `Entry` and `Answer` nodes, the run's `entries` count,
+and the audit queries over them. When a pass that was waiting moves on, the entries after it
+shift, and those are the ones rewritten at the next stop.
+
+Search is BM25 with Porter stemming (`aip.server.search`) over the name, description, `Use_When`
+lines and step descriptions of the revision each name resolves to, in the server's memory, the
+same on both backends; an exact name wins outright.
+
+### Backends
+
+- **Relate** (the default, `aip.server.backends.relate`). One file under the data directory,
+  `~/.local/share/aip/server/store.rl` unless `--path` or `backend.path` says otherwise. No other process is needed. A connection belongs to the thread that opened it, so one
+  worker thread owns it and runs every transaction in turn. **Nothing else can open the file
+  while the server runs**, not even read-only: Relate allows one process on a single-file
+  store, so `relate query` and `relate serve` on it answer `storage locked` until the server
+  stops. To look inside a live store over Bolt, use the setup below.
+- **Neo4j** (`aip.server.backends.neo4j`, `--backend neo4j`, `NEO4J_URI`, `NEO4J_USERNAME`,
+  `NEO4J_PASSWORD`, `NEO4J_DATABASE`). For a shared deployment, Aura included. The driver's
+  managed transactions; uniqueness constraints on the server's nodes and an index on
+  `(bundle_id, id)` for each label of a bundle's graph.
+
+`tests/server/` runs one suite over both (`NEO4J_URI` unset skips the Neo4j half):
+`test_contract.py` is the API through the client, `test_queries.py` runs every query of
+`docs/language/queries.md` and checks what the store kept of each kind of run.
+
+### A Relate store over Bolt
+
+(The steps for a person, in order, with how to go back: [`deploying.md`](deploying.md), "Explore the
+data with Cypher". This section is why it works.)
+
+To have the server and a Bolt client (Neo4j Browser, a driver, a notebook) on the same Relate
+store at once, let Relate own the file and make the server one of its clients. This is Relate's
+own answer to a second process needing the data: its CLI serves the store over Bolt and
+serializes access. It needs the `relate` command (`curl -sSfL https://relatedb.ai/install.sh |
+bash`); the `relate-db` package aip installs has no Bolt server.
+
+```bash
+relate serve --database ~/.local/share/aip/server/store.rl --bolt 7687 --auth neo4j:<password>
+aip server --backend neo4j --uri bolt://127.0.0.1:7687 --user neo4j --password <password>
 ```
 
-The existing `aip.client.backend.Backend` protocol (`describe`, `peek`, `run`,
-`answer_decision`, `has_decision_model`) is the seam the runner already codes
-against. `LocalBackend` stays for `aip run <folder>` with no server. A new
-`HttpBackend` implements the same protocol by calling the API below, addressed by
-name instead of folder. The runner does not change.
+The server runs its Neo4j adapter, since Bolt is what that speaks, so `GET /health` says
+`backend: neo4j`; the store is still the one `.rl` file, and a store the Relate backend wrote
+opens this way unchanged. Anything else connects to the same `bolt://127.0.0.1:7687` with the
+same credentials and may read and write, so treat it as you would the server's own database.
+`relate serve` binds loopback and has no TLS: keep it there. The suite passes this way
+(`NEO4J_URI=bolt://127.0.0.1:<port>` with `relate serve` on a scratch file, 70 passed on
+2026-11-17 with `relate` 1.0.1); CI does not run it, since the CLI is not in the wheel.
 
-## 4. The client contract
+### Built-in bundles
 
-### 4.1 CLI
+`aip.server.builtins.publish_builtins` runs when the app is built: each `.rl` shipped under
+`aip/server/bundles/` that the store has not been offered before is published, and the store
+remembers the ids it has been offered, so a built-in appears on a store's first start and is not
+brought back after someone retires it. Four ship: `assist` (what `aip agent` drives), `build_procedure`
+and `edit_procedure` (the Studio's and `assist`'s builders), and `make_procedure`, which has an
+agent write a procedure from a description (each has its source under `examples/language/`; the
+`.rl` in the package is that folder compiled, and a test fails when the two disagree). So `aip
+list` on a store that has just been created shows the four at revision 1, and a package upgrade that carries a
+changed one publishes it as the next revision on the server's next start. `aip upgrade` publishes
+the same bundles from a client, as `aip publish` would, for a server that runs an older package
+than the client; a bundle the server already holds keeps its revision.
 
-| Command | Today | With a server |
+## 4. Audit
+
+`aip audit` asks the store questions by name (`src/aip/server/audit.py`, one Cypher statement
+each, the same on both backends; "governance" is what the record, the pins and the retirements
+add up to, and none of these decides who may do what, so the command says what it does). Every
+query takes the same parameters: `name`, `agent`, `session`, `user` and `draft` filter the runs
+(`draft=true` the runs of a bundle with no revision, `false` those of a published one), `window`
+is how many of the most recent matching runs are looked at (default 100), `limit` how many rows
+come back (default 50).
+
+| Query | Rows |
+|---|---|
+| `confidence-fired` | per procedure, route and reason (`below`, `absent`): how often the route's `Confidence_Below` fired in the windowed runs, and in which |
+| `failing-aggregations` | per aggregation: how often it was computed, how often it did not hold, how many answers its bar turned |
+| `model-answers` | per question: how many answers the decision model gave, their mean and lowest confidence, the mean time of the call |
+| `agent-work` | per `Task_Agent` step, who answered, the model and `work` (`reported` by the agent): how many tasks, their tool calls and tokens, most tokens first |
+| `failing-scripts` | per `Execute` step and error (`script_failed`, `timeout`, `requires_unmet`): the windowed runs that stand failed there, the script, the latest message. A run that was resumed past the failure no longer counts: the record keeps where a run stands, not the attempts before |
+| `untaken-branches` | branches of a route (its `Confidence_Below` line included) that none of the windowed runs took, in the bundles those runs ran |
+| `repeated-cycles` | per `Loop` and how it ended (`until`, `times`, `cap`): the runs where it went round more than `repeats` times (default 1), and the most passes |
+| `agent-routes` | routes an agent's answer steers (the source class on the route's `READ_BY` edge), with the runs through each |
+| `missing-fields` | procedures whose header has no `Use_When`, `Do_Not_Use_When` or `Avoid` line, with how many of each it has |
+| `empty-results` | procedures whose `End` returns only `Start` inputs |
+| `unused-data` | keys a step produces, and questions a `Decide` asks, that nothing reads |
+| `cycles` | every `For` and `Loop`: what bounds it and which keys its body produces again on every pass |
+| `lineage` | for `key=`: every key it is derived from, how many steps back, and the steps that produce each, through a `For`'s collected list too |
+
+The first six read the windowed runs. The last six read the revision each published name
+resolves to (`name` narrows them; the run filters do not apply). Two 0.8 queries are gone with
+the agent fallback: `manual-decisions` (no answer is given by hand) and `unmeasured-routes` (a
+route an agent steers is a design, not a flag; `agent-routes` lists them).
+
+**Stored queries.** `PUT /audit/{name}` keeps a query of your own in the store (`aip audit --save
+NAME --cypher '...'`), listed after the built-ins with `builtin: false` and run by name like
+them, with the same parameters bound (`$name`, `$agent`, `$session`, `$user`, `$draft`,
+`$window`, `$limit`, `$repeats`, `$key`, and `$bundles`, the ids of the resolved revisions). The
+name is kebab-case and not a built-in's. Every audit query runs in a transaction that is never
+committed (Neo4j's read transaction, a rolled-back one on Relate), and Cypher with a writing
+clause, or that the database cannot parse (it is planned with `EXPLAIN`, not run), is refused
+when it is stored (422). A stored query's rows are whatever it returns: a node comes back as
+`{"labels", "properties"}`, a relationship as `{"type", "properties"}`, a path as its `nodes`
+and `relationships`, so `RETURN r` answers like any other query. One that fails when it is run
+answers 422 with the database's message.
+
+**Export.** `GET /export/runs` writes the runs that match, the graph of every bundle among them
+and those bundles' revisions into a new Relate file with the statements the store itself uses,
+so the file is a small store: every query of `docs/language/queries.md` answers on it as it
+does here, with no server. `since` is a date or a timestamp a run started at or after.
+
+## 5. Configuration
+
+`aip server --init` writes `~/.config/aip/server.toml` with every setting commented;
+`--example-config` prints it. Precedence: flags, the environment (a `.env` is loaded into it
+without overriding), the file, defaults (`src/aip/server/config.py`). `[server]` is the listener
+(`host`, `port`, `token`, `read_token`, `localhost_open`, `log_level`, `allow_origins`),
+`[tokens]` names people, `[backend]` picks the store (`kind = "relate"` with `path`, or `"neo4j"`
+with `uri`, `user`, `password`, `database`). A file that still says `kind = "filesystem"` is
+refused with where the store is now; keys an older `aip` wrote that change nothing
+(`server.inspector`, `backend.root`, `backend.cache_dir`) are ignored with a warning.
+
+## 6. The local server
+
+`aip config server local` (what the installer sets) points a client at a server on its own
+machine that nobody starts by hand (`src/aip/client/local.py`). The first request that finds
+nothing answering starts `aip server --local` as a process of its own and is sent again; every
+later command reuses it; it stops when no request has arrived for 15 minutes, and the next
+command starts it again. Nothing is lost in between: the store is the Relate file `aip server`
+opens by default.
+
+| | Default | Moved by |
 |---|---|---|
-| `aip search "<words>" [--limit N]` | — | ranked `name`, `revision`, `description`, score; ranking is the server's |
-| `aip list` | `aip db list` (Neo4j only) | every name with its pinned revision and revision count |
-| `aip info <name\|folder>` | folder only | by name: what `aip info <folder>` prints today, from the server |
-| `aip run <name\|folder> --input start.json` | folder only | by name: starts a run on the server; pauses write a run file holding `run_id` |
-| `aip resume <run-file> --input answer.json` | local | same; the run file carries the server URL and `run_id` |
-| `aip publish <folder>` | — | validate locally, upload all files, server validates again, returns `name@revision` |
-| `aip retire <name@revision>` | — | revision no longer resolvable by name (kept for runs that reference it) |
-| `aip pin <name> <revision>` | — | which revision `name` resolves to |
-| `aip config [--server URL] [--token T]` | — | where the client points; `AIP_SERVER` env var overrides; unset means local folders only |
+| address | `http://127.0.0.1:8247` | `AIP_LOCAL_PORT` |
+| store and log | `~/.local/share/aip/server/store.rl`, `local.log` beside it | `AIP_LOCAL_DATA` (the directory) |
+| idle before it stops | 900 seconds | `AIP_LOCAL_IDLE` (0: never) |
 
-Name resolution rules: `name` resolves to the pinned revision; `name@<revision>` is
-exact; `name@latest` is the newest published regardless of pin. A folder path is
-detected by the presence of `SKILL.md` and bypasses the server entirely, as today.
+`--local` means loopback only, the Relate backend, no token, and no config file or `.env` read,
+so it is the same server whichever directory the client stood in. The port is not 8000, where
+`aip server` listens by default, so a server started by hand and the local one do not collide;
+they do share the default store file, which one process holds at a time. A client tells its
+server from anything else on the port by `GET /health`, and reports what it found when it is not
+one. A run never fails because of this: when the local server cannot be started (a broken
+install, the port is taken, another process holds the store), the stop is
+reported as not recorded with the reason, and the last line of the log. `aip server --local
+--stop` stops it by hand, which an upgrade needs: a running server keeps the code it started
+with. A remote server is `aip config server URL --token T`; the token's name on the server is
+the `user` of the runs.
 
-### 4.2 HTTP API
+## 7. Around the server
 
-All bodies JSON. Errors are `{"error": {"kind": str, "message": str, "location"?: str}}`
-with the validator's `kind` vocabulary reused where it applies.
-
-Catalog:
-
-| Method | Path | Body / query | Returns |
-|---|---|---|---|
-| `GET` | `/catalog/search?q=&limit=` | | `[{name, revision, description, score}]` |
-| `GET` | `/catalog` | | `[{name, pinned, revisions: [{revision, published_at, retired}]}]` |
-| `GET` | `/catalog/{name}` | optional `@revision` | the `describe()` document plus `aip info` fields (purpose, triggers, start input, steps) |
-| `GET` | `/catalog/{name}/files` | optional `?archive=tar` | file manifest: path, size, sha256, mode; with `archive=tar`, a tar stream of every file plus the manifest |
-| `GET` | `/catalog/{name}/files/{path}` | | the raw bytes of one file (the inspector's source view) |
-| `POST` | `/catalog` | multipart or `{files: [{path, bytes_b64, mode}]}` | `{name, revision}`; 422 with validator issues on failure |
-| `POST` | `/catalog/{name}/pin` | `{revision}` | |
-| `POST` | `/catalog/{name}/retire` | `{revision}` | |
-
-Execution, one endpoint per `Backend` method, addressed by name:
-
-| Method | Path | Body | Returns |
-|---|---|---|---|
-| `POST` | `/procedures/{name}/peek` | `{after, payload}` | `describe_next(node)` |
-| `POST` | `/procedures/{name}/step` | `{after, payload, history, thresholds?, run_id?}` | `StepResponse.to_dict()` plus `run_id` |
-| `POST` | `/procedures/{name}/answer` | `{after, payload, history, answers, run_id?}` | same shape (manual decision) |
-| `GET` | `/procedures/{name}/capabilities` | | `{decision_model: bool, executes_scripts: bool}` |
-
-Runs (persistence; a backend may decline with 501, the CLI then keeps the run file
-exactly as today):
-
-| Method | Path | Returns |
-|---|---|---|
-| `POST` | `/runs` | `{run_id}` for `{name, revision}`; called by `step` implicitly when `run_id` is absent |
-| `GET` | `/runs?name=&status=&limit=` | `[{run_id, name, revision, status, started_at, last_step}]` |
-| `GET` | `/runs/{run_id}` | `{name, revision, status, history, pause?}` |
-
-`status` is `running`, `paused`, `done`, or `error`. Every `step` and `answer` call
-with a `run_id` appends to that run's history server-side; the client still receives
-and may carry the full history, so a client that never persists works unchanged.
-
-### 4.3 Runtime block
-
-The runtime block that every skill carries verbatim says to run
-`aip run <this skill's folder> --input <start.json>`. It gains one sentence: when a
-server is configured, `aip run <name>` works the same and `aip search` finds
-procedures. Because the block is validator-enforced verbatim, this is part of the
-format bump to `0.5a0`; skills carrying the 0.4a0 text remain valid under a one-line
-compatibility rule (the validator accepts the 0.4a0 text with a warning throughout
-the 0.5a line).
-
-## 5. The backend interface
-
-One Python protocol in `aip.server.backend`, implemented twice. Search semantics are
-deliberately unspecified beyond "ranked, deterministic for a fixed catalog"; the
-contract tests check shape and a handful of obvious cases (exact name match ranks
-first; a word only in one description finds that skill), not ranking quality.
-
-```python
-class CatalogBackend(Protocol):
-    def publish(self, skill: SkillRecord) -> str:                       # returns revision
-    def get(self, name: str, revision: str | None = None) -> SkillRecord
-    def files(self, name: str, revision: str) -> list[FileRecord]
-    def file(self, name: str, revision: str, path: str) -> bytes
-    def list(self) -> list[NameSummary]
-    def search(self, query: str, limit: int) -> list[SearchHit]         # backend decides how
-    def pin(self, name: str, revision: str) -> None
-    def retire(self, name: str, revision: str) -> None
-    def resolve(self, ref: str) -> tuple[str, str]                      # "name" | "name@rev" | "name@latest"
-
-class RunBackend(Protocol):                                             # optional
-    def create(self, name: str, revision: str) -> str
-    def append(self, run_id: str, entry: JSON, status: str, pause: JSON | None) -> None
-    def get(self, run_id: str) -> RunRecord
-    def list(self, name: str | None, status: str | None, limit: int) -> list[RunSummary]
-```
-
-`SkillRecord` is the existing `aip.db.neo4j` record (frontmatter, files with bytes
-and hashes, parsed procedure); it moves to `aip.server.records` and both backends use
-it. A backend may also expose `project(skill)` for analytics; the server never calls
-it.
-
-Materialisation: to execute a procedure the server needs the skill on disk. The
-server keeps a cache directory, `<cache>/<name>@<revision>/<name>/`, rebuilt from
-`files()` on first use and verified by hash (the `export` path that exists today).
-`load_procedure` then runs unchanged against that folder. The filesystem backend
-needs no cache: its published folder is already on disk and is used in place.
-
-### 5.1 `Neo4jBackend` (default)
-
-Local or remote: the `neo4j` Docker image or Neo4j Desktop on a laptop, a compose
-sidecar next to a trial container, or Aura. The backend only needs a bolt URI.
-
-- Reuses the lossless projection: `Skill {id: name@revision}`, `File`, `Procedure`,
-  `Step`, `Input`, `Question` nodes and their edges. Adds `Name {name, pinned}`
-  with `HAS_REVISION` edges, `retired` and `published_at` on `Skill`, and
-  `Run {id, name, revision, status, started_at}` with `StepRun {order, step, kind,
-  input, result, manual, review}` nodes linked `NEXT` in order and `OF_STEP` to the
-  `Step` node they executed.
-- `search`: a full-text index (Lucene `english` analyzer, so the query and the text are
-  stemmed) over `Skill.description`, `Procedure.purpose`, and
-  the `trigger_when` list; optionally a vector index over the same text when an
-  embedding provider is configured. Graph signals (which procedures declare an input
-  with a given name, which end in a given output) are available to the inspector as
-  Cypher, not to `search`.
-- Governance queries the inspector will run are plain Cypher over this graph:
-  decisions whose answers are most often overridden, procedures with no
-  `do_not_use_when`, scripts that failed in the last N runs, routers that can
-  reach the end without a decision.
-
-### 5.2 `FilesystemBackend`
-
-- A root directory and nothing else:
-
-  ```
-  <root>/
-  ├── catalog.json                 names → {pinned, revisions: [{revision, published_at, retired}]}
-  ├── skills/<name>/<revision>/    one revision
-  │   ├── .aip-manifest.json       file manifest: path, size, sha256, mode
-  │   └── <name>/                  the skill folder exactly as published (this is the materialised copy too;
-  │                                the loader requires the folder to be named after the skill)
-  └── runs/<run_id>.jsonl          one JSON line per history entry, first line is the run header
-  ```
-
-- `search` loads every pinned revision's description, purpose, and `trigger_when`
-  into memory at startup (and on publish) and scores a query by weighted BM25 over
-  Porter-stemmed terms (name field highest, then description, then purpose, then
-  triggers; an exact name match wins outright). Pure Python, deterministic, no index
-  files, adequate for catalogs of hundreds of procedures.
-- Writes are atomic per file (write to a temp name, rename); `catalog.json` is the
-  only file rewritten, under a lock.
-- Zero external services; this is what a trial container or a laptop runs with no
-  database. It is the backend the aip-skillbench harness installs per trial.
-
-### 5.3 Contract tests
-
-`tests/server/test_contract.py` parametrised over both backends (the filesystem
-backend against a temp dir; Neo4j against `NEO4J_URI`, typically a local Docker
-instance): publish the
-`examples/billing-support` skill, resolve by every ref form, search finds it by a
-word from its description, files round-trip byte for byte, pin and retire behave,
-runs persist and list, and a full traversal through the HTTP layer reproduces the
-`running.md` worked example. The Neo4j variant is skipped without `NEO4J_URI`.
-
-## 6. Execution locality (superseded)
-
-> Superseded 2026-10-17 by `docs/client-execution.md`: execution steps run on the client,
-> next to the files; the server keeps the procedure, routing, validation and history. The
-> text below is the earlier decision, kept for the reasoning.
-
-Scripts run on the server, with the server's interpreter for that skill. Reasons:
-`running.md` already plans a per-skill interpreter built from the skill's
-environment file; decisions, routing, and script execution are then recorded in one
-place, which is what makes runs auditable; and the client stays thin.
-
-Consequences:
-
-- Any file a script reads through the state (a `lightcurve_path`, an `stl_path`)
-  must be reachable from the server. The supported pattern is co-location: the
-  server runs on the machine, container, or volume that holds the data. For the
-  aip-skillbench harness that means `aip server --backend filesystem` inside the
-  trial container, listening on localhost, with the task's packages visible to the
-  interpreter; `--backend neo4j` with a compose sidecar is the heavier alternative
-  when the run graph itself is under study.
-- Client tasks and manual decision answers remain client-side; nothing changes.
-- Remote data is out of scope for this version. A later `assets` mechanism may let
-  a client upload inputs with the start request.
-- Scripts are untrusted code the server executes. The server runs them as a
-  subprocess with a timeout (the step's `timeout`) under whatever isolation the
-  deployment provides (container, user, seccomp); the server itself does not
-  sandbox. Document this in the server's README in plain words.
-
-## 7. Decision model (superseded)
-
-> Superseded 2026-10-17 by `docs/client-execution.md`, "Decision steps": the client resolves
-> decisions with the decision model configured on the client and reports the answer with
-> attribution; the server holds no model key.
-
-`TYPESAFE_API_KEY` is held by the server. `capabilities.decision_model` tells the
-client whether decisions will be answered server-side; when false the client answers
-them, as the runner does today. Per-question threshold overrides may be stored
-server-side per `name` (`POST /catalog/{name}/thresholds`), which the inspector
-exposes; a request's `thresholds` still wins for that call.
-
-## 8. Client changes
-
-- `aip.client.backend.HttpBackend(server_url, token, name)`: the five `Backend`
-  methods over the endpoints in §4.2; `run` and `answer_decision` carry `run_id`.
-- `RunFile` gains `server`, `name`, `revision`, `run_id`; `resume` reconstructs the
-  right backend from it.
-- `aip search`, `aip list`, `aip publish`, `aip retire`, `aip pin`, `aip config`.
-- `aip run` and `aip info` accept a name when a server is configured. A folder still
-  bypasses the server.
-- `aip get <name>[@revision] [--out dir]` downloads a revision losslessly: fetch
-  `/files?archive=tar`, unpack under `<out>/<name>/`, restore modes, hash every file
-  against the manifest and abort naming the first mismatch, then run the validator.
-  `source/` is included; it is part of the skill and of the revision hash.
-  `aip get` followed by `aip publish` must yield the same revision; that is a
-  contract test.
-
-## 9. The `aip-runtime` meta-skill
-
-A plain Agent Skill, not an AIP procedure, shipped in the package
-(`aip runtime --skill` writes it; also under `skills/aip-runtime/` in the repo) and
-versioned with the format. It is the "one page of directions":
-
-- When the task might match a known procedure, run `aip search "<task words>"`
-  first. Read the hits' descriptions; pick one or none.
-- `aip info <name>` for the start input and an example `start.json`.
-- `aip run <name> --input start.json`; on exit code 3 read the pause: `decision`
-  means answer the listed questions; `review` means confirm or override the flagged
-  answers; `client_task` means do the task and return the keys in `expects`. Put the
-  answer in a JSON file and run the printed `resume` command. Repeat until
-  `"done": true`; `state` is the result.
-- Do not execute a procedure's steps by hand when the server can run it.
-- Trust boundaries: the procedure's scripts run on the server; paths in the start
-  input must be reachable there.
-
-Under 120 lines, frontmatter `name: aip-runtime`, a `description` that triggers on
-"procedure", "runbook", "workflow", and the `aip` command. It replaces, for the
-server case, the per-skill runtime block as the thing the agent reads first.
-
-## 10. `aip-inspector`
-
-A web client of the API in §4.2, no private endpoints. Lives in its own repo
-(`aip-inspector`); `aip-web` stays the project site. Served by `aip server
---inspector` from a built bundle in the package, or standalone against any server
-URL.
-
-Views, in build order:
-
-1. **Catalog**: `GET /catalog` and `/catalog/search` as a searchable table; a
-   procedure page from `/catalog/{name}` with purpose, triggers, do-not-use-when,
-   start input, and the step graph drawn as a graph (nodes by kind, `inputs_to` and
-   router branches as edges, the end step marked). Revisions and the pin.
-2. **Source**: the file manifest and viewer from `/files`; diff between revisions.
-3. **Run console**: choose a procedure, fill the start input from the example JSON,
-   step. Each step shows the state before and after, a decision's questions with
-   their full distributions and which crossed the threshold, the router's branch, a
-   script's stdin and stdout, a client task's rendered template with the references
-   it may load. Pauses are answered in the UI; the same `/step` and `/answer` calls
-   the CLI makes.
-4. **History**: `GET /runs` filtered by name and status; a run page replaying its
-   history as a trace over the graph.
-5. **Governance**: pin and retire; per-question threshold overrides; corpus
-   questions answered by the backend (§5.1), shown as lists: decisions most
-   overridden by clients, scripts failing most, procedures missing fields, routers
-   with unreachable branches in practice (never taken in N runs).
-
-Non-goals for the first version: editing procedures in the browser (authoring stays
-with the `aip-compile` skill), user accounts beyond a shared token, multi-server views.
-
-## 11. Security
-
-- One bearer token per server, two scopes: `read` (search, info, files, runs, step)
-  and `publish` (publish, pin, retire, thresholds). Localhost with no token is
-  allowed for the in-container and laptop cases.
-- Scripts execute with the server's privileges; see §6. The server README states
-  that publishing is equivalent to code execution on the server.
-- The inspector never stores the token beyond the session.
-
-## 12. Phases
-
-1. **Records and backend interface** (`aip.server.records`, `aip.server.backend`),
-   the filesystem backend, contract tests. `aip db` keeps working, re-pointed at the
-   Neo4j backend.
-2. **HTTP server** (`aip server --backend filesystem|neo4j`), catalog and execution
-   endpoints, materialisation cache. `HttpBackend` in the client; `aip search`,
-   `list`, `info <name>`, `run <name>`, `resume`, `publish`, `config`. Runtime
-   block sentence and format bump to `0.5a0`. The `aip-runtime` meta-skill.
-3. **Neo4j backend** on the existing projection plus names and runs; full-text
-   search; the governance queries as named Cypher in the package.
-4. **Runs API and inspector** views 1 to 4.
-5. **Governance** (pins, retire, thresholds, corpus queries) and inspector view 5.
-
-Acceptance for phase 2, which is what aip-skillbench needs: in a fresh container
-with the filesystem backend, `aip publish <pack>` then an agent holding only the
-`aip-runtime` skill and the server URL completes a task through `search`, `info`,
-`run`, and `resume`, with the run visible in `GET /runs`.
-
-## 13. What changes downstream
-
-In aip-skillbench, mode 4 (`aip-runtime`) becomes: start `aip server --backend
-filesystem` in the trial container, `aip publish` the task's pack, mount only the
-`aip-runtime` meta-skill, write the memory pointing at the server. Nothing
-task-specific is mounted under `~/.claude/skills/`. Mode 3 keeps mounting the pack
-artifact. The harness's four-modes plan (`prompts/four-modes-plan.md` there) is
-revised once phase 2 lands.
-
-## 14. Open questions
-
-- Should `search` accept structured hints (`--input-name lightcurve_path`) that a
-  graph backend can use? Proposed: not in the first version; the inspector can show
-  that query, and the CLI can grow a flag later without changing the contract.
-- Revision pinning per client (a run file pins its revision) versus per server:
-  both; the run file always records the exact revision it started on.
-- Whether to let the server run a procedure's client tasks against a configured
-  model, making the server a full agent for headless use. Out of scope; it changes
-  the client's role.
+`aip mcp` (`docs/mcp.md`) is the client as an MCP server: it records runs here as any client
+does, and with `aip config server local` its first call starts the local server the same way.
+The console (`console/`, plan C1)
+is on this API: it reads the catalog, the graph of a revision or a draft, the runs and the audit
+queries from the page, and runs procedures through the `aip` CLI on its own machine.

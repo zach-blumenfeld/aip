@@ -5,33 +5,133 @@
     </td>
     <td valign="middle">
       <h1>AIP — Agent Instruction Protocol</h1>
-      <p><em>The open protocol for governed agent workflows</em></p>
+      <p><em>The open standard for reliable agent workflows: portable like a skill, enforced like code.</em></p>
     </td>
   </tr>
 </table>
 
-## What Is AIP?
-Agent Instruction Protocol (AIP) is an open protocol for creating and running governed agent workflows.
+Write any task once as an AIP procedure: any agent follows the steps as written, and every run is recorded by default, regardless of your harness or orchestration framework.
 
-AIP is used to distill domain knowledge into procedures that even small, inexpensive agents follow step by step, with explicit control flow and optional server-side recording for auditing every run.
+## Quick Start
 
-As an open protocol, AIP works with any model, agent harness, or orchestration stack. It was designed for agentic AI, but an AIP client can be any application or a human operator.
+### Install
 
-Two open standards cover parts of this today. [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) decouples tools, data, and other assets into a service any agent can call. [Agent Skills](https://agentskills.io/) represent procedural knowledge in a portable form that humans can read and maintain.
+```bash
+curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
+```
 
-AIP fills the gap between them. It builds on Agent Skills, so a procedure stays a portable, human-readable skill, and adds what Skills lack: typed steps, explicit control flow, and a runtime any client can drive, the way MCP gave tools a service any agent can call. The result is predictability, portability, auditability, and lower cost for teams running autonomous agents.
+### Video
 
-Ex of an AIP procedure for marketing emails with historic runs. Visualized in the AIP console:\
-<img src="img/aip-console-example2.png" alt="Alt text">
+<img src="console/docs/screenshots/quickstart/build-run-audit.gif" alt="Build, run, audit: an agent builds and publishes a procedure, an agent runs it, and the console shows the runs">
+
+### Steps
+
+**1. Build.** Ask your coding agent to write a procedure for any task and publish it. For example:
+
+```
+Build an AIP procedure for handling a billing complaint: decide whether the message
+is about billing and whether the customer is angry; escalate angry customers to a
+human, draft a reply for calm ones. Publish it as billing_support.
+```
+
+The result is a procedure: a graph of steps whose control flow AIP enforces. This one has agent tasks, a route and a script:
+
+<img src="console/docs/screenshots/quickstart/billing-support.png" alt="The billing_support procedure as a graph: start, a triage task for the agent, a route on tone, then a script that escalates or a reply task, then end">
+
+A procedure can also have decisions made by a [decision model](#decision-models) with a confidence (when one is configured), loops that repeat steps until an answer holds, and map-reduce style `For` loops that run steps over a list in batches and aggregate the results.
+
+**2. Run.** Give the agent a task the procedure covers:
+
+```
+A customer wrote: "I was charged twice for March. Could you check?" Handle it.
+```
+
+It finds `billing_support` in the AIP catalog and runs it, pausing only where a step needs the agent.
+
+Any agent can run the same procedure, with the same enforced control flow, from the CLI, the MCP server or the Python SDK: search to find it, run, and resume. The catalog can also be served remotely, to [share procedures across teams](#share-across-teams).
+
+<table>
+<tr><th>CLI</th><td>
+
+```bash
+aip search "customer charged twice"
+aip run billing_support -i '{"message": "I was charged twice for March."}'
+aip resume <run_id> --answers '{"billing": true, "tone": "calm"}'
+```
+
+</td></tr>
+<tr><th>MCP</th><td>
+
+```json
+{"mcpServers": {"aip": {"command": "aip", "args": ["mcp"]}}}
+```
+
+Any agent framework gets tools to `search`, `describe`, `run` and `resume`, among others; with `aip mcp --publish`, one to publish ([`docs/mcp.md`](docs/mcp.md)).
+
+</td></tr>
+<tr><th>Python SDK</th><td>
+
+```python
+import aip
+
+client = aip.Client(agent="support-app")
+
+# Three tools for any agent, good for every procedure in the catalog.
+def search(query: str) -> list[dict]:
+    return [{"name": hit.name, "description": hit.description} for hit in client.search(query)]
+
+def run(procedure: str, inputs: dict) -> dict:
+    return client.run(procedure, inputs).to_json()      # done with a result, or paused with a task
+
+def resume(run_id: str, answers: dict) -> dict:
+    return client.resume(run_id, answers).to_json()
+```
+
+[`docs/sdk.md`](docs/sdk.md)
+
+</td></tr>
+</table>
+
+**3. Audit.** Open the console to see every run, from every client, step by step:
+
+```bash
+npx aip-console --server http://127.0.0.1:8247
+```
+
+<img src="console/docs/screenshots/quickstart/console.gif" alt="The AIP console: the billing_support procedure as a graph, the traffic of nine runs made from the command line, the Python SDK and MCP, and two of those runs step by step">
+
+[More ways to install and deploy](#install-and-deploy) are below.
+
+## Where AIP Fits
+
+Agents need to know how you work. We express that know-how, called “procedural knowledge”, in two ways: by writing it or by coding it.
+
+1. **Writing** instructions in skills and prompts, which are easy to read, update and standardize, and which any agent can use. However, the agent decides how to follow them, so they are not enforceable.
+2. **Coding** them into a harness or orchestration framework, which makes them enforceable and deterministic. However, the steps are hard-coded into one stack, so they are not portable, and in most cases they are more complicated to understand, maintain and update.
+
+Most teams use both together, so know-how lives in two places: part in skills, part in code. Neither copy is both portable and enforced, and it is hard to observe or evaluate what the agent actually followed. We believe this is behind most agent reliability and governance problems today.
+
+AIP is a third form that keeps the know-how in one place. A procedure is readable, standard and portable like skills, enforced like code, and recorded on every run so it can be observed and evaluated. The model's judgment stays in the steps that need it.
+
+| | Written | Coded | AIP |
+|---|---|---|---|
+| | Skills and prompts | Harnesses and orchestration frameworks | Procedures |
+| **Standard and portable** | Yes: any agent can use it. | No: hard-coded into one stack. | Yes: any agent can run it. |
+| **Easy to read and update** | Yes | In most cases, less so. | Yes |
+| **Enforced** | No: the agent decides how to follow it. | Yes: the steps are deterministic. | Yes: the runtime runs the steps as written. |
+| **Observable** | No: nothing records what the agent followed. | Where you add tracing. | Yes: every run is recorded by default. |
+
+AIP is not a harness or a framework, and it does not replace yours. The agent you have today can use AIP, driving the run through the command line, MCP or the Python SDK.
 
 ## Contents
 
+- [Quick Start](#quick-start)
+- [Where AIP Fits](#where-aip-fits)
 - [Key Concepts](#key-concepts)
 - [How It Works](#how-it-works)
-- [Research and Evidence So Far](#research-and-evidence-so-far)
-- [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
-- [End-to-End Walkthrough](#end-to-end-walkthrough)
+- [Install and Deploy](#install-and-deploy)
+- [Research and Evidence So Far](#research-and-evidence-so-far)
 - [Reference](#reference)
 - [Development & Contributing](#development--contributing)
 
@@ -39,80 +139,168 @@ Ex of an AIP procedure for marketing emails with historic runs. Visualized in th
 
 ### Procedures
 
-An AIP _procedure_ is an instance of step-by-step know-how: an executable graph-shaped workflow that guides an agent on how to perform a task using tools and logical sequences.
+An AIP _procedure_ is step-by-step know-how in a declarative workflow form: a small graph of steps that guides an agent through a task, with its tools, its decisions and its branches written down.
 
-Procedures are direct extensions of Agent Skills, fully compatible with the [agent skills spec](https://agentskills.io/specification), and can even be used in the same way—by placing in a discoverable directory for the agent (see the [AIP specification](packages/aip-spec/docs/specification.md) in the format package, [`packages/aip-spec/`](packages/aip-spec/), for details). However, AIP also provides a runtime (this repo) that takes advantage of the graph structure to enforce control flow - sequenced workflows of tools and steps, with typed I/O contracts - as well as typed records for auditing each run. 
+A procedure is a folder holding `procedure.aip`, written in the AIP language ([`docs/language/spec.md`](docs/language/spec.md)), with any `scripts/`, `assets/` and `references/` beside it. The compiler checks it and turns it into a _bundle_, one `.rl` file that holds the procedure as a graph and every file it needs. A bundle is what runs, what a server publishes under a name and a revision, and what every run is recorded against.
 
-Ex of the marketing email procedure in its serialized agent skill format:
+Below is the billing-support example ([`examples/language/billing-support`](examples/language/billing-support)), open in VS Code with the AIP extension. On the left is the folder: `procedure.aip` with its `assets/`, `references/` and `scripts/`. In the middle is the procedure: a `Start`, a `Decide` that classifies the message, a `Route` that sends angry or uncertain cases to a script and calm ones to the agent, and an `End`. On the right is the graph the compiler makes of it.
 
-<img src="img/aip-skill-example2.png" alt="Alt text">
+<img src="img/billing-support-vscode.png" alt="The billing-support procedure in VS Code: the folder's files, procedure.aip, and its step graph (start, triage, by_tone, then escalate or reply, then end)">
 
 ### Steps and State
 
-A procedure's body is a YAML graph of typed steps, validated against the AIP schema. There are five step kinds:
+There are seven kinds of step, and two kinds of loop:
 
 | kind | what it does |
 |---|---|
-| `execution` | runs a script and adds its result to the state |
-| `decision` | asks typed questions about the state (yes/no, a choice, a score); each answer becomes a value in the state |
-| `client_task` | hands work to the client, with a rendered template and the outputs it must produce |
-| `router` | branches on a value in the state |
-| `end` | declares which keys are the procedure's result |
+| `Start` | holds the procedure's inputs, what the client supplies |
+| `Decide` | asks a decision model typed questions about the state (yes or no, a choice, a score); each answer carries the model's confidence |
+| `Route` | branches on one answer, after checking its confidence if the author asked for that |
+| `Aggregate` | combines several answers into one yes or no (`All`, `Any`, `None`) |
+| `Execute` | runs a script and adds its result to the state |
+| `Task_Agent` | hands work to whoever is running the procedure, an agent or a person, with a prompt and the keys to produce |
+| `End` | declares which keys are the procedure's result |
+| `For`, `Loop` | repeat a body of steps: once per item of a list, or until an answer holds, up to a cap |
 
-The state is the one JSON object a run carries. Each step declares the keys it reads as `inputs` and the keys it adds as `outputs`, with their types.
+The ticket-triage example ([`examples/language/ticket-triage`](examples/language/ticket-triage)) uses every kind but `Aggregate`, with a `For` over the tickets and a review `Loop` inside it, as the AIP console draws it:
 
-### Procedure Distillation
+<img src="console/docs/screenshots/loops/triage-control-down.png" alt="The ticket-triage procedure as a step graph in the AIP console">
 
-Procedures can be written by hand, but the recommended workflow is to distill them from material that already exists. Most domain know-how is already written somewhere; just not in an executable form. It sits in runbooks and SOPs, policy documents, post-mortems and incident reviews, decision logs and design deliberations, existing freeform Agent Skills, wiki pages, ticket threads, etc. 
+The state is the one JSON object a run carries. Each step says which keys it reads (`Read`) and which it adds (`Produce`), with their types; keys accumulate, and a later step may overwrite one.
 
-The `aip-compile` skill ([`skills/aip-compile/`](skills/aip-compile/), bundled with `aip-spec`) takes that material in whatever form it comes and compiles it, with a frontier model, into a step graph: each piece of know-how becomes a typed step, a question with a confidence threshold, a router branch, a script, or a task handed to the client. The skill then runs `aip-spec validate` until the graph passes and walks the source line by line to confirm that nothing actionable was dropped; rules, thresholds, lookups, and branching are never allowed to fall away, and anything left out on purpose is recorded with its rationale. The original material ships inside the skill under `source/`, so every procedure can be read against what it was compiled from, and compiled again when the source changes. Step 6 of the [walkthrough](#6-compile-and-publish-your-own-skill) does this end to end.
+### Decision Models
 
-<img src="img/aip-authoring.png" alt="Alt text">
+A `Decide` step is answered by a decision model, not by the agent. A decision model, also called a System One model after the fast, intuitive kind of thinking, is a small model that answers typed questions (yes or no, a choice, a score) in one pass. It returns each answer with a confidence and a probability for each value.
 
-### Runtime Protocol
+A procedure can act on how sure the model was: a `Route` can check the confidence and send an unsure case elsewhere, and an `Aggregate` can set a probability bar. This lets a procedure make judgment calls quickly and cheaply, and keeps a large model's slower reasoning for the steps that need it.
 
-The runtime protocol is how a procedure gets executed. It defines the step types, the state that flows between steps, and the pauses where a client must act. AIP enforces this at three levels:
-
-1. **In the skill itself.** Every AIP skill carries a fixed runtime block in its body, so any agent can follow the protocol itself, with no AIP tooling present, just as it would any Agent Skill.
-2. **Locally.** The `aip` command runs a skill folder with an engine that enforces the protocol: it walks the graph, checks each step's inputs and outputs against their declared types, runs scripts, answers decisions, and follows routers.
-3. **Client-server.** An `aip` server holds a catalog of published procedures and drives each run with the same engine, recording every step for auditing. Clients, whether an agent, an application, or a person, search the catalog, start runs, and act at pauses. Scripts run on the client, next to the data, never on the server.
-
-In every mode the client only has to act at a pause: a task to perform, a decision the procedure's author marked as needing confirmation, or questions to answer when no decision model is configured.
+AIP is currently tested with [TypeSafe](https://typesafe.ai), and more providers are being considered. Setup is one key, `aip config --decision-model-key KEY` ([`docs/running.md`](docs/running.md)). A decision model is optional: without one, a procedure has the agent decide in a `Task_Agent` step under fixed labels, and its route checks no confidence, as [`examples/language/billing-support-agent`](examples/language/billing-support-agent) does.
 
 ## How It Works
 
-```mermaid
-flowchart LR
-    subgraph compiling["Compiling (once, with a frontier model)"]
-        doc["runbook, playbook,<br/>freeform SKILL.md"] --> skill["aip-compile skill<br/>compiles to an AIP step graph"]
-        skill --> validate["aip-spec validate"]
-        validate --> publish["aip publish"]
-    end
-    subgraph clients["Clients"]
-        agent["any agent +<br/>aip-runtime meta-skill"] --> cli["aip CLI<br/>search · info · run · resume"]
-        insp["aip-console<br/>catalog · run console · history · governance"]
-        scripts["scripts run here,<br/>next to the data"]
-        model["decision model (TypeSafe)<br/>answers questions, flags low confidence"]
-        cli --> scripts
-        cli --> model
-    end
-    subgraph server["aip server (one HTTP API)"]
-        api["/catalog · /runs · /governance"]
-        engine["execution engine<br/>steps · routing · validation"]
-        api --> engine
-    end
-    subgraph backend["Backend (one interface)"]
-        neo["Neo4j<br/>catalog · files · runs · answers<br/>full-text search · graph queries"]
-        fs["Filesystem<br/>a directory"]
-    end
-    publish --> api
-    cli --> api
-    insp --> api
-    engine --> backend
-    api --> backend
+A procedure goes through five stages: it is written, compiled, run, stored and audited.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/aip-end-to-end-dark.png">
+  <img src="docs/figures/aip-end-to-end-light.png" alt="AIP end to end: Write (editors, coding agents, built-in procedures, the console's Studio), Compile (a folder becomes one .rl bundle), Run (any agent through the CLI, MCP or the SDK), Store (files, a local or remote server, Relate or Neo4j) and Audit (aip audit, the console, an export)">
+</picture>
+
+### Write
+
+Procedures can be written by hand, but most know-how is already written somewhere, in runbooks and SOPs, policy documents, post-mortems, existing Agent Skills, wiki pages and ticket threads, so the usual way is to have an agent distill one from that material. There are four ways in, and each ends at the same folder, checked by the same compiler:
+
+- **An editor.** The VS Code extension ([`editors/vscode`](editors/vscode)) colours `procedure.aip`, shows the compiler's errors as you type and previews the graph. Cursor and Windsurf take the same extension.
+- **A coding agent.** Any agent with the `aip` skill, which carries the language on one page: it writes, compiles and fixes until the procedure compiles.
+- **A built-in procedure.** AIP ships procedures that build procedures. `make_procedure` has your agent write one from a description and compiles it until it is clean; `build_procedure` reads a brief and a folder of documents, settles the rules with a person, writes the folder, tries it once and reviews it against the rules; `edit_procedure` changes one as an instruction says and shows the change as a diff. Step 1 of the [Quick Start](#quick-start) does this end to end.
+- **The console's Studio.** A chat that runs `build_procedure` and `edit_procedure` for you, with the step graph beside it.
+
+### Compile
+
+`aip compile` checks the folder and writes one file, the bundle. Nothing runs unchecked: running a folder compiles it first, and a bundle is verified again every time it is opened.
+
+- **What the checker catches**, each as one error at its line: a step nothing leads to, a key some path never produces, a route that misses a value, a loop with no cap, a script or prompt that is not in the folder.
+- **What the bundle holds:** the source byte for byte, every file the procedure uses, and the graph. Its id is the hash of the source and the files, so the same folder always gives the same id, and `aip export` writes the folder back.
+
+### Run
+
+Every run happens on the machine that starts it. The `aip` client loads the bundle and walks the graph one step at a time: it checks each step's inputs and outputs against their types, runs an `Execute` step's script next to your data, sends a `Decide` step's questions to the decision model, and follows routes and loops.
+
+A run pauses only at a `Task_Agent` step, which is the agent's to do. The pause carries a prompt, the state the step reads and the keys to answer with; the agent answers with `aip resume`, and the answer is checked before anything moves. Nothing else is put to the agent: a decision's answer carries the model's confidence, and a route checks it and sends an unsure run where the author says.
+
+A `For` loop is the map and reduce of a procedure: it runs its steps once per item of a list, in batches, and collects the results into one list for the steps that follow. A batch of decisions is one call to the decision model, and a batch of agent tasks is one pause.
+
+Any agent can drive a run, with no new code: through the command line and the `aip` skill, through `aip mcp`, or through the Python SDK. `aip agent` covers the case where there is no agent yet: it runs `aip` with a small, simple built-in agent, a chat model that answers the pauses. For an agent with no `aip` at all, `aip export <procedure> --skill DIR` writes a procedure out as a plain Agent Skill to follow by hand.
+
+### Store
+
+Every run writes its files on the machine that ran it. Point the client at a server and procedures and runs also land in one graph: a catalog to search and a record to audit.
+
+- **`aip server` keeps the catalog and the record.** It never runs a step, a script or a model, and holds no model key. The installer sets up a local one that starts on demand; a team points its clients at a shared one.
+- **The catalog** gives each published bundle a name and a revision; agents find procedures with `aip search`, and a revision can be pinned or retired.
+- **The store is one graph**, in a single [Relate](https://relatedb.ai) file by default, or in Neo4j or Aura for a shared deployment ([`docs/deploying.md`](docs/deploying.md)).
+
+### Audit
+
+Every step, answer and pause is recorded against the exact bundle that ran.
+
+- **`aip audit`** runs named queries over the record, such as which routes fired their confidence check, which scripts failed and which branches no run took, or your own Cypher.
+- **The console** draws the record over the step graph: how many runs took each edge, one run's path, every decision's confidence, and the history by procedure, agent and user.
+- **`aip export runs`** writes the runs and the procedures they ran into one file that anyone can query with no server.
+
+## Project Structure
+
+Everything is in this repository:
+
+| package | where | what it holds | install |
+|---|---|---|---|
+| `agent-instruction-protocol` (PyPI) | `src/aip/` | the `aip` command and the Python SDK: the language's compiler (`aip compile`, `fmt`, `export`), the runtime, `aip agent`, `aip mcp`, `aip server` with its two backends, the `aip` skill ([`skills/aip/`](skills/aip/)) and the example programs ([`examples/language/`](examples/language/)) | `uv tool install agent-instruction-protocol` |
+| `aip-console` (npm) | [`console/`](console/) | the web console: the catalog, each procedure as a step graph with its source, the Studio, the run console, history and audit, over a running `aip server` | `npx aip-console --server URL` |
+
+The VS Code extension for `procedure.aip` is [`editors/vscode/`](editors/vscode/).
+
+## Install and Deploy
+
+The installer in the [Quick Start](#quick-start) installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` command, and the `aip` skill into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). It also sets `aip config server local`, so runs are recorded on this machine with nothing to start. Re-run it any time to upgrade. Open a new terminal afterwards if `aip` is not found.
+
+### Try a shipped example
+
+`aip example` lists the example programs that come with the package. `billing-support-agent` needs no model key: it hands its one decision to whoever is running.
+
+```bash
+aip example billing-support-agent        # writes ./billing-support-agent
+aip info ./billing-support-agent         # what it does, the inputs it expects, how it flows
+aip run ./billing-support-agent -i '{"message": "I was charged twice for March. Could you check?"}'
+aip publish ./billing-support-agent      # compiles, uploads, prints billing_support_agent@1
 ```
 
-The agent never decides anything the procedure can decide. It starts a run, and the server walks the graph: it validates each step's input and follows routers, while the `aip` client runs the scripts and asks the decision model. It stops only at a pause the agent must handle: a task to perform, a decision answered below its threshold to confirm or override, or, with no decision model configured, the questions themselves. Every step, answer, and pause is recorded against the revision that ran, which is what the history and governance views read.
+The run pauses with a task and a `run_id`. Answer it with `aip resume <run_id> --answers '{...}'`, giving the keys the pause names. `aip runs` lists the runs; `aip runs <run_id>` shows one step by step.
+
+### Build from a document
+
+Put a runbook, SOP or policy in a folder and ask your agent:
+
+```
+Build an AIP procedure from ./refund-runbook.md
+```
+
+The skill runs `make_procedure`, which has the agent write the folder and compiles it until it is clean. Then `aip run ./<folder>` tries it as a draft and `aip publish ./<folder>` puts it in the catalog.
+
+### Optional
+
+- `aip config --decision-model-key KEY` with a [TypeSafe](https://typesafe.ai) key lets `Decide` steps run: a decision model answers their questions, and each answer carries a confidence a route can check ([Decision Models](#decision-models)). The `billing-support` example uses one.
+- `aip config agent --model-key KEY` lets `aip agent "<task>"` hand a whole task to a chat model that finds, runs or builds a procedure for it ([`docs/agent.md`](docs/agent.md)).
+
+### Other ways to install
+
+```bash
+uv tool install agent-instruction-protocol      # the `aip` command; uv fetches Python 3.14
+aip skill install                               # the `aip` skill, into every detected agent
+aip skill install claude-code                   # one agent; `aip skill list` shows them
+aip skill install --path ./.claude/skills       # a project's skills directory
+```
+
+With pip, into an environment on Python 3.14 or later: `pip install agent-instruction-protocol`, then `aip skill install`. From a checkout: `uv tool install --force --reinstall --no-cache 'agent-instruction-protocol @ <path>'` (without `--reinstall --no-cache`, uv may install a build it cached earlier). On native Windows use the `uv tool install` line; the installer is a bash script.
+
+### Model Recommendation for Building
+
+Use the **largest frontier model available** when building a procedure. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
+
+For *running* the resulting procedure, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
+
+### Explore the data with Cypher
+
+The catalog and every run are one graph. Out of the box it lives in a file only `aip server` can open; to look at it in Neo4j Browser, or from any Bolt driver, follow [Explore the data with Cypher](docs/deploying.md#explore-the-data-with-cypher): install the `relate` command, stop the server, and start the two again connected over Bolt. It is the same store before and after.
+
+### Share Across Teams
+
+`aip server` connects over Bolt to any Neo4j database. [Neo4j Aura](https://console.neo4j.io) is the easiest to host, because it is fully managed:
+
+```bash
+export NEO4J_PASSWORD=<password>
+aip server --backend neo4j --uri neo4j+s://xxxxxxxx.databases.neo4j.io --user neo4j
+```
+
+[Share Across Teams](docs/deploying.md#share-across-teams) has the steps, and what running one server for everyone adds: named tokens, so the record says who made each run, and the database password in one place.
 
 ## Research and Evidence So Far
 
@@ -125,328 +313,35 @@ Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](
 | Human-curated Agent Skill | 50.8% | 0.567 |
 | The same skill converted to AIP | **63.3%** | **0.668** |
 
-Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. The format has moved on since (typed step kinds, declared inputs and outputs, a decision model with thresholds, the runtime block, and a server that holds each run while the client runs its scripts and decisions); measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
-
-## Project Structure
-
-Two Python packages live in this repository as a uv workspace, and the console is its own repository:
-
-| package | where | what it holds | install |
-|---|---|---|---|
-| `aip-spec` | [`packages/aip-spec/`](packages/aip-spec/) | the format: pydantic models, JSON Schema, the runtime block, and the `aip-spec` validator CLI; it bundles the `aip-compile` skill ([`skills/aip-compile/`](skills/aip-compile/)) and the example ([`examples/`](examples/)) | `uv tool install aip-spec` |
-| `agent-instruction-protocol` | this repo's root (`src/aip/`) | the runtime: the `aip` CLI and Python SDK, `aip server`, the Neo4j backend, and the `aip-runtime` skill ([`skills/aip-runtime/`](skills/aip-runtime/)); it depends on `aip-spec` at the same version | `uv tool install "agent-instruction-protocol[server]"` |
-| `aip-console` | [aip-console](https://github.com/zach-blumenfeld/aip-console) | the web console: catalog, run console, history, and governance views over a running `aip server` | `npx aip-console --server URL` |
-
-## Quick Start
-Minimal prerequisites. 
-
-**1. Install or upgrade.** One command does both; re-run it any time.
-```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
-```
-Installs [uv](https://docs.astral.sh/uv/) if missing, the `aip` CLI with `aip-spec`, and both Agent Skills, `aip-compile` for compiling and `aip-runtime` for running, into every agent it detects (Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, Cline, Codex, Pi, OpenCode, Junie). Open a new terminal afterwards if `aip` is not found.
-
-**2. Run the example locally.** The bundled `billing-support` skill triages a customer message. With no decision model configured you answer its questions on the terminal; the run then either runs its escalation script or pauses with a task for you.
-
-```bash
-aip-spec example billing-support --out .     # writes ./billing-support
-aip info ./billing-support                   # what it does, the input it expects, how it flows
-aip run ./billing-support --interactive
-```
-
-**3. Start a server and publish.** The filesystem backend is a directory and needs nothing else. Leave the server running in one terminal and publish from another.
-
-```bash
-aip server --backend filesystem              # terminal 1, http://localhost:8000
-```
-
-```bash
-aip config --server http://localhost:8000    # terminal 2: where the client sends requests
-aip publish ./billing-support                # validates, uploads, prints billing-support@<revision>
-aip search "refund"
-aip run billing-support --interactive        # the same run, now recorded on the server
-```
-
-**4. Let an agent run it.** The installer put the `aip-runtime` skill into your agent, and `aip config` pointed the `aip` command at your server. In Claude Code, ask:
-
-```
-A customer wrote: "I was charged twice! Refund me today or I'm gone." Handle it.
-```
-
-The agent searches the catalog, finds `billing-support`, starts the run, and handles each pause instead of improvising the steps.
-
-**5. Compile your own.** Put a runbook, SOP, playbook, or existing `SKILL.md` in a folder and, in Claude Code, ask:
-
-```
-Author an AIP skill from ./refund-runbook.md
-```
-
-The `aip-compile` skill compiles it into a procedure, validates it, and checks nothing was dropped. Then `aip publish ./<name>` puts it on the server. Use the largest model you have for this step; see below.
-
-Optional: `aip config --decision-model KEY` with a [TypeSafe](https://typesafe.ai) key has a decision model answer the questions in steps 2 to 4, pausing only when an answer falls under the author's threshold. The [End-to-End Walkthrough](#end-to-end-walkthrough) repeats these steps on a Neo4j-backed server with the web console and shows the procedure and run graphs in Cypher.
-
-### Other ways to install
-
-```bash
-uv tool install aip-spec                                 # format only: the `aip-spec` validator; `aip-spec skill install` adds the compiling skill
-uv tool install "agent-instruction-protocol[server]"     # the `aip` command with `aip server`; pulls aip-spec in as a library
-pip install aip-spec "agent-instruction-protocol[server]"   # into a virtualenv instead of uv's tool directory
-aip skill install                   # both skills, every detected agent
-aip skill install claude-code       # one agent;  aip skill list  shows them
-aip skill install --path ./.claude/skills    # a project-local skills directory
-aip skill remove
-```
-
-### Model Recommendation for Compiling
-
-Use the **largest frontier model available** when using the `aip-compile` skill. The work is cognitively intense and underrepresented in current training data — smaller models struggle.
-
-For *consuming* the resulting skill, the opposite holds: AIP's structure is what makes smaller, cheaper models more competitive on workflow-heavy tasks.
-
-## End-to-End Walkthrough
-
-Extended example with Neo4j backend for deeper audit and governance. 
-
-### Prerequisites
-
-- macOS or Linux with `curl`.
-- A Neo4j database. [Aura](https://console.neo4j.io) works.
-- A [TypeSafe](https://typesafe.ai) API key, set on the client. Optional: without it, every decision step pauses and asks you/agent to answer instead of a decision model.
-- [Claude Code](https://claude.com/claude-code) for steps 5 and 6. Any agent `aip skill list` names works the same way.
-
-### 1. Install or upgrade
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/zach-blumenfeld/aip/main/install.sh | bash
-```
-
-That installs [uv](https://docs.astral.sh/uv/) if missing, then two commands, `aip-spec` (the format and validator) and `aip` (runtime, server, client), and puts two Agent Skills into every agent it detects: `aip-compile` for compiling and `aip-runtime` for running published procedures. Check:
-
-```bash
-aip --help
-aip skill list          # which agents got the skills
-```
-
-If `aip` is not found, open a new terminal. uv installs commands into `~/.local/bin`.
-
-### 2. Start a server on Neo4j, with the example published
-
-```bash
-aip server --init       # writes ~/.config/aip/server.toml, every setting commented
-```
-
-Open that file and set 5 lines. 
-
-Under `[backend]`:
-```toml
-kind = "neo4j"
-uri = "neo4j+s://xxxxxxxx.databases.neo4j.io"   # from Aura
-user = "neo4j"
-password = "..."
-database = "neo4j"
-```
-
-Then start the aip server:
-
-```bash
-aip server
-```
-Leave it running. In a second terminal you will publish an AIP skill to the server. 
-You will use the hello-world example for now.  Later you will see how to compile your own. 
-
-```bash
-aip config --server http://localhost:8000      # where the client and the agents send requests
-aip config --decision-model "..."              # your TYPESAFE_API_KEY: optional but highly recommended
-aip-spec example billing-support --out .       # the bundled example skill, written to ./billing-support
-aip publish billing-support                    # validates, uploads, prints billing-support@<revision>
-```
-
-`aip publish <folder>` is how any skill gets onto the server. `aip list` shows the catalog.
-
-### 3. The console
-
-The console is a separate npm package from its own repository, [aip-console](https://github.com/zach-blumenfeld/aip-console); the server serves no UI. In another
-terminal, start it against the server and open the URL it prints:
-
-```bash
-npx aip-console --server http://localhost:8000
-```
-
-Four tabs across the top plus the server link at the right:
-
-- **catalog**: every published name with its step graph drawn. Click `billing-support` for the procedure page: purpose, triggers, each step with its inputs and questions, the files it ships (source viewer), the diff between any two revisions, and the governance controls (pin a revision, retire one).
-- **run**: the run console. Pick a procedure, fill the start input, start. The console walks the steps and stops at every pause for you to answer: a decision the model was unsure about, a task it needs the client to do, or the questions themselves when there is no model.
-- **history**: every run, step by step, with what each step got and produced.
-- **governance**: corpus queries across all runs: decisions the client overrode at review, decisions answered by hand, scripts that failed (with the client's stderr), skills missing fields, branches no run has taken.
-- **server link** (top right): the server URL and bearer token the page uses.
-
-Try two runs of `billing-support`. Message `I was charged twice this month and I am furious, fix it or I cancel`: the model marks it billing and angry (with no decision-model key, you answer the two questions on the page), the router sends it to the escalation script, which runs on your machine, and the run ends; its ticket id and the tier2 queue are on the escalate step in the history tab. Message `Hi, could you tell me whether my March invoice was a duplicate?`: calm, so the run pauses with a client task asking you to draft the reply from the policy; type one and the run ends, with your reply recorded on the reply step.
-
-### 4. See it in Neo4j
-
-Open your database in Neo4j Browser or Query and run these. The skill and its procedure graph:
-
-```cypher
-MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
-MATCH p1 = (p)-[:HAS_STEP]->(st:Step)
-OPTIONAL MATCH p2 = (st)-[:NEXT|THEN]->(:Step)
-OPTIONAL MATCH p3 = (st)-[:ASKS]->(:Question)
-RETURN n, s, p, p1, p2, p3
-```
-
-Or just the control flow, from the start step to the end, with each router's condition on its `THEN` edge:
-
-```cypher
-MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
-MATCH controlFlow = (p)-[:STARTS_AT]->(:Step)-[:NEXT|THEN*]->(:Step)
-RETURN controlFlow
-```
-
-The data flow is a second edge set over the same steps: one `Data` node per key, `PRODUCES` from the step that declares it (an output, or the decision whose question it answers), `FEEDS` into every step that reads it, and `SUPPLIES` from the procedure for the start inputs the client provides. Follow a value from the client to the result:
-
-```cypher
-MATCH (n:Name {name: 'billing-support'})-[:HAS_REVISION]->(s:Skill)-[:HAS_PROCEDURE]->(p:Procedure)
-MATCH dataFlow = (p)-[:SUPPLIES]->(:Data)-[:FEEDS|PRODUCES*]->()
-RETURN dataFlow
-```
-
-Every run of the skill, with the steps they ran and, for decisions a model answered, its answers (`Answer` nodes; a decision answered by hand has none, and its answers are on the `StepRun`):
-
-```cypher
-MATCH (r:Run {name: 'billing-support'})-[:OF_SKILL]->(s:Skill)
-MATCH p1 = (r)-[:STEP_RUN]->(sr:StepRun)
-OPTIONAL MATCH p2 = (sr)-[:FOLLOWED_BY]->(:StepRun)
-OPTIONAL MATCH p3 = (sr)-[:OF_STEP]->(:Step)
-OPTIONAL MATCH p4 = (sr)-[:ANSWERED]->(:Answer)-[:OF_QUESTION]->(:Question)
-RETURN r, s, p1, p2, p3, p4
-```
-
-Just the run trails, when that gets busy:
-
-```cypher
-MATCH p = (r:Run {name: 'billing-support'})-[:STEP_RUN]->(:StepRun)-[:FOLLOWED_BY*0..]->(:StepRun)
-RETURN p
-```
-
-Every file of every revision is also in there as `File` nodes with exact bytes; `aip get billing-support --out ./restored` rebuilds the folder from them and verifies the hashes.
-
-### 5. Run it through an agent
-
-The installer put the `aip-runtime` skill into Claude Code if it found it so you should be able to just ask the below to see it work:
-
-- `A customer wrote: "I was charged twice! Refund me today or I'm gone." Handle it.`
-- `A customer asks politely whether they can still get a refund on a subscription they forgot to cancel last month. Deal with it.`
-
-`aip skill list` shows `installed`, and if not, `aip skill install claude-code` does it now. Step 2 pointed the `aip` command at your server with `aip config`. The agent never learns the URL; the skill tells it to run `aip search`, `aip run`, and `aip resume`, and those read the config.
-
-Watch it search the catalog, find `billing-support`, start the run, and answer each pause ([`docs/examples/aip-runtime-session.md`](docs/examples/aip-runtime-session.md) is a recorded session; an agent may also skip the skill and improvise, so if it does, ask again naming the catalog). The first ends in a tier2 ticket opened by the skill's script, which `aip` ran on your machine. The second pauses with a client task, and the agent drafts the reply itself. Both runs then appear in the console's history tab and in the Cypher above. Ask it to run something unrelated and it should say the catalog has nothing for it rather than improvise.
-
-### 6. Compile and publish your own skill
-
-The `aip-compile` skill turns a document into a procedure. Put the material in a folder: a runbook in markdown, an existing freeform `SKILL.md`, a support playbook, anything with steps and decisions. Use the largest model you have; this is the hard part. In Claude Code, from that folder:
-
-```
-Author an AIP skill from ./refund-runbook.md
-```
-
-The agent asks you to pick a name, scaffolds `./<name>/` with your document under `source/`, writes `SKILL.md` as a step graph (decisions with questions, scripts, tasks for the client, routers), runs `aip-spec validate` until it passes, then walks your source line by line checking nothing was dropped. Then:
-
-```bash
-aip validate ./<name>                    # the same checks, any time
-aip info ./<name>                        # what it does, the input it expects, how it flows
-aip run ./<name> --interactive           # try running locally first: no server, answers on the terminal
-aip publish ./<name>                     # then onto the server, where agents find it; refresh the console
-```
-
-Edit, validate, publish again: the same name gets a new revision, and the console's diff shows what changed. Pin a revision when the catalog should resolve to it regardless of what is published later.
+Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. AIP has moved on since: procedures are now written in a small language and compiled, steps are typed, a decision model answers the questions and a route checks its confidence, and every run is recorded. Measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
 
 ## Reference
 
-The pieces behind the walkthrough, for looking things up rather than reading through: the two Agent Skills the installer writes, the `aip` command and the Python SDK under it, and how a skill folder becomes a published revision.
+- [`docs/running.md`](docs/running.md): running a procedure, pauses and answers, configuration.
+- [`docs/language/spec.md`](docs/language/spec.md): the language. [`skills/aip/references/language.md`](skills/aip/references/language.md) is the same on one page.
+- [`docs/agent.md`](docs/agent.md): `aip agent`. [`docs/mcp.md`](docs/mcp.md): `aip mcp`, for agent frameworks. [`docs/sdk.md`](docs/sdk.md): the Python SDK.
+- [`docs/deploying.md`](docs/deploying.md): where the catalog and the runs live: on your machine, with Neo4j Browser looking in, or shared across teams.
+- [`docs/server-design.md`](docs/server-design.md): the server, its API and its two backends.
+- [`docs/cli-json.md`](docs/cli-json.md): every JSON object the CLI prints.
+- [`docs/language/queries.md`](docs/language/queries.md): Cypher over the procedures and the runs.
+- [`docs/upgrading.md`](docs/upgrading.md): moving from 0.8 to 0.9.
+- [`console/README.md`](console/README.md): the console.
 
-### The Two Agent Skills
-
-The installer puts two Agent Skills into your agent, both written by `aip skill install`:
-
-1. **`aip-compile`** from [`skills/aip-compile/`](skills/aip-compile/) (bundled with `aip-spec`). Bring source material (or describe it); the agent compiles it into a procedure, validates it against the schema, runs it, and tests it. It also validates an existing skill folder on request, with `aip-spec validate` (or `aip validate`, the same checks). Details in [`SKILL.md` § Authoring an Agent Skill](skills/aip-compile/SKILL.md#authoring-an-agent-skill) and [§ Validating an AIP Skill](skills/aip-compile/SKILL.md#validating-an-aip-skill).
-2. **`aip-runtime`** from this repo ([`skills/aip-runtime/SKILL.md`](skills/aip-runtime/SKILL.md)). The one page an agent reads to search the catalog and run a published procedure through the `aip` client instead of doing the steps by hand. `aip runtime --skill --out <skills dir>` writes it alone.
-
-### Running a Skill
-
-```bash
-aip info <path/to/skill-folder>                       # what it does, the input it expects, how it flows
-aip info <path/to/skill-folder> --example-input > start.json   # a start input to edit
-aip run <path/to/skill-folder> --input start.json     # runs until the client must decide
-aip resume <run-id> --input answer.json              # continues a paused run, from any directory
-aip run <path/to/skill-folder> --interactive           # prompts on the terminal instead
-```
-
-With a server (`aip server --backend filesystem|neo4j`, see [`docs/server-design.md`](docs/server-design.md)), the same commands take a published name, and the catalog has its own:
-
-```bash
-export AIP_SERVER=http://localhost:8000               # or: aip config --server URL [--token T]
-aip publish <path/to/skill-folder>                     # validate, upload, prints name@revision
-aip search "refund"                                    # ranked by the server
-aip list                                               # every name with the revision it resolves to
-aip info <name> --example-input > start.json
-aip run <name> --input start.json                      # runs on the server; same pause and resume
-aip get <name>[@revision] --out ./restored             # the folder back, hash-verified and validated
-aip pin <name> <revision>  /  aip retire <name>@<revision>
-aip runs [<run-id>]                                    # the server's runs; one run's state and history
-aip governance [<query>]                               # the governance queries, or one query's rows
-```
-
-Every one of these is a thin wrapper over the Python SDK, `aip.Client` ([`docs/sdk.md`](docs/sdk.md)): `aip.Client().run("billing-support", {...})` returns the same pause or done the CLI prints, as typed objects, and shares its run files.
-
-The web client, the console ([aip-console](https://github.com/zach-blumenfeld/aip-console), formerly aip-inspector),
-is its own npm package: `npx aip-console --server URL` serves the catalog, source, run console, history and
-governance views from a local Node process, and its page calls the server directly (the server answers CORS for
-loopback origins; `aip server --allow-origin ORIGIN` adds others). The server serves no UI. The console checks
-`aip --version` (`aip <version> format <format>`) at startup, since interactive runs go through the `aip` CLI.
-
-`aip run` drives the procedure locally with the same engine the server uses. It stops one of three ways and prints one JSON object for each ([`docs/cli-json.md`](docs/cli-json.md)): paused (exit 0) when the client has to act, a client task to perform, a decision answered below its threshold to confirm or override, or, when this client has no decision-model key, a decision's questions to answer yourself; done (exit 0) with the end step's state; or error (exit 1) with the failing step and why. A pause carries only the paused step's declared inputs and what to answer with; every outcome prints a `run_id`, the run file is `~/.aip/runs/<run-id>.json` (`AIP_HOME` moves it, `--run-file` picks a path), `aip resume <run-id> --input answer.json` continues from any directory, and `aip resume <run-id>` with no input retries a failed step. `--progress` adds a JSON line per completed step and `--debug` a traceback on failure. Decision thresholds are the author's, from SKILL.md; nothing at run time overrides them. On a server, the server holds the run's state and history and the run file is only a handle.
-
-#### Configuring the server
-
-`aip server --init` writes `~/.config/aip/server.toml`, every setting commented, and `aip server` reads it from there. The file is also looked for as `--config FILE`, `$AIP_SERVER_CONFIG`, and `./aip-server.toml`, in that order, the first found wins; `--example-config` prints the same template. Precedence, highest first: flags, the environment (a `./.env` or `--env-file` is loaded into it without overriding anything already set), the file, defaults. The filesystem catalog lives in `~/.local/share/aip/server` unless `root` says otherwise. The startup log names what it loaded and the backend.
-
-The file has two tables. `[server]` is the listener and tokens; `[backend]` picks `filesystem` (`root`) or `neo4j` (`uri`, `user`, `password`, `database`, `cache_dir`). Secrets can live in the file, in `.env`, or in the environment as `NEO4J_*`; the file never overrides a variable that is already set. The server holds no decision-model key, and a `[decision_model]` table is refused with a pointer to the client setting below.
-
-**Decision model.** Decision steps are answered by [TypeSafe](https://typesafe.ai) through `typesafe-sdk`, on the client: `aip config --decision-model KEY` stores the key in `~/.config/aip/config.json`, and `TYPESAFE_API_KEY` overrides it. That holds for `aip run <name>` against a server as much as for `aip run <folder>`. Without a key every decision step pauses with its `questions` for you to answer by hand; with one, the model answers, the author's thresholds come with the step, and the run only pauses with a `review` block when an answer falls under its threshold. The server records each decision with its attribution (`resolver` `typesafe` or `manual`, `model`, `confidence`, `reviewed`), which the `overridden-decisions` and `manual-decisions` governance queries read.
-
-**Scripts and trust.** A procedure's execution steps are scripts, and they run on the client, in the `aip` process's user account, never on the server: `aip run <name>` fetches the revision's `scripts/` and `assets/` into `~/.aip/cache/<name>@<revision>/`, checks each file against the server's manifest, and runs the script with whatever that user can read, write, or reach. `aip` does not sandbox them; the step's `timeout` (or `AIP_STEP_TIMEOUT`) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters. The server runs no user code and holds no model key, so publishing no longer means code execution on the server; it still decides what every client runs, so keep it on localhost or behind a token.
-
-### Publishing, Fetching, and Revisions
-
-An AIP skill is an Agent Skills folder: `SKILL.md`, `source/`, and any `scripts/`, `references/`, and `assets/`. That folder is the whole procedure, so moving it to and from a server is a file transfer, not a translation:
-
-```bash
-aip publish ./<name>                         # validate, upload every file, print <name>@<revision>
-aip get <name>[@<revision>] --out ./restored # the folder back, byte for byte, hashes verified, validated
-aip list                                     # every name with the revision it resolves to
-```
-
-The mapping is lossless. The server stores every file with its exact bytes, mode, and sha256, and `aip get` rebuilds a folder that validates and runs identically to the one published. The same commands work on either backend.
-
-A revision is the hash of the files. Publishing a folder again with no changes is a no-op; publishing a changed folder adds a revision under the same name and the catalog resolves the name to it. Earlier revisions stay, so a run is always recorded against the exact bytes that ran, and `aip get <name>@<revision>` returns any of them. `aip pin <name> <revision>` makes the name resolve to a chosen revision regardless of what is published later; `aip retire <name>@<revision>` removes one from the catalog without deleting its record.
-
-On the Neo4j backend each revision is also a graph: the parsed procedure is projected as `Procedure`, `Step` (labelled by kind), `Data`, and `Question` nodes: `NEXT` edges (and a router's `THEN {value}` edges) are the control flow, `PRODUCES` and `FEEDS` (one `Data` node per key, since every key has one producer) are the data flow, `SUPPLIES` marks the start inputs, `ASKS` and `YIELDS` tie a question to the key its answer lands under, and `USES` points at the `File` nodes a step runs, renders, or may load; the `requires` block sits on the `Procedure` node. A `Name` node groups the revisions of one skill and carries its pin; `Run` and `StepRun` nodes record executions, linked `FOLLOWED_BY` in order and `OF_STEP` to the step they ran. The backend (`aip.server.backends.neo4j`) also serves the catalog, a full-text search index over names, descriptions, purposes, and triggers, and a hash-verified materialisation cache under `~/.cache/aip/` (`AIP_CACHE_DIR` overrides) that the server loads procedures from. The filesystem backend (`aip.server.backends.filesystem`) offers the same contract over a plain directory.
+**Scripts and trust.** A procedure's `Execute` steps are scripts, and they run on the client, in the `aip` process's user account, never on the server. `aip` does not sandbox them; the script timeout (`aip config --script-timeout`, 300 seconds by default) is the only limit it applies. Running a published procedure is therefore running its author's code on your machine, the same trust as a CI runner: give the `publish` scope only to people whose code your clients would run, and pin revisions where that matters.
 
 ## Development & Contributing
 
 ```bash
-uv sync --group dev                                    # pytest and the Neo4j driver
-uv run pytest -q                                       # the Neo4j backend tests skip unless NEO4J_URI is set
-uv tool install --editable .                           # `aip` on PATH, tracking your edits; `uv tool uninstall agent-instruction-protocol` removes it
+uv sync --group dev        # everything, editable, with pytest
+uv run pytest -q           # every test; the Neo4j half of the server's suite skips unless NEO4J_URI is set
+uv tool install --editable .
 ```
 
-`aip-spec` is a workspace member at `packages/aip-spec/`, so `uv sync` installs it editable alongside the runtime and `uv run pytest -q` at the root runs both packages' tests (`packages/aip-spec/tests` is in `testpaths`). The two `pyproject.toml` files carry the same version, and the runtime pins `aip-spec==<that version>`.
-
-The design behind the client-server architecture is [`docs/server-design.md`](docs/server-design.md).
+The compiler, the runtime, the server and the client are one package (`src/aip/`). The console has its own tests (`npm test` and `npm run e2e` in `console/`), as does the VS Code extension (`editors/vscode/`). [`AGENTS.md`](AGENTS.md) has the repo map, the conventions and the release process.
 
 ### Versioning and releases
 
-Both packages share one version and release together; the format version (`FORMAT_VERSION`, currently `0.6a1`) moves only when the format changes. The rules are in the [roadmap](https://github.com/zach-blumenfeld/aip/issues/20) and, with the release process, in [`AGENTS.md`](AGENTS.md). Drift is caught automatically: the spec's schema-sync and runtime-block tests fail if its files disagree, validation of the bundled example fails on an `aip_version_mismatch`, and `tests/test_runtime_skill.py` fails if the `aip-runtime` skill's version lags `FORMAT_VERSION`.
+The package has one version; the language has its own (`LANGUAGE_VERSION`, `0.9`), which moves only when the language changes. `aip --version` prints both. The rules are in the [roadmap](https://github.com/zach-blumenfeld/aip/issues/20) and in [`AGENTS.md`](AGENTS.md).
 
 ### Changelog
 

@@ -1,0 +1,69 @@
+# make_procedure/procedure.aip
+#
+# The procedure that writes procedures. The agent writes a program folder from a description
+# (assets/write.md hands it the language on one page, assets/language.md), a script runs the
+# compiler on the folder, and a loop sends the compiler's diagnostics back to the agent until
+# the folder compiles. It uses no decision model, so it runs on any machine with `aip`.
+#
+# The shape is check, then fix only if needed, both inside the loop: `compile` is the first step
+# of the body and `Until compiled` ends the loop the moment it says yes, so a folder that compiles
+# first time never reaches `fix`. A fix is checked by the pass after it, and the cap counts
+# passes, so `At_Most 6` is five checked fixes: a sixth pass that still does not compile fails
+# the run.
+#
+# It ships inside the package as a bundle (src/aip/server/bundles/make_procedure.rl, compiled
+# from this folder) and every server publishes it when it first starts.
+
+Procedure make_procedure
+  "Build an AIP procedure from a description: write its program folder, compile it, and revise it until it compiles."
+
+  Use_When
+    "A new procedure, runbook or workflow is to be written for aip from a description."
+    "Existing material (a runbook, a policy, a checklist) is to become a procedure an agent runs step by step."
+  Do_Not_Use_When
+    "The procedure already exists and only needs running: run it."
+    "A small edit to an existing procedure.aip: edit the file and run `aip compile --check` on it."
+  Requires python 3.10
+  Avoid
+    "Reporting the procedure as built before the compile step has said it compiles."
+    "Silencing a diagnostic by deleting the step it names instead of fixing what it says."
+
+Start "What to build: the procedure's name, what it should do, and any material to build it from." {
+  name: string        "The procedure's name, a lowercase identifier such as policy_draft; it names the folder too."
+  description: string "What the procedure should do, in the requester's words: its inputs, its steps, who does each, its result."
+  materials: string   "A path to a file or a folder of source material to read first, or an empty string when there is none."
+  Next_Step write
+}
+
+Task_Agent write "Write the program folder: procedure.aip with its assets, references and scripts." {
+  Read name, description, materials
+  Prompt assets/write.md
+  Use assets/language.md
+  Produce path: string "The absolute path of the program folder written."
+  Next_Step revise
+}
+
+Loop revise Until compiled, At_Most 6, Else_Fail {
+  Execute compile "Compile the folder and report what the compiler says; the folder is left as it was written." {
+    Read path
+    Run_Script scripts/compile.py
+    Produce compiled:    true_or_false "Whether the folder compiles with no error."
+            diagnostics: list          "The compiler's diagnostics, one line each: where, severity, code, message."
+            bundle_id:   string        "The id of the bundle the folder compiles to; empty when it does not compile."
+    Next_Step fix
+  }
+
+  Task_Agent fix "Fix what the compiler reported, in the folder." {
+    Read path, diagnostics
+    Prompt assets/fix.md
+    Use assets/language.md
+    Produce path: string "The absolute path of the program folder, as fixed."
+    Continue
+  }
+
+  Next_Step end
+}
+
+End "Where the folder of the procedure that compiles is, with whatever warnings the compiler still has." {
+  Read path, bundle_id, diagnostics
+}

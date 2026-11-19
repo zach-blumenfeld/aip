@@ -1,0 +1,13 @@
+# A fixture with exactly one error: the End step reads a key nothing produces.
+# The extension's diagnostics test expects `unknown_key` on line 12, columns 8 to 14.
+
+Procedure one_error "A procedure with one error, for the extension's tests."
+
+Start "The one input." {
+  message: string "A message."
+  Next_Step end
+}
+
+End "Reads a key that does not exist." {
+  Read messag
+}

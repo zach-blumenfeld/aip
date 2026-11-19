@@ -1,94 +1,224 @@
-"""Type vocabulary, JSON Schema compilation, and input validation."""
+"""The type vocabulary at run time, and the errors a step can fail with.
 
-from typing import Any, Dict, List, TypeAlias
+The language's types (spec 6, Types) are checked against JSON values: `string`, `integer`,
+`float`, `boolean`, `list` and `object` as JSON holds them; the three answer types
+`true_or_false`, `choice` and `score`, each an object with a `value` of its kind (spec 2.4); and
+`decision` and `aggregation`, objects with one answer per question or aggregation. A key whose
+type the program does not say (an item of a plain list) accepts anything.
 
-from jsonschema import Draft202012Validator
+An answer written by an agent is `{"value": ...}` and nothing else; one written by a script may
+carry `confidence` and the probabilities a model's would (`ANSWER_FIELDS`, spec 2.4), and nothing
+else. The runtime also accepts the bare value (`true` for `passed: true_or_false`) and stores it
+as `{"value": true}`; that is the one normalisation it performs, and the record keeps the
+normalised form (`docs/language/runtime.md`, The state).
 
-from aip_spec.models import DataType  # the format owns the vocabulary
+Every failure of a step is a `StepError` whose `kind` is a word of `ERROR_KINDS`, the vocabulary
+of the error objects the CLI and the SDK report; `fields()` is the kind's detail."""
 
-JSON: TypeAlias = Dict[str, Any]
+from __future__ import annotations
 
+from typing import Any, TypeAlias
 
-_JSON_SCHEMA_TYPES = {
-    DataType.STRING: "string",
-    DataType.INTEGER: "integer",
-    DataType.FLOAT: "number",
-    DataType.BOOLEAN: "boolean",
-    DataType.OBJECT: "object",
-    DataType.LIST: "array",
-}
+from aip.compiler.keywords import ANSWER_TYPES
 
-Inputs: TypeAlias = Dict[str, DataType]
+JSON: TypeAlias = dict[str, Any]
 
+# The JSON kind each answer type's `value` has (spec 2.4): a boolean, or a label (a `score`'s
+# value is the label of its level, as a `choice`'s is the label chosen).
+VALUE_KIND = {"true_or_false": "boolean", "choice": "string", "score": "string"}
 
-def to_json_schema(inputs: Inputs, strict: bool = False) -> JSON:
-    """Compile a DataType map into a JSON Schema. All declared keys are required."""
-    return {
-        "type": "object",
-        "properties": {name: {"type": _JSON_SCHEMA_TYPES[DataType(t)]} for name, t in inputs.items()},
-        "required": list(inputs),
-        "additionalProperties": not strict,
-    }
+# The fields an answer of each type may carry beside `value`: the model's own (spec 2.4). A script
+# may supply them; an agent's answer is `value` alone.
+ANSWER_FIELDS = {"true_or_false": ("confidence", "noul", "probabilities"), "choice": ("confidence", "probabilities"),
+                 "score": ("confidence", "score", "probabilities")}
 
+ERROR_KINDS = ("invalid_input", "invalid_output", "no_branch", "script_failed", "timeout", "script_not_run", "requires_unmet",
+               "no_decision_model", "decision_model_failed", "loop_cap", "not_paused", "server")
 
-def describe_inputs(inputs: Inputs) -> Dict[str, str]:
-    """Client-facing form of an inputs map: {name: "string" | "integer" | ...}."""
-    return {name: DataType(t).value for name, t in inputs.items()}
+# The failures a retry would only repeat: `aip resume` does not retry them, and their error
+# objects say `resumable: false`.
+NOT_RESUMABLE = ("loop_cap", "script_not_run")
 
-
-EXAMPLE_VALUES = {"string": "<string>", "integer": 0, "float": 0.0, "boolean": False, "object": {}, "list[*]": []}
+DECISION_MODEL_HINT = ("run `aip config --decision-model-key KEY`, and `aip config --decision-model URL` for an endpoint other "
+                       "than TypeSafe's")
 
 
-def example_input(inputs: Dict[str, str]) -> JSON:
-    """A placeholder start input for a described inputs map ({name: type name}); accepted as-is by the step."""
-    return {name: EXAMPLE_VALUES[dtype] for name, dtype in inputs.items()}
+def is_plain(type: str, value: Any) -> bool:
+    """Whether `value` is a `string`, `integer`, `float`, `boolean`, `list` or `object` of that type."""
+    if type == "string":
+        return isinstance(value, str)
+    if type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type == "float":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if type == "boolean":
+        return isinstance(value, bool)
+    if type == "list":
+        return isinstance(value, list)
+    if type == "object":
+        return isinstance(value, dict)
+    return False
+
+
+def normalise(type: str | None, value: Any) -> Any:
+    """`value` as the state holds it: a bare `true` or label written for an answer type
+    becomes `{"value": ...}`; everything else is returned as it is."""
+    if type in ANSWER_TYPES and not isinstance(value, dict) and is_plain(VALUE_KIND[type], value):
+        return {"value": value}
+    return value
+
+
+def conforms(type: str | None, value: Any, labels: list[str] | None = None) -> str | None:
+    """Why `value` is not of `type`, or None when it is. `labels` are a `choice` or `score`
+    answer's labels when known: the value must be one of them."""
+    if type is None:
+        return None
+    if type in ANSWER_TYPES:
+        if not isinstance(value, dict) or "value" not in value:
+            return f"a {type} answer is an object with a value, not {describe(value)}"
+        v = value["value"]
+        kind = VALUE_KIND[type]
+        if not is_plain(kind, v):
+            return f"the value of a {type} answer is a {kind}, not {describe(v)}"
+        if labels and type in ("choice", "score") and v not in labels:
+            return f"{v!r} is not one of the {'labels' if type == 'choice' else 'levels'} {labels}"
+        confidence = value.get("confidence")
+        if confidence is not None and not (is_plain("float", confidence) and 0 <= confidence <= 1):
+            return f"the confidence of an answer is a number in 0..1, not {describe(confidence)}"
+        probabilities = value.get("probabilities")
+        if probabilities is not None and not (isinstance(probabilities, dict)
+                                              and all(is_plain("float", p) and 0 <= p <= 1 for p in probabilities.values())):
+            return "the probabilities of an answer are an object of numbers in 0..1"
+        return None
+    if type in ("decision", "aggregation"):
+        return None if isinstance(value, dict) else f"a {type} is an object, not {describe(value)}"
+    if is_plain(type, value):
+        return None
+    return f"expected {an(type)}, got {describe(value)}"
+
+
+def extra_fields(type: str | None, value: Any, allowed: tuple[str, ...]) -> str | None:
+    """Why an answer carries fields its source may not write, or None: `allowed` is what may
+    sit beside `value` (nothing for an agent, `ANSWER_FIELDS[type]` for a script)."""
+    if type not in ANSWER_TYPES or not isinstance(value, dict):
+        return None
+    extra = sorted(k for k in value if k != "value" and k not in allowed)
+    if not extra:
+        return None
+    if not allowed:
+        return f"an agent's answer is its value and nothing else, not {', '.join(extra)}"
+    return f"a {type} answer carries value, {', '.join(allowed)} and nothing else, not {', '.join(extra)}"
+
+
+def an(word: str) -> str:
+    return ("an " if word[0] in "aeiou" else "a ") + word
+
+
+def describe(value: Any) -> str:
+    """The JSON kind of a value, for messages: `a string`, `null`, `a list`..."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, int):
+        return "an integer"
+    if isinstance(value, float):
+        return "a float"
+    if isinstance(value, str):
+        return "a string"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "an object"
+    return type(value).__name__
+
+
+def branch_key(value: Any) -> str:
+    """The word a route's branch line writes for an answer's value: `true` or `false` for a
+    `true_or_false`, the label for a `choice` or a `score`."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+# ---------------------------------------------------------------- errors
 
 
 class StepError(Exception):
-    """A step failed. `kind` names the failure in the client's error object (`docs/cli-json.md`);
-    `fields()` is the kind's detail: key lists, or the script's exit code and stderr."""
-    kind: str = "step_failed"
+    """A step failed. `kind` is a word of `ERROR_KINDS`; `step` the step's name; `fields()` the
+    kind's detail (key lists, a script's exit code and stderr, what a machine lacks)."""
+
+    kind = "server"
 
     def __init__(self, step: str | None, message: str):
-        self.step = step
         super().__init__(message)
+        self.step = step
+        self.message = message
 
     def fields(self) -> JSON:
         return {}
 
+    def to_dict(self) -> JSON:
+        return {"error": self.kind, "step": self.step, "message": self.message, **self.fields()}
 
-class _KeysError(StepError, ValueError):
-    """A state or a result that does not match the declared keys. `missing` names absent keys,
-    `invalid` keys that are mistyped, undeclared, or hold a value with no branch."""
+
+class KeysError(StepError):
+    """A state or a result that does not fit the declared keys: `missing` names absent keys,
+    `invalid` the keys that are mistyped, undeclared, or hold a value nothing accepts."""
+
     what = ""
 
-    def __init__(self, step: str, errors: List[str], missing: List[str] | None = None,
-                 invalid: List[str] | None = None):
-        self.errors = errors
+    def __init__(self, step: str | None, errors: list[str], missing: list[str] | None = None,
+                 invalid: list[str] | None = None):
+        self.errors = list(errors)
         self.missing = list(missing or [])
         self.invalid = list(invalid or [])
-        super().__init__(step, f"{self.what} step {step!r} is invalid: " + "; ".join(errors))
+        super().__init__(step, f"{self.what} {step!r}: " + "; ".join(errors))
 
     def fields(self) -> JSON:
         return {"missing": self.missing, "invalid": self.invalid}
 
 
-class InputValidationError(_KeysError):
-    kind, what = "invalid_input", "Input to"
+class InvalidInput(KeysError):
+    kind, what = "invalid_input", "the input to"
 
 
-class OutputValidationError(_KeysError):
-    """A step's result does not match its declared `outputs`: a key missing, mistyped, or undeclared.
-    The step failed; nothing is merged into the state. `script` is set when a script returned it."""
-    kind, what = "invalid_output", "Output of"
+class InvalidOutput(KeysError):
+    """A step's result does not match its `Produce` keys. Nothing is written to the state;
+    `script` is set when a script returned it. For the answers to a pause, `missing_tasks` are
+    the task indexes left unanswered and `invalid_tasks` the indexes the pause does not have
+    (`missing` and `invalid` hold key names, never indexes)."""
+
+    kind, what = "invalid_output", "the output of"
     script: str | None = None
 
+    def __init__(self, step: str | None, errors: list[str], missing: list[str] | None = None, invalid: list[str] | None = None,
+                 *, missing_tasks: list[int] | None = None, invalid_tasks: list[int] | None = None):
+        super().__init__(step, errors, missing, invalid)
+        self.missing_tasks = list(missing_tasks or [])
+        self.invalid_tasks = list(invalid_tasks or [])
+
     def fields(self) -> JSON:
-        return {**({"script": self.script} if self.script else {}), **super().fields()}
+        tasks = {k: v for k, v in (("missing_tasks", self.missing_tasks), ("invalid_tasks", self.invalid_tasks)) if v}
+        return {**({"script": self.script} if self.script else {}), **super().fields(), **tasks}
 
 
-class ScriptFailed(StepError, RuntimeError):
+class NoBranch(StepError):
+    """A route read a value none of its branch lines names."""
+
+    kind = "no_branch"
+
+    def __init__(self, step: str, key: str, value: Any, branches: list[str]):
+        self.key, self.value, self.branches = key, value, list(branches)
+        super().__init__(step, f"{key} is {value!r}, which no branch of {step} names; the branches are {self.branches}")
+
+    def fields(self) -> JSON:
+        return {"key": self.key, "value": self.value, "branches": self.branches}
+
+
+class ScriptFailed(StepError):
     """A script exited non-zero, or wrote something other than one JSON object to stdout."""
+
     kind = "script_failed"
 
     def __init__(self, step: str, script: str, exit_code: int, stderr: str, message: str):
@@ -99,52 +229,97 @@ class ScriptFailed(StepError, RuntimeError):
         return {"script": self.script, "exit_code": self.exit_code, "stderr": self.stderr}
 
 
-class ScriptTimeout(StepError, RuntimeError):
+class ScriptTimeout(StepError):
     kind = "timeout"
 
     def __init__(self, step: str, script: str, seconds: float | None):
         self.script, self.seconds = script, seconds
-        super().__init__(step, f"Script {script} did not finish within {seconds} seconds")
+        super().__init__(step, f"the script {script} did not finish within {seconds:g} seconds, the cap on one script "
+                               f"(`aip config --script-timeout N` or AIP_SCRIPT_TIMEOUT raises it); resume the run to try it again")
 
     def fields(self) -> JSON:
         return {"script": self.script, "seconds": self.seconds}
 
 
-def _schema_errors(inputs: Inputs, payload: Any, strict: bool) -> tuple[List[str], List[str], List[str]]:
-    """Messages, missing keys, invalid keys."""
-    validator = Draft202012Validator(to_json_schema(inputs, strict))
-    errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
-    messages = [(f"{'.'.join(str(p) for p in e.path)}: " if e.path else "") + e.message for e in errors]
-    missing: List[str] = []
-    invalid: List[str] = []
-    for e in errors:
-        if e.validator == "required" and isinstance(e.instance, dict):
-            missing += [k for k in e.validator_value if k not in e.instance and k not in missing]
-        elif e.path and str(e.path[0]) not in invalid:
-            invalid.append(str(e.path[0]))
-    return messages, missing, invalid
+class ScriptNotRun(StepError):
+    """A run that executes no script (`Client.run(..., scripts=False)`, a trial) reached an
+    `Execute`: it stops there, before the script, and is over."""
+
+    kind = "script_not_run"
+
+    def __init__(self, step: str, script: str):
+        self.script = script
+        super().__init__(step, f"{step} would run {script}; this run executes no script")
+
+    def fields(self) -> JSON:
+        return {"script": self.script}
 
 
-def validate_input(step: str, inputs: Inputs, payload: Any, strict: bool = False) -> None:
-    errors, missing, invalid = _schema_errors(inputs, payload, strict)
-    if errors:
-        raise InputValidationError(step, errors, missing, invalid)
+class RequiresUnmet(StepError):
+    """The machine lacks what the procedure's `Requires` names."""
+
+    kind = "requires_unmet"
+
+    def __init__(self, step: str | None, missing: list[str]):
+        self.missing = list(missing)
+        super().__init__(step, "this machine lacks what the procedure requires: " + "; ".join(missing))
+
+    def fields(self) -> JSON:
+        return {"missing": self.missing}
 
 
-def validate_output(step: str, outputs: Inputs, result: Any, strict: bool = True) -> None:
-    """Check a step's result against its declared outputs. `strict` also rejects keys the step
-    did not declare, naming each one; off when `result` is the whole state (an answer merged over it)."""
-    if not isinstance(result, dict):
-        raise OutputValidationError(step, [f"expected a JSON object, got {type(result).__name__}"])
-    errors, missing, invalid = _schema_errors(outputs, result, strict=False)
-    if strict:
-        undeclared = [key for key in result if key not in outputs]
-        errors += [f"undeclared output {key!r}" for key in undeclared]
-        invalid += undeclared
-    if errors:
-        raise OutputValidationError(step, errors, missing, invalid)
+class NoDecisionModel(StepError):
+    """A `Decide` step with no model configured. Every decision needs one (spec 2.4)."""
+
+    kind = "no_decision_model"
+
+    def __init__(self, step: str):
+        super().__init__(step, f"{step} is a decision and no decision model is configured; a Decide is always answered by a "
+                               f"decision model, so configure one: {DECISION_MODEL_HINT}; then `aip resume <run_id>` asks it")
 
 
-def project(state: JSON, inputs: Inputs) -> JSON:
-    """The part of the state a step may see: its declared input keys, nothing else."""
-    return {name: state[name] for name in inputs if name in state}
+class DecisionModelFailed(StepError):
+    """The decision model raised on a `Decide` step: `model` is the resolver's name, `endpoint`
+    the URL it spoke to (None for a resolver that is not a service), `cause` the exception."""
+
+    kind = "decision_model_failed"
+
+    def __init__(self, step: str, model: str, cause: BaseException, endpoint: str | None = None):
+        self.model, self.endpoint, self.cause = model, endpoint, f"{type(cause).__name__}: {cause}"
+        where = f" at {endpoint}" if endpoint else ""
+        super().__init__(step, f"the decision model {model}{where} failed on {step}: {self.cause}")
+
+    def fields(self) -> JSON:
+        return {"model": self.model, "endpoint": self.endpoint, "cause": self.cause}
+
+
+class LoopCap(StepError):
+    """A loop reached its cap: a `For` (or a fold) given more items than `At_Most`, or an `Until`
+    loop that ran `At_Most` passes without its condition holding and says `Else_Fail`. The error
+    names the `loop` (its `step` is None: no step is to blame), the `cap` and the `count` (passes
+    run, or items given). A retry would fail the same way, so it is not resumable."""
+
+    kind = "loop_cap"
+
+    def __init__(self, loop: str, cap: int, count: int, message: str):
+        self.loop, self.cap, self.count = loop, cap, count
+        super().__init__(None, message)
+
+    def fields(self) -> JSON:
+        return {"loop": self.loop, "cap": self.cap, "count": self.count}
+
+
+class NotPaused(StepError):
+    """An answer arrived for a run that is not waiting for one, or does not fit its pause."""
+
+    kind = "not_paused"
+
+
+def resumable(error: JSON | None) -> bool:
+    """Whether a failed run's error is one `aip resume` can retry."""
+    return error is not None and error.get("error") not in NOT_RESUMABLE
+
+
+__all__ = ["JSON", "ERROR_KINDS", "VALUE_KIND", "ANSWER_FIELDS", "DECISION_MODEL_HINT", "NOT_RESUMABLE", "resumable", "StepError", "KeysError", "InvalidInput",
+           "InvalidOutput", "NoBranch", "ScriptFailed", "ScriptTimeout", "ScriptNotRun", "RequiresUnmet", "NoDecisionModel", "DecisionModelFailed",
+           "LoopCap", "NotPaused", "is_plain", "normalise", "conforms", "extra_fields", "describe", "branch_key"]

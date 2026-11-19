@@ -1,314 +1,779 @@
-"""The run loop: one procedure, one cursor, one answer at a time.
+"""The run loop: one procedure, one state, one record, stepping until a pause, the end or a
+failure (`docs/language/runtime.md`).
 
-A run is a `Cursor`: the step whose output the next input answers (`after`), the full state,
-the history, and what the run waits for (`pause`). `start` opens one from the start input;
-`submit` carries one thing to it: the answer to its pause, or nothing to retry a failed step.
-Each steps the procedure until a pause, the end, or a failure, and returns an `Advance`.
+    engine = Engine(resolver=TypeSafeResolver.from_environment())  # None when no model is configured
+    run = engine.start(procedure, {"message": "..."})      # steps until it must stop
+    if run.status == "paused":
+        run = engine.resume(run, {"0": {"reply": "..."}})   # the agent's answers, then on it goes
+    run.status, run.result, run.history
 
-The same loop runs in both places a run can live: the local client (`aip run ./folder`)
-keeps the cursor in its run file; the server keeps it in its run backend and the client
-holds only the run id. Neither keeps anything in memory between calls.
+A `Run` is data: the state, the history, the node about to run (`position`), the loop frames,
+the runtime's loop keys, the pending pause, the error when a step failed, the identity of who
+ran it, when it started and finished; `to_dict` and `from_dict` move it in and out of a file or
+a server. The `Engine` holds what every run on this machine shares: the decision model, the
+file cache, the interpreter, the script timeout, the batch size, the clock.
 
-Pause kinds, as `cursor.pause["kind"]`:
+**Loops.** A `Loop` runs its passes in order on the one state, with a frame on the cursor's
+stack that holds the pass count; `Until` is tested at the head of every pass and the moment a
+body step (or a loop in the body) produces the watched answer, `At_Most` at the head; a pass
+ends at `Continue`, the only way back to the loop, so every cycle a run makes is through a loop
+node. A `For` runs its passes as independent cursors over a copy of the state, `batch` at a time: a
+batch whose body is one `Decide` is one model call with the question keys suffixed by pass and
+mapped back; any other body drives each pass in turn until it pauses or finishes, so one pause
+carries every pass waiting at the same step. The entries of a pass are buffered and appended
+when its batch completes, pass by pass in input order, so the history is the same at every
+batch size; a pass that fails fails the run, and the passes of its batch that finished are
+recorded. While a batch is still open (the run is paused in it) its passes' entries are on
+their cursors, and `recorded_history` reads them in the same order, which is what a run's
+record shows (`aip runs <id>`, the server): a paused loop's work is in the record, not held
+back until the loop exits. The runtime's loop keys (spec 2.6: `index`, `iterations`, each loop's own key) live
+beside the state in `loops`, never in it: a step reads them like any key, and a run that is
+over keeps none.
 
-- `client_task`: the client must answer. The block is what the CLI prints, minus `run_id` and
-  `run_file`.
-- `decision`: every decision stops here; the loop never calls a decision model. The client
-  resolves it (`aip.client.resolver`) with its own model when one is configured, else prints
-  it for the agent to answer; the next `submit` carries the answers and their attribution
-  (`Decision.accept_answers`). The block also carries the author's `thresholds` and, when the
-  step sets `history: true`, the run's `history`: what a resolver needs, never printed (`PRIVATE`).
-  A `review` (the model answered a question under its threshold) is the client's pause, not
-  the loop's: the loop still waits at the decision.
-- `execute`: an execution step, in a run whose loop does not run scripts (`scripts=False`: the
-  server's, and the local client's, which runs them itself between calls). The block is
-  `Execution.request`; the next `submit` carries the client's report of running it (`{"output":
-  {...}, "seconds"}` or a failure, see `Execution.accept_report`). Never printed by the CLI.
-- `error`: a step failed; `after`, `state`, and `history` are as they were before it, so a
-  `submit` with no answer retries it.
-- `done`: the end was reached; `state` is the end step's inputs.
-"""
+**Pauses.** A `Task_Agent` step always pauses; a `Decide` step never does: with no model
+configured it fails the run (`no_decision_model`), and so does a model that raises
+(`decision_model_failed`), and `retry` asks again. A pause is `{"kind": "task", "step", "since",
+"seconds", "tasks": [...]}`, one task per pass waiting at the step; outside a loop there is one.
+A task carries `index` (its position in the list), `pass` and `passes` (which pass of which
+loop), `last_pass` and `pass_of` when its innermost loop is a capped `Loop` (whether this is
+the last pass the cap allows, and the cap), `prompt`, `state`, `references`, `answer_with` (the
+`Produce` keys and types) and `labels` (the values a `choice` or `score` among them may take).
+`resume` takes the answers keyed by task index (`{"0": {...}}`), a list in task order, or one
+answer object when there is one task. Answers are as strict as inputs: a missing key, a key or
+a task the pause did not ask for, a task left out, a value outside the labels, anything on an
+answer but its value, and `InvalidOutput` is raised naming them all, nothing is applied, and
+the pause stands.
+
+**The history.** Every entry carries `step`, `kind`, `pass` (the innermost loop's pass index,
+None outside loops), `passes` (`[{"loop", "pass"}]` from the outermost loop in), `at` (UTC, when
+it was written), `input` (the Read keys the step saw, each under the name the step reads it
+by) and `result` (what it produced); a step's entry also `seconds`, its own wall time. Per
+kind: a `Decide` entry `answered_by` (`{"model": name, "endpoint": url}`), `history_sent`,
+`model_seconds` (the call alone) and, when it went out in a batch of several passes,
+`batched: true` and `batch_size`; a `Route` entry `read` (the dotted key, for lineage), `check`
+(`below`, `confidence`, `fired`, and `reason` when it fired: `below` or `absent`), `value` and
+`to`; an `Aggregate` entry `resolutions` per aggregation; an `Execute` entry `script` and
+`stdin`; a `Task_Agent` entry the `prompt` and `references` it was given, `answered_by`
+(`{"agent", "session"}`; an agent that reports its work adds `work: "reported"` and what it
+reported, `model` in `answered_by`, `tool_calls`, `tokens`, `work_seconds`) and
+`waited_seconds` (pause to resume). The first entry a `Loop` pass
+writes at the loop's level carries `until`, the test at the head that let the pass run
+(`{"where": "head", "holds": false, "resolution"}`). A loop writes one entry when it exits
+(`kind` `For` or `Loop`): `result` holds `iterations` and the collected list, `exit` says why
+and where (`until` at a step or at the head, `items`, `times`, `cap`) with the `Until` answer's
+resolution; a loop that fails the run at its cap writes it too. The history is appended, never
+rewritten; a failed run keeps everything up to the failure and `error`. The run carries the
+bundle id, `identity` (`agent`, `session` and `user`, as given to `start`, and `agent_version`
+when the caller gave one), `started` and `finished`."""
 
 from __future__ import annotations
 
+import copy
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
 
-from aip.model.procedure import Procedure
-from aip.model.steps import Decision, Execution, describe_next, threshold
+from aip.model import cache, steps
+from aip.model.environment import Requires, script_timeout
+from aip.model.procedure import Loop, Procedure, Step
+from aip.model.resolver import Resolver
 from aip.model.types import (
-    JSON, InputValidationError, OutputValidationError, StepError, project, validate_input, validate_output,
+    JSON, ERROR_KINDS, DecisionModelFailed, InvalidOutput, LoopCap, NoDecisionModel, NotPaused, ScriptNotRun, StepError, resumable,
 )
 
-# The error kinds of the error object (`docs/cli-json.md`); anything else is reported as `server`.
-ERROR_KINDS = ("script_failed", "invalid_input", "invalid_output", "requires_unmet", "timeout", "server")
+RUNNING, PAUSED, DONE, FAILED = "running", "paused", "done", "failed"
+STATUSES = (RUNNING, PAUSED, DONE, FAILED)
 
-PAUSED = ("client_task", "decision")
+DEFAULT_BATCH = 10
+DEFAULT_TIMEOUT = object()  # `Engine(timeout=...)` left unsaid: `script_timeout()`, read when the engine is made
+IDENTITY_FIELDS = ("agent", "session", "user")
 
-# Keys of a pause block that are for the client program, not the agent: the CLI never prints them.
-PRIVATE = ("thresholds", "history", "resolution")
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def new_identity(agent: str | None = None, session: str | None = None, user: str | None = None,
+                 agent_version: str | None = None) -> JSON:
+    """The identity fields of a run (plan question 14): who ran it, claimed, not verified. The
+    CLI fills `agent` from `--agent` or `AIP_AGENT`, `session` from `--session` or `AIP_SESSION`,
+    `user` from the server token's name. `agent_version` is there only when the caller has one
+    to give (`aip mcp`: the MCP client's own version); `agent` alone is what runs are filtered by."""
+    identity = {"agent": agent, "session": session, "user": user}
+    if agent_version:
+        identity["agent_version"] = agent_version
+    return identity
+
+
+def recorded_history(run: JSON) -> list[JSON]:
+    """The history of a run as its record shows it, from `Run.to_dict()`: the entries written so
+    far, then those of the `For` passes still in flight (a run paused, or failed, inside a
+    batch), pass by pass in input order, which is the order they are appended in when the batch
+    completes. For a run that is not inside a `For` it is the history itself."""
+    entries = list(run.get("history") or [])
+    for frame in run.get("frames") or []:
+        if frame.get("kind") == "For":
+            for cursor in sorted(frame.get("cursors") or [], key=lambda c: (c.get("passes") or [{}])[-1].get("pass") or 0):
+                entries.extend(recorded_history(cursor))
+    return entries
 
 
 @dataclass
 class Cursor:
-    after: str | None = None
+    """One thread of execution: the state, the node about to run (`position`, None once done),
+    the loop frames from the outermost in, the entries written so far, the status, and the pause
+    or error when stopped. The run is a cursor; each pass of a `For` is one too, over its own
+    copy of the state, with `passes` naming the enclosing passes (`[{"loop", "pass"}]`). `loops`
+    holds the runtime's keys (spec 2.6: `index`, `iterations`, and each loop's own key), which a
+    step reads beside the state and which are never part of it."""
     state: JSON = field(default_factory=dict)
-    history: List[JSON] = field(default_factory=list)
+    history: list[JSON] = field(default_factory=list)
+    position: str | None = None
+    status: str = RUNNING
     pause: JSON | None = None
+    error: JSON | None = None
+    frames: list[JSON] = field(default_factory=list)
+    passes: list[JSON] = field(default_factory=list)
+    loops: JSON = field(default_factory=dict)
+    before: list[JSON] = field(default_factory=list, repr=False)  # the history visible from before this cursor began
 
-    @property
-    def status(self) -> str:
-        """The run's status: `paused`, `failed`, `done`, or `running` (nothing pending)."""
-        kind = (self.pause or {}).get("kind")
-        return "paused" if kind in PAUSED else "failed" if kind == "error" else "done" if kind == "done" else "running"
+    def view(self) -> JSON:
+        """What a step reads from: the state and the runtime's loop keys."""
+        return {**self.state, **self.loops}
+
+    def to_dict(self) -> JSON:
+        return {"status": self.status, "position": self.position, "state": self.state, "loops": self.loops, "history": self.history,
+                "pause": self.pause, "error": self.error, "frames": [_frame_to_dict(f) for f in self.frames], "passes": self.passes}
+
+    @classmethod
+    def from_dict(cls, data: JSON) -> "Cursor":
+        return cls(dict(data.get("state") or {}), list(data.get("history") or []), data.get("position"), data.get("status", RUNNING),
+                   data.get("pause"), data.get("error"), [_frame_from_dict(f) for f in data.get("frames") or []],
+                   list(data.get("passes") or []), dict(data.get("loops") or {}))
+
+
+def _frame_to_dict(frame: JSON) -> JSON:
+    if frame["kind"] == "For":
+        return {**frame, "cursors": [c.to_dict() for c in frame["cursors"]]}
+    return dict(frame)
+
+
+def _frame_from_dict(frame: JSON) -> JSON:
+    if frame["kind"] == "For":
+        return {**frame, "cursors": [Cursor.from_dict(c) for c in frame["cursors"]]}
+    return dict(frame)
 
 
 @dataclass
-class Advance:
-    """What one `start` or `submit` did.
-
-    cursor:  where the run is now; `None` when nothing is worth keeping (the start input was
-             rejected before any step ran)
-    entries: the history entries this call added, in order (also at the end of `cursor.history`)
-    lines:   the `--progress` line of every step this call completed, in order
-    error:   the error object when the call failed; `kept` says the run did not move (an answer
-             that does not fit its pause: answer it again)
-    failure: the history entry recording a step that failed while running (the server's ledger)
-    exc:     the exception behind `error`, for `--debug`
-    """
-    cursor: Cursor | None
-    entries: List[JSON] = field(default_factory=list)
-    lines: List[JSON] = field(default_factory=list)
-    error: JSON | None = None
-    kept: bool = False
-    failure: JSON | None = None
-    exc: BaseException | None = None
+class Run(Cursor):
+    """One run of a procedure: the cursor at the top level, plus what belongs to the run as a
+    whole. `result` is the End's keys when done; `error` the error object when `failed` (the
+    cursor stays at the step, and `Engine.retry` runs it again); `identity` who ran it;
+    `started` and `finished` when it began and when it last reached done or failed."""
+    procedure: Procedure = None  # type: ignore[assignment]
+    result: JSON | None = None
+    requires_checked: bool = False
+    batch: int = DEFAULT_BATCH
+    identity: JSON = field(default_factory=new_identity)
+    started: str | None = None
+    finished: str | None = None
 
     @property
-    def resumable(self) -> bool:
-        """Whether there is a run to come back to: the pause that still stands, or the retry point."""
-        return self.kept or self.cursor is not None
+    def bundle_id(self) -> str:
+        return self.procedure.bundle_id
 
-    def outcome(self) -> JSON:
-        """The paused, done, or error object, without `run_id` and `run_file` (the caller adds them)."""
-        if self.error is not None:
-            return dict(self.error)
-        pause = self.cursor.pause
-        if pause["kind"] == "done":
-            return {"done": True, "state": pause["state"]}
-        return {"paused": pause["kind"], **{k: v for k, v in pause.items() if k != "kind"}}
+    def to_dict(self) -> JSON:
+        return {"bundle_id": self.bundle_id, "started": self.started, "finished": self.finished, "identity": self.identity,
+                **super().to_dict(), "result": self.result, "requires_checked": self.requires_checked, "batch": self.batch}
 
-
-# ---------------------------------------------------------------------------- errors
-
-
-def error_object(exc: BaseException) -> JSON:
-    """The error object's kind, step, message and per-kind detail for a step that raised."""
-    if isinstance(exc, StepError):
-        kind = exc.kind if exc.kind in ERROR_KINDS else "server"
-        return {"error": kind, "step": exc.step, "message": str(exc), **exc.fields()}
-    return {"error": "server", "step": None, "message": f"{type(exc).__name__}: {exc}"}
+    @classmethod
+    def from_dict(cls, procedure: Procedure, data: JSON) -> "Run":  # type: ignore[override]
+        if data.get("bundle_id") != procedure.bundle_id:
+            raise ValueError(f"the run is of bundle {data.get('bundle_id')}, not {procedure.bundle_id}")
+        cursor = Cursor.from_dict(data)
+        return cls(cursor.state, cursor.history, cursor.position, cursor.status, cursor.pause, cursor.error, cursor.frames, cursor.passes,
+                   cursor.loops, procedure=procedure, result=data.get("result"), requires_checked=bool(data.get("requires_checked")),
+                   batch=int(data.get("batch") or DEFAULT_BATCH), identity={**new_identity(), **(data.get("identity") or {})},
+                   started=data.get("started"), finished=data.get("finished"))
 
 
-def _answer_error(error: JSON) -> bool:
-    """An answer to a pause that does not fit, as opposed to a step that failed while running."""
-    return error["error"] in ("invalid_input", "invalid_output") and "script" not in error
+class Engine:
+    """Runs procedures. `resolver` is the decision model (None: no model configured); `home` the
+    directory the file cache lives under (`AIP_HOME` when None); `python` the interpreter for
+    `python` scripts (this process's own when None); `timeout` the seconds a script may run;
+    `workdir` the directory scripts read and write the run's files in (`AIP_WORKDIR`; the
+    current directory when None); `batch` how many `For` passes run at once (`--batch`, default
+    10); `clock` the source of timestamps and `timer` of durations; `on_entry` is called with
+    every history entry the moment it is written (`--progress`). With `scripts` False the engine
+    runs no script: an `Execute` fails the run with `script_not_run` before its script starts (a
+    trial: `Decide`, routes and loops run, a `Task_Agent` pauses as usual). `script_env(run)` gives
+    the variables a script is started with beyond this process's own (the client's: which run
+    it is part of, who runs it); the engine adds `AIP_STEP` and `AIP_PASS`, the step and its
+    innermost pass."""
 
+    def __init__(self, resolver: Resolver | None = None, *, home: Path | None = None, python: str | None = None,
+                 timeout: float | None | Any = DEFAULT_TIMEOUT, workdir: Path | None = None, batch: int = DEFAULT_BATCH,
+                 clock: Callable[[], str] = utc_now, timer: Callable[[], float] = time.monotonic,
+                 on_entry: Callable[[JSON], None] | None = None, scripts: bool = True,
+                 script_env: Callable[[Run], JSON] | None = None):
+        self.resolver = resolver
+        self.scripts = scripts
+        self.script_env = script_env
+        self.home = home
+        self.python = python
+        self.timeout = script_timeout() if timeout is DEFAULT_TIMEOUT else timeout
+        self.workdir = workdir
+        self.batch = batch
+        self.clock = clock
+        self.timer = timer
+        self.on_entry = on_entry
+        self._requires: dict[str, Requires] = {}
+        self._roots: dict[str, Path] = {}
 
-# ----------------------------------------------------------------------------- lines
+    # ------------------------------------------------------------ the three entry points
 
+    def start(self, procedure: Procedure, inputs: JSON, *, identity: JSON | None = None, batch: int | None = None) -> Run:
+        """Open a run on the inputs and step it until it must stop. Inputs that do not fit the
+        `Start` step raise `InvalidInput` before anything runs. `identity` is who runs it
+        (`agent`, `session`, `user`); `batch` overrides the engine's batch size for this run."""
+        began = self.timer()
+        start = procedure.step(procedure.start)
+        state = steps.start(start, inputs)
+        batch = self.batch if batch is None else batch
+        if batch < 1:
+            raise ValueError(f"the batch size is at least 1, not {batch}")
+        run = Run(state, procedure=procedure, batch=batch, identity={**new_identity(), **(identity or {})}, started=self.clock())
+        self._record(run, run, start, state, {}, began)
+        self._follow(run, run, start)
+        return self._settle(run)
 
-def step_line(entry: JSON) -> JSON:
-    """The `--progress` line for one completed step, from its history entry."""
-    line: JSON = {"event": "step", "step": entry["step"], "kind": entry["kind"]}
-    if entry["kind"] == "router":
-        line["to"] = entry["result"]["to"]
-    elif entry["kind"] == "decision":
-        line["resolver"] = (entry.get("attribution") or {}).get("resolver", "manual")
-    elif entry["kind"] == "execution" and "seconds" in entry:
-        line["seconds"] = entry["seconds"]
-    return line
+    def resume(self, run: Run, answers: Any, *, identity: JSON | None = None, answered: dict[int, JSON] | None = None) -> Run:
+        """Carry the agent's answers to a paused run and step on. `answers` is keyed by task
+        index, a list in task order, or the one answer when the pause has one task. They are as
+        strict as inputs: every task answered, every `Produce` key present and of its type, and
+        nothing the pause did not ask for (a key, a task index, a field on an answer). Anything
+        else raises `InvalidOutput` naming all of it, nothing is applied, and the pause stands.
+        `identity` is who answers (`agent`, `session`), the run's own when not given. `answered`
+        holds, per task index, fields for that task's entry: a `model` to add to the identity's
+        (the one the agent reports), and what answering cost, marked `work: "reported"` (the
+        agent's word: `tool_calls`, `tokens`, `work_seconds`)."""
+        if run.status != PAUSED or run.pause is None:
+            raise NotPaused(None, f"the run is {run.status}; only a paused run takes an answer")
+        began = self.timer()
+        pause = run.pause
+        tasks = pause["tasks"]
+        by_index = _by_index(pause, answers)
+        indexes = [t["index"] for t in tasks]
+        missing_tasks = [i for i in indexes if i not in by_index]
+        invalid_tasks = sorted(i for i in by_index if i not in indexes)
+        errors: list[str] = []
+        missing: list[str] = []
+        invalid: list[str] = []
+        accepted = []
+        for task in tasks:
+            cursor, step = self._locate(run, task)
+            if task["index"] not in by_index:
+                continue
+            try:
+                produced = steps.check_outputs(run.procedure, step, by_index[task["index"]], source="agent")
+            except InvalidOutput as err:
+                errors += [f"task {task['index']}: {e}" for e in err.errors] if len(tasks) > 1 else err.errors
+                missing += [k for k in err.missing if k not in missing]
+                invalid += [k for k in err.invalid if k not in invalid]
+                continue
+            accepted.append((cursor, step, task, produced))
+        if missing_tasks:
+            errors.append(f"no answer for task {_list(missing_tasks)}; every task of the pause is answered at once")
+        if invalid_tasks:
+            has = "one task, 0" if len(tasks) == 1 else f"{len(tasks)} tasks, {_list(indexes)}"
+            errors.append(f"there is no task {_list(invalid_tasks)}; the pause has {has}")
+        if errors:
+            raise InvalidOutput(pause["step"], errors, missing, invalid, missing_tasks=missing_tasks, invalid_tasks=invalid_tasks)
+        who = {**run.identity, **{k: v for k, v in (identity or {}).items() if v is not None}}
+        answered_by = {"agent": who.get("agent"), "session": who.get("session")}
+        now = self.clock()
+        for cursor, step, task, produced in accepted:  # every answer checked before any is applied
+            waiting = cursor.pause or {}
+            cursor.pause, cursor.status = None, RUNNING
+            cursor.state.update(produced)
+            extra = dict((answered or {}).get(task["index"]) or {})
+            spent = (waiting.get("seconds") or 0.0) + (extra.pop("answer_seconds", None) or 0.0)  # a model's chat is the step's own time
+            model = extra.pop("model", None)          # the model an outside agent reports it answered with
+            by = extra.pop("answered_by", None) or {**answered_by, **({"model": model} if model else {})}
+            self._record(run, cursor, step, task["state"], produced, began, spent=spent,
+                         answered_by=by, waited_seconds=_between(waiting.get("since"), now),
+                         prompt=task["prompt"], references=task["references"], **extra)
+            try:
+                self._after_step(run, cursor, step, set(produced))
+            except StepError as err:  # the flow after the step: a loop's cap at the head of the next pass
+                cursor.status, cursor.error = FAILED, {**err.to_dict(), **_where(cursor)}
+        if run.status != FAILED:  # the run's own task may have met a cap just above; a `For` goes on to its other passes
+            run.pause, run.status = None, RUNNING
+        return self._settle(run)
 
+    def retry(self, run: Run) -> Run:
+        """Run the step that failed again, from the state before it. A failure a retry cannot
+        change (`loop_cap`) is not retried."""
+        if run.status != FAILED:
+            raise NotPaused(None, f"the run is {run.status}; only a failed run is retried")
+        if not resumable(run.error):
+            raise NotPaused(None, f"the run failed with {run.error['error']}, which a retry would only repeat")
+        self._clear_failure(run, run)
+        return self._settle(run)
 
-def settled_line(pause: JSON) -> JSON | None:
-    """The line for a paused step, printed once its answer is accepted."""
-    if pause["kind"] == "client_task":
-        return {"event": "step", "step": pause["step"], "kind": "client_task"}
-    return None
+    def _settle(self, run: Run) -> Run:
+        """Step the run until it stops. A run that is over (done, or failed in a way no retry
+        changes) keeps none of the runtime's loop keys and no loop frame (spec 2.6)."""
+        run.finished = None
+        self._advance(run, run)
+        if run.status == DONE or (run.status == FAILED and not resumable(run.error)):
+            run.loops, run.frames = {}, []
+        if run.status in (DONE, FAILED):
+            run.finished = self.clock()
+        return run
 
+    # ------------------------------------------------------------ the loop
 
-# ---------------------------------------------------------------------------- pauses
+    def _advance(self, run: Run, cursor: Cursor) -> Run:
+        """Step the cursor until it stops. For the run itself that is a pause, the end or a
+        failure; for a `For` pass also the end of the pass."""
+        while cursor.status == RUNNING:
+            if cursor.position is None:
+                raise RuntimeError("a running cursor has no step to run")
+            try:
+                if run.procedure.is_loop(cursor.position):
+                    self._loop(run, cursor, run.procedure.loop(cursor.position))
+                else:
+                    self._step(run, cursor, run.procedure.step(cursor.position))
+            except StepError as err:
+                cursor.status, cursor.error = FAILED, {**err.to_dict(), **_where(cursor)}
+        return run
 
+    def _step(self, run: Run, cursor: Cursor, step: Step) -> None:
+        procedure = run.procedure
+        began = self.timer()
+        state = cursor.view()
+        if step.kind != "End":                 # End takes what the path produced (steps.end)
+            steps.check_reads(procedure, step, state)
+        match step.kind:
+            case "End":
+                result = steps.end(step, state)
+                self._record(run, cursor, step, result, result, began)
+                run.result, cursor.status, cursor.position = result, DONE, None
+            case "Route":
+                flow, record = steps.route(procedure, step, state)
+                self._record(run, cursor, step, record["input"], {}, began, read=record["read"], check=record["check"],
+                             value=record["value"], to=record["to"])
+                if flow.continues:
+                    self._pass_over(run, cursor, flow.to)
+                else:
+                    cursor.position = flow.to
+            case "Aggregate":
+                produced, resolutions = steps.aggregate(procedure, step, state)
+                key = step.produced_key()
+                cursor.state[key] = produced
+                self._record(run, cursor, step, steps.project(step, state), produced, began, resolutions=resolutions)
+                self._after_step(run, cursor, step, {key})
+            case "Execute":
+                if not self.scripts:
+                    raise ScriptNotRun(step.name, step.file("RUNS").path)
+                self._ensure_requires(run, step)
+                passes = _passes(cursor)
+                env = {**(self.script_env(run) if self.script_env is not None else {}), steps.STEP_ENV: step.name,
+                       steps.PASS_ENV: str(passes[-1]["pass"]) if passes else ""}
+                outputs, stdin, _ = steps.execute(procedure, step, state, self._root(procedure), python=self.python,
+                                                  timeout=self.timeout, workdir=self.workdir, env=env)
+                cursor.state.update(outputs)
+                self._record(run, cursor, step, stdin["state"], outputs, began, script=step.file("RUNS").path, stdin=stdin)
+                self._after_step(run, cursor, step, set(outputs))
+            case "Task_Agent":
+                task = steps.task(procedure, step, state, self._root(procedure))
+                self._pause(run, cursor, step, [task], began)
+            case "Decide":
+                self._decide(run, cursor, step, began)
+            case _:
+                raise StepError(step.name, f"{step.kind} is not a step the engine runs")
 
-def pause_of(response: JSON) -> JSON | None:
-    """The pause a step response asks for: a client task. Its `state` is the step's projected input."""
-    if response["next"] is None or response["kind"] != "client_task":
-        return None
-    entry, result = response["history"][-1], response["result"]
-    return {"kind": "client_task", "step": response["ran"], "task": result["task"], "state": entry["input"],
-            "references": result["references"], "answer_with": result["expects"]}
-
-
-def thresholds_of(step: Decision) -> Dict[str, float]:
-    """Every question's threshold as the author set it in SKILL.md, the type's default otherwise."""
-    return {name: threshold(q.type, step.thresholds, name) for name, q in step.questions.items()}
-
-
-def decision_pause(step: Decision, state: JSON, history: List[JSON]) -> JSON:
-    """The pause at a decision: what the decision model is given (`questions`, `state`, and `history`
-    when the step asks for it), and the thresholds the client's resolver applies."""
-    pause = {"kind": "decision", "step": step.name, "questions": describe_next(step)["questions"],
-             "state": project(state, step.inputs), "thresholds": thresholds_of(step)}
-    if step.history:
-        pause["history"] = history
-    return pause
-
-
-# ------------------------------------------------------------------------------ loop
-
-
-def start(procedure: Procedure, payload: JSON, scripts: bool = True) -> Advance:
-    """Open a run on the start input and step it until it must stop. With `scripts` false the run
-    stops at each execution step (`execute`) instead of running its script here."""
-    return _drive(procedure, scripts, None, payload, [])
-
-
-def submit(procedure: Procedure, cursor: Cursor, answer: JSON | None, scripts: bool = True,
-           attribution: JSON | None = None) -> Advance:
-    """Carry one thing to a run: the answer to its pause (at a decision, with the `attribution` of
-    whoever resolved it; None is a manual answer), the report of a script the client ran, or
-    (`None`, at a failed step) a retry. A retry may carry keys too; they are merged over the
-    state before the step. An answer that does not fit leaves the run where it was (`kept`)."""
-    pause = cursor.pause or {}
-    kind = pause.get("kind")
-    if kind == "done":
-        return Advance(cursor, kept=True, error={
-            "error": "server", "step": None, "message": "the run is done; there is nothing to answer"})
-    if kind == "error":
-        return _drive(procedure, scripts, cursor.after, {**cursor.state, **(answer or {})}, cursor.history)
-    if kind == "execute":
-        if not _is_report(answer):
-            return Advance(cursor, kept=True, error={
-                "error": "invalid_output", "step": pause["step"],
-                "message": f"step {pause['step']!r} runs on the client: post the report of running its script, "
-                           '{"output": {...}} or {"error": "script_failed"|"timeout"|"requires_unmet", ...}',
-                "missing": ["output"], "invalid": []})
-        return _drive(procedure, scripts, cursor.after, cursor.state, cursor.history, report=answer)
-    if kind not in PAUSED:
-        return Advance(cursor, kept=True, error={
-            "error": "server", "step": None, "message": f"the run is not paused (status {cursor.status})"})
-    if answer is None:
-        keys = list(pause["questions"] if kind == "decision" else pause.get("answer_with", {}))
-        return Advance(cursor, kept=True, error={
-            "error": "invalid_output", "step": pause["step"],
-            "message": f"resume needs an answer for the paused {kind} step {pause['step']!r} (--input <answer.json>)",
-            "missing": keys, "invalid": []})
-    if kind == "decision":
-        return _drive(procedure, scripts, cursor.after, cursor.state, cursor.history,
-                      answering=pause, answers=(answer, attribution))
-    try:
-        validate_output(pause["step"], pause["answer_with"], answer, strict=False)
-    except OutputValidationError as exc:
-        return Advance(cursor, kept=True, error=error_object(exc), exc=exc)
-    # the client task's entry is written now, like a decision's: the task it was given and the answer
-    outputs = {k: answer[k] for k in pause["answer_with"]}
-    entry = {"step": pause["step"], "kind": "client_task", "input": pause["state"],
-             "result": {"task": pause["task"], "references": pause["references"], "answer": outputs}}
-    return _drive(procedure, scripts, cursor.after, {**cursor.state, **outputs}, cursor.history,
-                  answering=pause, answered=entry)
-
-
-def _is_report(answer: JSON | None) -> bool:
-    """A client's report of running a script: its output, or a failure of a known kind."""
-    if not isinstance(answer, dict):
-        return False
-    if "error" in answer:
-        return answer["error"] in ("script_failed", "timeout", "requires_unmet")
-    return isinstance(answer.get("output"), dict)
-
-
-def _drive(procedure: Procedure, scripts: bool, after: str | None, payload: JSON,
-           history: List[JSON], answering: JSON | None = None, answers: tuple[JSON, JSON | None] | None = None,
-           report: JSON | None = None, answered: JSON | None = None) -> Advance:
-    """Step until a pause, the end, or a failure. `answering` is the pause this call answers: a bad
-    answer leaves it in place. `answers` (the answers and their attribution) answers a decision
-    first, `report` an execution step the client ran, and `answered` is the history entry of the
-    client task this call answers."""
-    carried = len(history)
-    if answered is not None:
-        history = [*history, answered]
-    lines: List[JSON] = []
-
-    def settle() -> None:
-        nonlocal answering
-        line = settled_line(answering) if answering is not None else None
-        if line is not None:
-            lines.append(line)
-        answering = None
-
-    def stop(pause: JSON) -> Advance:
-        return Advance(Cursor(after, payload, history, pause), entries=history[carried:], lines=lines)
-
-    while True:
-        node = None
+    def _decide(self, run: Run, cursor: Cursor, step: Step, began: float) -> None:
+        """A `Decide` is the model's: no model fails the step, and so does a model that raises;
+        a retry asks again (spec 2.4)."""
+        if self.resolver is None:
+            raise NoDecisionModel(step.name)
+        request = steps.decision_request(step, cursor.view(), self._visible_history(cursor))
+        asked = self.timer()
         try:
-            node, routed = procedure.resolve(after, payload)
-            if answers is not None:
-                if not isinstance(node, Decision):
-                    raise KeyError(f"the step after {after!r} is not a decision")
-                response = node.accept_answers(payload, [*history, *routed], *answers).to_dict()
-                answers = None
-            elif report is not None:
-                if not isinstance(node, Execution):
-                    raise KeyError(f"the step after {after!r} is not an execution step")
-                response = node.accept_report(payload, [*history, *routed], report).to_dict()
-                report = None
-            elif isinstance(node, Decision):
-                validate_input(node.name, node.inputs, payload)          # before asking anyone
-                settle()
-                return stop(decision_pause(node, payload, [*history, *routed]))
-            elif isinstance(node, Execution) and not scripts:
-                request = node.request(payload)
-                settle()
-                return stop(request)
-            else:
-                response = procedure.run(after, payload, history).to_dict()
+            decision = self.resolver.decide(request)
         except Exception as exc:
-            return _failed(exc, node, after, payload, history, carried, lines, keep=answering is not None)
-        settle()
-        pause = pause_of(response)
-        if pause is not None:                        # its entry is written when it is answered
-            response["history"] = response["history"][:-1]
-        for entry in response["history"][len(history):]:
-            if entry["kind"] != "end":
-                lines.append(step_line(entry))
-        after, payload, history = response["ran"], response["suggested"], response["history"]
-        if response["next"] is None:
-            payload = response["result"]
-            return stop({"kind": "done", "state": response["result"]})
-        if pause is not None:
-            return stop(pause)
+            raise self._model_failed(step, exc) from exc
+        model_seconds = self._since(asked)
+        answers = steps.check_decision(step, decision.answers)
+        key = step.produced_key()
+        cursor.state[key] = answers
+        self._record(run, cursor, step, request.state, answers, began, answered_by=decision.answered_by(),
+                     history_sent=request.history is not None, model_seconds=model_seconds)
+        self._after_step(run, cursor, step, {key})
+
+    def _model_failed(self, step: Step, exc: BaseException) -> DecisionModelFailed:
+        resolver = self.resolver
+        return DecisionModelFailed(step.name, getattr(resolver, "name", type(resolver).__name__), exc, getattr(resolver, "url", None))
+
+    def _pause(self, run: Run, cursor: Cursor, step: Step, tasks: list[JSON], began: float) -> None:
+        """Stop for the agent. The pause keeps when it began (`since`) and the seconds the step
+        has taken so far, for the entry written when the answer arrives."""
+        where = {**_where(cursor), **self._last_pass(run, cursor)}
+        cursor.pause = {"kind": "task", "step": step.name, "since": self.clock(), "seconds": self._since(began),
+                        "tasks": [{"index": i, **where, **t} for i, t in enumerate(tasks)]}
+        cursor.status = PAUSED
+
+    def _last_pass(self, run: Run, cursor: Cursor) -> JSON:
+        """`{"last_pass", "pass_of"}` for a task whose innermost loop is a `Loop` with a cap
+        (`At_Most` on an `Until` loop, the count of a `Times` loop): whether this pass is the
+        last the cap allows, and the cap. Nothing for a task anywhere else."""
+        passes = _passes(cursor)
+        if not passes:
+            return {}
+        loop = run.procedure.loop(f"loop:{passes[-1]['loop']}")
+        if loop.kind != "Loop" or loop.mode == "Over" or loop.cap is None:
+            return {}
+        return {"last_pass": passes[-1]["pass"] >= loop.cap - 1, "pass_of": loop.cap}
+
+    # ------------------------------------------------------------ flow
+
+    def _after_step(self, run: Run, cursor: Cursor, step: Step, written: set[str]) -> None:
+        """A step is done and wrote `written`: an `Until` on the enclosing loop may end the loop
+        here (spec 2.6), otherwise the step's flow is followed."""
+        if written and self._until_ends(run, cursor, step.id, written, where=step.name):
+            return
+        self._follow(run, cursor, step)
+
+    def _until_ends(self, run: Run, cursor: Cursor, node: str, written: set[str], *, where: str) -> bool:
+        """`written` was just produced by `node`. Every enclosing `Loop` frame notes it (for the
+        rule that a loop in a body exits having produced it); if the innermost loop's `Until`
+        answer is among it, the node is in that loop's body and the condition now holds, the loop
+        exits here, the pass counted, and the rest of the pass does not run."""
+        for frame in cursor.frames:
+            frame["written"] = sorted(set(frame.get("written") or []) | written)
+        if not cursor.frames:
+            return False
+        frame = cursor.frames[-1]
+        loop = run.procedure.loop(frame["loop"])
+        if loop.until is None or loop.until.path[0] not in written or node not in loop.body:
+            return False
+        holds, resolution = steps.until_holds(run.procedure, loop, cursor.view())
+        if not holds:
+            return False
+        frame["count"] += 1
+        self._exit_loop(run, cursor, loop, frame, {"reason": "until", "where": where, "resolution": resolution})
+        return True
+
+    def _follow(self, run: Run, cursor: Cursor, step: Step) -> None:
+        flow = step.next
+        if flow is None:
+            raise StepError(step.name, f"{step.name} has no next step")
+        if flow.type == "CONTINUES":
+            self._pass_over(run, cursor, flow.to)
+        else:
+            cursor.position = flow.to
+
+    def _pass_over(self, run: Run, cursor: Cursor, loop_id: str) -> None:
+        """`Continue`, or a loop's exit line reaching the enclosing loop: the pass is over. For a
+        `Loop` the next pass begins at its head; for a `For` the pass's cursor is done."""
+        if cursor.frames and cursor.frames[-1]["loop"] == loop_id:
+            frame = cursor.frames[-1]
+            frame["count"] += 1
+            cursor.position = loop_id
+            self._head(run, cursor, run.procedure.loop(loop_id), frame)
+        else:
+            cursor.status, cursor.position = DONE, loop_id
+
+    # ------------------------------------------------------------ loops
+
+    def _loop(self, run: Run, cursor: Cursor, loop: Loop) -> None:
+        """The cursor is at a loop node: entering it. (A pass that ends goes to the head through
+        `_pass_over`, not through here; a `Loop` found with its frame already on the stack is
+        at its head all the same.)"""
+        frame = cursor.frames[-1] if cursor.frames and cursor.frames[-1]["loop"] == loop.id else None
+        if loop.kind == "For":
+            self._for(run, cursor, loop, frame)
+        elif frame is None:
+            items = self._items(run, cursor, loop) if loop.mode == "Over" else None
+            frame = {"loop": loop.id, "name": loop.name, "kind": "Loop", "count": 0, "items": items, "written": [], "head": True}
+            cursor.frames.append(frame)
+            self._head(run, cursor, loop, frame)
+        else:
+            self._head(run, cursor, loop, frame)
+
+    def _items(self, run: Run, cursor: Cursor, loop: Loop) -> list:
+        """The list a `For` or a fold runs over. One longer than the cap ends the loop before any
+        pass: its exit entry says `cap`, and the run fails (`loop_cap`)."""
+        try:
+            return steps.loop_items(loop, cursor.view())
+        except LoopCap:
+            self._record(run, cursor, loop, {}, {steps.ITERATIONS: 0}, exit={"reason": "cap", "where": "head"})
+            raise
+
+    def _head(self, run: Run, cursor: Cursor, loop: Loop, frame: JSON) -> None:
+        """The head of a `Loop` pass: `Until`, the list, the count and the cap decide whether a
+        pass runs (spec 2.6; runtime.md, Loops). When one does, the `Until` test that let it is
+        kept on the frame and written on the pass's first entry."""
+        count = frame["count"]
+        frame.pop("head", None)
+        resolution = None
+        if loop.until is not None:
+            holds, resolution = steps.until_holds(run.procedure, loop, cursor.view())
+            if holds:
+                self._exit_loop(run, cursor, loop, frame, {"reason": "until", "where": "head", "resolution": resolution})
+                return
+        if loop.mode == "Over" and count >= len(frame["items"]):
+            self._exit_loop(run, cursor, loop, frame, {"reason": "items", "where": "head"})
+            return
+        cap = loop.cap
+        if cap is not None and count >= cap:
+            if loop.mode == "Times":
+                self._exit_loop(run, cursor, loop, frame, {"reason": "times", "where": "head"})
+            elif loop.at_cap == "Else_Exit":
+                self._exit_loop(run, cursor, loop, frame, {"reason": "cap", "where": "head"})
+            else:  # Else_Fail: the loop's entry says why it ended, and the run fails for good
+                cursor.frames.pop()
+                self._record(run, cursor, loop, self._over(loop, frame), {steps.ITERATIONS: count},
+                             exit={"reason": "cap", "where": "head", "resolution": resolution})
+                raise LoopCap(loop.name, cap, count, f"{loop.name} ran {count} passes without its condition holding (At_Most {cap}, Else_Fail)")
+            return
+        if loop.until is not None:
+            frame["until"] = {"where": "head", "holds": False, "resolution": resolution}
+        cursor.loops[steps.INDEX] = count
+        cursor.loops[loop.name] = {steps.INDEX: count}  # the loop's own key (spec 2.6): `revise.index`
+        if loop.mode == "Over":
+            cursor.state[loop.item] = copy.deepcopy(frame["items"][count])
+        cursor.position = loop.enters
+
+    def _over(self, loop: Loop, frame: JSON) -> JSON:
+        """A loop entry's `input`: the list it ran over, under the name a step would read it by."""
+        return {loop.over[-1]: frame["items"]} if loop.over else {}
+
+    def _exit_loop(self, run: Run, cursor: Cursor, loop: Loop, frame: JSON, exit: JSON, result: JSON | None = None) -> None:
+        """A loop is over: its frame goes, `iterations` (and a `For`'s list) are written, its
+        entry is recorded, and the flow follows its exit line."""
+        assert cursor.frames and cursor.frames[-1] is frame
+        cursor.frames.pop()
+        written = set(frame.get("written") or []) | loop.produced_keys
+        cursor.loops[steps.ITERATIONS] = frame["count"]
+        cursor.loops[loop.name] = {steps.ITERATIONS: frame["count"]}  # `revise.iterations`, which a later loop does not overwrite
+        produced: JSON = {steps.ITERATIONS: frame["count"], **(result or {})}
+        cursor.state.update(result or {})
+        enclosing = _passes(cursor)
+        if enclosing:
+            cursor.loops[steps.INDEX] = enclosing[-1]["pass"]
+        else:
+            cursor.loops.pop(steps.INDEX, None)
+        self._record(run, cursor, loop, self._over(loop, frame), produced, exit=exit)
+        if self._until_ends(run, cursor, loop.id, written, where=loop.name):
+            return
+        flow = loop.exit
+        if flow is None:
+            raise StepError(loop.name, f"{loop.name} has no exit line")
+        if flow.type == "CONTINUES":
+            self._pass_over(run, cursor, flow.to)
+        else:
+            cursor.position = flow.to
+
+    def _for(self, run: Run, cursor: Cursor, loop: Loop, frame: JSON | None) -> None:
+        """A `For`: independent passes over a list, `batch` at a time, each a cursor of its own
+        (runtime.md, Batching). The cursor stays at the loop until every pass is done."""
+        if frame is None:
+            items = self._items(run, cursor, loop)
+            frame = {"loop": loop.id, "name": loop.name, "kind": "For", "count": 0, "items": items, "collected": [None] * len(items),
+                     "next": 0, "cursors": [], "before": len(cursor.history)}
+            cursor.frames.append(frame)
+        batched = steps.is_batched_decide(run.procedure, loop)
+        while True:
+            if not frame["cursors"]:
+                if frame["next"] >= len(frame["items"]):
+                    break
+                indexes = range(frame["next"], min(frame["next"] + run.batch, len(frame["items"])))
+                frame["cursors"] = [self._pass_cursor(cursor, loop, frame, i) for i in indexes]
+                frame["next"] = indexes.stop
+            for p in frame["cursors"]:  # a pass sees the history as it was before the loop, whatever batch it is in
+                p.before = [*cursor.before, *cursor.history[:frame["before"]]]
+            ready = [p for p in frame["cursors"] if p.status == RUNNING]
+            if batched is not None and self.resolver is not None and ready and all(p.position == batched.id and not p.history for p in ready):
+                self._decide_batch(run, cursor, batched, ready)
+            for p in frame["cursors"]:
+                if p.status == RUNNING:
+                    self._advance(run, p)
+            failed = [p for p in frame["cursors"] if p.status == FAILED]
+            paused = [p for p in frame["cursors"] if p.status == PAUSED]
+            if failed:
+                self._flush(cursor, [p for p in frame["cursors"] if p.status != RUNNING])
+                cursor.status, cursor.error = FAILED, failed[0].error
+                return
+            if paused:
+                step = paused[0].pause["step"]
+                group = [p for p in paused if p.pause["step"] == step]
+                tasks = [{**t, "index": i} for i, t in enumerate(t for p in group for t in p.pause["tasks"])]
+                cursor.pause = {**paused[0].pause, "tasks": tasks}
+                cursor.status = PAUSED
+                return
+            for p in frame["cursors"]:
+                if loop.collect_key is not None:
+                    frame["collected"][p.passes[-1]["pass"]] = p.state.get(loop.collect_key)
+            self._flush(cursor, frame["cursors"])
+            frame["count"] += len(frame["cursors"])
+            frame["cursors"] = []
+        result = {loop.collect_into: frame["collected"]} if loop.collect_into else {}
+        self._exit_loop(run, cursor, loop, frame, {"reason": "items"}, result)
+
+    def _pass_cursor(self, cursor: Cursor, loop: Loop, frame: JSON, index: int) -> Cursor:
+        """A fresh cursor for pass `index`: the state as it was before the loop, the item and `index`."""
+        state = copy.deepcopy(cursor.state)
+        state[loop.item] = copy.deepcopy(frame["items"][index])
+        loops = {**copy.deepcopy(cursor.loops), steps.INDEX: index, loop.name: {steps.INDEX: index}}
+        return Cursor(state, position=loop.enters, passes=[*_passes(cursor), {"loop": loop.name, "pass": index}], loops=loops)
+
+    def _decide_batch(self, run: Run, cursor: Cursor, step: Step, passes: list[Cursor]) -> None:
+        """One model call for a batch of passes whose body is this `Decide`: the question keys
+        suffixed with the pass index on the way out and mapped back on the way in, so the history
+        has one entry per pass as if each had called alone, each marked `batched` with the
+        `batch_size` and the one call's `model_seconds`. The call failing fails every pass of it,
+        so a retry makes one call again."""
+        began = self.timer()
+        requests = [(p.passes[-1]["pass"], steps.decision_request(step, p.view(), self._visible_history(p))) for p in passes]
+        try:
+            try:
+                decision = self.resolver.decide(steps.batch_request(step, requests))
+            except Exception as exc:
+                raise self._model_failed(step, exc) from exc
+            model_seconds = self._since(began)
+            split = steps.split_answers(step, decision.answers, [i for i, _ in requests])
+        except StepError as err:
+            for p in passes:
+                p.status, p.error = FAILED, {**err.to_dict(), **_where(p)}
+            return
+        key = step.produced_key()
+        for p, (index, request) in zip(passes, requests):
+            try:
+                answers = steps.check_decision(step, split[index])
+            except InvalidOutput as err:
+                p.status, p.error = FAILED, {**err.to_dict(), **_where(p)}
+                continue
+            p.state[key] = answers
+            batch = {"batched": True, "batch_size": len(passes)} if len(passes) > 1 else {}
+            self._record(run, p, step, request.state, answers, began, answered_by=decision.answered_by(),
+                         history_sent=request.history is not None, model_seconds=model_seconds, **batch)
+            self._after_step(run, p, step, {key})
+
+    def _flush(self, cursor: Cursor, passes: list[Cursor]) -> None:
+        """Append the passes' entries to the cursor's history, pass by pass in input order."""
+        for p in sorted(passes, key=lambda p: p.passes[-1]["pass"]):
+            cursor.history.extend(p.history)
+            p.history = []
+
+    # ------------------------------------------------------------ pauses and failures, located
+
+    def _locate(self, run: Run, task: JSON) -> tuple[Cursor, Step]:
+        """The cursor a task belongs to (the run, or a `For` pass, following the task's `passes`)
+        and the step it waits at."""
+        cursor: Cursor = run
+        while cursor.position is not None and run.procedure.is_loop(cursor.position) and cursor.frames \
+                and cursor.frames[-1]["kind"] == "For" and cursor.frames[-1]["loop"] == cursor.position:
+            frame = cursor.frames[-1]
+            wanted = next((e["pass"] for e in task.get("passes") or [] if e["loop"] == frame["name"]), None)
+            found = next((p for p in frame["cursors"] if p.passes[-1]["pass"] == wanted), None)
+            if found is None:
+                raise InvalidOutput(frame["name"], [f"task {task['index']} names no pass of {frame['name']}"])
+            cursor = found
+        if cursor.position is None or run.procedure.is_loop(cursor.position):
+            raise NotPaused(None, f"task {task['index']} is not waiting at a step")
+        return cursor, run.procedure.step(cursor.position)
+
+    def _clear_failure(self, run: Run, cursor: Cursor) -> None:
+        cursor.error, cursor.status = None, RUNNING
+        if cursor.position is not None and run.procedure.is_loop(cursor.position) and cursor.frames and cursor.frames[-1]["kind"] == "For":
+            for p in cursor.frames[-1]["cursors"]:
+                if p.status == FAILED:
+                    self._clear_failure(run, p)
+
+    # ------------------------------------------------------------ helpers
+
+    def _visible_history(self, cursor: Cursor) -> list[JSON]:
+        """The history as this cursor sees it: a pass sees what came before the loop and its own
+        entries, never another pass's (runtime.md, independence)."""
+        return [*cursor.before, *cursor.history]
+
+    def _since(self, began: float) -> float:
+        return round(max(self.timer() - began, 0.0), 3)
+
+    def _record(self, run: Run, cursor: Cursor, node: Step | Loop, input: JSON, result: JSON, began: float | None = None, *,
+                spent: float = 0.0, **extra: Any) -> None:
+        """Append the node's entry to the cursor's history. What it holds is copied: the state
+        moves on, the history does not. A step's entry carries `seconds`, its own wall time since
+        `began` (plus `spent`, what it took before a pause); a loop's exit entry has none. The
+        `Until` test at the head of a `Loop` pass is written on the pass's first entry."""
+        entry: JSON = {"step": node.name, "kind": node.kind, **_where(cursor), "at": self.clock()}
+        if began is not None:
+            entry["seconds"] = round(self._since(began) + spent, 3)
+        if cursor.frames and cursor.frames[-1]["kind"] == "Loop" and "until" in cursor.frames[-1]:
+            entry["until"] = cursor.frames[-1].pop("until")
+        entry = copy.deepcopy({**entry, "input": input, "result": result, **extra})
+        cursor.history.append(entry)
+        if self.on_entry is not None:
+            self.on_entry(entry)
+
+    def _root(self, procedure: Procedure) -> Path:
+        """The bundle's files, unpacked once per bundle id."""
+        if procedure.bundle_id not in self._roots:
+            self._roots[procedure.bundle_id] = cache.unpack(procedure.bundle_id, procedure.files(), self.home)
+        return self._roots[procedure.bundle_id]
+
+    def _ensure_requires(self, run: Run, step: Step) -> None:
+        if run.requires_checked:
+            return
+        declared = run.procedure.requires
+        if declared is not None:
+            requires = self._requires.setdefault(run.bundle_id, Requires(*declared))
+            requires.ensure(step.name, self.python)
+        run.requires_checked = True
 
 
-def _failed(exc: BaseException, node: Any, after: str | None, state: JSON, history: List[JSON], carried: int,
-            lines: List[JSON], keep: bool) -> Advance:
-    """A step failed. The run waits at the state before it, to be retried, unless the failure is a
-    bad answer to a pause (`keep`: the pause stands, answer it again) or the start input was
-    rejected before any step ran (start again)."""
-    error = error_object(exc)
-    if keep and _answer_error(error):
-        return Advance(None, error=error, kept=True, exc=exc)
-    if after is None and not history and isinstance(exc, InputValidationError):
-        return Advance(None, error=error, exc=exc)
-    detail = exc.fields() if isinstance(exc, StepError) else {}
-    if isinstance(getattr(exc, "host", None), str):
-        detail["host"] = exc.host                           # the machine that reported a script's failure
-    failure = {"step": getattr(node, "name", error["step"]), "kind": "error", "step_kind": getattr(node, "kind", None),
-               "input": state, "result": {"error": f"{type(exc).__name__}: {exc}", **detail}}
-    pause = {"kind": "error", "step": error["step"], "error": error["error"]}
-    return Advance(Cursor(after, state, history, pause), entries=history[carried:], lines=lines,
-                   error=error, failure=failure, exc=exc)
+def _passes(cursor: Cursor) -> list[JSON]:
+    """Every enclosing pass, outermost first: the `For` passes the cursor runs in, then the
+    `Loop` frames on its stack."""
+    return [*cursor.passes, *({"loop": f["name"], "pass": f["count"]} for f in cursor.frames if f["kind"] == "Loop")]
 
 
-__all__ = ["Advance", "Cursor", "ERROR_KINDS", "PAUSED", "PRIVATE", "decision_pause", "error_object", "pause_of",
-           "settled_line", "start", "step_line", "submit", "thresholds_of"]
+def _where(cursor: Cursor) -> JSON:
+    """The `pass` and `passes` fields of an entry, a task or an error."""
+    passes = _passes(cursor)
+    return {"pass": passes[-1]["pass"] if passes else None, "passes": passes}
+
+
+def _list(indexes: list[int]) -> str:
+    return ", ".join(str(i) for i in indexes)
+
+
+def _between(since: str | None, now: str) -> float | None:
+    """The seconds from one of the clock's timestamps to another, or None when either is not one."""
+    try:
+        return round(max((datetime.fromisoformat(now) - datetime.fromisoformat(since)).total_seconds(), 0.0), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _by_index(pause: JSON, answers: Any) -> dict[int, Any]:
+    """The answers keyed by task index: as given, from a list in task order, or the one answer
+    for the one task."""
+    tasks = pause["tasks"]
+    if isinstance(answers, list):
+        return dict(enumerate(answers))
+    if isinstance(answers, dict) and answers and all(str(k).isdigit() for k in answers) and all(isinstance(v, dict) for v in answers.values()):
+        return {int(k): v for k, v in answers.items()}
+    if isinstance(answers, dict) and len(tasks) == 1:
+        return {tasks[0]["index"]: answers}
+    raise InvalidOutput(pause["step"], [f"the pause has {len(tasks)} tasks: the answers are an object keyed by task index "
+                                        '({"0": {...}, "1": {...}}) or a list in task order'])
+
+
+__all__ = ["Engine", "Run", "Cursor", "new_identity", "RUNNING", "PAUSED", "DONE", "FAILED", "STATUSES", "ERROR_KINDS",
+           "DEFAULT_BATCH", "IDENTITY_FIELDS", "recorded_history", "utc_now", "resumable"]

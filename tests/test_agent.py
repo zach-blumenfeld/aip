@@ -1,0 +1,314 @@
+"""`aip agent` (plan aip#29, A3 and A4; `docs/agent.md`): a chat model outside the run answers the
+pauses of `assist`, one call per pause and no tools; the runtime never calls it. `aip.agent` is
+the loop and nothing else, its helpers are `aip.chat`'s; a session is what the record holds.
+
+The model here is a stand-in (`Scripted`): each reply is the next one in its list, or what a
+function makes of the messages it was sent. The runs are local (no server), so `assist`'s
+scripts find the procedures aip ships and run a folder by its path; `act.py`'s guard is also
+tried against the real server in process (`served`)."""
+
+from __future__ import annotations
+
+import importlib.util
+import inspect
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+import aip
+import aip.agent
+from aip.chat import ANSWERS, ChatError, Completion, history
+from aip.client.runs import RunFile, local_runs, run_path
+from aip.sdk import Done, NoAgentModel, Paused
+from aip.client.server import Server
+from aip.compiler import example_dir, relate
+
+from served import Served
+
+pytestmark = pytest.mark.skipif(not relate.available(), reason="relate is not installed")
+
+AGENT = "agent"                                   # who `aip agent`'s runs and answers are recorded as
+ACT = example_dir("assist") / "scripts" / "act.py"
+GREET = """Procedure greet
+  "Greet someone by name."
+
+Start "Who to greet." {
+  name: string "Their name."
+  Next_Step reply
+}
+
+Task_Agent reply "Write a one-line greeting for the name." {
+  Read name
+  Produce text: string "The greeting."
+  Next_Step end
+}
+
+End "The greeting." {
+  Read text
+}
+"""
+
+
+def finish(note: str) -> dict:
+    return {"verb": "finish", "args": {}, "note": note, "done": True}
+
+
+class Scripted:
+    """A chat model that answers from a script: a dict is sent as JSON, a string as it is, a
+    function is called with the messages. `asked` keeps every request's messages."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.asked: list[list[dict]] = []
+
+    def __call__(self, messages):
+        self.asked.append([dict(m) for m in messages])
+        reply = self.replies.pop(0)
+        if callable(reply):
+            reply = reply(messages)
+        text = reply if isinstance(reply, str) else json.dumps(reply)
+        return Completion({"role": "assistant", "content": text}, "stop", 100, 20, {"model": "stand-in-1"}, seconds=0.5)
+
+
+def client(chat: Scripted) -> aip.Client:
+    return aip.Client(agent_chat=chat, agent="tests")
+
+
+def test_the_module_is_the_loop_and_nothing_else():
+    source = inspect.getsource(aip.agent)
+    assert len(source.splitlines()) < 40
+    assert [n for n, v in vars(aip.agent).items() if inspect.isfunction(v) and v.__module__ == "aip.agent"] == ["agent"]
+    assert inspect.signature(aip.agent.agent).parameters.keys() == {"client", "chat", "text", "session"}
+    doc = (Path(__file__).parent.parent / "docs" / "agent.md").read_text(encoding="utf-8")
+    assert f"```python\n{source.rstrip()}\n```" in doc, "docs/agent.md shows src/aip/agent.py verbatim: copy it again"
+
+
+def test_no_model_key_no_agent(monkeypatch):
+    monkeypatch.delenv("AIP_AGENT_MODEL_KEY", raising=False)
+    with pytest.raises(NoAgentModel, match="aip config agent --model-key"):
+        aip.Client().ask("count the refunds")
+
+
+def test_a_sessions_second_call_reads_what_it_asked_from_the_record(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    chat = Scripted(finish("Which folder holds the notes?"), finish("monday 2, tuesday 0"))
+    c = client(chat)
+    first = c.ask("count the lines mentioning refund in each note", session="s-1")
+    assert isinstance(first, Done) and first.result["note"] == "Which folder holds the notes?"
+    plan = chat.asked[0][1]["content"]
+    assert plan.startswith("# Procedure step: plan") and "## Reference: references/aip-skill.md" in plan
+    assert '"outcome": ""' in plan and "The verbs assist has" in plan      # the reference's text, not its path alone
+
+    second = c.ask("./notes", session="s-1")
+    assert isinstance(second, Done) and second.result["note"] == "monday 2, tuesday 0"
+    asked = chat.asked[1][1]["content"]
+    assert '"task": "./notes"' in asked                                              # the text is the task...
+    assert "The task was: count the lines mentioning refund in each note" in asked  # ...and the session is the outcome
+    assert "You asked: Which folder holds the notes?" in asked and "The person answered: ./notes" in asked
+
+    run = RunFile.load(run_path(second.run_id)).run
+    assert run["identity"]["agent"] == AGENT and run["identity"]["session"] == "s-1"
+    assert run["state"]["outcome"] == ("The task was: count the lines mentioning refund in each note\n"
+                                       "You asked: Which folder holds the notes?\nThe person answered: ./notes")
+    plan_entry = next(e for e in run["history"] if e["step"] == "plan")
+    assert plan_entry["answered_by"]["agent"] == AGENT and plan_entry["answered_by"]["model"] == "stand-in-1"
+    assert plan_entry["work"] == "reported" and plan_entry["tokens"]["total"] == 120
+
+    # The whole session, oldest first, every run's task and note, then the new text: `history` reads the record.
+    assert history(c, "s-1", "thanks") == ("The task was: count the lines mentioning refund in each note\n"
+                                           "You asked: Which folder holds the notes?\n"
+                                           "The task was: ./notes\nYou asked: monday 2, tuesday 0\n"
+                                           "The person answered: thanks")
+    assert history(c, "s-none", "anything") == ""                                   # no runs: a new task, no outcome
+
+    chat = Scripted(finish("ok"))
+    client(chat).ask("something else", session="s-2")                              # another session starts afresh
+    assert '"outcome": ""' in chat.asked[0][1]["content"]
+    assert [r.run_id for r in c.runs(session="s-1", name="assist")] == [second.run_id, first.run_id]
+
+
+def test_the_command_prints_the_run_as_aip_run_does_with_the_session(tmp_path, monkeypatch, capsys):
+    from aip.client import cli
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("AIP_SESSION", raising=False)
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(finish("Which folder?"))))
+    assert cli.main(["agent", "count the refunds", "--progress"]) == 0
+    out, err = capsys.readouterr()
+    lines = [json.loads(line) for line in out.splitlines() if line.strip()]
+    session = lines[-1]["session"]
+    assert lines[-1]["done"] is True and lines[-1]["result"]["note"] == "Which folder?" and session.startswith("agent-")
+    assert all(line.get("event") == "step" for line in lines[:-1]) and {"search", "plan"} <= {line["step"] for line in lines[:-1]}
+    assert f"session: {session}" in err and f"export AIP_SESSION={session}" in err
+
+    monkeypatch.setenv("AIP_SESSION", session)
+    chat = Scripted(finish("monday 2"))
+    monkeypatch.setattr(cli, "_client", lambda: client(chat))
+    assert cli.main(["agent", "./notes"]) == 0
+    assert json.loads(capsys.readouterr().out)["session"] == session
+    assert "You asked: Which folder?" in chat.asked[0][1]["content"] and "The person answered: ./notes" in chat.asked[0][1]["content"]
+
+
+def test_a_refused_answer_goes_back_to_the_model_then_the_run_is_left_paused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    once = Scripted("I would finish here.", finish("done"))
+    out = client(once).ask("anything", session="s-2")
+    assert isinstance(out, Done) and len(once.asked) == 2
+    assert once.asked[1][-1]["content"].startswith("That answer was refused: the reply holds no JSON object")
+    assert once.asked[1][-2] == {"role": "assistant", "content": "I would finish here."}
+
+    wrong = {"verb": "dance", "args": {}, "note": "", "done": False}
+    chat = Scripted(*[wrong] * ANSWERS)
+    out = client(chat).ask("anything", session="s-3")
+    assert isinstance(out, Paused) and out.step == "plan" and len(chat.asked) == ANSWERS and not chat.replies
+    assert all(asked[-1]["content"].startswith("That answer was refused") for asked in chat.asked[1:])
+    assert "dance" in chat.asked[-1][-1]["content"]
+    run = RunFile.load(run_path(out.run_id))
+    assert run.status == "paused" and run.run["pause"]["step"] == "plan"
+
+
+def test_the_command_says_why_the_model_gave_up_or_its_endpoint_failed(tmp_path, monkeypatch, capsys):
+    """The loop catches refusals and nothing else: the command says on stderr why it stopped short."""
+    from aip.client import cli
+
+    monkeypatch.chdir(tmp_path)
+    wrong = {"verb": "dance", "args": {}, "note": "", "done": False}
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(*[wrong] * ANSWERS)))
+    assert cli.main(["agent", "anything", "--session", "s-5"]) == 1
+    out, err = capsys.readouterr()
+    assert json.loads(out)["paused"] == "task" and json.loads(out)["step"] == "plan" and json.loads(out)["session"] == "s-5"
+    assert "aip agent: gave up at plan after 4 answers: " in err and "dance" in err.split("gave up at plan")[1]
+
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted("not json", "still not", "no", "nope")))
+    assert cli.main(["agent", "anything", "--session", "s-6"]) == 1
+    assert "aip agent: gave up at plan after 4 answers: the reply holds no JSON object" in capsys.readouterr().err
+
+    def down(messages):
+        raise ChatError("https://model.example answered 503: busy")
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(down)))
+    assert cli.main(["agent", "anything", "--session", "s-7"]) == 1
+    out, err = capsys.readouterr()
+    assert "aip agent: the model's endpoint failed: https://model.example answered 503: busy" in err
+    assert json.loads(out)["error"] == "server" and "503" in json.loads(out)["message"]
+    [left] = aip.Client(agent="tests").runs(session="s-7")
+    assert left.status == "paused", "the run waits where it was, for whoever answers next"
+
+
+def test_a_child_runs_pause_comes_back_to_plan_and_is_answered_with_resume(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "greet"
+    folder.mkdir()
+    (folder / "procedure.aip").write_text(GREET, encoding="utf-8")
+
+    def answer_the_child(messages):
+        outcome = json.loads(json.loads(messages[-1]["content"].split("```json\n")[1].split("\n```")[0])["outcome"])
+        assert outcome["status"] == "paused", outcome
+        assert outcome["step"] == "reply" and outcome["tasks"][0]["state"] == {"name": "Ada"}
+        return {"verb": "resume", "args": {"run_id": outcome["run_id"], "answers": {"text": "Hello, Ada!"}}, "note": "", "done": False}
+
+    chat = Scripted({"verb": "run", "args": {"procedure": "greet", "inputs": {"name": "Ada"}}, "note": "", "done": False},
+                    answer_the_child, finish("Greeted Ada: Hello, Ada!"))
+    out = client(chat).ask("greet Ada", session="s-4")
+    assert isinstance(out, Done) and out.result["note"] == "Greeted Ada: Hello, Ada!" and not chat.replies
+    child = next(r for r in local_runs() if r.name == "greet")
+    assert child.status == "done" and child.run["result"] == {"text": "Hello, Ada!"}
+    assert child.run["identity"]["agent"] == AGENT and child.run["identity"]["session"] == "s-4"
+    reply = next(e for e in child.run["history"] if e["step"] == "reply")
+    assert reply["answered_by"]["agent"] == AGENT
+    assert '"status": "done"' in chat.asked[2][1]["content"]       # plan saw the child finish
+
+
+def act(verb: str, args: dict, cwd: Path) -> dict:
+    """assist's act.py as the runtime runs it: stdin in, the outcome out."""
+    proc = subprocess.run([sys.executable, str(ACT)], input=json.dumps({"state": {"verb": verb, "args": args}}),
+                          capture_output=True, text=True, cwd=cwd, check=True)
+    return json.loads(json.loads(proc.stdout)["outcome"])
+
+
+def test_act_has_six_verbs_and_none_that_changes_the_catalog(tmp_path):
+    for verb in ("retire", "pin", "overwrite", "unpublish"):
+        out = act(verb, {"name": "billing_support"}, tmp_path)
+        assert out["status"] == "refused" and "search, runs, run, resume, publish, finish" in out["message"]
+    assert act("run", {"procedure": "assist", "inputs": {}}, tmp_path)["status"] == "refused"
+    assert act("run", {"procedure": "assist@1", "inputs": {}}, tmp_path)["status"] == "refused"
+    assert act("finish", {}, tmp_path) == {"status": "finished"}
+
+
+def _act_module():
+    spec = importlib.util.spec_from_file_location("assist_act", ACT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_act_refuses_to_publish_over_a_taken_name_and_publishes_a_draft(tmp_path, monkeypatch):
+    fake = Served(token_names={"secret": "zach"})
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ticket_triage").mkdir()            # a folder named as the procedure is not the catalog (A3's live proof)
+    (tmp_path / "ticket_triage" / "procedure.aip").write_text(
+        (example_dir("ticket-triage") / "procedure.aip").read_text(encoding="utf-8"), encoding="utf-8")
+    try:
+        c = aip.Client(Server("http://testserver", token="secret", session=fake), agent="tests")
+        c.publish(example_dir("billing-support"))
+        module = _act_module()
+        taken = module.publish(c, {"path": str(example_dir("billing-support"))})
+        assert taken["status"] == "refused" and "already has billing_support" in taken["message"]
+        draft = module.publish(c, {"path": str(example_dir("billing-support")), "draft": True})
+        assert draft["status"] == "published" and draft["draft"] is True
+        fresh = module.publish(c, {"path": str(example_dir("ticket-triage"))})
+        assert fresh["status"] == "published" and fresh["revision"] == "1" and fresh["run_it_as"] == fresh["name"]
+        assert [e.name for e in c.list()].count("billing_support") == 1
+    finally:
+        fake.close()
+
+
+def test_answer_has_the_model_answer_one_pause_of_any_run(tmp_path, monkeypatch, capsys):
+    """`aip agent --answer RUN` (plan C6): the console's model steps. The same call as at a pause of
+    `assist`, on any run; the answer is recorded as the caller's agent; a run left unanswerable
+    comes back paused, with why."""
+    from aip.client import cli
+    from aip.sdk import Done, Paused, RunError
+
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "greet"
+    folder.mkdir()
+    (folder / "procedure.aip").write_text(GREET, encoding="utf-8")
+    chat = Scripted({"text": "Hello, Ada!"})
+    c = client(chat)
+    paused = c.run(folder, {"name": "Ada"}, agent="studio", session="page-1")
+    assert isinstance(paused, Paused) and paused.step == "reply"
+    events = []
+    done, reason = c.answer(paused.run_id, agent="studio", session="page-1", on_event=events.append)
+    assert isinstance(done, Done) and reason is None and done.result == {"text": "Hello, Ada!"}
+    assert chat.asked[0][1]["content"].startswith("# Procedure step: reply") and '"name": "Ada"' in chat.asked[0][1]["content"]
+    assert [e["event"] for e in events] == ["answer"]
+    reply = next(e for e in RunFile.load(run_path(done.run_id)).run["history"] if e["step"] == "reply")
+    assert reply["answered_by"]["agent"] == "studio" and reply["answered_by"]["model"] == "stand-in-1"
+    with pytest.raises(RunError) as exc:
+        c.answer(done.run_id)
+    assert exc.value.error["error"] == "not_paused"
+
+    second = c.run(folder, {"name": "Bo"})
+    stuck = client(Scripted(*[{"txt": "no"}] * ANSWERS))
+    left, reason = stuck.answer(second.run_id)
+    assert isinstance(left, Paused) and left.run_id == second.run_id and f"refused {ANSWERS} times" in reason
+
+    def down(messages):
+        raise ChatError("https://model.example answered 503: busy")
+    left, reason = client(Scripted(down)).answer(second.run_id)                 # the endpoint failing is a reason, not a raise
+    assert isinstance(left, Paused) and reason == "the model's endpoint failed: https://model.example answered 503: busy"
+
+    # The command: progress lines, then the paused object with `gave_up`, exit 1.
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted(*[{"txt": "no"}] * ANSWERS)))
+    assert cli.main(["agent", "--answer", second.run_id, "--progress"]) == 1
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert [line.get("event") for line in lines[:-1]] == ["answer", "refused"] * (ANSWERS - 1) + ["answer", "gave_up"]
+    assert lines[-1]["paused"] == "task" and lines[-1]["step"] == "reply" and "refused" in lines[-1]["gave_up"]
+    monkeypatch.setattr(cli, "_client", lambda: client(Scripted({"text": "Hi, Bo"})))
+    assert cli.main(["agent", "--answer", second.run_id, "--progress"]) == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert lines[-1]["done"] is True and lines[-1]["result"] == {"text": "Hi, Bo"}
+    assert any(line.get("event") == "step" and line.get("step") == "reply" for line in lines)

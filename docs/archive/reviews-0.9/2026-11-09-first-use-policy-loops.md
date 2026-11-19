@@ -1,0 +1,79 @@
+# AIP 0.9 first-use report: fixed-policy and dynamic-policy
+
+Binary `aip 0.8.0 language 0.9`; `AIP_HOME` pointed at a scratch dir; decision model TypeSafe (`jev-1.14.0`). 7 runs reached a pause, 1 was refused at Start; 17 decision-model calls in all (2 of them wasted by answers the CLI should have refused, see Bugs 1 and 2). Run files are under `.../scratchpad/ua-policy/runs/`.
+
+## What I ran
+
+| # | Command | Outcome |
+|---|---|---|
+| 1 | `aip compile --check examples/language/fixed-policy` / `dynamic-policy` | `ok fixed_policy: 6 steps, 3 files, bundle 4ce2cba6c582`, `ok dynamic_policy: 6 steps, 2 files, bundle 0b936382bca0` |
+| 2 | `aip info` both | inputs listed with a ready `run:` line; `LOOPS  revise  Loop  Until` says nothing about condition, cap or members |
+| 3 | r1 `aip run fixed-policy --inputs '{"request": "...refund for a duplicate charge..."}'` | paused at `draft` (no model call) |
+| 4 | r1 `aip resume 9330909dbbd54dd1 --progress --answers '{"work": "<compliant note>"}'` | check pass 0: all four `true` but `claims` at `noul: 0.6` → `all_hold: false` → paused at `fix` pass 0. The "happy path" did not exit |
+| 5 | r1 resume ×2 with shorter, claim-free notes | `claims` stayed `noul 0.61`, `0.68`; paused at `fix` pass 1, then pass 2 |
+| 6 | r1 resume (answer to the pass-2 fix) | `{"error": "loop_cap", "step": "revise", "message": "revise ran 3 passes without its condition holding (At_Most 3, Else_Fail)", "cap": 3, "count": 3, "pass": 3, ..., "resumable": true}` exit 1 |
+| 7 | `aip resume 9330909dbbd54dd1` (retry the capped run) | same `loop_cap` object, exit 1 (as runtime.md says) |
+| 8 | `aip resume 9330909dbbd54dd1 --answers '{"work":"x"}'` | `not_paused`: `run ... is failed, not paused; an answer needs a pause (resume it with no answers to retry the failed step)` |
+| 9 | r2a `aip run fixed-policy` with `"request": "Write a two-line thank-you note..."`, then resume with a two-line note | **first-pass exit**: `{"event":"step","step":"revise","kind":"Loop","pass":null,"passes":[],"exit":"until","iterations":1}` then `done`. `claims` landed at exactly `noul: 0.7`, `barred: false` |
+| 10 | r2b `aip run fixed-policy` same request as r1, resume with a note full of PII, superlatives, blame and pressure | check: `pii/claims/tone` all `value: false` (`noul 0.01/0.11/0.02`) → paused at `fix` pass 0 |
+| 11 | r2b `aip resume f5a8... --answers '{"0": {"work": "<compliant note>"}}'` (index-keyed form) | accepted; pass 1 check: `pii/tone/length` true, `claims noul 0.64` barred → paused at `fix` pass 1. Stopped here: violate→fix→exit is not reachable in fixed-policy with this model (see Bugs 6) |
+| 12 | r3 `aip run dynamic-policy --inputs '{"task": "...", "policies": [2 policies]}'`, resume with a compliant sentence | one `check` entry per For pass (`passes: [{"loop":"revise","pass":0},{"loop":"review","pass":0}]`), `review For ... "exit":"items","iterations":2`, `revise Loop ... "exit":"until","iterations":1`, `done`. Model called once for both policies |
+| 13 | r4 `aip run dynamic-policy --batch 10` with 5 policies; r5 same inputs with `--batch 1`; both resumed with the identical sentence | both: verdict[2] ("single sentence") false → paused at `fix`. Histories identical apart from `at` and the model's numbers (r4 `noul 0.36`, r5 `0.49` on the same question). r4 = 1 call, r5 = 5 calls; nothing in either record shows that |
+| 14 | r4 resume with a plainer sentence | pass 1: all 5 verdicts true → `revise Loop exit until iterations 2` → `done` (violate→fix→exit reached in dynamic-policy) |
+| 15 | r6 `aip run dynamic-policy` (2 policies), resumed with `"Welcome aboard! We are thrilled..."` | verdict[1] (`no exclamation marks`) `value: false, noul 0.01` → paused at `fix` pass 0 |
+| 16 | r6 `--answers '{"reply":"x"}'` | `invalid_output`: `the output of 'fix': work is missing`, `missing: ["work"]`; pause stands |
+| 17 | r6 `--answers '{"1": {"work":"x"}}'` (index 0 left out) | `invalid_output`: `the output of 'fix': no answer for task 0`, `missing: ["0"]`; pause stands |
+| 18 | r6 `--answers '{}'` | `invalid_output`: `work is missing` |
+| 19 | r6 `--answers '[{"work":"x"},{"work":"y"}]'` (two answers, one task) | **accepted**; `work="x"` applied, `"y"` dropped silently, model called, paused at `fix` pass 1 |
+| 20 | r6 `--answers '{"work":"x", "extra": 1}'` | **accepted**; `extra` dropped silently, model called, paused at `fix` pass 2 |
+| 21 | r6 resume (answer to the pass-2 fix) | `loop_cap` for dynamic-policy, same shape as #6 |
+| 22 | `aip resume 805a716ffdc945da` (done run), with and without answers; also by run-file path | `not_paused`, `run ... is done; there is nothing to resume` / `is done, not paused; an answer needs a pause`, `resumable: false` |
+| 23 | `aip resume deadbeefdeadbeef` | `invalid_input`: `no run 'deadbeefdeadbeef' on this machine (looked for .../runs/deadbeefdeadbeef.json)` |
+| 24 | `aip run dynamic-policy --inputs '{"task":"x","policies":"not a list"}'` | `invalid_input`: `policies: expected a list, got a string`, `run_id: null`, no run file |
+| 25 | `aip runs` / `aip runs --json` | `aip: no server is configured; ...` although 7 run files sit in `$AIP_HOME/runs`. `aip runs <id>` prints the local file as JSON (with or without `--json`) |
+
+## Bugs
+
+1. **A list of answers longer than the task list is accepted.** #19: `--answers '[{"work":"x"},{"work":"y"}]'` on a one-task pause applied `x` and dropped `y` without a word; cost a model call. cli-json.md: "An answer that does not fit the step's keys is refused and nothing is applied."
+2. **Extra keys beside the `Produce` keys are accepted.** #20: `{"work":"x","extra":1}` was applied with `extra` dropped. Same doc line as above; runtime.md says a `Task_Agent` answer "that does not fit the step's keys is refused". A typo'd key (`werk` beside `work`) would still be caught, but an agent returning `{"work": ..., "notes": ...}` never learns it was ignored.
+3. **The runtime's `index` leaks into the end state.** `aip runs 9330909dbbd54dd1` shows `"state": {..., "index": 2, ...}` after the loop failed at the head of pass 3; r6's failed state also carries `index`. spec 2.1: "Inside a body `index` names the pass"; nothing says it survives the body. A done run (r4) has no `index` but does have `iterations` (bug 4).
+4. **`iterations` is one key for two loops.** r4 (For ran 5 passes inside a Loop that ran 2): `state["iterations"] == 2`; the For's 5 is gone, overwritten, and `frames[0].written` lists `"iterations"` as a key the outer loop carries. runtime.md: "after a loop `iterations` is how many passes ran" does not say which loop when they nest; a step after the For but inside the Loop that reads `iterations` gets the For's, then the value changes under it when the Loop exits.
+5. **The agent is asked to fix work that can never be checked.** In both procedures the cap is tested at the head, so after the third failed check the runtime still pauses at `fix` pass 2 (#5, #21), the agent writes a revision, and the very next event is `loop_cap`. runtime.md says the cap is checked "at the head of each pass for a `Loop`", so this is to spec, but the spec makes an `Else_Fail` loop with a trailing fix step waste one agent task per failed run.
+6. **fixed-policy's happy path is practically unreachable.** `policy_claims = "Every factual claim about the product is one the approved claims list supports"`: no claims list is in the bundle, so the model answers `true` at `noul 0.6–0.68` on every reasonable note (r1 ×3, r2b), under the `0.7` bar, and the loop caps. It exited once (r2a) at exactly `noul: 0.7`. The example that teaches check-then-fix fails on its own content.
+7. **`With Confidence_Above 0.7` holds at 0.7.** r2a resolutions: `{"source": "policy_check.claims", "value": true, "holds": true, "probability": 0.7, "barred": false}`. The keyword says *above*; the implementation (and spec 2.5, "below p ... does not count") is *at least*. One of the two should change.
+8. **Stale comment in `dynamic-policy/procedure.aip`:** "See docs/limitations.md: one model call per policy for now, and a script to AND the verdicts." The file is `docs/language/limitations.md`, there is no script (the `Aggregate` ANDs), and with `--batch` (default 10) it is one call per batch, not per policy. Neither example has a `scripts/` directory.
+9. **`loop_cap` is `resumable: true` but can never be resumed.** #6/#7: the retry "arrives at the head again and fails the same way" (runtime.md). An agent that trusts `resumable` loops forever; the flag should mean "a retry can succeed".
+10. **`aip runs` cannot list local runs.** #25: with no server it refuses, while `aip runs <id>` happily reads the local file. There is no way to find a run id you lost except `ls $AIP_HOME/runs`.
+
+## Confusing
+
+- **Where loops are documented.** spec.md has no loop section: `For`/`Loop`/`Until`/`Again` are one paragraph inside 2.1 ("The source language"), between "Conditions" and "Questions composed from data"; 2.2 is Validation. I had to grep for `Until` to find the exit rule.
+- **The `fix` prompt talks about "unsure" without saying the bar.** The pause carries `policy_check` (`"claims": {"value": true, "confidence": 0.2, "noul": 0.6}`) but not `check_summary`, and the prompt says "a `false` value, or one the model was unsure of". Two numbers, no bar, no name for which one the bar is on. In r2a `confidence: 0.4` *passed* (because `noul 0.7` is what counts). An agent reading the prompt would "fix" the wrong policy or all of them. The `resolutions` list that answers exactly this (`barred: true`) exists in the record but is not in the pause.
+- **Two confidences per answer.** spec 2.4/2.5 explain `confidence = |2·noul − 1|` vs `noul`, and that `Confidence_Below` is on one and `Confidence_Above` on the other, "on purpose". It is correct and it took three readings. The run file then prints both numbers on every answer with no hint which one a given line used.
+- **`loop_cap` error fields.** `"step": "revise"` is a loop, not a step; `"pass": 3` and `"passes": [{"loop":"revise","pass":3}]` name a pass that never ran, next to `"count": 3`. I read it twice to decide whether 3 passes or 4 had run.
+- **Nothing records the `Until` test except the exit.** Mid-loop the record shows `check` then `summarize_check` with `all_hold: false`, then `fix`; the head-of-pass test that let pass 1 and 2 run is nowhere. On a capped run there is *no* loop entry at all (grep for `until`/`exit` in the r6 file finds only `frames[0].head: true`), although runtime.md lists `cap` as an `exit` reason. Why the loop ended is only in `run.error`.
+- **`frames[].count`** is `0` while the first pass is running (`"count": 0, "written": ["check_summary", "policy_check"]`) and `3` with `"head": true` at the cap. It is passes-completed, but neither runtime.md nor cli-json.md mentions `frames`, `count`, `head` or `written`; the run file's top level (`run.state/history/at/status/pause/error/frames/passes/result/requires_checked/batch/identity`) is undocumented beyond "the state, the record, the loop frames, the pending pause or the error".
+- **`--progress` lines carry no values.** `{"event":"step","step":"summarize_check","kind":"Aggregate",...}` does not say `all_hold` was false; the `Decide` line does not say what was answered; the `Loop` line says `"exit": "until"` but not `where` or what it saw. Watching a loop run, you cannot tell which way it is going until it pauses or ends.
+- **`aip info`'s STEPS list is flat.** `check`, `summarize_check`, `fix` appear as peers of `draft` and `end`; `LOOPS` says `revise  Loop  Until` and `review  For  Over`, with no condition, cap, `Else_Fail`, or which steps each contains. The graph is the point of the format and `info` hides it.
+- **Batching is invisible in the record.** r4 (`--batch 10`, one call) and r5 (`--batch 1`, five calls) have the same `answered_by` on every pass; `run.batch` is the only trace. Good for "batching never changes a result", bad for anyone auditing cost. The brief's "batched pause with several task indexes" cannot happen in these two examples at all: the only `Task_Agent` inside a `For` would be needed, and `review`'s body is a single `Decide`.
+- **Answers keyed by index on a single task.** Three accepted spellings (`{"work":..}`, `{"0": {"work":..}}`, `[{"work":..}]`) are documented, but the error for leaving one out, `"missing": ["0"]`, reuses the `missing` list that elsewhere holds key names (`"missing": ["work"]`).
+- **`Task` vs `Task_Agent`.** dynamic-policy writes `Task draft`, fixed-policy `Task_Agent draft`, `aip info` prints `Task_Agent` for both. The alias is in the glossary table only.
+- **`"recorded"` noise.** Every command ends with `aip: not recorded: no server is configured; run \`aip config --server URL\`...` on stderr, including `resume` calls that failed validation and ran nothing.
+- **The Aggregate's `probability: null`** in the Loop exit resolution (`{"answer": "check_summary.all_hold", "value": true, "holds": true, "probability": null, "barred": false}`) is right (no confidence by design) but reads like missing data next to the `0.96`s above it.
+
+## Good
+
+- The JSON contract is exactly as cli-json.md says: one object, first key tells the outcome, exit code matches; every error I provoked (`invalid_input`, `invalid_output`, `not_paused`, `loop_cap`) had a readable `message` and the documented extra keys.
+- `aip info`'s `run:` line is copy-paste ready, and the `invalid_input` messages name the inputs (`policies: expected a list, got a string`).
+- `passes: [{"loop":"revise","pass":1},{"loop":"review","pass":3}]` on every record entry makes nested passes unambiguous; the For's exit entry carrying `verdicts` in input order and the Aggregate's `resolutions` with `source: "verdicts[2].follows", barred: true` answer "which policy failed and why" in one place.
+- `--batch 1` and `--batch 10` produced the same record shape and the same pause; the batching promise held.
+- Compile, info and a run start are instant; a bad answer leaves the pause standing with nothing applied (for the shapes it does catch).
+- The spec's reasoning sections (why no joint confidence, why one producer per path) are short and convincing.
+
+## Top 5 changes, ranked
+
+1. **Refuse any answer with keys or list entries the pause did not ask for** (Bugs 1, 2). Silent drops cost model calls and hide agent mistakes; the docs already promise the refusal.
+2. **Put the Until/aggregate verdict into the loop's pauses and the record's passes**: carry `check_summary` and the `resolutions` (`barred`) into the `fix` task's `state`, write a small `until` entry (or field) when the head test runs, and write the loop entry with `exit: cap` on `Else_Fail` too. Today the one question a loop raises, "why am I still here", is answered only by reading two numbers and knowing which the bar is on.
+3. **Test the cap before pausing for a fix that cannot be checked** (Bug 5), or at least say in the spec and in the `fix` task that this is the last pass (`"passes": [{"loop":"revise","pass":2,"of":3}]`). And make `loop_cap` `resumable: false` (Bug 9).
+4. **Fix the examples**: give fixed-policy an `assets/claims.md` the question can be judged against (or drop `policy_claims`), fix the stale comment in dynamic-policy, add a procedure with a `Task_Agent` inside a `For` so the batched multi-task pause is demonstrable; and decide whether `Confidence_Above` means `>` or `>=` (Bug 7).
+5. **Show the loop structure where people look**: `aip info` should nest the loop's steps under it with `Until check_summary.all_hold, At_Most 3, Else_Fail`; `--progress` should carry the value of an Aggregate, a Decide's answers and a loop's `where`; `aip runs` should list local run files when no server is configured; and runtime.md should document the run file's `frames`/`count`/`head`, scope `index` to the body (Bug 3) and `iterations` to a named loop (Bug 4).

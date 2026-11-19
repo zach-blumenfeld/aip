@@ -1,0 +1,502 @@
+{
+ "batch": 10,
+ "bundle_id": "2a24c7a244e6811c75340bfcb49f608799fc8918bae2f646c04bce14183d9297",
+ "created": "2026-11-09T22:38:41.129+00:00",
+ "draft": true,
+ "error": null,
+ "finished": "2026-11-09T22:38:41.169+00:00",
+ "frames": [],
+ "identity": {
+  "agent": "codex",
+  "session": "s2",
+  "user": "zach"
+ },
+ "loops": {},
+ "name": "fixed_policy",
+ "passes": [],
+ "pause": null,
+ "position": null,
+ "requires_checked": false,
+ "result": {
+  "policy_check": {
+   "claims": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   },
+   "length": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   },
+   "pii": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   },
+   "tone": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   }
+  },
+  "work": "Welcome!"
+ },
+ "revision": null,
+ "run_id": "c4c29bb523774bab",
+ "started": "2026-11-09T22:38:41.128+00:00",
+ "state": {
+  "check_summary": {
+   "all_hold": {
+    "value": true
+   }
+  },
+  "policy_check": {
+   "claims": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   },
+   "length": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   },
+   "pii": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   },
+   "tone": {
+    "confidence": 0.8,
+    "noul": 0.9,
+    "value": true
+   }
+  },
+  "request": "a welcome note",
+  "work": "Welcome!"
+ },
+ "status": "done",
+ "updated": "2026-11-09T22:38:41.169+00:00",
+ "history": [
+  {
+   "at": "2026-11-09T22:38:41.128+00:00",
+   "input": {
+    "request": "a welcome note"
+   },
+   "kind": "Start",
+   "pass": null,
+   "passes": [],
+   "result": {},
+   "seconds": 0.0,
+   "step": "start"
+  },
+  {
+   "answered_by": {
+    "agent": "codex",
+    "session": "s2"
+   },
+   "at": "2026-11-09T22:38:41.155+00:00",
+   "input": {
+    "request": "a welcome note"
+   },
+   "kind": "Task_Agent",
+   "pass": null,
+   "passes": [],
+   "prompt": "# Write the work\n\nWrite what the request below asks for. Follow the house policy exactly; it is attached.\n\nRequest:\na welcome note\n\nPolicy:\n# House policy for customer-facing writing\n\n1. No personal data: no names of private individuals, no account numbers, no addresses.\n2. Every factual claim about the product is one the approved claims list supports; nothing is\n   promised beyond it. Writing that makes no claim about the product passes.\n3. Plain and courteous tone: no superlatives, no pressure, no blame.\n4. Under 300 words.\n\n\nApproved claims:\n# Approved claims about the product\n\nThe only factual claims customer-facing writing may make about the product. Anything else about\nthe product is left out, however likely it is to be true.\n\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.\n\n\nReturn JSON with `work` (the text).\n",
+   "references": [],
+   "result": {
+    "work": "Welcome"
+   },
+   "seconds": 0.001,
+   "step": "draft",
+   "waited_seconds": 0.026
+  },
+  {
+   "answered_by": {
+    "endpoint": "https://api.typesafe.ai",
+    "model": "jev-1"
+   },
+   "at": "2026-11-09T22:38:41.155+00:00",
+   "history_sent": false,
+   "input": {
+    "work": "Welcome"
+   },
+   "kind": "Decide",
+   "model_seconds": 0.0,
+   "pass": 0,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 0
+    }
+   ],
+   "result": {
+    "claims": {
+     "confidence": 0.2,
+     "noul": 0.6,
+     "value": true
+    },
+    "length": {
+     "confidence": 0.2,
+     "noul": 0.6,
+     "value": true
+    },
+    "pii": {
+     "confidence": 0.2,
+     "noul": 0.6,
+     "value": true
+    },
+    "tone": {
+     "confidence": 0.2,
+     "noul": 0.6,
+     "value": true
+    }
+   },
+   "seconds": 0.0,
+   "step": "check",
+   "until": {
+    "holds": false,
+    "resolution": null,
+    "where": "head"
+   }
+  },
+  {
+   "at": "2026-11-09T22:38:41.156+00:00",
+   "input": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     },
+     "length": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     },
+     "pii": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     },
+     "tone": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     }
+    }
+   },
+   "kind": "Aggregate",
+   "pass": 0,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 0
+    }
+   ],
+   "resolutions": {
+    "all_hold": [
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.6,
+      "source": "policy_check.pii",
+      "value": true
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.6,
+      "source": "policy_check.claims",
+      "value": true
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.6,
+      "source": "policy_check.tone",
+      "value": true
+     },
+     {
+      "barred": true,
+      "holds": false,
+      "probability": 0.6,
+      "source": "policy_check.length",
+      "value": true
+     }
+    ]
+   },
+   "result": {
+    "all_hold": {
+     "value": false
+    }
+   },
+   "seconds": 0.0,
+   "step": "summarize_check"
+  },
+  {
+   "answered_by": {
+    "agent": "codex",
+    "session": "s2"
+   },
+   "at": "2026-11-09T22:38:41.168+00:00",
+   "input": {
+    "check_summary": {
+     "all_hold": {
+      "value": false
+     }
+    },
+    "policy_check": {
+     "claims": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     },
+     "length": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     },
+     "pii": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     },
+     "tone": {
+      "confidence": 0.2,
+      "noul": 0.6,
+      "value": true
+     }
+    },
+    "request": "a welcome note",
+    "work": "Welcome"
+   },
+   "kind": "Task_Agent",
+   "pass": 0,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 0
+    }
+   ],
+   "prompt": "# Revise the work\n\nThe policy check below has one answer per policy (`pii`, `claims`, `tone`, `length`). A policy\nfailed when its `value` is `false`, or when its `noul`, the probability the model put on the\npolicy holding, is not above 0.7: the check counts an answer the model was not more than 0.7\nsure of as failed (`confidence` is a different number and is not the one the check reads).\n`check_summary.all_hold` is `false` because at least one failed. Revise the work so the failed\npolicies pass, changing nothing else.\n\nRequest:\na welcome note\n\nWork:\nWelcome\n\nPolicy check:\n{\"pii\": {\"value\": true, \"confidence\": 0.2, \"noul\": 0.6}, \"claims\": {\"value\": true, \"confidence\": 0.2, \"noul\": 0.6}, \"tone\": {\"value\": true, \"confidence\": 0.2, \"noul\": 0.6}, \"length\": {\"value\": true, \"confidence\": 0.2, \"noul\": 0.6}}\n\nCheck summary:\n{\"all_hold\": {\"value\": false}}\n\nPolicy:\n# House policy for customer-facing writing\n\n1. No personal data: no names of private individuals, no account numbers, no addresses.\n2. Every factual claim about the product is one the approved claims list supports; nothing is\n   promised beyond it. Writing that makes no claim about the product passes.\n3. Plain and courteous tone: no superlatives, no pressure, no blame.\n4. Under 300 words.\n\n\nApproved claims:\n# Approved claims about the product\n\nThe only factual claims customer-facing writing may make about the product. Anything else about\nthe product is left out, however likely it is to be true.\n\n- A duplicate charge is refunded in full to the original payment method within 5 business days.\n- A subscription can be cancelled at any time and stays active until the end of the paid period.\n- Support answers email within one business day.\n- An annual plan costs less per month than a monthly plan.\n- Account data can be exported from the settings page.\n\n\nReturn JSON with `work` (the revised text).\n",
+   "references": [],
+   "result": {
+    "work": "Welcome!"
+   },
+   "seconds": 0.0,
+   "step": "fix",
+   "waited_seconds": 0.012
+  },
+  {
+   "answered_by": {
+    "endpoint": "https://api.typesafe.ai",
+    "model": "jev-1"
+   },
+   "at": "2026-11-09T22:38:41.169+00:00",
+   "history_sent": false,
+   "input": {
+    "work": "Welcome!"
+   },
+   "kind": "Decide",
+   "model_seconds": 0.0,
+   "pass": 1,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 1
+    }
+   ],
+   "result": {
+    "claims": {
+     "confidence": 0.8,
+     "noul": 0.9,
+     "value": true
+    },
+    "length": {
+     "confidence": 0.8,
+     "noul": 0.9,
+     "value": true
+    },
+    "pii": {
+     "confidence": 0.8,
+     "noul": 0.9,
+     "value": true
+    },
+    "tone": {
+     "confidence": 0.8,
+     "noul": 0.9,
+     "value": true
+    }
+   },
+   "seconds": 0.0,
+   "step": "check",
+   "until": {
+    "holds": false,
+    "resolution": {
+     "answer": "check_summary.all_hold",
+     "barred": false,
+     "holds": false,
+     "probability": null,
+     "value": false
+    },
+    "where": "head"
+   }
+  },
+  {
+   "at": "2026-11-09T22:38:41.169+00:00",
+   "input": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "length": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "pii": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "tone": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     }
+    }
+   },
+   "kind": "Aggregate",
+   "pass": 1,
+   "passes": [
+    {
+     "loop": "revise",
+     "pass": 1
+    }
+   ],
+   "resolutions": {
+    "all_hold": [
+     {
+      "barred": false,
+      "holds": true,
+      "probability": 0.9,
+      "source": "policy_check.pii",
+      "value": true
+     },
+     {
+      "barred": false,
+      "holds": true,
+      "probability": 0.9,
+      "source": "policy_check.claims",
+      "value": true
+     },
+     {
+      "barred": false,
+      "holds": true,
+      "probability": 0.9,
+      "source": "policy_check.tone",
+      "value": true
+     },
+     {
+      "barred": false,
+      "holds": true,
+      "probability": 0.9,
+      "source": "policy_check.length",
+      "value": true
+     }
+    ]
+   },
+   "result": {
+    "all_hold": {
+     "value": true
+    }
+   },
+   "seconds": 0.0,
+   "step": "summarize_check"
+  },
+  {
+   "at": "2026-11-09T22:38:41.169+00:00",
+   "exit": {
+    "reason": "until",
+    "resolution": {
+     "answer": "check_summary.all_hold",
+     "barred": false,
+     "holds": true,
+     "probability": null,
+     "value": true
+    },
+    "where": "summarize_check"
+   },
+   "input": {},
+   "kind": "Loop",
+   "pass": null,
+   "passes": [],
+   "result": {
+    "iterations": 2
+   },
+   "step": "revise"
+  },
+  {
+   "at": "2026-11-09T22:38:41.169+00:00",
+   "input": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "length": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "pii": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "tone": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     }
+    },
+    "work": "Welcome!"
+   },
+   "kind": "End",
+   "pass": null,
+   "passes": [],
+   "result": {
+    "policy_check": {
+     "claims": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "length": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "pii": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     },
+     "tone": {
+      "confidence": 0.8,
+      "noul": 0.9,
+      "value": true
+     }
+    },
+    "work": "Welcome!"
+   },
+   "seconds": 0.0,
+   "step": "end"
+  }
+ ]
+}

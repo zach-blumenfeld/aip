@@ -1,0 +1,67 @@
+# assist/procedure.aip
+#
+# Do a task with the catalog's procedures. `aip agent "<task>"` drives it: a chat model outside
+# the run answers each pause of `plan`, one call each and no tools, and the runtime does the rest.
+# The procedure is the whole of what that model can do: `plan` says one aip verb at a time, and
+# `act` (scripts/act.py) is the allow-list that carries it out: search the catalog, read this
+# session's runs, run a procedure, resume one (a child run's pause comes back as the outcome and
+# the next `plan` answers it), publish a new procedure, finish. Nothing retires, pins or
+# publishes over a name, and assist never runs itself. One flat loop: no run is started from a
+# run's model, and no depth.
+#
+# A procedure that is missing is built with build_procedure, run like any other: its pauses
+# (draft the folder, fix what the compiler says) come back to `plan` and are answered there.
+#
+# It ships inside the package as a bundle (src/aip/server/bundles/assist.rl, compiled from this
+# folder), as build_procedure does.
+
+Procedure assist
+  "Do a task with the catalog's procedures; build one when none fits; finish with the result or a question."
+
+  Use_When
+    "A task is to be done with the procedures in the catalog, or with one built for it: `aip agent \"<task>\"` runs this."
+  Do_Not_Use_When
+    "The procedure to run is already known: run it with `aip run` and answer its pauses."
+  Requires python 3.10
+  Avoid
+    "Changing the catalog: retiring, pinning, or publishing over a name that exists."
+    "Inventing data to make a run succeed, or finishing with an answer the runs' outcomes do not support."
+
+Start "The task; outcome is empty at first, and on a later turn of the session says what was asked and what the person answered." {
+  task: string    "What is to be done, in the requester's words."
+  outcome: string "Empty to begin; on a later turn, the question this session asked and the person's answer."
+  Next_Step search
+}
+
+Execute search "List the catalog's procedures that may fit the task, and this session's runs so far." {
+  Read task
+  Run_Script scripts/search.py
+  Produce catalog: string "The procedures that may fit, best first, with what each takes; then this session's runs."
+  Next_Step work
+}
+
+Loop work Until done, At_Most 50, Else_Exit {
+  Task_Agent plan "Say the next aip verb to use and its arguments, or finish with the result or a question for the person." {
+    Read task, catalog, outcome
+    Prompt assets/plan.md
+    Use references/aip-skill.md "The six verbs, their arguments and what each answers with."
+    Produce verb: choice [search, runs, run, resume, publish, finish] "The verb to use next."
+            args: object                                              "The verb's arguments, as the reference says; {} for finish."
+            note: string                                              "When finishing: the result, or the question for the person; otherwise empty."
+            done: true_or_false                                       "True exactly when the verb is finish."
+    Next_Step act
+  }
+
+  Execute act "Carry out the one verb plan said, through the aip client; no model is called here." {
+    Read verb, args
+    Run_Script scripts/act.py
+    Produce outcome: string "What the verb came to, as JSON: a run's status and its result, pause or error; the hits; the runs; or why it was refused."
+    Continue
+  }
+
+  Next_Step end
+}
+
+End "The result of the task, or the question for the person." {
+  Read note
+}
