@@ -304,6 +304,29 @@ aip server --backend neo4j --uri neo4j+s://xxxxxxxx.databases.neo4j.io --user ne
 
 ## Research and Evidence So Far
 
+Two measurements so far: a benchmark of the AIP procedure language (0.9) on one task, and a paper on the earlier YAML format over 24 tasks.
+
+### The procedure language: one loan assessment, with and without AIP
+
+The [loan benchmark](https://github.com/zach-blumenfeld/graph-memory-system-one-demo/tree/main/loan-bench-aip-demo) compares two Claude Code agents on a small-business loan assessment, with AIP 0.9.0: one written application in, one of four outcomes out, under a policy of seven arithmetic rules and five judgment rules. The baseline agent is handed the SOP and the policy and told to follow them. The AIP agent runs a procedure written from those two documents, through `aip mcp`. There are 30 applications in three tiers of difficulty, each run five times (twice at max effort), every run in its own container with no network beyond the model APIs.
+
+| Agent | Outcome correct | Failed-rules list correct | Thinking tokens | All tokens | Cost | Seconds |
+|---|---|---|---|---|---|---|
+| Haiku 5.5, low effort, baseline | 141/150 | 137/150 | 809 | 9,192 | $0.0011 | 8.1 |
+| Haiku 5.5, low effort, AIP | **150/150** | **150/150** | 751 | 33,107 | $0.0024 | 13.7 |
+| Haiku 5.5, max effort, baseline | 58/60 | 56/60 | 35,186 | 70,336 | $0.0208 | 142.6 |
+| Haiku 5.5, max effort, AIP | **60/60** | **60/60** | 26,413 | 76,903 | $0.0181 | 106.3 |
+| Sonnet 5.5, low effort, baseline | 150/150 | 145/150 | 120 | 8,048 | $0.0112 | 6.3 |
+
+Tokens, cost and seconds are means per run. The decision model's calls add about $0.00005 a run to the AIP rows, 2% of their cost, and are not in the table.
+
+- **100% correct with AIP, against 94% without.** On Haiku at low effort, AIP got the outcome and the list of failed rules right on every run. The baseline got 94% of outcomes and 91% of rule lists. At max effort the baseline reached 97% and 93%; AIP stayed at 100%.
+- **79% lower cost, by using a smaller model.** The baseline needed Sonnet to get every outcome right. AIP did it on Haiku for $0.0024 a run against Sonnet's $0.0112.
+- **25% fewer thinking tokens at max effort, 13% lower cost and 25% less time.** AIP uses more tokens in total, but the extra ones are cached input, priced at a quarter of output or less. The saving shows up where the model thinks a lot: at low effort, with little thinking to save, AIP cost more than the Haiku baseline.
+- **Every check on the record.** An AIP run checks the arithmetic rules in a script, asks a decision model each judgment rule as one question answered with a probability, and records every step and answer.
+
+### The paper: the earlier YAML format on SkillsBench
+
 Our research shows AIP lifting Claude Sonnet's task pass rate from 51% to 63% over the same skills as Agent Skills.
 
 Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](https://arxiv.org/pdf/2606.04781), published at a VLDB 2026 workshop, measured the previous format (`0.3a3`, skills as structured YAML loaded into context, before the server existed) on a stratified core of 24 [SkillsBench](https://www.skillsbench.ai) tasks. Each task's human-curated skill was converted to AIP once by Claude Opus; Claude Sonnet 4.6 then solved the task with either the original or the conversion, five trials per task.
@@ -313,7 +336,7 @@ Our paper [AIP: A Graph Representation for Learning and Governing Agent Skills](
 | Human-curated Agent Skill | 50.8% | 0.567 |
 | The same skill converted to AIP | **63.3%** | **0.668** |
 
-Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. AIP has moved on since: procedures are now written in a small language and compiled, steps are typed, a decision model answers the questions and a route checks its confidence, and every run is recorded. Measuring this release the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
+Tool-call counts were about equal, and wall clock was lower on the AIP side in two of the three task cohorts. AIP has moved on since: procedures are now written in a small language and compiled, steps are typed, a decision model answers the questions and a route checks its confidence, and every run is recorded. Measuring the procedure language the same way is the next study, and the harness is [aip-skillbench](https://github.com/zach-blumenfeld/aip-skillbench).
 
 ## Reference
 
