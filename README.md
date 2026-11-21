@@ -174,7 +174,7 @@ A `Decide` step is answered by a decision model, not by the agent. A decision mo
 
 A procedure can act on how sure the model was: a `Route` can check the confidence and send an unsure case elsewhere, and an `Aggregate` can set a probability bar. This lets a procedure make judgment calls quickly and cheaply, and keeps a large model's slower reasoning for the steps that need it.
 
-AIP is currently tested with [TypeSafe](https://typesafe.ai), and more providers are being considered. Setup is one key, `aip config --decision-model-key KEY` ([`docs/running.md`](docs/running.md)). A decision model is optional: without one, a procedure has the agent decide in a `Task_Agent` step under fixed labels, and its route checks no confidence, as [`examples/language/billing-support-agent`](examples/language/billing-support-agent) does.
+AIP is currently tested with Jev, [TypeSafe](https://typesafe.ai)'s decision model, and more providers are being considered. Setup is one key, `aip config --decision-model-key KEY` ([`docs/running.md`](docs/running.md)). A decision model is optional: without one, a procedure has the agent decide in a `Task_Agent` step under fixed labels, and its route checks no confidence, as [`examples/language/billing-support-agent`](examples/language/billing-support-agent) does.
 
 ## How It Works
 
@@ -318,7 +318,7 @@ The [loan benchmark](https://github.com/zach-blumenfeld/graph-memory-system-one-
 | Haiku 5.5, max effort, AIP | **60/60** | **60/60** | 26,413 | 76,903 | $0.0181 | 106.3 |
 | Sonnet 5.5, low effort, baseline | 150/150 | 145/150 | 120 | 8,048 | $0.0112 | 6.3 |
 
-Tokens, cost and seconds are means per run. The decision model's calls add about $0.00005 a run to the AIP rows, 2% of their cost, and are not in the table.
+Tokens, cost and seconds are means per run. The decision model was Jev; its calls add about $0.00005 a run to the AIP rows, 2% of their cost, and are not in the table.
 
 - **100% correct with AIP, against 94% without.** On Haiku at low effort, AIP got the outcome and the list of failed rules right on every run. The baseline got 94% of outcomes and 91% of rule lists. At max effort the baseline reached 97% and 93%; AIP stayed at 100%.
 - **79% lower cost, by using a smaller model.** The baseline needed Sonnet to get every outcome right. AIP did it on Haiku for $0.0024 a run against Sonnet's $0.0112.
